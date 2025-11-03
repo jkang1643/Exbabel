@@ -26,7 +26,7 @@ export function HomePage({ onSelectMode }) {
               Welcome to Exbabel
             </h1>
             <p className="text-base sm:text-lg md:text-xl text-gray-600">
-              Real-time translation for everyone, everywhere
+              Live translation for everyone, everywhere
             </p>
           </div>
 
