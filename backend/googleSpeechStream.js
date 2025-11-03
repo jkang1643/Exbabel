@@ -89,6 +89,28 @@ export class GoogleSpeechStream {
     // We'll restart the stream every 4 minutes to be safe
     this.STREAMING_LIMIT = 240000; // 4 minutes in milliseconds
     this.startTime = Date.now();
+    
+    // Jitter buffer: Queue audio chunks to handle network jitter (200-400ms, target 300ms)
+    this.jitterBuffer = [];
+    this.jitterBufferDelay = 250; // 250ms target delay (reduced from 300ms for better responsiveness)
+    this.jitterBufferMin = 200; // Minimum 200ms
+    this.jitterBufferMax = 400; // Maximum 400ms
+    this.jitterBufferTimer = null;
+    this.lastJitterRelease = Date.now();
+    
+    // Chunk retry tracking: Track failed chunks and retry up to 3 times
+    this.chunkRetryMap = new Map(); // chunkId -> { attempts: number, chunkData, metadata, lastAttempt }
+    this.MAX_CHUNK_RETRIES = 3;
+    this.RETRY_BACKOFF_MS = [100, 200, 400]; // Exponential backoff delays
+    
+    // Per-chunk timeout tracking: Detect stuck chunks
+    // Increased timeout to account for jitter buffer (300ms) + processing time
+    this.chunkTimeouts = new Map(); // chunkId -> { timeout handle, sendTimestamp }
+    this.CHUNK_TIMEOUT_MS = 7000; // 7 seconds (5s + 2s buffer for jitter/processing)
+    this.chunkIdCounter = 0;
+    
+    // Track pending chunks in send order for better timeout clearing
+    this.pendingChunks = []; // Array of { chunkId, sendTimestamp }
   }
 
   /**
@@ -218,6 +240,23 @@ export class GoogleSpeechStream {
    * Restart the stream (for long sessions)
    */
   async restartStream() {
+    // Clear jitter buffer and retry tracking on restart
+    this.clearJitterBuffer();
+    
+    // Clear all retry timers
+    for (const [chunkId, retryInfo] of this.chunkRetryMap.entries()) {
+      if (retryInfo.retryTimer) {
+        clearTimeout(retryInfo.retryTimer);
+      }
+    }
+    this.chunkRetryMap.clear();
+    
+    // Clear all chunk timeouts
+    for (const [chunkId, timeoutInfo] of this.chunkTimeouts.entries()) {
+      clearTimeout(timeoutInfo.timeout);
+    }
+    this.chunkTimeouts.clear();
+    this.pendingChunks = [];
     // Prevent multiple simultaneous restarts
     if (this.isRestarting) {
       console.log('[GoogleSpeech] Restart already in progress, skipping...');
@@ -280,6 +319,20 @@ export class GoogleSpeechStream {
     const isFinal = result.isFinal;
     const stability = result.stability || 0;
 
+    // Clear chunk timeouts on successful result
+    // Google Speech processes chunks in order, so clear oldest pending chunks
+    // Clear multiple timeouts since partial results come frequently and might clear multiple chunks
+    const chunksToClear = Math.min(
+      isFinal ? 3 : 1, // Final results might correspond to multiple chunks, partials usually 1
+      this.pendingChunks.length
+    );
+    
+    for (let i = 0; i < chunksToClear && this.pendingChunks.length > 0; i++) {
+      const oldestChunk = this.pendingChunks.shift();
+      this.clearChunkTimeout(oldestChunk.chunkId);
+      console.log(`[GoogleSpeech] ✅ Cleared timeout for chunk ${oldestChunk.chunkId} (result received)`);
+    }
+
     if (isFinal) {
       // Final result - high confidence
       console.log(`[GoogleSpeech] ✅ FINAL: "${transcript}"`);
@@ -308,27 +361,30 @@ export class GoogleSpeechStream {
   }
 
   /**
-   * Process audio chunk - send to Google Speech
+   * Release chunk from jitter buffer to Google Speech
+   * @param {string} chunkId - Unique chunk identifier
    * @param {string} audioData - Base64 encoded PCM audio
+   * @param {object} metadata - Optional metadata
    */
-  async processAudio(audioData) {
+  async releaseChunkFromBuffer(chunkId, audioData, metadata = {}) {
     try {
-      // Track last audio time for timeout detection
-      this.lastAudioTime = Date.now();
-
+      // Track chunk send time for timeout detection
+      const sendTimestamp = Date.now();
+      
       // Check if stream is ready
       if (!this.isStreamReady()) {
-        // Buffer audio if stream is restarting
-        if (this.isRestarting) {
-          this.audioQueue.push(audioData);
-          return;
-        }
-
-        console.warn('[GoogleSpeech] Stream not ready, attempting restart...');
-        this.audioQueue.push(audioData);
+        // If stream not ready, check if we should retry or give up
+        const existingRetry = this.chunkRetryMap.get(chunkId);
+        const attempts = existingRetry ? existingRetry.attempts : 0;
         
-        if (!this.isRestarting) {
-          await this.restartStream();
+        // Only retry if we haven't exceeded max attempts and stream is just restarting (not inactive)
+        if (attempts < this.MAX_CHUNK_RETRIES && !this.isRestarting && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+          this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
+        } else {
+          // Give up - stream inactive or too many attempts
+          console.log(`[GoogleSpeech] ⚠️ Giving up on chunk ${chunkId} - stream not ready and conditions not met for retry`);
+          this.chunkRetryMap.delete(chunkId);
+          this.clearChunkTimeout(chunkId);
         }
         return;
       }
@@ -336,8 +392,8 @@ export class GoogleSpeechStream {
       // Check if we need to restart due to time limit
       const elapsedTime = Date.now() - this.startTime;
       if (elapsedTime >= this.STREAMING_LIMIT) {
-        console.log('[GoogleSpeech] Time limit reached, restarting stream...');
-        this.audioQueue.push(audioData);
+        console.log('[GoogleSpeech] Time limit reached, queuing chunk for retry after restart...');
+        this.queueChunkForRetry(chunkId, audioData, metadata, 0);
         await this.restartStream();
         return;
       }
@@ -345,28 +401,265 @@ export class GoogleSpeechStream {
       // Convert base64 to Buffer
       const audioBuffer = Buffer.from(audioData, 'base64');
 
-      // Double-check stream is still ready (can change during async operations)
+      // Double-check stream is still ready
       if (this.isStreamReady()) {
         this.recognizeStream.write(audioBuffer);
+        
+        // Set per-chunk timeout (5s)
+        this.setChunkTimeout(chunkId, sendTimestamp, audioData, metadata);
+        
+        // Track last audio time
+        this.lastAudioTime = Date.now();
       } else {
-        console.warn('[GoogleSpeech] Stream became unavailable, queuing audio...');
-        this.audioQueue.push(audioData);
+        console.warn('[GoogleSpeech] Stream became unavailable, checking if retry is needed...');
+        const existingRetry = this.chunkRetryMap.get(chunkId);
+        const attempts = existingRetry ? existingRetry.attempts : 0;
+        
+        // Only retry if conditions are met
+        if (attempts < this.MAX_CHUNK_RETRIES && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+          this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
+        } else {
+          // Give up - too many attempts or audio stopped
+          console.log(`[GoogleSpeech] ⚠️ Giving up on chunk ${chunkId} - too many attempts or audio stopped`);
+          this.chunkRetryMap.delete(chunkId);
+          this.clearChunkTimeout(chunkId);
+        }
         
         if (!this.isRestarting) {
           await this.restartStream();
         }
       }
     } catch (error) {
-      console.error('[GoogleSpeech] Error processing audio:', error.message);
-
-      // Mark as inactive on error
-      this.isActive = false;
-
-      // Try to restart on error if not already restarting
-      if (!this.isRestarting && this.shouldAutoRestart) {
-        console.log('[GoogleSpeech] Attempting restart after audio processing error...');
-        await this.restartStream();
+      console.error('[GoogleSpeech] Error releasing chunk:', error.message);
+      const existingRetry = this.chunkRetryMap.get(chunkId);
+      const attempts = existingRetry ? existingRetry.attempts : 0;
+      
+      // Only retry on error if conditions are met
+      if (attempts < this.MAX_CHUNK_RETRIES && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+        this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
+      } else {
+        this.chunkRetryMap.delete(chunkId);
+        this.clearChunkTimeout(chunkId);
       }
+    }
+  }
+
+  /**
+   * Set timeout for chunk processing (7s to account for jitter buffer + processing)
+   */
+  setChunkTimeout(chunkId, sendTimestamp, audioData, metadata) {
+    // Clear any existing timeout for this chunk
+    if (this.chunkTimeouts.has(chunkId)) {
+      clearTimeout(this.chunkTimeouts.get(chunkId).timeout);
+    }
+    
+    // Remove from pending chunks if already there (avoid duplicates)
+    this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
+    
+    // Add to pending chunks queue (FIFO)
+    this.pendingChunks.push({ chunkId, sendTimestamp });
+    
+    const timeoutHandle = setTimeout(() => {
+      const elapsed = Date.now() - sendTimestamp;
+      console.warn(`[GoogleSpeech] ⚠️ Chunk ${chunkId} timeout after ${elapsed}ms (${this.CHUNK_TIMEOUT_MS}ms limit)`);
+      
+      // Remove from timeout tracking and pending chunks
+      this.chunkTimeouts.delete(chunkId);
+      this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
+      
+      // Queue for retry
+      const retryInfo = this.chunkRetryMap.get(chunkId);
+      const attempts = retryInfo ? retryInfo.attempts : 0;
+      this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
+    }, this.CHUNK_TIMEOUT_MS);
+    
+    this.chunkTimeouts.set(chunkId, { timeout: timeoutHandle, sendTimestamp });
+  }
+
+  /**
+   * Clear chunk timeout (called when result received)
+   */
+  clearChunkTimeout(chunkId) {
+    if (this.chunkTimeouts.has(chunkId)) {
+      const timeoutInfo = this.chunkTimeouts.get(chunkId);
+      clearTimeout(timeoutInfo.timeout);
+      this.chunkTimeouts.delete(chunkId);
+    }
+    
+    // Also remove from pending chunks
+    this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
+  }
+
+  /**
+   * Queue chunk for retry with exponential backoff
+   */
+  queueChunkForRetry(chunkId, audioData, metadata, currentAttempts) {
+    // Prevent infinite retry loops - check if already retrying
+    const existingRetry = this.chunkRetryMap.get(chunkId);
+    if (existingRetry && existingRetry.retryTimer) {
+      // Already scheduled for retry, don't schedule another
+      console.log(`[GoogleSpeech] ⚠️ Chunk ${chunkId} already has retry scheduled, skipping duplicate`);
+      return;
+    }
+    
+    if (currentAttempts >= this.MAX_CHUNK_RETRIES) {
+      console.error(`[GoogleSpeech] ❌ Chunk ${chunkId} failed after ${this.MAX_CHUNK_RETRIES} retries, giving up`);
+      this.chunkRetryMap.delete(chunkId);
+      return;
+    }
+    
+    // Don't retry if stream is restarting or if audio has been stopped for a while
+    // Check if audio stopped more than 2 seconds ago (likely user paused)
+    const audioStopped = this.lastAudioTime && (Date.now() - this.lastAudioTime > 2000);
+    if (this.isRestarting || audioStopped) {
+      console.log(`[GoogleSpeech] ⚠️ Skipping retry for chunk ${chunkId} - stream restarting or audio stopped`);
+      this.chunkRetryMap.delete(chunkId);
+      return;
+    }
+    
+    const nextAttempt = currentAttempts + 1;
+    const backoffDelay = this.RETRY_BACKOFF_MS[Math.min(currentAttempts, this.RETRY_BACKOFF_MS.length - 1)];
+    
+    const retryInfo = {
+      attempts: nextAttempt,
+      chunkData: audioData,
+      metadata: metadata,
+      lastAttempt: Date.now(),
+      retryTimer: null // Will be set below
+    };
+    
+    this.chunkRetryMap.set(chunkId, retryInfo);
+    
+    console.log(`[GoogleSpeech] 🔄 Scheduling retry ${nextAttempt}/${this.MAX_CHUNK_RETRIES} for chunk ${chunkId} in ${backoffDelay}ms`);
+    
+    const retryTimer = setTimeout(async () => {
+      // Remove timer reference
+      const currentRetry = this.chunkRetryMap.get(chunkId);
+      if (currentRetry) {
+        currentRetry.retryTimer = null;
+      }
+      
+      // Check if chunk still needs retry and stream is ready
+      const stillPending = this.chunkRetryMap.get(chunkId);
+      if (stillPending && stillPending.attempts === nextAttempt) {
+        // Only retry if stream is ready and audio is still active
+        if (this.isStreamReady() && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+          await this.releaseChunkFromBuffer(chunkId, audioData, metadata);
+        } else {
+          // Stream not ready or audio stopped - give up
+          console.log(`[GoogleSpeech] ⚠️ Abandoning retry for chunk ${chunkId} - stream not ready or audio stopped`);
+          this.chunkRetryMap.delete(chunkId);
+        }
+      }
+    }, backoffDelay);
+    
+    // Store timer reference so we can cancel it if needed
+    retryInfo.retryTimer = retryTimer;
+  }
+
+  /**
+   * Process audio chunk - add to jitter buffer and release after delay
+   * @param {string} audioData - Base64 encoded PCM audio
+   * @param {object} metadata - Optional metadata (chunkIndex, startMs, endMs, clientTimestamp)
+   */
+  async processAudio(audioData, metadata = {}) {
+    // Generate unique chunk ID
+    const chunkId = `chunk_${this.chunkIdCounter++}_${Date.now()}`;
+    
+    // Add to jitter buffer with timestamp
+    const now = Date.now();
+    this.jitterBuffer.push({
+      chunkId,
+      audioData,
+      metadata,
+      receivedAt: now,
+      shouldReleaseAt: now + this.jitterBufferDelay
+    });
+    
+    // Sort buffer by receive time to handle out-of-order chunks
+    this.jitterBuffer.sort((a, b) => a.receivedAt - b.receivedAt);
+    
+    // Process jitter buffer - release chunks that are ready
+    this.processJitterBuffer();
+  }
+
+  /**
+   * Process jitter buffer - release chunks that are ready based on delay
+   */
+  processJitterBuffer() {
+    const now = Date.now();
+    
+    // Clear any existing timer
+    if (this.jitterBufferTimer) {
+      clearTimeout(this.jitterBufferTimer);
+    }
+    
+    // Release all chunks that are ready (past their release time)
+    while (this.jitterBuffer.length > 0) {
+      const chunk = this.jitterBuffer[0];
+      const delay = now - chunk.receivedAt;
+      
+      // Release if delay is at least jitterBufferMin (200ms) and past release time
+      if (delay >= this.jitterBufferMin && now >= chunk.shouldReleaseAt) {
+        const released = this.jitterBuffer.shift();
+        this.releaseChunkFromBuffer(released.chunkId, released.audioData, released.metadata);
+        this.lastJitterRelease = now;
+      } else {
+        // Calculate when next chunk should be released
+        const timeUntilRelease = chunk.shouldReleaseAt - now;
+        if (timeUntilRelease > 0) {
+          this.jitterBufferTimer = setTimeout(() => {
+            this.processJitterBuffer();
+          }, Math.min(timeUntilRelease, 50)); // Check at least every 50ms
+        }
+        break;
+      }
+    }
+    
+    // If buffer still has items but no timer set, set one
+    if (this.jitterBuffer.length > 0 && !this.jitterBufferTimer) {
+      const nextChunk = this.jitterBuffer[0];
+      const timeUntilRelease = nextChunk.shouldReleaseAt - now;
+      if (timeUntilRelease > 0) {
+        this.jitterBufferTimer = setTimeout(() => {
+          this.processJitterBuffer();
+        }, Math.min(timeUntilRelease, 50));
+      }
+    }
+  }
+  
+  /**
+   * Clear chunk retry (cancel retry timer and remove from map)
+   */
+  clearChunkRetry(chunkId) {
+    const retryInfo = this.chunkRetryMap.get(chunkId);
+    if (retryInfo) {
+      if (retryInfo.retryTimer) {
+        clearTimeout(retryInfo.retryTimer);
+        retryInfo.retryTimer = null;
+      }
+      this.chunkRetryMap.delete(chunkId);
+    }
+  }
+  
+  clearJitterBuffer() {
+    // Release all pending chunks immediately before clearing
+    while (this.jitterBuffer.length > 0) {
+      const chunk = this.jitterBuffer.shift();
+      // Clear retry tracking for chunks being cleared
+      this.clearChunkRetry(chunk.chunkId);
+      this.clearChunkTimeout(chunk.chunkId);
+    }
+    
+    if (this.jitterBufferTimer) {
+      clearTimeout(this.jitterBufferTimer);
+      this.jitterBufferTimer = null;
+    }
+    
+    // Also clear any pending chunks that were sent but not yet timed out
+    for (const pending of this.pendingChunks) {
+      this.clearChunkTimeout(pending.chunkId);
+      this.clearChunkRetry(pending.chunkId);
     }
   }
 

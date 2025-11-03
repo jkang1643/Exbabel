@@ -125,8 +125,8 @@ export function HostPage({ onBackToHome }) {
   const segmenterRef = useRef(null);
   if (!segmenterRef.current) {
     segmenterRef.current = new SentenceSegmenter({
-      maxSentences: 3,
-      maxChars: 500,
+      maxSentences: 10,     // Increased to allow more sentences in live view
+      maxChars: 2000,       // Increased to handle longer text (prevents premature flushing)
       maxTimeMs: 15000,
       onFlush: (flushedSentences) => {
         const joinedText = flushedSentences.join(' ').trim();

@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { Volume2, Copy, Download } from 'lucide-react'
 
 function TranslationDisplay({ 
-  finalTranslations, 
+  finalTranslations = [],  // Default to empty array to prevent undefined errors
   livePartial, 
   livePartialOriginal,
   audioEnabled, 
@@ -10,6 +10,9 @@ function TranslationDisplay({
   sourceLang, 
   targetLang
 }) {
+  // CRITICAL: Ensure finalTranslations is always an array
+  const safeFinalTranslations = Array.isArray(finalTranslations) ? finalTranslations : [];
+  
   const isTranscriptionMode = sourceLang === targetLang
   const isTranslationMode = !isTranscriptionMode
   const transcriptBoxRef = useRef(null)
@@ -21,6 +24,14 @@ function TranslationDisplay({
       console.log('[TranslationDisplay] 🔴 LIVE PARTIAL RENDER:', livePartial.substring(0, 50))
     }
   }, [livePartial])
+  
+  // DEBUG: Log when finalTranslations changes
+  useEffect(() => {
+    const count = safeFinalTranslations.length;
+    console.log('[TranslationDisplay] 📝 FINAL TRANSLATIONS CHANGED:', count, 'items');
+    console.log('[TranslationDisplay] 📝 Safe final translations:', safeFinalTranslations);
+    console.log('[TranslationDisplay] 📝 Raw prop - isArray:', Array.isArray(finalTranslations), 'isDefined:', finalTranslations !== undefined, 'isNull:', finalTranslations === null, 'value:', finalTranslations);
+  }, [finalTranslations, safeFinalTranslations])
   
   // Auto-scroll to bottom when live partial updates
   useEffect(() => {
@@ -34,7 +45,7 @@ function TranslationDisplay({
   }
 
   const downloadTranscript = () => {
-    const content = finalTranslations.map(t => 
+    const content = safeFinalTranslations.map(t => 
       `${isTranscriptionMode ? 'Transcription' : 'Original'}: ${t.original || t.translated}\n${isTranscriptionMode ? '' : `Translated: ${t.translated}\n`}---`
     ).join('\n')
     
@@ -58,7 +69,7 @@ function TranslationDisplay({
         </h3>
         <button
           onClick={downloadTranscript}
-          disabled={finalTranslations.length === 0}
+          disabled={safeFinalTranslations.length === 0}
           className="flex items-center space-x-1 px-2 sm:px-3 py-1 text-xs sm:text-sm text-gray-600 hover:text-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Download className="w-3 h-3 sm:w-4 sm:h-4" />
@@ -134,7 +145,13 @@ function TranslationDisplay({
                   </span>
                 )}
               </div>
-              {livePartial ? (
+              {/* CRITICAL: Only show livePartial if it's different from original (prevents English glitch) */}
+              {/* Check multiple ways to ensure we never show English in translation box */}
+              {livePartial && 
+               livePartial.trim() && 
+               livePartial !== livePartialOriginal && 
+               livePartial.trim() !== livePartialOriginal.trim() &&
+               livePartial.toLowerCase() !== livePartialOriginal.toLowerCase() ? (
                 <p className="text-white text-base sm:text-lg font-medium leading-relaxed whitespace-pre-wrap">
                   {livePartial}
                   {isListening && (
@@ -142,6 +159,7 @@ function TranslationDisplay({
                   )}
                 </p>
               ) : livePartialOriginal ? (
+                // Show "Translating..." when we have original but no translation yet
                 <p className="text-white/50 text-xs sm:text-sm italic animate-pulse">Translating...</p>
               ) : (
                 <p className="text-white/40 text-xs sm:text-sm italic">Waiting for speech...</p>
@@ -197,20 +215,21 @@ function TranslationDisplay({
       </div>
 
       {/* HISTORY - Completed paragraphs scroll below */}
-      {finalTranslations.length > 0 && (
+      {/* CRITICAL: Always render history if there are items - use safeFinalTranslations to ensure it's always an array */}
+      {safeFinalTranslations.length > 0 && (
         <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-3 sm:mx-0">
           <div className="flex items-center justify-between mb-3 sm:mb-4">
             <h4 className="text-xs sm:text-sm font-semibold text-gray-700 flex items-center gap-1 sm:gap-2">
               <span className="text-blue-600">📝</span>
               History
               <span className="text-xs text-gray-500 font-normal">
-                ({finalTranslations.length})
+                ({safeFinalTranslations.length})
               </span>
             </h4>
           </div>
           
           <div className="space-y-2 sm:space-y-3 max-h-80 sm:max-h-96 overflow-y-auto pr-1 sm:pr-2">
-            {finalTranslations.slice().reverse().map((translation, index) => (
+            {safeFinalTranslations.slice().reverse().map((translation, index) => (
               <div 
                 key={translation.id} 
                 className="bg-white rounded-lg p-3 sm:p-4 shadow-sm hover:shadow-md transition-all border border-gray-200 animate-fadeIn"
@@ -260,7 +279,7 @@ function TranslationDisplay({
                 
                 <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-gray-100 text-xs text-gray-400 flex items-center justify-between">
                   <span>{new Date(translation.timestamp).toLocaleTimeString()}</span>
-                  <span className="text-gray-300">#{finalTranslations.length - index}</span>
+                  <span className="text-gray-300">#{safeFinalTranslations.length - index}</span>
                 </div>
               </div>
             ))}
@@ -269,7 +288,7 @@ function TranslationDisplay({
       )}
 
       {/* Empty State */}
-      {finalTranslations.length === 0 && !livePartial && !isListening && (
+      {safeFinalTranslations.length === 0 && !livePartial && !isListening && (
         <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-lg sm:rounded-xl p-6 sm:p-12 text-center border-2 border-dashed border-blue-300 -mx-3 sm:mx-0">
           <div className="space-y-2 sm:space-y-3">
             <div className="text-4xl sm:text-5xl">🎤</div>

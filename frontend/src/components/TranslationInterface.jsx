@@ -8,6 +8,7 @@ import { Header } from './Header'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useAudioCapture } from '../hooks/useAudioCapture'
 import { SentenceSegmenter } from '../utils/sentenceSegmenter'
+import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection'
 
 const LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -75,6 +76,20 @@ function TranslationInterface({ onBackToHome }) {
   const [livePartialOriginal, setLivePartialOriginal] = useState('') // 🔴 LIVE original (for translation mode)
   const [finalTranslations, setFinalTranslations] = useState([]) // 📝 Completed translations
   
+  // DEBUG: Log when finalTranslations state changes and detect if it's being cleared
+  useEffect(() => {
+    const count = Array.isArray(finalTranslations) ? finalTranslations.length : 0;
+    console.log('[TranslationInterface] 📝 STATE: finalTranslations updated to', count, 'items');
+    console.log('[TranslationInterface] 📝 STATE: finalTranslations value:', finalTranslations);
+    if (count === 0 && finalTranslations !== undefined && !Array.isArray(finalTranslations)) {
+      console.error('[TranslationInterface] ❌ CRITICAL: finalTranslations is not an array!', typeof finalTranslations, finalTranslations);
+    }
+  }, [finalTranslations])
+  
+  // CRITICAL: Ensure finalTranslations is always an array (never null/undefined)
+  // This prevents the history box from disappearing due to type issues
+  const safeFinalTranslations = Array.isArray(finalTranslations) ? finalTranslations : [];
+  
   const [showSettings, setShowSettings] = useState(false)
   const [audioEnabled, setAudioEnabled] = useState(true)
   const [latency, setLatency] = useState(0)
@@ -90,8 +105,8 @@ function TranslationInterface({ onBackToHome }) {
   
   if (!segmenterRef.current) {
     segmenterRef.current = new SentenceSegmenter({
-      maxSentences: 3,      // Keep max 3 sentences in live view
-      maxChars: 500,        // Force flush after 500 chars
+      maxSentences: 10,     // Increased to allow more sentences in live view (prevents premature flushing)
+      maxChars: 2000,       // Increased to handle longer text (prevents premature flushing after 4 lines)
       maxTimeMs: 15000,     // Force flush after 15 seconds
       onFlush: (flushedSentences) => {
         // Move flushed sentences to history with forced paint
@@ -160,12 +175,118 @@ function TranslationInterface({ onBackToHome }) {
     audioLevel,
     availableDevices,
     selectedDeviceId,
-    setSelectedDeviceId
+    setSelectedDeviceId,
+    audioSource,
+    setAudioSource
   } = useAudioCapture()
+  
+  // Check device capabilities
+  const isMobile = isMobileDevice()
+  const systemAudioSupported = isSystemAudioSupported()
 
+  // Sequence tracking to prevent stale partials
+  const latestSeqIdRef = useRef(-1);
+  
+  // Pending final tracking for confirmation window
+  const pendingFinalRef = useRef(null);
+  
+  // Helper function to commit final to history
+  // CRITICAL: Use ref to store function to avoid closure issues in timeout callbacks
+  const commitFinalToHistoryRef = useRef(null);
+  
+  // Define the commit function - recreate when component mounts/updates
+  useEffect(() => {
+    commitFinalToHistoryRef.current = (finalData) => {
+      console.log(`[TranslationInterface] ✅ COMMIT FUNCTION CALLED - seqId=${finalData?.seqId}`, finalData)
+      
+      if (!finalData || !finalData.text) {
+        console.warn('[TranslationInterface] ⚠️ Invalid finalData, skipping commit');
+        return;
+      }
+      
+      // Process through segmenter to flush ONLY NEW text (deduplicated)
+      const { flushedSentences } = segmenterRef.current.processFinal(finalData.text)
+      
+      console.log(`[TranslationInterface] 📊 Segmenter returned ${flushedSentences.length} sentences:`, flushedSentences);
+      
+      // Add deduplicated sentences to history - use flushSync for immediate UI update
+      if (flushedSentences.length > 0) {
+        const joinedText = flushedSentences.join(' ').trim()
+        if (joinedText) {
+          flushSync(() => {
+            setFinalTranslations(prev => {
+              const newHistory = [...prev, {
+                id: Date.now(),
+                original: finalData.original || '',
+                translated: joinedText,
+                timestamp: finalData.timestamp || Date.now(),
+                sequenceId: finalData.seqId
+              }]
+              console.log(`[TranslationInterface] ✅ STATE UPDATED - New history total: ${newHistory.length} items`);
+              return newHistory;
+            })
+          })
+          console.log(`[TranslationInterface] ✅ Added to history: "${joinedText.substring(0, 50)}..."`);
+        }
+      } else {
+        // FALLBACK: If segmenter deduplicated everything, still add the final text if it's substantial
+        // This ensures history appears even if deduplication is too aggressive
+        const finalText = finalData.text.trim();
+        if (finalText.length > 10) {
+          console.log(`[TranslationInterface] ⚠️ Segmenter deduplicated all, using fallback`);
+          flushSync(() => {
+            setFinalTranslations(prev => {
+              const newHistory = [...prev, {
+                id: Date.now(),
+                original: finalData.original || '',
+                translated: finalText,
+                timestamp: finalData.timestamp || Date.now(),
+                sequenceId: finalData.seqId
+              }]
+              console.log(`[TranslationInterface] ✅ FALLBACK STATE UPDATED - New history total: ${newHistory.length} items`);
+              return newHistory;
+            })
+          })
+        } else {
+          console.log('[TranslationInterface] ⚠️ No new sentences and text too short - NOT adding to history');
+        }
+      }
+      
+      // Clear live partial for next segment
+      setLivePartial('')
+      setLivePartialOriginal('')
+      
+      // Calculate latency from server timestamp if available
+      if (finalData.serverTimestamp) {
+        setLatency(Date.now() - finalData.serverTimestamp);
+      } else {
+        setLatency(Date.now() - (finalData.timestamp || Date.now()));
+      }
+    };
+  }, []); // Only set once on mount
+  
+  // Also create a stable reference function for use in callbacks
+  const commitFinalToHistory = useCallback((finalData) => {
+    if (commitFinalToHistoryRef.current) {
+      commitFinalToHistoryRef.current(finalData);
+    } else {
+      console.error('[TranslationInterface] ❌ commitFinalToHistoryRef.current is null!');
+    }
+  }, []);
+  
   // Define message handler with useCallback to prevent re-creation
   const handleWebSocketMessage = useCallback((message) => {
-    console.log('[TranslationInterface] 🔔 MESSAGE HANDLER CALLED:', message.type, message.isPartial ? '(PARTIAL)' : '(FINAL)')
+    console.log('[TranslationInterface] 🔔 MESSAGE HANDLER CALLED:', message.type, message.isPartial ? '(PARTIAL)' : '(FINAL)', `seqId: ${message.seqId}`)
+    
+    // Drop stale messages (out of order)
+    if (message.seqId !== undefined && message.seqId < latestSeqIdRef.current) {
+      console.log(`[TranslationInterface] ⚠️ Dropping stale message seqId=${message.seqId} (latest=${latestSeqIdRef.current})`);
+      return;
+    }
+    
+    if (message.seqId !== undefined) {
+      latestSeqIdRef.current = Math.max(latestSeqIdRef.current, message.seqId);
+    }
     
     switch (message.type) {
       case 'session_ready':
@@ -180,39 +301,121 @@ function TranslationInterface({ onBackToHome }) {
           // For translation mode, show both original and translated
           if (isTranslationMode) {
             // Always update original immediately (transcription is instant)
-            const originalText = message.originalText
+            const originalText = message.originalText || ''
             if (originalText) {
               setLivePartialOriginal(originalText)
             }
             
             // Update translation (might be delayed due to throttling)
-            if (hasTranslation && message.translatedText) {
-              const translatedText = message.translatedText
-              const now = Date.now()
+            // Show translation when hasTranslation is true OR when translatedText exists
+            const translatedText = message.translatedText
+            
+            if (hasTranslation && translatedText && translatedText.trim()) {
+              // CRITICAL: Only show translation if it's DIFFERENT from original (prevents English glitch)
+              // Check both exact match and trimmed match to catch all cases
+              const isDifferent = translatedText !== originalText && 
+                                  translatedText.trim() !== originalText.trim() &&
+                                  translatedText.toLowerCase() !== originalText.toLowerCase();
               
-              pendingTextRef.current = translatedText
-              const timeSinceLastUpdate = now - lastUpdateTimeRef.current
-              
-              if (timeSinceLastUpdate >= 50) {
-                lastUpdateTimeRef.current = now
-                flushSync(() => {
-                  setLivePartial(translatedText)
-                })
-              } else {
-                if (throttleTimerRef.current) {
-                  clearTimeout(throttleTimerRef.current)
-                }
+              if (isDifferent) {
+                const now = Date.now()
                 
+                pendingTextRef.current = translatedText
+                const timeSinceLastUpdate = now - lastUpdateTimeRef.current
+                
+                // Adaptive throttle: Longer translations need more frequent updates
+                // For longer text (>300 chars), reduce throttle to 30ms to keep up
+                const throttleMs = translatedText.length > 300 ? 30 : 50;
+                
+                if (timeSinceLastUpdate >= throttleMs) {
+                  lastUpdateTimeRef.current = now
+                  flushSync(() => {
+                    setLivePartial(translatedText)
+                  })
+                  console.log(`[TranslationInterface] ⚡ LIVE PARTIAL UPDATED (${translatedText.length} chars): "${translatedText.substring(0, 40)}..."`)
+                } else {
+                  if (throttleTimerRef.current) {
+                    clearTimeout(throttleTimerRef.current)
+                  }
+                  
                 throttleTimerRef.current = setTimeout(() => {
                   const latestText = pendingTextRef.current
-                  if (latestText !== null) {
-                    lastUpdateTimeRef.current = Date.now()
-                    flushSync(() => {
-                      setLivePartial(latestText)
-                    })
+                  // CRITICAL: Always update if we have text, even if it matches original briefly
+                  // This ensures the last translation update always shows
+                  if (latestText !== null && latestText.trim()) {
+                    // Check if different from original (but don't skip if it's the last update)
+                    const isDifferent = latestText !== originalText && 
+                                        latestText.trim() !== originalText.trim();
+                    
+                    // For long text, always update even if same - might be final translation
+                    const isLongText = latestText.length > 300;
+                    if (isDifferent || isLongText) {
+                      lastUpdateTimeRef.current = Date.now()
+                      flushSync(() => {
+                        setLivePartial(latestText)
+                      })
+                      console.log(`[TranslationInterface] ⏱️ THROTTLED LIVE PARTIAL (${latestText.length} chars): "${latestText.substring(0, 40)}..."`)
+                    }
                   }
-                }, 50)
+                }, throttleMs)
+                }
+              } else {
+                console.log('[TranslationInterface] ⚠️ Translation equals original, skipping to prevent English glitch', {
+                  translatedLength: translatedText.length,
+                  originalLength: originalText.length,
+                  areEqual: translatedText === originalText
+                });
               }
+            } else if (translatedText && translatedText.trim()) {
+              // Fallback: Only show if it's definitely different from original
+              const isDifferent = translatedText !== originalText && 
+                                  translatedText.trim() !== originalText.trim() &&
+                                  translatedText.toLowerCase() !== originalText.toLowerCase();
+              
+              if (isDifferent) {
+                // Fallback: If translatedText exists and is different, show it even without hasTranslation flag
+                const now = Date.now()
+                pendingTextRef.current = translatedText
+                const timeSinceLastUpdate = now - lastUpdateTimeRef.current
+                
+                if (timeSinceLastUpdate >= 50) {
+                  lastUpdateTimeRef.current = now
+                  flushSync(() => {
+                    setLivePartial(translatedText)
+                  })
+                  console.log(`[TranslationInterface] ⚡ FALLBACK LIVE PARTIAL: "${translatedText.substring(0, 40)}..."`)
+                } else {
+                  if (throttleTimerRef.current) {
+                    clearTimeout(throttleTimerRef.current)
+                  }
+                  throttleTimerRef.current = setTimeout(() => {
+                    const latestText = pendingTextRef.current
+                    // CRITICAL: Always update if we have text - ensure last translation shows
+                    if (latestText !== null && latestText.trim()) {
+                      const isDifferent = latestText !== originalText && 
+                                          latestText.trim() !== originalText.trim();
+                      const isLongText = latestText.length > 300;
+                      if (isDifferent || isLongText) {
+                        lastUpdateTimeRef.current = Date.now()
+                        flushSync(() => {
+                          setLivePartial(latestText)
+                        })
+                        console.log(`[TranslationInterface] ⏱️ FALLBACK THROTTLED: "${latestText.substring(0, 40)}..."`)
+                      }
+                    }
+                  }, 50)
+                }
+              } else {
+                console.log('[TranslationInterface] ⚠️ Fallback translation equals original, skipping');
+              }
+            } else {
+              // No translation yet - don't update livePartial (prevents English from showing)
+              // CRITICAL: Also clear livePartial if it matches original (defensive cleanup)
+              if (livePartial && livePartial === livePartialOriginal) {
+                console.log('[TranslationInterface] 🧹 CLEANUP: Clearing livePartial that matches original');
+                setLivePartial('')
+              }
+              console.log('[TranslationInterface] ⏳ Waiting for translation...', { hasTranslation, hasTranslatedText: !!translatedText, originalLength: originalText.length });
             }
           } else {
             // Transcription-only mode - just show the text
@@ -254,29 +457,49 @@ function TranslationInterface({ onBackToHome }) {
             }
           }
         } else {
-          // 📝 FINAL: Process through segmenter to flush ONLY NEW text (deduplicated)
+          // 📝 FINAL: Commit immediately to history (restored simple approach)
           const finalText = message.translatedText
-          console.log(`[TranslationInterface] 📝 FINAL: "${finalText.substring(0, 50)}..." - Processing through segmenter`)
+          const finalSeqId = message.seqId
+          console.log(`[TranslationInterface] 📝 FINAL received seqId=${finalSeqId}: "${finalText.substring(0, 50)}..."`)
           
-          // Segmenter deduplicates and returns only new sentences
-          const { flushedSentences } = segmenterRef.current.processFinal(finalText)
-          
-          // Add deduplicated sentences to history
-          if (flushedSentences.length > 0) {
-            const joinedText = flushedSentences.join(' ').trim()
-            setFinalTranslations(prev => [...prev, {
-              id: Date.now(),
-              original: message.originalText || '',
-              translated: joinedText,
-              timestamp: message.timestamp || Date.now(),
-              sequenceId: message.sequenceId
-            }])
+          // Cancel any pending final timeout (in case we had one)
+          if (pendingFinalRef.current && pendingFinalRef.current.timeout) {
+            clearTimeout(pendingFinalRef.current.timeout);
+            pendingFinalRef.current = null;
           }
           
-          // Clear live partial for next segment
-          setLivePartial('')
-          setLivePartialOriginal('')
-          setLatency(Date.now() - (message.timestamp || Date.now()))
+          // Commit immediately - process through segmenter and add to history
+          const finalData = {
+            text: finalText,
+            original: message.originalText || '',
+            timestamp: message.timestamp || Date.now(),
+            serverTimestamp: message.serverTimestamp,
+            seqId: finalSeqId
+          };
+          
+          // Call commit function immediately
+          if (commitFinalToHistoryRef.current) {
+            commitFinalToHistoryRef.current(finalData);
+          } else {
+            console.error('[TranslationInterface] ❌ commitFinalToHistoryRef.current is null, using fallback');
+            // FALLBACK: Direct commit if ref isn't ready
+            const { flushedSentences } = segmenterRef.current.processFinal(finalText);
+            if (flushedSentences.length > 0 || finalText.length > 10) {
+              const textToAdd = flushedSentences.length > 0 ? flushedSentences.join(' ').trim() : finalText;
+              if (textToAdd) {
+                setFinalTranslations(prev => [...prev, {
+                  id: Date.now(),
+                  original: finalData.original,
+                  translated: textToAdd,
+                  timestamp: finalData.timestamp,
+                  sequenceId: finalSeqId
+                }]);
+                console.log(`[TranslationInterface] ✅ FALLBACK: Added to history: "${textToAdd.substring(0, 50)}..."`);
+              }
+            }
+            setLivePartial('')
+            setLivePartialOriginal('')
+          }
         }
         break
       case 'warning':
@@ -294,7 +517,7 @@ function TranslationInterface({ onBackToHome }) {
       default:
         console.log('[TranslationInterface] ⚠️ Unknown message type:', message.type)
     }
-  }, []) // No dependencies - handler is stable
+  }, [commitFinalToHistory]) // Include commitFinalToHistory in dependencies
   
   useEffect(() => {
     console.log('[TranslationInterface] 🚀 Initializing WebSocket connection')
@@ -303,12 +526,30 @@ function TranslationInterface({ onBackToHome }) {
     // Add message handler
     const removeHandler = addMessageHandler(handleWebSocketMessage)
     
+    // Handle tab visibility changes (background/foreground)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        console.log('[TranslationInterface] 📴 Tab hidden - notifying server');
+        sendMessage({
+          type: 'client_hidden'
+        });
+      } else {
+        console.log('[TranslationInterface] 📴 Tab visible - notifying server');
+        sendMessage({
+          type: 'client_visible'
+        });
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
     return () => {
       console.log('[TranslationInterface] 🔌 Cleaning up WebSocket')
       removeHandler()
       disconnect()
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     }
-  }, [handleWebSocketMessage])
+  }, [handleWebSocketMessage, sendMessage])
 
   useEffect(() => {
     if (connectionState === 'open') {
@@ -333,19 +574,43 @@ function TranslationInterface({ onBackToHome }) {
     
     try {
       // Enable streaming mode (second parameter = true)
-      await startRecording((audioChunk) => {
-        // Send audio chunk to backend in real-time with language information
-        sendMessage({
+      await startRecording((audioChunk, metadata) => {
+        // Send audio chunk to backend in real-time with language information and metadata
+        const message = {
           type: 'audio',
           audioData: audioChunk,
           sourceLang: sourceLang,
           targetLang: targetLang,
           streaming: true
-        })
+        }
+        
+        // Add chunk metadata if available (from optimized AudioWorklet)
+        if (metadata) {
+          message.chunkIndex = metadata.chunkIndex
+          message.startMs = metadata.startMs
+          message.endMs = metadata.endMs
+          message.clientTimestamp = Date.now()
+        }
+        
+        sendMessage(message)
       }, true) // true = streaming mode
       setIsListening(true)
     } catch (error) {
       console.error('Failed to start recording:', error)
+      
+      // Show user-friendly error message
+      let errorMessage = 'Failed to start audio capture.'
+      if (error.message) {
+        if (error.message.includes('Share audio')) {
+          errorMessage = '⚠️ No audio captured. Please make sure to check "Share audio" in the browser prompt when sharing your screen.'
+        } else if (error.message.includes('not supported')) {
+          errorMessage = '⚠️ System audio capture is not supported on this device or browser.'
+        } else {
+          errorMessage = `⚠️ ${error.message}`
+        }
+      }
+      
+      alert(errorMessage)
     }
   }
 
@@ -438,8 +703,61 @@ function TranslationInterface({ onBackToHome }) {
           <div className="bg-gray-50 rounded-lg p-3 sm:p-4 mb-4 sm:mb-6">
             <h3 className="text-sm sm:text-base font-semibold text-gray-900 mb-3">Settings</h3>
             
-            {/* Microphone Selector */}
-            {availableDevices.length > 0 && (
+            {/* Audio Source Selector */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Audio Source
+              </label>
+              <div className="space-y-2">
+                <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                  audioSource === 'microphone' 
+                    ? 'bg-blue-50 border-blue-300' 
+                    : 'bg-white border-gray-300 hover:bg-gray-50'
+                } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <input
+                    type="radio"
+                    name="audioSource"
+                    value="microphone"
+                    checked={audioSource === 'microphone'}
+                    onChange={(e) => setAudioSource(e.target.value)}
+                    disabled={isListening}
+                    className="text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700">🎤 Microphone</span>
+                </label>
+                <label className={`flex items-center space-x-2 p-2 rounded-lg border transition-colors ${
+                  !systemAudioSupported
+                    ? 'bg-gray-100 border-gray-200 cursor-not-allowed opacity-60'
+                    : audioSource === 'system'
+                    ? 'bg-blue-50 border-blue-300 cursor-pointer'
+                    : 'bg-white border-gray-300 hover:bg-gray-50 cursor-pointer'
+                } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <input
+                    type="radio"
+                    name="audioSource"
+                    value="system"
+                    checked={audioSource === 'system'}
+                    onChange={(e) => setAudioSource(e.target.value)}
+                    disabled={!systemAudioSupported || isListening}
+                    className="text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                  />
+                  <span className="text-sm text-gray-700">🔊 System Audio</span>
+                  {!systemAudioSupported && (
+                    <span className="text-xs text-gray-500 ml-auto">
+                      {isMobile ? '(Not available on mobile)' : '(Not supported)'}
+                    </span>
+                  )}
+                </label>
+              </div>
+              {isListening && (
+                <p className="text-xs text-amber-600 mt-1">
+                  Stop listening to change audio source
+                </p>
+              )}
+            </div>
+            
+            {/* Microphone Selector - only show when microphone is selected */}
+            {audioSource === 'microphone' && availableDevices.length > 0 && (
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   🎤 Microphone Device
@@ -462,6 +780,16 @@ function TranslationInterface({ onBackToHome }) {
                     Stop listening to change microphone
                   </p>
                 )}
+              </div>
+            )}
+            
+            {audioSource === 'system' && (
+              <div className="mb-4 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-xs text-blue-800">
+                  💡 <strong>Important:</strong> When you start listening, your browser will show a screen sharing dialog. 
+                  You can select any window or screen - we only need the audio. <strong>Make sure to check "Share audio" or enable audio sharing</strong> 
+                  in the browser prompt, otherwise no audio will be captured.
+                </p>
               </div>
             )}
             
@@ -525,7 +853,7 @@ function TranslationInterface({ onBackToHome }) {
 
         {/* Translation Display */}
         <TranslationDisplay 
-          finalTranslations={finalTranslations}
+          finalTranslations={safeFinalTranslations}
           livePartial={livePartial}
           livePartialOriginal={livePartialOriginal}
           audioEnabled={audioEnabled}

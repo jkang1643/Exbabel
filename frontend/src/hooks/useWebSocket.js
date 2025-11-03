@@ -4,6 +4,8 @@ export function useWebSocket(url) {
   const [connectionState, setConnectionState] = useState('connecting')
   const wsRef = useRef(null)
   const messageHandlersRef = useRef(new Set())
+  const pingIntervalRef = useRef(null)
+  const PING_INTERVAL = 10000 // 10 seconds
 
   const connect = useCallback(() => {
     // Close existing connection if any
@@ -23,11 +25,26 @@ export function useWebSocket(url) {
       wsRef.current.onopen = () => {
         setConnectionState('open')
         console.log('[WebSocket] ✅ Connected successfully!')
+        
+        // Start keep-alive ping interval (10s)
+        pingIntervalRef.current = setInterval(() => {
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }))
+            console.log('[WebSocket] 📡 Keep-alive ping sent')
+          }
+        }, PING_INTERVAL)
       }
       
       wsRef.current.onclose = (event) => {
         setConnectionState('closed')
         console.log(`[WebSocket] ❌ Disconnected (code: ${event.code}, reason: ${event.reason})`)
+        
+        // Clear keep-alive ping interval
+        if (pingIntervalRef.current) {
+          clearInterval(pingIntervalRef.current)
+          pingIntervalRef.current = null
+        }
+        
         // Auto-reconnect after 2 seconds
         setTimeout(() => {
           if (wsRef.current?.readyState !== WebSocket.OPEN) {
@@ -74,6 +91,12 @@ export function useWebSocket(url) {
   }, [url])
 
   const disconnect = useCallback(() => {
+    // Clear keep-alive ping interval
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current)
+      pingIntervalRef.current = null
+    }
+    
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null

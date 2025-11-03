@@ -204,7 +204,7 @@ Output: Only the translated text in ${targetLangName}.`
           }
         ],
         temperature: 0.3, // Low temperature for consistent translations
-        max_tokens: 1000
+        max_tokens: 16000 // Increased significantly to handle very long translations without truncation
       })
     });
 

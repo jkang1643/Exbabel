@@ -12,6 +12,7 @@ import { GoogleSpeechStream } from './googleSpeechStream.js';
 import WebSocket from 'ws';
 import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
+import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
 
 export async function handleHostConnection(clientWs, sessionId) {
   console.log(`[HostMode] ⚡ Host connecting to session ${sessionId} - Using Google Speech + OpenAI Translation`);
@@ -123,7 +124,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       try {
                         console.log(`[HostMode] 🔄 Translating partial to ${targetLanguages.length} language(s)`);
-                        const translations = await translationManager.translateToMultipleLanguages(
+                        // Use dedicated partial translation worker (fast, low-latency)
+                        const translations = await partialTranslationWorker.translateToMultipleLanguages(
                           transcriptText,
                           currentSourceLang,
                           targetLanguages,
@@ -156,7 +158,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       pendingPartialTranslation = setTimeout(async () => {
                         try {
-                          const translations = await translationManager.translateToMultipleLanguages(
+                          // Use dedicated partial translation worker (fast, low-latency)
+                          const translations = await partialTranslationWorker.translateToMultipleLanguages(
                             transcriptText,
                             currentSourceLang,
                             targetLanguages,
@@ -212,8 +215,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
 
                 try {
-                  // Translate to all needed languages at once
-                  const translations = await translationManager.translateToMultipleLanguages(
+                  // Translate to all needed languages at once using final translation worker (high-quality)
+                  const translations = await finalTranslationWorker.translateToMultipleLanguages(
                     transcriptText,
                     currentSourceLang,
                     targetLanguages,
