@@ -33,7 +33,6 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
-    "@google-cloud/speech": "^7.2.1",
-    "date-fns": "^4.1.0"
+    "@google-cloud/speech": "^7.2.1"
   }
 }
