@@ -254,8 +254,9 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
    * Uses GPT-4o-mini or GPT-3.5-turbo for speed
    */
   async translatePartial(text, sourceLang, targetLang, apiKey) {
-    if (!text || text.length < 5) {
-      return text; // Too short to translate
+    // EXTREME SPEED: Allow translation of minimal text
+    if (!text || text.length < 2) {
+      return text; // Too short to translate (minimum 2 chars)
     }
 
     // CRITICAL: For long extending text, cache key must include full text length or suffix

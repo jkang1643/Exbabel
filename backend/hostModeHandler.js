@@ -75,7 +75,7 @@ export async function handleHostConnection(clientWs, sessionId) {
               let lastPartialTranslations = {}; // Track last translation per language
               let lastPartialTranslationTime = 0;
               let pendingPartialTranslation = null;
-              const PARTIAL_TRANSLATION_THROTTLE = 250; // Max every 250ms (reduced from 800ms)
+              const PARTIAL_TRANSLATION_THROTTLE = 50; // EXTREME SPEED: Max every 50ms (was 100ms, originally 800ms)
               
               // Set up result callback - handles both partials and finals
               speechStream.onResult(async (transcriptText, isPartial) => {
@@ -108,9 +108,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                     hasTranslation: false // Flag to indicate this is just the original, not translated yet
                   });
                   
-                  // Throttled translation for listeners with different target languages
+                  // EXTREME SPEED: Start translation instantly with minimal text
                   const targetLanguages = sessionStore.getSessionLanguages(sessionId);
-                  if (targetLanguages.length > 0 && transcriptText.length > 10) {
+                  if (targetLanguages.length > 0 && transcriptText.length > 3) {
                     const now = Date.now();
                     const timeSinceLastTranslation = now - lastPartialTranslationTime;
                     
