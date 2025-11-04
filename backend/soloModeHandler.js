@@ -155,12 +155,12 @@ export async function handleSoloMode(clientWs) {
               let pendingPartialTranslation = null;
               let currentPartialText = ''; // Track current partial text for delayed translations
               
-              // Adaptive throttle based on text length (longer text = shorter throttle to keep up)
+              // Adaptive throttle based on text length - reduced for faster updates
               const getAdaptiveThrottle = (textLength) => {
-                if (textLength > 500) return 300; // Very long text: 300ms throttle (reduced from 400ms)
-                if (textLength > 300) return 400; // Long text: 400ms throttle
-                if (textLength > 200) return 600; // Medium text: 600ms throttle
-                return 800; // Short text: 800ms throttle (default)
+                if (textLength > 500) return 200; // Very long text: 200ms throttle
+                if (textLength > 300) return 250; // Long text: 250ms throttle
+                if (textLength > 200) return 300; // Medium text: 300ms throttle
+                return 400; // Short text: 400ms throttle (reduced from 800ms)
               };
               
               // Set up result callback - handles both partials and finals
@@ -259,8 +259,7 @@ export async function handleSoloMode(clientWs) {
                       
                       try {
                         console.log(`[SoloMode] 🔄 Translating partial (${transcriptText.length} chars, throttle: ${adaptiveThrottle}ms): "${transcriptText.substring(0, 40)}..."`);
-                        console.log(`[SoloMode] 📝 FULL TEXT BEING TRANSLATED (${transcriptText.length} chars): "${transcriptText}"`);
-                        // Use dedicated partial translation worker (fast, low-latency)
+                        // Use dedicated partial translation worker (fast, low-latency, gpt-4o-mini)
                         const translatedText = await partialTranslationWorker.translatePartial(
                           transcriptText,
                           currentSourceLang,
@@ -302,8 +301,8 @@ export async function handleSoloMode(clientWs) {
                         pendingPartialTranslation = null;
                       }
                       
-                      // Use shorter delay for longer text (max 400ms for very long, 600ms for others)
-                      const maxDelay = transcriptText.length > 500 ? 400 : 600;
+                      // Use shorter delay for longer text (reduced for faster updates)
+                      const maxDelay = transcriptText.length > 500 ? 250 : 350;
                       const delayMs = Math.min(effectiveThrottle, maxDelay);
                       
                       pendingPartialTranslation = setTimeout(async () => {
@@ -330,7 +329,7 @@ export async function handleSoloMode(clientWs) {
                         
                         try {
                           console.log(`[SoloMode] ⏱️ Delayed translating partial (${latestText.length} chars): "${latestText.substring(0, 40)}..."`);
-                          // Use dedicated partial translation worker (fast, low-latency)
+                          // Use dedicated partial translation worker (fast, low-latency, gpt-4o-mini)
                           const translatedText = await partialTranslationWorker.translatePartial(
                             latestText,
                             currentSourceLang,

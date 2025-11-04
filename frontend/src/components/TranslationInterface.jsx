@@ -306,9 +306,10 @@ function TranslationInterface({ onBackToHome }) {
               setLivePartialOriginal(originalText)
             }
             
-            // Update translation (might be delayed due to throttling)
+            // Update translation (might be delayed due to throttling or streaming)
             // Show translation when hasTranslation is true OR when translatedText exists
             const translatedText = message.translatedText
+            const isIncremental = message.isIncremental || false // Streaming incremental update flag
             
             if (hasTranslation && translatedText && translatedText.trim()) {
               // CRITICAL: Only show translation if it's DIFFERENT from original (prevents English glitch)
@@ -320,19 +321,23 @@ function TranslationInterface({ onBackToHome }) {
               if (isDifferent) {
                 const now = Date.now()
                 
+                // For incremental streaming updates, use even more aggressive throttling
+                // Streaming tokens arrive rapidly, so we can update more frequently
                 pendingTextRef.current = translatedText
                 const timeSinceLastUpdate = now - lastUpdateTimeRef.current
                 
-                // Adaptive throttle: Longer translations need more frequent updates
-                // For longer text (>300 chars), reduce throttle to 30ms to keep up
-                const throttleMs = translatedText.length > 300 ? 30 : 50;
+                // Adaptive throttle: Streaming updates need very frequent updates for smooth feel
+                // For longer text (>300 chars), reduce throttle to 20ms for streaming
+                const throttleMs = isIncremental 
+                  ? (translatedText.length > 300 ? 20 : 30) // Streaming: faster updates
+                  : (translatedText.length > 300 ? 30 : 50); // Non-streaming: normal updates
                 
                 if (timeSinceLastUpdate >= throttleMs) {
                   lastUpdateTimeRef.current = now
                   flushSync(() => {
                     setLivePartial(translatedText)
                   })
-                  console.log(`[TranslationInterface] ⚡ LIVE PARTIAL UPDATED (${translatedText.length} chars): "${translatedText.substring(0, 40)}..."`)
+                  console.log(`[TranslationInterface] ⚡ ${isIncremental ? 'STREAMING' : 'LIVE'} PARTIAL UPDATED (${translatedText.length} chars): "${translatedText.substring(0, 40)}..."`)
                 } else {
                   if (throttleTimerRef.current) {
                     clearTimeout(throttleTimerRef.current)
@@ -354,7 +359,7 @@ function TranslationInterface({ onBackToHome }) {
                       flushSync(() => {
                         setLivePartial(latestText)
                       })
-                      console.log(`[TranslationInterface] ⏱️ THROTTLED LIVE PARTIAL (${latestText.length} chars): "${latestText.substring(0, 40)}..."`)
+                      console.log(`[TranslationInterface] ⏱️ THROTTLED ${isIncremental ? 'STREAMING' : 'LIVE'} PARTIAL (${latestText.length} chars): "${latestText.substring(0, 40)}..."`)
                     }
                   }
                 }, throttleMs)

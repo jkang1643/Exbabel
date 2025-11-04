@@ -249,10 +249,17 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 // Store the segmented text
                 pendingTextRef.current = liveText;
                 
-                // THROTTLE: Update max 20 times per second (50ms intervals)
+                // Handle streaming incremental updates with faster throttling
+                const isIncremental = message.isIncremental || false;
+                
+                // THROTTLE: Streaming updates get faster throttling (20-30ms) vs normal (50ms)
+                const throttleMs = isIncremental 
+                  ? (translatedText.length > 300 ? 20 : 30) // Streaming: faster updates
+                  : 50; // Non-streaming: normal updates
+                
                 const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
                 
-                if (timeSinceLastUpdate >= 50) {
+                if (timeSinceLastUpdate >= throttleMs) {
                   // Immediate update with forced sync render
                   lastUpdateTimeRef.current = now;
                   flushSync(() => {
@@ -272,7 +279,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                         setCurrentTranslation(latestText);
                       });
                     }
-                  }, 50);
+                  }, throttleMs);
                 }
               }
             } else {

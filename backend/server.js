@@ -299,7 +299,7 @@ app.get('/health', (req, res) => {
     transcriptionProvider: 'Google Cloud Speech-to-Text',
     transcriptionModel: 'Chirp 3 (latest_long)',
     translationProvider: 'OpenAI',
-    translationModel: 'gpt-4o',
+    translationModel: 'gpt-4o-mini',
     endpoint: '/translate',
     message: 'Backend is running and responding to requests!'
   });
@@ -321,7 +321,7 @@ app.post('/test-translation', async (req, res) => {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
@@ -374,7 +374,7 @@ console.log("[Backend] Model: Chirp 3 (latest_long)");
 console.log("[Backend] Features: Live streaming with partial results");
 console.log("[Backend] ===== TRANSLATION SERVICE =====");
 console.log("[Backend] Provider: OpenAI");
-console.log("[Backend] Model: gpt-4o");
+console.log("[Backend] Model: gpt-4o-mini");
 console.log("[Backend] ===== API KEYS =====");
 console.log("[Backend] OpenAI API Key:", process.env.OPENAI_API_KEY ? 'Yes ✓' : 'No ✗ (WARNING: Translation disabled)');
 

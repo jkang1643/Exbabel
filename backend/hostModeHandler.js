@@ -71,11 +71,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                 });
               });
               
-              // Translation throttling for partials
+              // Translation throttling for partials - reduced for faster updates
               let lastPartialTranslations = {}; // Track last translation per language
               let lastPartialTranslationTime = 0;
               let pendingPartialTranslation = null;
-              const PARTIAL_TRANSLATION_THROTTLE = 800; // Max every 800ms
+              const PARTIAL_TRANSLATION_THROTTLE = 250; // Max every 250ms (reduced from 800ms)
               
               // Set up result callback - handles both partials and finals
               speechStream.onResult(async (transcriptText, isPartial) => {
@@ -124,7 +124,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       try {
                         console.log(`[HostMode] 🔄 Translating partial to ${targetLanguages.length} language(s)`);
-                        // Use dedicated partial translation worker (fast, low-latency)
+                        // Use dedicated partial translation worker (fast, low-latency, gpt-4o-mini)
                         const translations = await partialTranslationWorker.translateToMultipleLanguages(
                           transcriptText,
                           currentSourceLang,
@@ -158,7 +158,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       pendingPartialTranslation = setTimeout(async () => {
                         try {
-                          // Use dedicated partial translation worker (fast, low-latency)
+                          // Use dedicated partial translation worker (fast, low-latency, gpt-4o-mini)
                           const translations = await partialTranslationWorker.translateToMultipleLanguages(
                             transcriptText,
                             currentSourceLang,

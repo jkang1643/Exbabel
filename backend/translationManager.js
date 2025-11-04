@@ -182,7 +182,7 @@ class TranslationManager {
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'gpt-4o', // Use GPT-4o for high-quality translation
+        model: 'gpt-4o-mini', // Use GPT-4o-mini for faster translation
         messages: [
           {
             role: 'system',

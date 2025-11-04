@@ -8,8 +8,8 @@
  *   - Lower temperature for consistency
  *   - Can cancel/abort if new partial arrives
  * 
- * - FinalTranslationWorker: High-quality translations for history
- *   - Uses GPT-4o for best quality
+ * - FinalTranslationWorker: Fast translations for history
+ *   - Uses GPT-4o-mini for speed and cost efficiency
  *   - No throttling or cancellation
  *   - Full context and accuracy
  */
@@ -83,7 +83,174 @@ export class PartialTranslationWorker {
   }
 
   /**
-   * Fast translation for partial text - optimized for latency
+   * Streaming translation for partial text - token-by-token updates
+   * Uses GPT-4o-mini with streaming for real-time updates
+   * @param {string} text - Text to translate
+   * @param {string} sourceLang - Source language code
+   * @param {string} targetLang - Target language code
+   * @param {string} apiKey - OpenAI API key
+   * @param {Function} onChunk - Callback for each token chunk: (chunk: string, isComplete: boolean) => void
+   * @param {AbortSignal} signal - Abort signal for cancellation
+   * @returns {Promise<string>} - Full translated text
+   */
+  async translatePartialStream(text, sourceLang, targetLang, apiKey, onChunk, signal) {
+    if (!text || text.length < 5) {
+      return text; // Too short to translate
+    }
+
+    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
+    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+
+    if (!apiKey) {
+      console.error('[PartialWorker] ERROR: No API key provided');
+      return text;
+    }
+
+    try {
+      console.log(`[PartialWorker] ⚡ Streaming translation: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
+
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini', // Faster model for partials
+          messages: [
+            {
+              role: 'system',
+              content: `You are a fast real-time translator. Translate text from ${sourceLangName} to ${targetLangName}.
+
+RULES FOR PARTIAL/INCOMPLETE TEXT:
+1. Translate the partial text naturally even if sentence is incomplete
+2. Maintain the same tense and context as the partial
+3. Do NOT complete or extend the sentence - only translate what's given
+4. Keep translation concise and natural in ${targetLangName}
+5. No explanations, only the translation`
+            },
+            {
+              role: 'user',
+              content: text
+            }
+          ],
+          temperature: 0.2, // Lower temperature for consistency in partials
+          max_tokens: 16000,
+          stream: true // Enable streaming
+        }),
+        signal: signal
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+        throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
+      }
+
+      let fullTranslation = '';
+      let buffer = '';
+
+      // node-fetch v3 returns a Node.js Readable stream, not browser ReadableStream
+      // Process as a Node.js stream
+      return new Promise((resolve, reject) => {
+        response.body.on('data', (chunk) => {
+          if (signal?.aborted) {
+            console.log('[PartialWorker] 🚫 Stream aborted');
+            response.body.destroy();
+            resolve(fullTranslation.trim() || text);
+            return;
+          }
+
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          
+          // Keep the last incomplete line in buffer
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+
+            if (trimmedLine.startsWith('data: ')) {
+              const data = trimmedLine.slice(6);
+              if (data === '[DONE]') {
+                continue;
+              }
+
+              try {
+                const parsed = JSON.parse(data);
+                const delta = parsed.choices?.[0]?.delta?.content;
+                
+                if (delta) {
+                  fullTranslation += delta;
+                  // Call callback with incremental update
+                  if (onChunk) {
+                    onChunk(fullTranslation, false);
+                  }
+                }
+              } catch (e) {
+                // Ignore JSON parse errors for incomplete chunks
+              }
+            }
+          }
+        });
+
+        response.body.on('end', () => {
+          // Process any remaining buffer
+          if (buffer.trim()) {
+            const trimmedLine = buffer.trim();
+            if (trimmedLine.startsWith('data: ')) {
+              const data = trimmedLine.slice(6);
+              if (data !== '[DONE]') {
+                try {
+                  const parsed = JSON.parse(data);
+                  const delta = parsed.choices?.[0]?.delta?.content;
+                  
+                  if (delta) {
+                    fullTranslation += delta;
+                    if (onChunk) {
+                      onChunk(fullTranslation, false);
+                    }
+                  }
+                } catch (e) {
+                  // Ignore parse errors
+                }
+              }
+            }
+          }
+
+          // Send final complete translation
+          if (onChunk && fullTranslation) {
+            onChunk(fullTranslation.trim(), true);
+          }
+
+          resolve(fullTranslation.trim() || text);
+        });
+
+        response.body.on('error', (error) => {
+          reject(error);
+        });
+
+        // Handle abort signal
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            response.body.destroy();
+            resolve(fullTranslation.trim() || text);
+          });
+        }
+      });
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.log(`[PartialWorker] 🚫 Streaming translation aborted`);
+        return text;
+      }
+
+      console.error(`[PartialWorker] Streaming translation error:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Fast translation for partial text - optimized for latency (non-streaming fallback)
    * Uses GPT-4o-mini or GPT-3.5-turbo for speed
    */
   async translatePartial(text, sourceLang, targetLang, apiKey) {
@@ -334,8 +501,8 @@ export class FinalTranslationWorker {
   }
 
   /**
-   * High-quality translation for final text - optimized for accuracy
-   * Uses GPT-4o for best quality
+   * Fast translation for final text - optimized for speed
+   * Uses GPT-4o-mini for faster, cost-effective translations
    */
   async translateFinal(text, sourceLang, targetLang, apiKey) {
     if (!text || text.trim().length === 0) {
@@ -372,7 +539,7 @@ export class FinalTranslationWorker {
           'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: 'gpt-4o', // Best model for final quality
+          model: 'gpt-4o-mini', // Faster model for final translations
           messages: [
             {
               role: 'system',
