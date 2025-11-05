@@ -88,14 +88,24 @@ export class GoogleSpeechStream {
     // Google Speech has a 305 second (5 min) streaming limit
     // We'll restart the stream every 4 minutes to be safe
     this.STREAMING_LIMIT = 240000; // 4 minutes in milliseconds
+    
+    // CRITICAL: Auto-restart at 25 seconds to prevent VAD cutoff
+    // Google's VAD becomes aggressive after ~30 seconds, causing premature finalization
+    this.VAD_CUTOFF_LIMIT = 25000; // 25 seconds - restart before VAD cutoff
+    this.cumulativeAudioTime = 0; // Track total audio sent in current session
+    this.lastAudioChunkTime = Date.now();
+    
     this.startTime = Date.now();
     
-    // Jitter buffer: Queue audio chunks to handle network jitter
-    // REDUCED to 50ms to prevent Google Speech from finalizing prematurely
+    // Speech context: Track last transcript for context carry-forward between sessions
+    this.lastTranscriptContext = ''; // Last 50 chars of transcript for context
+    
+    // Audio batching: Batch chunks into 100-150ms groups for optimal flow
+    // Balance between smooth flow (prevent VAD gaps) and responsiveness
     this.jitterBuffer = [];
-    this.jitterBufferDelay = 50; // 50ms target delay (reduced from 250ms to prevent premature finalization)
-    this.jitterBufferMin = 30; // Minimum 30ms
-    this.jitterBufferMax = 100; // Maximum 100ms (reduced to keep audio flowing)
+    this.jitterBufferDelay = 100; // 100ms batching (sweet spot: smooth but responsive)
+    this.jitterBufferMin = 80; // Minimum 80ms
+    this.jitterBufferMax = 150; // Maximum 150ms
     this.jitterBufferTimer = null;
     this.lastJitterRelease = Date.now();
     
@@ -105,7 +115,7 @@ export class GoogleSpeechStream {
     this.RETRY_BACKOFF_MS = [100, 200, 400]; // Exponential backoff delays
     
     // Per-chunk timeout tracking: Detect stuck chunks
-    // Timeout accounts for jitter buffer (50ms) + processing time
+    // Timeout accounts for audio batching (100ms) + processing time
     this.chunkTimeouts = new Map(); // chunkId -> { timeout handle, sendTimestamp }
     this.CHUNK_TIMEOUT_MS = 7000; // 7 seconds (5s + 2s buffer for processing)
     this.chunkIdCounter = 0;
@@ -169,6 +179,11 @@ export class GoogleSpeechStream {
     this.startTime = Date.now();
     this.isActive = true;
     this.isRestarting = false;
+    
+    // Reset cumulative audio time for new session
+    this.cumulativeAudioTime = 0;
+    console.log(`[GoogleSpeech] Reset cumulative audio time. Context: "${this.lastTranscriptContext || 'none'}"`);
+
 
     const request = {
       config: {
@@ -177,8 +192,7 @@ export class GoogleSpeechStream {
         languageCode: this.languageCode,
         enableAutomaticPunctuation: true,
         useEnhanced: true,
-        model: 'latest_long', // Use latest_long model for best accuracy
-        // Enable Chirp 3 model if available
+        model: 'latest_long', // Use latest_long model for best accuracy (better for long-form)
         alternativeLanguageCodes: [],
       },
       interimResults: true, // CRITICAL: Enable partial results
@@ -338,6 +352,13 @@ export class GoogleSpeechStream {
     const combinedTranscript = allTranscripts.join(' ');
     const isFinal = hasFinal;
     const stability = data.results[0].stability || 0;
+    
+    // Update speech context when we get a final result
+    if (isFinal && combinedTranscript.length > 20) {
+      // Store last 50 characters for context carry-forward
+      this.lastTranscriptContext = combinedTranscript.slice(-50).trim();
+      console.log(`[GoogleSpeech] 📝 Updated context: "${this.lastTranscriptContext}"`);
+    }
 
     // Clear chunk timeouts on successful result
     // Google Speech processes chunks in order, so clear oldest pending chunks
@@ -409,6 +430,20 @@ export class GoogleSpeechStream {
         return;
       }
 
+      // Track cumulative audio time (assume ~20ms per chunk based on 24kHz sampling)
+      const chunkDurationMs = 20; // Approximate duration of each audio chunk
+      this.cumulativeAudioTime += chunkDurationMs;
+      
+      // CRITICAL: Check for VAD cutoff limit (25 seconds)
+      // Restart proactively BEFORE Google's VAD becomes aggressive
+      // DISABLED FOR NOW - causing timeout issues
+      // if (this.cumulativeAudioTime >= this.VAD_CUTOFF_LIMIT) {
+      //   console.log(`[GoogleSpeech] ⚠️ VAD cutoff approaching (${this.cumulativeAudioTime}ms) - proactive restart to prevent word loss...`);
+      //   this.queueChunkForRetry(chunkId, audioData, metadata, 0);
+      //   await this.restartStream();
+      //   return;
+      // }
+      
       // Check if we need to restart due to time limit
       const elapsedTime = Date.now() - this.startTime;
       if (elapsedTime >= this.STREAMING_LIMIT) {
@@ -619,7 +654,7 @@ export class GoogleSpeechStream {
       const chunk = this.jitterBuffer[0];
       const delay = now - chunk.receivedAt;
       
-      // Release if delay is at least jitterBufferMin (30ms) and past release time
+      // Release if delay is at least jitterBufferMin (80ms) and past release time
       if (delay >= this.jitterBufferMin && now >= chunk.shouldReleaseAt) {
         const released = this.jitterBuffer.shift();
         this.releaseChunkFromBuffer(released.chunkId, released.audioData, released.metadata);
