@@ -254,9 +254,9 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
    * Uses GPT-4o-mini or GPT-3.5-turbo for speed
    */
   async translatePartial(text, sourceLang, targetLang, apiKey) {
-    // EXTREME SPEED: Allow translation of minimal text
-    if (!text || text.length < 2) {
-      return text; // Too short to translate (minimum 2 chars)
+    // REAL-TIME INSTANT: Allow translation of absolute minimum text
+    if (!text || text.length < 1) {
+      return text; // Too short to translate (minimum 1 char)
     }
 
     // CRITICAL: For long extending text, cache key must include full text length or suffix
@@ -298,41 +298,53 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       return text;
     }
 
-    // For long text, be more careful about canceling - only cancel if clearly reset
-    // For extending text, allow both to complete (previous + new)
+    // SMART CANCELLATION: Cancel only on resets to allow word-by-word updates
+    // For extending text, allow concurrent translations to create smooth word-by-word effect
+    // This prevents rapid cancellation that blocks all translations from completing
     const cancelKey = `${sourceLang}:${targetLang}`;
     
     // Find any existing pending request for this language pair
     let existingRequest = null;
+    let concurrentCount = 0;
     for (const [key, value] of this.pendingRequests.entries()) {
       if (key.startsWith(cancelKey)) {
         existingRequest = { key, ...value };
-        break;
+        concurrentCount++;
       }
+    }
+    
+    // Limit concurrent requests to prevent rate limiting (max 2-3 concurrent)
+    const MAX_CONCURRENT = 2;
+    
+    // Check if new text is a reset (much shorter or completely different start)
+    let isReset = false;
+    if (existingRequest && existingRequest.text) {
+      const previousText = existingRequest.text;
+      isReset = text.length < previousText.length * 0.6 || 
+                !text.startsWith(previousText.substring(0, Math.min(previousText.length, 100)));
     }
     
     if (existingRequest) {
       const { abortController, text: previousText } = existingRequest;
       
-      // Check if new text is clearly a reset (much shorter) or completely different start
-      // This indicates user started a new sentence/phrase, so cancel old translation
-      const isReset = previousText && (text.length < previousText.length * 0.6 || 
-                                       !text.startsWith(previousText.substring(0, Math.min(previousText.length, 100))));
-      
-      if (isReset) {
+      // Cancel if: reset OR too many concurrent requests
+      if (isReset || concurrentCount >= MAX_CONCURRENT) {
         abortController.abort();
         this.pendingRequests.delete(existingRequest.key);
-        console.log(`[PartialWorker] 🚫 Cancelled previous translation (text reset: ${previousText.length} → ${text.length} chars)`);
+        const reason = isReset ? 'reset' : 'too many concurrent';
+        console.log(`[PartialWorker] 🚫 Cancelled previous translation (${reason}: ${previousText?.length || 0} → ${text.length} chars)`);
       } else {
-        // Text is extended - DON'T cancel previous, allow both to complete
+        // Text is extending - allow concurrent for word-by-word updates
         // Previous shows earlier part, new shows updated full text
-        console.log(`[PartialWorker] ⏳ Text extended (${previousText.length} → ${text.length} chars) - allowing concurrent translations`);
+        console.log(`[PartialWorker] ⏳ Text extended (${previousText.length} → ${text.length} chars) - allowing concurrent for word-by-word updates`);
       }
     }
 
     // Create abort controller for this request
-    // Use timestamp in key for long extending text to allow concurrent translations
-    const uniqueKey = text.length > 500 ? `${cancelKey}_${Date.now()}` : cancelKey;
+    // Use timestamp in key for extending text to allow concurrent translations
+    const uniqueKey = existingRequest && !isReset && concurrentCount < MAX_CONCURRENT 
+      ? `${cancelKey}_${Date.now()}` 
+      : cancelKey;
     const abortController = new AbortController();
     this.pendingRequests.set(uniqueKey, { abortController, text });
 

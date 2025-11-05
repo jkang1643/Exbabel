@@ -75,11 +75,33 @@ export async function handleHostConnection(clientWs, sessionId) {
               let lastPartialTranslations = {}; // Track last translation per language
               let lastPartialTranslationTime = 0;
               let pendingPartialTranslation = null;
-              const PARTIAL_TRANSLATION_THROTTLE = 50; // EXTREME SPEED: Max every 50ms (was 100ms, originally 800ms)
+              const PARTIAL_TRANSLATION_THROTTLE = 0; // REAL-TIME INSTANT: 0ms for maximum speed (was 25ms, originally 800ms) - SAFE: Cancellation prevents spam
+              
+              // CRITICAL: Track latest and longest partial to prevent word loss
+              let latestPartialText = ''; // Most recent partial text from Google Speech
+              let latestPartialTime = 0; // Timestamp of latest partial
+              let longestPartialText = ''; // Track the longest partial seen in current segment
+              let longestPartialTime = 0; // Timestamp of longest partial
+              
+              // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
               
               // Set up result callback - handles both partials and finals
               speechStream.onResult(async (transcriptText, isPartial) => {
                 if (isPartial) {
+                  // Track latest partial
+                  if (!latestPartialText || transcriptText.length > latestPartialText.length) {
+                    latestPartialText = transcriptText;
+                    latestPartialTime = Date.now();
+                  }
+                  
+                  // CRITICAL FIX: Track the LONGEST partial we've seen
+                  // This prevents word loss when finals come before all words are captured
+                  if (!longestPartialText || transcriptText.length > longestPartialText.length) {
+                    longestPartialText = transcriptText;
+                    longestPartialTime = Date.now();
+                    console.log(`[HostMode] 📏 New longest partial: ${longestPartialText.length} chars`);
+                  }
+                  
                   // Send live partial transcript to the HOST first
                   if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                     clientWs.send(JSON.stringify({
@@ -108,9 +130,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                     hasTranslation: false // Flag to indicate this is just the original, not translated yet
                   });
                   
-                  // EXTREME SPEED: Start translation instantly with minimal text
+                  // REAL-TIME INSTANT: Start translation instantly with absolute minimum text
                   const targetLanguages = sessionStore.getSessionLanguages(sessionId);
-                  if (targetLanguages.length > 0 && transcriptText.length > 3) {
+                  if (targetLanguages.length > 0 && transcriptText.length > 1) {
                     const now = Date.now();
                     const timeSinceLastTranslation = now - lastPartialTranslationTime;
                     
@@ -190,7 +212,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
                 
                 // Final transcript - send to host and translate for listeners
-                console.log(`[HostMode] 📝 FINAL Transcript: "${transcriptText.substring(0, 50)}..."`);
+                console.log(`[HostMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
+                
+                // SIMPLE FIX: Use longest partial if it's longer (within last 5 seconds)
+                const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                
+                if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 5000) {
+                  const missingWords = longestPartialText.substring(transcriptText.length).trim();
+                  console.log(`[HostMode] ⚠️ Using LONGEST partial (${transcriptText.length} → ${longestPartialText.length} chars)`);
+                  console.log(`[HostMode] 📊 Recovered: "${missingWords}"`);
+                  transcriptText = longestPartialText;
+                }
+                
+                // Reset for next segment
+                latestPartialText = '';
+                longestPartialText = '';
+                
+                console.log(`[HostMode] ✅ FINAL Transcript: "${transcriptText.substring(0, 80)}..."`);
                 
                 // Send final transcript to the HOST
                 if (clientWs && clientWs.readyState === WebSocket.OPEN) {

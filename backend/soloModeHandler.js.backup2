@@ -155,14 +155,6 @@ export async function handleSoloMode(clientWs) {
               let pendingPartialTranslation = null;
               let currentPartialText = ''; // Track current partial text for delayed translations
               
-              // CRITICAL: Track latest partial to prevent word loss
-              let latestPartialText = ''; // Most recent partial text from Google Speech
-              let latestPartialTime = 0; // Timestamp of latest partial
-              let longestPartialText = ''; // Track the longest partial seen in current segment
-              let longestPartialTime = 0; // Timestamp of longest partial
-              
-              // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
-              
               // EXTREME SPEED: Near-zero throttling for instant updates
               const getAdaptiveThrottle = (textLength) => {
                 if (textLength > 500) return 0; // Very long text: NO throttle - instant
@@ -176,19 +168,6 @@ export async function handleSoloMode(clientWs) {
                 if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
                 
                 if (isPartial) {
-                  // Track latest partial
-                  if (!latestPartialText || transcriptText.length > latestPartialText.length) {
-                    latestPartialText = transcriptText;
-                    latestPartialTime = Date.now();
-                  }
-                  
-                  // CRITICAL FIX: Track the LONGEST partial we've seen
-                  // This prevents word loss when finals come before all words are captured
-                  if (!longestPartialText || transcriptText.length > longestPartialText.length) {
-                    longestPartialText = transcriptText;
-                    longestPartialTime = Date.now();
-                    console.log(`[SoloMode] 📏 New longest partial: ${longestPartialText.length} chars`);
-                  }
                   // Live partial transcript - send original immediately with sequence ID
                   const seqId = sendWithSequence({
                     type: 'translation',
@@ -391,30 +370,21 @@ export async function handleSoloMode(clientWs) {
                     }
                   }
                 } else {
-                  // Final transcript from Google Speech
-                  console.log(`[SoloMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
+                  // Final transcript from Google Speech - send immediately (restored simple approach)
+                  console.log(`[SoloMode] 📝 FINAL Transcript (raw): "${transcriptText.substring(0, 50)}..."`);
                   
-                  // SIMPLE FIX: Use longest partial if it's longer (within last 5 seconds)
-                  const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
-                  
-                  if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 5000) {
-                    const missingWords = longestPartialText.substring(transcriptText.length).trim();
-                    console.log(`[SoloMode] ⚠️ Using LONGEST partial (${transcriptText.length} → ${longestPartialText.length} chars)`);
-                    console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
-                    transcriptText = longestPartialText;
+                  // Cancel any pending finalization timeout (in case we had delayed finalization)
+                  if (pendingFinalization && pendingFinalization.timeout) {
+                    clearTimeout(pendingFinalization.timeout);
+                    pendingFinalization = null;
                   }
-                  
-                  // Reset for next segment
-                  latestPartialText = '';
-                  longestPartialText = '';
-                  
-                  console.log(`[SoloMode] ✅ FINAL Transcript: "${transcriptText.substring(0, 80)}..."`);
                   
                   // Process final immediately - translate and send to client
                   (async () => {
                     try {
                       if (isTranscriptionOnly) {
                         // Same language - just send transcript
+                        console.log(`[SoloMode] ✅ Sending final transcript: "${transcriptText.substring(0, 50)}..."`);
                         sendWithSequence({
                           type: 'translation',
                           originalText: '',
@@ -424,12 +394,15 @@ export async function handleSoloMode(clientWs) {
                       } else {
                         // Different language - translate the transcript
                         try {
+                          // Use dedicated final translation worker (high-quality, GPT-4o)
                           const translatedText = await finalTranslationWorker.translateFinal(
                             transcriptText,
                             currentSourceLang,
                             currentTargetLang,
                             process.env.OPENAI_API_KEY
                           );
+                          
+                          console.log(`[SoloMode] ✅ Sending final translation: "${translatedText.substring(0, 50)}..." (original: "${transcriptText.substring(0, 50)}...")`);
                           
                           sendWithSequence({
                             type: 'translation',
@@ -439,6 +412,7 @@ export async function handleSoloMode(clientWs) {
                           }, false);
                         } catch (error) {
                           console.error(`[SoloMode] Final translation error:`, error);
+                          // Send transcript as fallback
                           sendWithSequence({
                             type: 'translation',
                             originalText: transcriptText,

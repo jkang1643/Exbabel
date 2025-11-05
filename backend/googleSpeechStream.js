@@ -90,11 +90,12 @@ export class GoogleSpeechStream {
     this.STREAMING_LIMIT = 240000; // 4 minutes in milliseconds
     this.startTime = Date.now();
     
-    // Jitter buffer: Queue audio chunks to handle network jitter (200-400ms, target 300ms)
+    // Jitter buffer: Queue audio chunks to handle network jitter
+    // REDUCED to 50ms to prevent Google Speech from finalizing prematurely
     this.jitterBuffer = [];
-    this.jitterBufferDelay = 250; // 250ms target delay (reduced from 300ms for better responsiveness)
-    this.jitterBufferMin = 200; // Minimum 200ms
-    this.jitterBufferMax = 400; // Maximum 400ms
+    this.jitterBufferDelay = 50; // 50ms target delay (reduced from 250ms to prevent premature finalization)
+    this.jitterBufferMin = 30; // Minimum 30ms
+    this.jitterBufferMax = 100; // Maximum 100ms (reduced to keep audio flowing)
     this.jitterBufferTimer = null;
     this.lastJitterRelease = Date.now();
     
@@ -104,9 +105,9 @@ export class GoogleSpeechStream {
     this.RETRY_BACKOFF_MS = [100, 200, 400]; // Exponential backoff delays
     
     // Per-chunk timeout tracking: Detect stuck chunks
-    // Increased timeout to account for jitter buffer (300ms) + processing time
+    // Timeout accounts for jitter buffer (50ms) + processing time
     this.chunkTimeouts = new Map(); // chunkId -> { timeout handle, sendTimestamp }
-    this.CHUNK_TIMEOUT_MS = 7000; // 7 seconds (5s + 2s buffer for jitter/processing)
+    this.CHUNK_TIMEOUT_MS = 7000; // 7 seconds (5s + 2s buffer for processing)
     this.chunkIdCounter = 0;
     
     // Track pending chunks in send order for better timeout clearing
@@ -310,14 +311,33 @@ export class GoogleSpeechStream {
       return;
     }
 
-    const result = data.results[0];
-    if (!result.alternatives || result.alternatives.length === 0) {
+    // CRITICAL FIX: Google Speech can send multiple results in one response
+    // For long phrases, we need to accumulate ALL results, not just the first one
+    let allTranscripts = [];
+    let hasFinal = false;
+    
+    for (const result of data.results) {
+      if (!result.alternatives || result.alternatives.length === 0) {
+        continue;
+      }
+      
+      const transcript = result.alternatives[0].transcript;
+      if (transcript && transcript.trim()) {
+        allTranscripts.push(transcript.trim());
+        if (result.isFinal) {
+          hasFinal = true;
+        }
+      }
+    }
+    
+    if (allTranscripts.length === 0) {
       return;
     }
-
-    const transcript = result.alternatives[0].transcript;
-    const isFinal = result.isFinal;
-    const stability = result.stability || 0;
+    
+    // Combine all transcripts (Google may split long phrases across multiple results)
+    const combinedTranscript = allTranscripts.join(' ');
+    const isFinal = hasFinal;
+    const stability = data.results[0].stability || 0;
 
     // Clear chunk timeouts on successful result
     // Google Speech processes chunks in order, so clear oldest pending chunks
@@ -335,15 +355,15 @@ export class GoogleSpeechStream {
 
     if (isFinal) {
       // Final result - high confidence
-      console.log(`[GoogleSpeech] ✅ FINAL: "${transcript}"`);
+      console.log(`[GoogleSpeech] ✅ FINAL (${data.results.length} result(s)): "${combinedTranscript}"`);
       if (this.resultCallback) {
-        this.resultCallback(transcript, false); // isPartial = false
+        this.resultCallback(combinedTranscript, false); // isPartial = false
       }
     } else {
       // Interim result - partial transcription
-      // console.log(`[GoogleSpeech] 🔵 PARTIAL (stability: ${stability.toFixed(2)}): "${transcript}"`);
+      // console.log(`[GoogleSpeech] 🔵 PARTIAL (stability: ${stability.toFixed(2)}): "${combinedTranscript}"`);
       if (this.resultCallback) {
-        this.resultCallback(transcript, true); // isPartial = true
+        this.resultCallback(combinedTranscript, true); // isPartial = true
       }
     }
   }
@@ -445,7 +465,7 @@ export class GoogleSpeechStream {
   }
 
   /**
-   * Set timeout for chunk processing (7s to account for jitter buffer + processing)
+   * Set timeout for chunk processing (7s to account for processing + network delays)
    */
   setChunkTimeout(chunkId, sendTimestamp, audioData, metadata) {
     // Clear any existing timeout for this chunk
@@ -599,7 +619,7 @@ export class GoogleSpeechStream {
       const chunk = this.jitterBuffer[0];
       const delay = now - chunk.receivedAt;
       
-      // Release if delay is at least jitterBufferMin (200ms) and past release time
+      // Release if delay is at least jitterBufferMin (30ms) and past release time
       if (delay >= this.jitterBufferMin && now >= chunk.shouldReleaseAt) {
         const released = this.jitterBuffer.shift();
         this.releaseChunkFromBuffer(released.chunkId, released.audioData, released.metadata);
