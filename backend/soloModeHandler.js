@@ -163,13 +163,8 @@ export async function handleSoloMode(clientWs) {
               
               // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
               
-              // EXTREME SPEED: Near-zero throttling for instant updates
-              const getAdaptiveThrottle = (textLength) => {
-                if (textLength > 500) return 0; // Very long text: NO throttle - instant
-                if (textLength > 300) return 25; // Long text: 25ms throttle
-                if (textLength > 200) return 50; // Medium text: 50ms throttle
-                return 100; // Short text: 100ms throttle (EXTREME SPEED - was 150ms)
-              };
+              // Simple consistent throttle - same for all text lengths
+              const THROTTLE_MS = 20; // Consistent 20ms throttle for all text
               
               // Set up result callback - handles both partials and finals
               speechStream.onResult(async (transcriptText, isPartial) => {
@@ -209,64 +204,24 @@ export async function handleSoloMode(clientWs) {
                   lastAudioTimestamp = Date.now();
                   silenceStartTime = null;
                   
-                  // EXTREME SPEED: Start translation with minimal text - INSTANT START
-                  if (!isTranscriptionOnly && transcriptText.length > 3) {
+                  // EXTREME SPEED: Start translation with minimal text - INSTANT START (1-2 chars)
+                  if (!isTranscriptionOnly && transcriptText.length > 1) {
                     // Update current partial text (used for delayed translations)
                     currentPartialText = transcriptText;
                     
                     const now = Date.now();
                     const timeSinceLastTranslation = now - lastPartialTranslationTime;
-                    const adaptiveThrottle = getAdaptiveThrottle(transcriptText.length);
                     
-                    // EXTREME SPEED: Update with TINY character changes
-                    // Check if text has grown - EXTREMELY AGGRESSIVE threshold for instant updates
-                    // (5% growth or 5-10 chars, whichever is smaller)
+                    // Simple growth-based updates: update every 2 characters (half a word)
                     const textGrowth = transcriptText.length - lastPartialTranslation.length;
-                    let growthThreshold = 5; // EXTREME SPEED: Ultra-low threshold (was 10)
-                    if (lastPartialTranslation.length > 0) {
-                      // Use 5% growth or 5-10 chars minimum for maximum sensitivity
-                      growthThreshold = Math.min(10, Math.max(5, Math.floor(lastPartialTranslation.length * 0.05)));
-                    }
-                    const textGrewSignificantly = textGrowth >= growthThreshold && transcriptText.length > lastPartialTranslation.length;
+                    const GROWTH_THRESHOLD = 2; // Consistent threshold: update every 2 characters
+                    const textGrewSignificantly = textGrowth >= GROWTH_THRESHOLD && transcriptText.length > lastPartialTranslation.length;
                     
-                    // For long text (>300 chars), always translate more aggressively to keep up
-                    const isLongText = transcriptText.length > 300;
-                    
-                    // For long text, check if content changed even if length is same
-                    // Compare first 200 chars to detect content changes in long text
-                    let longTextNeedsUpdate = false;
-                    if (isLongText && lastPartialTranslation.length > 0) {
-                      const prefixMatch = transcriptText.substring(0, 200) === lastPartialTranslation.substring(0, 200);
-                      longTextNeedsUpdate = !prefixMatch || transcriptText.length !== lastPartialTranslation.length;
-                    } else if (isLongText && lastPartialTranslation.length === 0) {
-                      // First translation of long text - always translate
-                      longTextNeedsUpdate = true;
-                    }
-                    
-                    // For very long text (>500 chars), NO throttle - instant updates
-                    const isVeryLongText = transcriptText.length > 500;
-                    const effectiveThrottle = isVeryLongText ? 0 : adaptiveThrottle; // EXTREME: 0ms for very long text
-                    
-                    // CRITICAL: For long text, always translate if different - don't block on lastPartialTranslation
-                    // The comparison might fail if previous translation failed silently
-                    const textsAreDifferent = transcriptText !== lastPartialTranslation;
-                    const isStale = lastPartialTranslationTime === 0 || (Date.now() - lastPartialTranslationTime > 5000);
-                    
-                    // EXTREME SPEED: Force IMMEDIATE translation for ANY change
-                    // 1. Text grew by TINY amount (5% or 5-10 chars)
-                    // 2. Throttle time passed (near-zero: 0-100ms)
-                    // 3. First translation (no previous) - INSTANT START (0ms throttle)
-                    // 4. ANY text change detected
-                    // 5. Long text - update every 100ms max (was 500ms)
+                    // Simple logic: translate if text grew OR throttle time passed OR first translation
                     const isFirstTranslation = lastPartialTranslation.length === 0;
-                    const firstTranslationThrottle = isFirstTranslation ? 0 : effectiveThrottle; // EXTREME: 0ms for first translation
-                    const shouldTranslateNow = isFirstTranslation || // INSTANT on first text (0ms)
-                                               timeSinceLastTranslation >= firstTranslationThrottle || 
-                                               textGrewSignificantly || 
-                                               longTextNeedsUpdate ||
-                                               (isVeryLongText && textsAreDifferent) ||
-                                               (isLongText && isStale) ||
-                                               (isLongText && timeSinceLastTranslation >= 100); // EXTREME: Force update every 100ms for long text (was 500ms)
+                    const shouldTranslateNow = isFirstTranslation || // INSTANT on first text (0ms throttle)
+                                               textGrewSignificantly || // Text grew by threshold
+                                               timeSinceLastTranslation >= THROTTLE_MS; // Throttle time passed
                     
                     if (shouldTranslateNow) {
                       // Cancel any pending translation
@@ -281,7 +236,7 @@ export async function handleSoloMode(clientWs) {
                       // Don't set lastPartialTranslation here - only after successful translation
                       
                       try {
-                        console.log(`[SoloMode] 🔄 Translating partial (${transcriptText.length} chars, throttle: ${adaptiveThrottle}ms): "${transcriptText.substring(0, 40)}..."`);
+                        console.log(`[SoloMode] 🔄 Translating partial (${transcriptText.length} chars): "${transcriptText.substring(0, 40)}..."`);
                         // Use dedicated partial translation worker (fast, low-latency, gpt-4o-mini)
                         const translatedText = await partialTranslationWorker.translatePartial(
                           transcriptText,
@@ -324,9 +279,8 @@ export async function handleSoloMode(clientWs) {
                         pendingPartialTranslation = null;
                       }
                       
-                      // EXTREME SPEED: Near-zero delays for instant updates
-                      const maxDelay = transcriptText.length > 500 ? 0 : 25; // EXTREME: 0-25ms (was 50-100ms)
-                      const delayMs = Math.min(effectiveThrottle, maxDelay);
+                      // Simple consistent delay
+                      const delayMs = THROTTLE_MS;
                       
                       pendingPartialTranslation = setTimeout(async () => {
                         // CRITICAL: Always capture LATEST text at timeout execution
@@ -336,16 +290,12 @@ export async function handleSoloMode(clientWs) {
                           return;
                         }
                         
-                        // For long text, ALWAYS translate regardless of exact match
-                        // This ensures continuous updates throughout long passages
-                        const isLongTextNow = latestText.length > 300;
-                        const veryRecentlyTranslated = lastPartialTranslationTime && (Date.now() - lastPartialTranslationTime < 25); // EXTREME: 25ms (was 50ms)
+                        // Skip if exact match and very recently translated
+                        const veryRecentlyTranslated = lastPartialTranslationTime && (Date.now() - lastPartialTranslationTime < THROTTLE_MS);
                         const isExactMatch = latestText === lastPartialTranslation;
                         
-                        // Only skip if it's short text AND exact match AND very recent (<25ms)
-                        // For long text, always translate to ensure continuous updates
-                        if (isExactMatch && !isLongTextNow && veryRecentlyTranslated) {
-                          console.log(`[SoloMode] ⏭️ Skipping exact match translation (short text, very recent)`);
+                        if (isExactMatch && veryRecentlyTranslated) {
+                          console.log(`[SoloMode] ⏭️ Skipping exact match translation (very recent)`);
                           pendingPartialTranslation = null;
                           return;
                         }
