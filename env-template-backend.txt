@@ -27,3 +27,20 @@ PORT=3001
 # Node environment (development|production)
 NODE_ENV=production
 
+# ===================================
+# Grammar Correction (OPTIONAL)
+# ===================================
+
+# Enable Xenova AI grammar model (T5-based, ONNX-optimized)
+# Set to 'true' to enable advanced grammar correction for final transcripts
+# Model: onnx-community/grammar-synthesis-small-ONNX (uses @xenova/transformers)
+# Note: First run will download model files (one-time)
+ENABLE_XENOVA_GRAMMAR=false
+
+# Optional: Specify custom model (default: onnx-community/grammar-synthesis-small-ONNX)
+# GRAMMAR_MODEL=onnx-community/grammar-synthesis-small-ONNX
+
+# Optional: HuggingFace API token for fallback to API if local model fails
+# Get free token from: https://huggingface.co/settings/tokens
+# HF_TOKEN=your-huggingface-token-here
+

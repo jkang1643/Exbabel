@@ -12,6 +12,7 @@ import { GoogleSpeechStream } from './googleSpeechStream.js';
 import WebSocket from 'ws';
 import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
+import { cleanPartialTranscription, cleanFinalTranscription } from './transcriptionPipeline.js';
 
 export async function handleSoloMode(clientWs) {
   console.log("[SoloMode] ⚡ Connection using Google Speech + OpenAI Translation");
@@ -169,6 +170,29 @@ export async function handleSoloMode(clientWs) {
               // Set up result callback - handles both partials and finals
               speechStream.onResult(async (transcriptText, isPartial) => {
                 if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
+
+                const rawTranscriptText = transcriptText;
+                const grammarEnabled = typeof currentSourceLang === 'string' && currentSourceLang.toLowerCase().startsWith('en');
+                const grammarOptions = grammarEnabled ? {
+                  enableNumbers: false,
+                  enableDates: true,
+                  enableTimes: true,
+                  enableColloquialisms: true,
+                  enableDomainSpecific: true
+                } : null;
+
+                if (grammarEnabled) {
+                  try {
+                    if (isPartial) {
+                      transcriptText = cleanPartialTranscription(rawTranscriptText, grammarOptions || undefined);
+                    } else {
+                      transcriptText = await cleanFinalTranscription(rawTranscriptText, grammarOptions || undefined);
+                    }
+                  } catch (error) {
+                    console.warn(`[SoloMode] ⚠️ Grammar pipeline error (${isPartial ? 'partial' : 'final'}):`, error?.message || error);
+                    transcriptText = rawTranscriptText;
+                  }
+                }
                 
                 if (isPartial) {
                   // Track latest partial

@@ -3,11 +3,14 @@
  * 
  * Uses hybrid approach:
  * - Partials: Fast synchronous processing (<10ms) via processPartialSync
- * - Finals: Comprehensive async processing (~100-200ms) via processWithRetext
+ * - Finals: Comprehensive async processing (~100-200ms) via processWithRetext + Xenova model
  * 
  * Both paths use the same correction logic from retext-plugins/logic.js
  * to ensure 100% consistency.
  */
+
+// Load environment variables FIRST
+import './loadEnv.js';
 
 import { processPartialSync, processWithRetext } from './retext-processor.js';
 import {
@@ -18,6 +21,24 @@ import {
   insertMissingWords
 } from './transcriptionCleanup.js';
 import { protectedWords } from './cleanupRules.js';
+import { getGrammarCorrectorModel } from './grammarCorrectorModel.js';
+
+// Initialize Xenova grammar model (enabled via ENABLE_XENOVA_GRAMMAR env variable)
+console.log('[TranscriptionPipeline] Module loading... ENABLE_XENOVA_GRAMMAR=' + process.env.ENABLE_XENOVA_GRAMMAR);
+const ENABLE_XENOVA_GRAMMAR = process.env.ENABLE_XENOVA_GRAMMAR === 'true';
+console.log('[TranscriptionPipeline] Evaluated to:', ENABLE_XENOVA_GRAMMAR);
+let grammarModel = null;
+
+if (ENABLE_XENOVA_GRAMMAR) {
+  console.log('[TranscriptionPipeline] Initializing Xenova model...');
+  grammarModel = getGrammarCorrectorModel();
+  console.log('[TranscriptionPipeline] 🚀 Xenova grammar model enabled - initializing in background...');
+  grammarModel.init().catch(err => {
+    console.warn('[TranscriptionPipeline] Xenova model initialization failed:', err.message);
+  });
+} else {
+  console.log('[TranscriptionPipeline] ❌ Xenova model NOT enabled (ENABLE_XENOVA_GRAMMAR=' + process.env.ENABLE_XENOVA_GRAMMAR + ')');
+}
 
 /**
  * Normalize whitespace - clean up spacing issues
@@ -178,13 +199,13 @@ export function cleanTranscription(rawText, isPartial = false, options = {}) {
     console.log(`[GrammarPipeline] 🚀 STARTING ASYNC PIPELINE (FINAL): "${rawText.substring(0, 100)}${rawText.length > 100 ? '...' : ''}"`);
     console.log(`[GrammarPipeline] 📊 Options: enableNumbers=${enableNumbers}, enableDates=${enableDates}, enableTimes=${enableTimes}, enableColloquialisms=${enableColloquialisms}, enableDomainSpecific=${enableDomainSpecific}`);
     
-    const result = processWithRetext(rawText, {
+    return processWithRetext(rawText, {
       enableNumbers,
       enableDates,
       enableTimes,
       enableColloquialisms,
       enableDomainSpecific
-    }).then(text => {
+    }).then(async text => {
       // Apply additional fixes that work better as text processing
       if (enableDates) {
         console.log(`[GrammarPipeline] 🔍 Running: normalizeDates`);
@@ -229,7 +250,38 @@ export function cleanTranscription(rawText, isPartial = false, options = {}) {
         console.log(`[GrammarPipeline] ✓ Grammar fixes checked (no changes)`);
       }
       
+      // Apply Xenova AI grammar model if enabled
+      if (ENABLE_XENOVA_GRAMMAR && grammarModel) {
+        try {
+          console.log(`[GrammarPipeline] 🤖 Running Xenova grammar model...`);
+          const beforeXenova = text;
+          const result = await grammarModel.correct(text);
+          text = result.corrected || text;
+          if (text !== beforeXenova) {
+            console.log(`[GrammarPipeline] ✨ Xenova corrected (${result.matches} fix(es)): "${beforeXenova.substring(0, 80)}" → "${text.substring(0, 80)}"`);
+          } else {
+            console.log(`[GrammarPipeline] ✓ Xenova checked (no changes)`);
+          }
+        } catch (xenovaError) {
+          console.warn(`[GrammarPipeline] ⚠️ Xenova model error, using text as-is:`, xenovaError.message);
+        }
+      }
+      
       return text;
+    }).catch(error => {
+      console.warn('[GrammarPipeline] ⚠️ Async processing failed, falling back to partial sync path:', error?.message || error);
+      try {
+        return processPartialSync(rawText, {
+          enableNumbers,
+          enableDates,
+          enableTimes,
+          enableColloquialisms,
+          enableDomainSpecific
+        });
+      } catch (fallbackError) {
+        console.error('[GrammarPipeline] ❌ Fallback sync processing failed:', fallbackError?.message || fallbackError);
+        return rawText;
+      }
     });
   }
 }

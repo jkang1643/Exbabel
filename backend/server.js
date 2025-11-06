@@ -17,21 +17,28 @@
  * See LICENSE file for complete terms and conditions.
  */
 
+// Load environment variables FIRST (before any other imports)
+import './loadEnv.js';
+
 import express from "express";
 import WebSocket, { WebSocketServer } from "ws";
 import fetch from "node-fetch";
 import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
-import dotenv from "dotenv";
 import sessionStore from "./sessionStore.js";
 import translationManager from "./translationManager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load .env from backend directory
-dotenv.config({ path: path.join(__dirname, '.env') });
+console.log('[Backend] ENABLE_XENOVA_GRAMMAR:', process.env.ENABLE_XENOVA_GRAMMAR);
+
+// Initialize transcription pipeline early (triggers Xenova model initialization if enabled)
+// Use dynamic import to ensure .env is loaded first
+console.log('[Backend] Loading transcription pipeline...');
+await import('./transcriptionPipeline.js');
+console.log('[Backend] Transcription pipeline loaded');
 
 const app = express();
 const port = process.env.PORT || 3001;

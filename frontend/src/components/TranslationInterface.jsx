@@ -187,6 +187,10 @@ function TranslationInterface({ onBackToHome }) {
   // Sequence tracking to prevent stale partials
   const latestSeqIdRef = useRef(-1);
   
+  // Message buffer for out-of-order final translations
+  const messageBufferRef = useRef(new Map()); // Map<seqId, message>
+  const lastProcessedFinalSeqRef = useRef(-1); // Track last processed final seqId
+  
   // Pending final tracking for confirmation window
   const pendingFinalRef = useRef(null);
   
@@ -202,6 +206,41 @@ function TranslationInterface({ onBackToHome }) {
       if (!finalData || !finalData.text) {
         console.warn('[TranslationInterface] ⚠️ Invalid finalData, skipping commit');
         return;
+      }
+      
+      // CRITICAL: Each FINAL message from backend is a separate utterance
+      // Check if this is a completely new utterance (not overlapping with previous)
+      const previousFlushedText = segmenterRef.current.flushedText || '';
+      
+      // Detect if this is a new utterance by checking for significant overlap
+      let isNewUtterance = false;
+      if (!previousFlushedText) {
+        isNewUtterance = true; // First final
+      } else {
+        // Check if texts don't overlap significantly
+        const hasOverlap = finalData.text.includes(previousFlushedText) || 
+                          previousFlushedText.includes(finalData.text);
+        const overlapRatio = previousFlushedText.length > 0 ? 
+                            (finalData.text.length / previousFlushedText.length) : 1;
+        
+        // If no overlap AND text is substantially different in length, it's a new utterance
+        isNewUtterance = !hasOverlap && (overlapRatio < 0.5 || overlapRatio > 2.0);
+        
+        if (!isNewUtterance) {
+          // Check for partial overlap at boundaries (Google might send overlapping finals for same utterance)
+          const overlap = segmenterRef.current.findOverlap(previousFlushedText, finalData.text);
+          const overlapPercent = overlap / Math.max(previousFlushedText.length, finalData.text.length);
+          // If overlap is less than 30%, treat as new utterance
+          isNewUtterance = overlapPercent < 0.3;
+        }
+      }
+      
+      if (isNewUtterance && previousFlushedText) {
+        console.log(`[TranslationInterface] 🔄 New utterance detected (previous: ${previousFlushedText.length} chars, new: ${finalData.text.length} chars), resetting segmenter`);
+        // Reset flushedText for new utterance - each FINAL is independent
+        segmenterRef.current.flushedText = '';
+        segmenterRef.current.cumulativeText = '';
+        segmenterRef.current.liveText = '';
       }
       
       // Process through segmenter to flush ONLY NEW text (deduplicated)
@@ -229,24 +268,39 @@ function TranslationInterface({ onBackToHome }) {
           console.log(`[TranslationInterface] ✅ Added to history: "${joinedText.substring(0, 50)}..."`);
         }
       } else {
-        // FALLBACK: If segmenter deduplicated everything, still add the final text if it's substantial
-        // This ensures history appears even if deduplication is too aggressive
+        // FALLBACK: If segmenter deduplicated everything, check if this is a new utterance
         const finalText = finalData.text.trim();
+        // If text is substantial and different from previous, add it anyway
         if (finalText.length > 10) {
-          console.log(`[TranslationInterface] ⚠️ Segmenter deduplicated all, using fallback`);
-          flushSync(() => {
-            setFinalTranslations(prev => {
-              const newHistory = [...prev, {
-                id: Date.now(),
-                original: finalData.original || '',
-                translated: finalText,
-                timestamp: finalData.timestamp || Date.now(),
-                sequenceId: finalData.seqId
-              }]
-              console.log(`[TranslationInterface] ✅ FALLBACK STATE UPDATED - New history total: ${newHistory.length} items`);
-              return newHistory;
+          // Check if this text is actually new (not a duplicate)
+          const isNewText = !previousFlushedText || 
+                           !previousFlushedText.includes(finalText) ||
+                           finalText.length > previousFlushedText.length * 1.2;
+          
+          if (isNewText) {
+            console.log(`[TranslationInterface] ⚠️ Segmenter deduplicated all, but text is new - using fallback`);
+            flushSync(() => {
+              setFinalTranslations(prev => {
+                const newHistory = [...prev, {
+                  id: Date.now(),
+                  original: finalData.original || '',
+                  translated: finalText,
+                  timestamp: finalData.timestamp || Date.now(),
+                  sequenceId: finalData.seqId
+                }]
+                console.log(`[TranslationInterface] ✅ FALLBACK STATE UPDATED - New history total: ${newHistory.length} items`);
+                return newHistory;
+              })
             })
-          })
+            // Update segmenter's flushedText to prevent this from being added again
+            if (segmenterRef.current.flushedText) {
+              segmenterRef.current.flushedText += ' ' + finalText;
+            } else {
+              segmenterRef.current.flushedText = finalText;
+            }
+          } else {
+            console.log('[TranslationInterface] ⚠️ No new sentences and text appears to be duplicate - NOT adding to history');
+          }
         } else {
           console.log('[TranslationInterface] ⚠️ No new sentences and text too short - NOT adding to history');
         }
@@ -278,14 +332,19 @@ function TranslationInterface({ onBackToHome }) {
   const handleWebSocketMessage = useCallback((message) => {
     console.log('[TranslationInterface] 🔔 MESSAGE HANDLER CALLED:', message.type, message.isPartial ? '(PARTIAL)' : '(FINAL)', `seqId: ${message.seqId}`)
     
-    // Drop stale messages (out of order)
-    if (message.seqId !== undefined && message.seqId < latestSeqIdRef.current) {
-      console.log(`[TranslationInterface] ⚠️ Dropping stale message seqId=${message.seqId} (latest=${latestSeqIdRef.current})`);
+    // Drop stale partial messages (out of order)
+    if (message.isPartial && message.seqId !== undefined && message.seqId < latestSeqIdRef.current) {
+      console.log(`[TranslationInterface] ⚠️ Dropping stale partial message seqId=${message.seqId} (latest=${latestSeqIdRef.current})`);
       return;
     }
     
-    if (message.seqId !== undefined) {
-      latestSeqIdRef.current = Math.max(latestSeqIdRef.current, message.seqId);
+    // Update latest sequence ID for partials (finals are handled separately)
+    if (message.isPartial && message.seqId !== undefined) {
+      if (latestSeqIdRef.current === -1) {
+        latestSeqIdRef.current = message.seqId;
+      } else {
+        latestSeqIdRef.current = Math.max(latestSeqIdRef.current, message.seqId);
+      }
     }
     
     switch (message.type) {
@@ -462,49 +521,111 @@ function TranslationInterface({ onBackToHome }) {
             }
           }
         } else {
-          // 📝 FINAL: Commit immediately to history (restored simple approach)
+          // 📝 FINAL: Buffer and process in order to maintain correct history ordering
           const finalText = message.translatedText
           const finalSeqId = message.seqId
           console.log(`[TranslationInterface] 📝 FINAL received seqId=${finalSeqId}: "${finalText.substring(0, 50)}..."`)
           
-          // Cancel any pending final timeout (in case we had one)
-          if (pendingFinalRef.current && pendingFinalRef.current.timeout) {
-            clearTimeout(pendingFinalRef.current.timeout);
-            pendingFinalRef.current = null;
-          }
-          
-          // Commit immediately - process through segmenter and add to history
-          const finalData = {
-            text: finalText,
-            original: message.originalText || '',
-            timestamp: message.timestamp || Date.now(),
-            serverTimestamp: message.serverTimestamp,
-            seqId: finalSeqId
-          };
-          
-          // Call commit function immediately
-          if (commitFinalToHistoryRef.current) {
-            commitFinalToHistoryRef.current(finalData);
-          } else {
-            console.error('[TranslationInterface] ❌ commitFinalToHistoryRef.current is null, using fallback');
-            // FALLBACK: Direct commit if ref isn't ready
+          if (typeof finalSeqId !== 'number') {
+            console.warn('[TranslationInterface] ⚠️ FINAL message missing seqId - processing immediately without buffering');
             const { flushedSentences } = segmenterRef.current.processFinal(finalText);
             if (flushedSentences.length > 0 || finalText.length > 10) {
               const textToAdd = flushedSentences.length > 0 ? flushedSentences.join(' ').trim() : finalText;
               if (textToAdd) {
                 setFinalTranslations(prev => [...prev, {
                   id: Date.now(),
-                  original: finalData.original,
+                  original: message.originalText || '',
                   translated: textToAdd,
-                  timestamp: finalData.timestamp,
-                  sequenceId: finalSeqId
+                  timestamp: message.timestamp || Date.now(),
+                  sequenceId: finalSeqId ?? Date.now()
                 }]);
-                console.log(`[TranslationInterface] ✅ FALLBACK: Added to history: "${textToAdd.substring(0, 50)}..."`);
               }
             }
-            setLivePartial('')
-            setLivePartialOriginal('')
+            setLivePartial('');
+            setLivePartialOriginal('');
+            break;
           }
+          
+          // Store message in buffer
+          messageBufferRef.current.set(finalSeqId, message);
+          
+          // Process buffered messages in chronological order (sequence IDs may skip due to partials)
+          const processBufferedMessages = () => {
+            if (messageBufferRef.current.size === 0) {
+              return;
+            }
+            
+            const sortedSeqIds = Array.from(messageBufferRef.current.keys()).sort((a, b) => a - b);
+            let processedCount = 0;
+            
+            for (const seqId of sortedSeqIds) {
+              if (seqId <= lastProcessedFinalSeqRef.current) {
+                // Already processed or stale - clean up residual entries
+                messageBufferRef.current.delete(seqId);
+                continue;
+              }
+              
+              const bufferedMessage = messageBufferRef.current.get(seqId);
+              if (!bufferedMessage) {
+                continue;
+              }
+              messageBufferRef.current.delete(seqId);
+              
+              const bufferedFinalText = bufferedMessage.translatedText || '';
+              const bufferedSeqId = bufferedMessage.seqId;
+              
+              console.log(`[TranslationInterface] ✅ Processing buffered FINAL seqId=${bufferedSeqId}: "${bufferedFinalText.substring(0, 50)}..."`);
+              
+              // Cancel any pending final timeout (in case we had one)
+              if (pendingFinalRef.current && pendingFinalRef.current.timeout) {
+                clearTimeout(pendingFinalRef.current.timeout);
+                pendingFinalRef.current = null;
+              }
+              
+              // Commit in order - process through segmenter and add to history
+              const finalData = {
+                text: bufferedFinalText,
+                original: bufferedMessage.originalText || '',
+                timestamp: bufferedMessage.timestamp || Date.now(),
+                serverTimestamp: bufferedMessage.serverTimestamp,
+                seqId: bufferedSeqId
+              };
+              
+              if (commitFinalToHistoryRef.current) {
+                console.log(`[TranslationInterface] 📤 Calling commitFinalToHistoryRef for seqId=${bufferedSeqId}`);
+                commitFinalToHistoryRef.current(finalData);
+              } else {
+                console.error('[TranslationInterface] ❌ commitFinalToHistoryRef.current is null, using fallback');
+                // FALLBACK: Direct commit if ref isn't ready
+                const { flushedSentences } = segmenterRef.current.processFinal(bufferedFinalText);
+                if (flushedSentences.length > 0 || bufferedFinalText.length > 10) {
+                  const textToAdd = flushedSentences.length > 0 ? flushedSentences.join(' ').trim() : bufferedFinalText;
+                  if (textToAdd) {
+                    setFinalTranslations(prev => [...prev, {
+                      id: Date.now(),
+                      original: finalData.original,
+                      translated: textToAdd,
+                      timestamp: finalData.timestamp,
+                      sequenceId: bufferedSeqId
+                    }]);
+                    console.log(`[TranslationInterface] ✅ FALLBACK: Added to history: "${textToAdd.substring(0, 50)}..."`);
+                  }
+                }
+                setLivePartial('');
+                setLivePartialOriginal('');
+              }
+              
+              lastProcessedFinalSeqRef.current = bufferedSeqId;
+              processedCount++;
+            }
+            
+            if (processedCount > 0) {
+              console.log(`[TranslationInterface] ✅ Processed ${processedCount} buffered FINAL message(s) (lastProcessed=${lastProcessedFinalSeqRef.current})`);
+            }
+          };
+          
+          // Always attempt to process buffered messages (sorted order handles gaps from partial sequences)
+          processBufferedMessages();
         }
         break
       case 'warning':
