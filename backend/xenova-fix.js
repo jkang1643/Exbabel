@@ -28,10 +28,10 @@ export async function patchXenovaGeneration() {
       generationModule.MinLengthLogitsProcessor.prototype._call = function(input_ids, logits) {
         // Guard: ensure logits.data exists
         if (!logits.data && logits.cpuData) {
-          console.warn('[XenovaFix] ⚠️ MinLengthLogitsProcessor: logits.data undefined, using cpuData');
+          // console.warn('[XenovaFix] ⚠️ MinLengthLogitsProcessor: logits.data undefined, using cpuData');
           logits.data = logits.cpuData;
         } else if (!logits.data) {
-          console.error('[XenovaFix] ❌ MinLengthLogitsProcessor: logits has no data/cpuData!');
+          // console.error('[XenovaFix] ❌ MinLengthLogitsProcessor: logits has no data/cpuData!');
           return logits; // Return as-is to avoid crash
         }
         return original_call.call(this, input_ids, logits);
@@ -45,10 +45,10 @@ export async function patchXenovaGeneration() {
       generationModule.MinNewTokensLengthLogitsProcessor.prototype._call = function(input_ids, logits) {
         // Guard: ensure logits.data exists
         if (!logits.data && logits.cpuData) {
-          console.warn('[XenovaFix] ⚠️ MinNewTokensLengthLogitsProcessor: logits.data undefined, using cpuData');
+          // console.warn('[XenovaFix] ⚠️ MinNewTokensLengthLogitsProcessor: logits.data undefined, using cpuData');
           logits.data = logits.cpuData;
         } else if (!logits.data) {
-          console.error('[XenovaFix] ❌ MinNewTokensLengthLogitsProcessor: logits has no data/cpuData!');
+          // console.error('[XenovaFix] ❌ MinNewTokensLengthLogitsProcessor: logits has no data/cpuData!');
           return logits; // Return as-is to avoid crash
         }
         return original_call.call(this, input_ids, logits);
@@ -62,10 +62,10 @@ export async function patchXenovaGeneration() {
       generationModule.NoBadWordsLogitsProcessor.prototype._call = function(input_ids, logits) {
         // Guard: ensure logits.data exists
         if (!logits.data && logits.cpuData) {
-          console.warn('[XenovaFix] ⚠️ NoBadWordsLogitsProcessor: logits.data undefined, using cpuData');
+          // console.warn('[XenovaFix] ⚠️ NoBadWordsLogitsProcessor: logits.data undefined, using cpuData');
           logits.data = logits.cpuData;
         } else if (!logits.data) {
-          console.error('[XenovaFix] ❌ NoBadWordsLogitsProcessor: logits has no data/cpuData!');
+          // console.error('[XenovaFix] ❌ NoBadWordsLogitsProcessor: logits has no data/cpuData!');
           return logits; // Return as-is to avoid crash
         }
         return original_call.call(this, input_ids, logits);
@@ -80,10 +80,10 @@ export async function patchXenovaGeneration() {
         // Guard: ensure logits.data exists before calling original
         if (!logits || !logits.data) {
           if (logits && logits.cpuData) {
-            console.warn('[XenovaFix] ⚠️ Sampler.getLogits: logits.data undefined, using cpuData');
+            // console.warn('[XenovaFix] ⚠️ Sampler.getLogits: logits.data undefined, using cpuData');
             logits.data = logits.cpuData;
           } else {
-            console.error('[XenovaFix] ❌ Sampler.getLogits: logits has no data/cpuData, returning empty array');
+            // console.error('[XenovaFix] ❌ Sampler.getLogits: logits has no data/cpuData, returning empty array');
             // Return empty Float32Array to avoid crash
             return new Float32Array(0);
           }

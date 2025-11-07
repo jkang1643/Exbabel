@@ -174,7 +174,7 @@ export async function handleSoloMode(clientWs) {
                 const rawTranscriptText = transcriptText;
                 const grammarEnabled = typeof currentSourceLang === 'string' && currentSourceLang.toLowerCase().startsWith('en');
                 const grammarOptions = grammarEnabled ? {
-                  enableNumbers: false,
+                  enableNumbers: true,
                   enableDates: true,
                   enableTimes: true,
                   enableColloquialisms: true,
@@ -184,7 +184,7 @@ export async function handleSoloMode(clientWs) {
                 if (grammarEnabled) {
                   try {
                     if (isPartial) {
-                      transcriptText = cleanPartialTranscription(rawTranscriptText, grammarOptions || undefined);
+                      transcriptText = await cleanPartialTranscription(rawTranscriptText, grammarOptions || undefined);
                     } else {
                       transcriptText = await cleanFinalTranscription(rawTranscriptText, grammarOptions || undefined);
                     }

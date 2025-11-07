@@ -189,23 +189,28 @@ export function restorePunctuationLogic(text, isPartial = false, doc = null) {
   // Strategy 2: Detect subject changes generically - when a lowercase word is followed by a pronoun/noun
   // This catches cases like "unplug we", "closed and a", "engage rather than unplug we"
   // Pattern: lowercase word + space + pronoun/noun starting new thought
+  // UPDATED: More conservative - only split if there's clear sentence-ending context
   const subjectPronouns = /\s+(we|they|I|you|he|she|it|our|your|their|my|his|her|people|someone|somebody|everyone|everybody|anyone|anybody)\s+[a-z]/gi;
-  
+
   let pronounMatch;
   while ((pronounMatch = subjectPronouns.exec(result)) !== null) {
     // pronounMatch.index is the position of the space before the pronoun
     const pronounStart = pronounMatch.index;
     const beforePronoun = result.substring(Math.max(0, pronounStart - 40), pronounStart).trim();
-    
+
     // Check if before has a verb/predicate (complete thought)
     if (beforePronoun.length > 10) {
       const beforeDoc = nlp(beforePronoun);
       const hasVerb = beforeDoc.match('#Verb').length > 0;
-      
+
+      // ADDED: Check for sentence-ending verbs or clear sentence boundaries
+      const hasSentenceEndingVerb = /\b(finished|concluded|ended|completed|done|stopped|ceased|closed|terminated)\b/i.test(beforePronoun);
+
       // Also check for common action words that might not be detected as verbs
       const hasActionWord = /\b(unplug|engage|pray|start|go|do|say|tell|show|see|know|think|want|need|get|make|take|give|come|leave|stay|stand|sit|walk|run|move|turn|open|close|beat|care|miss|entertain|gather|choose|reject|fulfill|spend|call|separate|isolate|insinuate|back|rather|than)\b/i.test(beforePronoun);
-      
-      if ((hasVerb || hasActionWord) && !/[.!?]/.test(beforePronoun.slice(-1))) {
+
+      // UPDATED: Only split if we have a sentence-ending verb OR (verb AND action word AND substantial length)
+      if ((hasSentenceEndingVerb || (hasVerb && hasActionWord && beforePronoun.length > 25)) && !/[.!?]/.test(beforePronoun.slice(-1))) {
         // The boundary is at pronounStart (where the space before the pronoun is)
         // We want to insert punctuation before the pronoun, so use pronounStart as the boundary
         const boundaryPos = pronounStart;
@@ -448,14 +453,13 @@ export function restorePunctuationLogic(text, isPartial = false, doc = null) {
           const afterWords = afterAnd.split(/\s+/).length;
           const isSubstantialClause = beforeWords > 5 && afterWords > 5;
           
-          // CRITICAL: More aggressive splitting logic
-          // Split with PERIOD if:
-          // 1. We're in a series (2+ "and"s in context) AND clauses are substantial
-          // 2. OR context is long (>100 chars) AND both clauses have 8+ words
-          // 3. OR both clauses are very substantial (10+ words each) - independent thoughts
-          const shouldSplit = (andCountInContext > 1 && isSubstantialClause) || 
-                             (context.length > 100 && beforeWords > 8 && afterWords > 8) ||
-                             (beforeWords > 10 && afterWords > 10);
+          // CRITICAL: Conservative splitting logic to reduce false positives
+          // Split with PERIOD only if:
+          // 1. We're in a long series (4+ "and"s in context) AND clauses are very substantial
+          // 2. OR context is very long (>200 chars) AND both clauses have 15+ words
+          // This prevents splitting compound phrases like "canoes and boats"
+          const shouldSplit = (andCountInContext > 3 && beforeWords > 12 && afterWords > 12) ||
+                             (context.length > 200 && beforeWords > 15 && afterWords > 15);
           
           if (shouldSplit) {
             allAndPositions.push({
@@ -506,7 +510,9 @@ export function restorePunctuationLogic(text, isPartial = false, doc = null) {
   // CRITICAL: Reduce minimum distance - 3 characters is enough for most cases
   // The previous 10 character requirement was too restrictive and prevented valid breaks
   const MIN_DISTANCE_FROM_END = 3;
+  const MIN_CONFIDENCE = 0.9; // Only apply high-confidence boundaries to reduce false positives
   const sortedBoundaries = boundaries
+    .filter(b => b.confidence >= MIN_CONFIDENCE) // ADDED: Filter by confidence threshold
     .filter(b => b.position > 0 && b.position < result.length - MIN_DISTANCE_FROM_END) // Never at start or too close to end
     .sort((a, b) => b.position - a.position);
 
@@ -1252,14 +1258,14 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
   let result = text;
   const originalResult = result;
   
-  console.log(`[QuoteDetection] 🔍 Starting quote detection on: "${result.substring(0, 150)}${result.length > 150 ? '...' : ''}"`);
+  // console.log(`[QuoteDetection] 🔍 Starting quote detection on: "${result.substring(0, 150)}${result.length > 150 ? '...' : ''}"`);
   
   // CRITICAL: We DO want to process even if quotes exist - we need to detect quotes after "I love this quote," patterns
   // The existing quotes might be STT artifacts that need fixing
   const hasQuotes = /["'"]/.test(result);
-  if (hasQuotes) {
-    console.log(`[QuoteDetection] ℹ️ Text contains existing quotes - will check if they're correctly placed`);
-  }
+  // if (hasQuotes) {
+  //   console.log(`[QuoteDetection] ℹ️ Text contains existing quotes - will check if they're correctly placed`);
+  // }
   
   // Handle "Quote ... end quote" patterns
   result = result.replace(/\bQuote\s+(.+?)\s+end\s+quote\b/gi, (match, quoteText) => {
@@ -1307,12 +1313,12 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
     let quoteMatch;
     pattern.lastIndex = 0;
     const patternNames = ['I love this quote', 'this quote', 'quote'];
-    console.log(`[QuoteDetection] 🔍 Checking pattern ${patternIndex + 1}: "${patternNames[patternIndex]}"`);
+    // console.log(`[QuoteDetection] 🔍 Checking pattern ${patternIndex + 1}: "${patternNames[patternIndex]}"`);
     
     while ((quoteMatch = pattern.exec(result)) !== null) {
       const afterQuoteStart = quoteMatch.index + quoteMatch[0].length;
       const remainingText = result.substring(afterQuoteStart);
-      console.log(`[QuoteDetection] ✅ Found "${patternNames[patternIndex]}" at position ${quoteMatch.index}, checking text after: "${remainingText.substring(0, 80)}..."`);
+      // console.log(`[QuoteDetection] ✅ Found "${patternNames[patternIndex]}" at position ${quoteMatch.index}, checking text after: "${remainingText.substring(0, 80)}..."`);
       
       // Find where quote ends - look for end markers or natural sentence boundaries
       const endMarkerPatterns = [
@@ -1331,7 +1337,7 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
         if (markerMatch && markerMatch.index !== undefined && markerMatch.index < quoteEndOffset) {
           quoteEndOffset = markerMatch.index;
           foundEndMarker = name;
-          console.log(`[QuoteDetection] 📍 Found end marker "${name}" at position ${markerMatch.index}`);
+          // console.log(`[QuoteDetection] 📍 Found end marker "${name}" at position ${markerMatch.index}`);
         }
       }
       
@@ -1345,13 +1351,13 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
         if (textBeforePeriod.length > 20) {
           quoteEndOffset = sentenceBoundary.index;
           foundEndMarker = 'sentence boundary';
-          console.log(`[QuoteDetection] 📍 Found sentence boundary at position ${sentenceBoundary.index}`);
+          // console.log(`[QuoteDetection] 📍 Found sentence boundary at position ${sentenceBoundary.index}`);
         }
       }
       
       // Extract quote text
       let quoteText = remainingText.substring(0, quoteEndOffset).trim();
-      console.log(`[QuoteDetection] 📝 Extracted quote text (${quoteText.length} chars): "${quoteText.substring(0, 100)}${quoteText.length > 100 ? '...' : ''}"`);
+      // console.log(`[QuoteDetection] 📝 Extracted quote text (${quoteText.length} chars): "${quoteText.substring(0, 100)}${quoteText.length > 100 ? '...' : ''}"`);
       
       // CRITICAL: Find where quote naturally ends by looking for sentence boundaries
       // Quotes typically end at: periods, exclamation marks, question marks
@@ -1360,13 +1366,13 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
       if (sentenceEndMatch && sentenceEndMatch.index !== undefined) {
         // Quote ends at this sentence boundary
         quoteText = quoteText.substring(0, sentenceEndMatch.index + 1).trim();
-        console.log(`[QuoteDetection] 📍 Found sentence boundary in quote at position ${sentenceEndMatch.index}`);
+        // console.log(`[QuoteDetection] 📍 Found sentence boundary in quote at position ${sentenceEndMatch.index}`);
       }
       
       // Clean up quote text
       if (foundEndMarker && foundEndMarker !== 'sentence boundary') {
         quoteText = quoteText.replace(new RegExp(`\\s+${foundEndMarker.replace(/\s+/g, '\\s+')}.*$`, 'i'), '').trim();
-        console.log(`[QuoteDetection] 🧹 Cleaned quote text after removing end marker: "${quoteText.substring(0, 100)}${quoteText.length > 100 ? '...' : ''}"`);
+        // console.log(`[QuoteDetection] 🧹 Cleaned quote text after removing end marker: "${quoteText.substring(0, 100)}${quoteText.length > 100 ? '...' : ''}"`);
       }
       
       // Only add quote if we found substantial content (at least 15 chars)
@@ -1381,28 +1387,30 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
           // Remove any artifacts like "e" or single letters in quotes
           cleanQuoteText = cleanQuoteText.replace(/\s+["']e["']\s+/gi, ' ').trim();
           cleanQuoteText = cleanQuoteText.replace(/["']e["']/gi, '').trim();
-          console.log(`[QuoteDetection] 🧹 Cleaned existing quotes: "${quoteText.substring(0, 80)}" → "${cleanQuoteText.substring(0, 80)}"`);
+          // console.log(`[QuoteDetection] 🧹 Cleaned existing quotes: "${quoteText.substring(0, 80)}" → "${cleanQuoteText.substring(0, 80)}"`);
         }
         
         // Only add if we still have substantial content after cleaning
         if (cleanQuoteText && cleanQuoteText.length > 15) {
-          console.log(`[QuoteDetection] ✅ Adding quote match: "${cleanQuoteText.substring(0, 100)}${cleanQuoteText.length > 100 ? '...' : ''}"`);
+          // console.log(`[QuoteDetection] ✅ Adding quote match: "${cleanQuoteText.substring(0, 100)}${cleanQuoteText.length > 100 ? '...' : ''}"`);
           quoteMatches.push({
             start: afterQuoteStart,
             end: afterQuoteStart + quoteEndOffset,
             speaker: null,
             quoteText: cleanQuoteText
           });
-        } else {
-          console.log(`[QuoteDetection] ⚠️ Skipping - quote text too short after cleaning (${cleanQuoteText ? cleanQuoteText.length : 0} chars, need 15+)`);
         }
-      } else {
-        console.log(`[QuoteDetection] ⚠️ Skipping - quote text too short (${quoteText ? quoteText.length : 0} chars, need 15+)`);
+        // else {
+        //   console.log(`[QuoteDetection] ⚠️ Skipping - quote text too short after cleaning (${cleanQuoteText ? cleanQuoteText.length : 0} chars, need 15+)`);
+        // }
       }
+      // else {
+      //   console.log(`[QuoteDetection] ⚠️ Skipping - quote text too short (${quoteText ? quoteText.length : 0} chars, need 15+)`);
+      // }
     }
   });
   
-  console.log(`[QuoteDetection] 📊 Found ${quoteMatches.length} quote matches to apply`);
+  // console.log(`[QuoteDetection] 📊 Found ${quoteMatches.length} quote matches to apply`);
   
   // CRITICAL: Handle pattern: "X said," followed by unquoted content that should be quoted
   // This is the most important case - quotes that are implied by context
@@ -1592,9 +1600,9 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
       replacement = `"${quoteText}"`;
     }
     
-    console.log(`[QuoteDetection] 🔧 Applying quote ${index + 1}/${quoteMatches.length}:`);
-    console.log(`  Before: "${beforeReplacement.substring(0, 80)}${beforeReplacement.length > 80 ? '...' : ''}"`);
-    console.log(`  After: "${replacement.substring(0, 80)}${replacement.length > 80 ? '...' : ''}"`);
+    // console.log(`[QuoteDetection] 🔧 Applying quote ${index + 1}/${quoteMatches.length}:`);
+    // console.log(`  Before: "${beforeReplacement.substring(0, 80)}${beforeReplacement.length > 80 ? '...' : ''}"`);
+    // console.log(`  After: "${replacement.substring(0, 80)}${replacement.length > 80 ? '...' : ''}"`);
     result = before + replacement + after;
   });
   
@@ -1603,9 +1611,10 @@ export function normalizeQuotationSyntaxLogic(text, doc = null) {
   
   if (result !== originalResult) {
     console.log(`[QuoteDetection] ✅ QUOTES APPLIED: "${originalResult.substring(0, 150)}${originalResult.length > 150 ? '...' : ''}" → "${result.substring(0, 150)}${result.length > 150 ? '...' : ''}"`);
-  } else {
-    console.log(`[QuoteDetection] ⚠️ NO QUOTES APPLIED - text unchanged`);
   }
+  // else {
+  //   console.log(`[QuoteDetection] ⚠️ NO QUOTES APPLIED - text unchanged`);
+  // }
   
   return result;
 }
@@ -1667,7 +1676,7 @@ export function fixRunOnSentencesLogic(text, doc = null) {
   let result = text;
   const original = result;
   
-  console.log(`[RunOnFix] 🔍 Checking for run-on sentences in: "${result.substring(0, 150)}${result.length > 150 ? '...' : ''}"`);
+  // console.log(`[RunOnFix] 🔍 Checking for run-on sentences in: "${result.substring(0, 150)}${result.length > 150 ? '...' : ''}"`);
   
   // First, fix common artifacts like "e" in quotes and weird punctuation
   result = result.replace(/\s+["']e["']\s+/gi, ' ');
@@ -1712,7 +1721,7 @@ export function fixRunOnSentencesLogic(text, doc = null) {
         continue;
       }
       
-      console.log(`[RunOnFix] 🔍 Found potential run-on (pattern ${patternIndex + 1}): "${fullMatch.substring(0, 80)}${fullMatch.length > 80 ? '...' : ''}"`);
+      // console.log(`[RunOnFix] 🔍 Found potential run-on (pattern ${patternIndex + 1}): "${fullMatch.substring(0, 80)}${fullMatch.length > 80 ? '...' : ''}"`);
       
       // Check if both parts have verbs (independent clauses)
       const beforeDoc = nlp(beforeAnd);
@@ -1720,8 +1729,8 @@ export function fixRunOnSentencesLogic(text, doc = null) {
       const beforeVerbs = beforeDoc.match('#Verb').length;
       const afterVerbs = afterDoc.match('#Verb').length;
       
-      console.log(`[RunOnFix] 📊 Before "and": ${beforeVerbs} verbs, ${beforeAnd.split(/\s+/).length} words`);
-      console.log(`[RunOnFix] 📊 After "and": ${afterVerbs} verbs, ${afterAnd.split(/\s+/).length} words`);
+      // console.log(`[RunOnFix] 📊 Before "and": ${beforeVerbs} verbs, ${beforeAnd.split(/\s+/).length} words`);
+      // console.log(`[RunOnFix] 📊 After "and": ${afterVerbs} verbs, ${afterAnd.split(/\s+/).length} words`);
       
       // More aggressive splitting: if pattern 0 (capitalized after "and") OR both have verbs
       const shouldSplit = (patternIndex === 0) || // Pattern 0: "and" followed by capitalized word (likely new clause)
@@ -1735,7 +1744,7 @@ export function fixRunOnSentencesLogic(text, doc = null) {
         const isSubstantial = (beforeWords >= 5 && afterWords >= 5) || (beforeWords + afterWords > 30) || (patternIndex === 0);
         
         if (isSubstantial) {
-          console.log(`[RunOnFix] ✅ Splitting run-on sentence: "${beforeAnd.substring(0, 60)}... AND ${afterAnd.substring(0, 60)}..."`);
+          // console.log(`[RunOnFix] ✅ Splitting run-on sentence: "${beforeAnd.substring(0, 60)}... AND ${afterAnd.substring(0, 60)}..."`);
           
           // Replace " and " with ". And " (period + space + capitalized And)
           const before = result.substring(0, absoluteAndPos);
@@ -1747,25 +1756,28 @@ export function fixRunOnSentencesLogic(text, doc = null) {
           result = before + '. And ' + capitalizedAfter;
           processedPositions.add(absoluteAndPos);
           
-          console.log(`[RunOnFix] 🔧 Applied fix: "${before.substring(Math.max(0, before.length - 40))} and ${after.substring(0, 40)}" → "${before.substring(Math.max(0, before.length - 40))}. And ${capitalizedAfter.substring(0, 40)}"`);
+          // console.log(`[RunOnFix] 🔧 Applied fix: "${before.substring(Math.max(0, before.length - 40))} and ${after.substring(0, 40)}" → "${before.substring(Math.max(0, before.length - 40))}. And ${capitalizedAfter.substring(0, 40)}"`);
           
           // Reset all patterns since we modified the string
           runOnPatterns.forEach(p => p.lastIndex = 0);
           break; // Restart from beginning
-        } else {
-          console.log(`[RunOnFix] ⚠️ Skipping - clauses too short (${beforeWords} + ${afterWords} words)`);
         }
-      } else {
-        console.log(`[RunOnFix] ⚠️ Skipping - not independent clauses (before: ${beforeVerbs} verbs, after: ${afterVerbs} verbs)`);
+        // else {
+        //   console.log(`[RunOnFix] ⚠️ Skipping - clauses too short (${beforeWords} + ${afterWords} words)`);
+        // }
       }
+      // else {
+      //   console.log(`[RunOnFix] ⚠️ Skipping - not independent clauses (before: ${beforeVerbs} verbs, after: ${afterVerbs} verbs)`);
+      // }
     }
   });
   
   if (result !== original) {
     console.log(`[RunOnFix] ✅ RUN-ON SENTENCES FIXED: "${original.substring(0, 150)}${original.length > 150 ? '...' : ''}" → "${result.substring(0, 150)}${result.length > 150 ? '...' : ''}"`);
-  } else {
-    console.log(`[RunOnFix] ⚠️ NO RUN-ON SENTENCES FOUND - text unchanged`);
   }
+  // else {
+  //   console.log(`[RunOnFix] ⚠️ NO RUN-ON SENTENCES FOUND - text unchanged`);
+  // }
   
   return result;
 }

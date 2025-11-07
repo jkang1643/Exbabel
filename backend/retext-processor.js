@@ -80,88 +80,96 @@ export function processPartialSync(text, options = {}) {
   }
   
   // Stage 1: Fix contractions
-  console.log(`[GrammarPipeline] 🔍 Running: fixContractionsLogic`);
+  // console.log(`[GrammarPipeline] 🔍 Running: fixContractionsLogic`);
   const beforeContractions = result;
   result = fixContractionsLogic(result);
   if (result !== beforeContractions) {
     console.log(`[GrammarPipeline] 🔧 Contractions fixed: "${beforeContractions.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Contractions checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Contractions checked (no changes)`);
+  // }
   
   // Stage 2: Remove fillers
-  console.log(`[GrammarPipeline] 🔍 Running: removeFillersLogic`);
+  // console.log(`[GrammarPipeline] 🔍 Running: removeFillersLogic`);
   const beforeFillers = result;
   result = removeFillersLogic(result);
   if (result !== beforeFillers) {
     console.log(`[GrammarPipeline] 🔧 Fillers removed: "${beforeFillers.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Fillers checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Fillers checked (no changes)`);
+  // }
   
   // Stage 3: Deduplicate words
-  console.log(`[GrammarPipeline] 🔍 Running: deduplicateWordsLogic`);
+  // console.log(`[GrammarPipeline] 🔍 Running: deduplicateWordsLogic`);
   const beforeDedupe = result;
   result = deduplicateWordsLogic(result);
   if (result !== beforeDedupe) {
     console.log(`[GrammarPipeline] 🔧 Duplicates removed: "${beforeDedupe.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Duplicates checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Duplicates checked (no changes)`);
+  // }
   
   // Stage 4: Fix homophones (context-aware)
-  console.log(`[GrammarPipeline] 🔍 Running: fixHomophonesLogic`);
+  // console.log(`[GrammarPipeline] 🔍 Running: fixHomophonesLogic`);
   const doc = nlp(result);
   const beforeHomophones = result;
   result = fixHomophonesLogic(result, doc);
   if (result !== beforeHomophones) {
     console.log(`[GrammarPipeline] 🔧 Homophones fixed: "${beforeHomophones.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Homophones checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Homophones checked (no changes)`);
+  // }
   
   // Stage 5: Restore punctuation (with sentence segmentation)
-  console.log(`[GrammarPipeline] 🔍 Running: restorePunctuationLogic`);
+  // console.log(`[GrammarPipeline] 🔍 Running: restorePunctuationLogic`);
   const beforePunctuation = result;
   result = restorePunctuationLogic(result, true, doc); // isPartial = true
   if (result !== beforePunctuation) {
     console.log(`[GrammarPipeline] 🔧 Punctuation restored: "${beforePunctuation.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Punctuation checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Punctuation checked (no changes)`);
+  // }
   
   // Stage 6: Capitalize sentences (IMPORTANT: Do this AFTER punctuation restoration)
-  console.log(`[GrammarPipeline] 🔍 Running: capitalizeSentencesLogic, fixPronounILogic`);
+  // console.log(`[GrammarPipeline] 🔍 Running: capitalizeSentencesLogic, fixPronounILogic`);
   const beforeCapitalization = result;
   result = capitalizeSentencesLogic(result);
   result = fixPronounILogic(result);
   if (result !== beforeCapitalization) {
     console.log(`[GrammarPipeline] 🔧 Capitalization fixed: "${beforeCapitalization.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Capitalization checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Capitalization checked (no changes)`);
+  // }
   
   // Stage 7: Capitalize proper nouns and acronyms
-  console.log(`[GrammarPipeline] 🔍 Running: capitalizeProperNounsLogic, capitalizeAcronymsLogic`);
+  // console.log(`[GrammarPipeline] 🔍 Running: capitalizeProperNounsLogic, capitalizeAcronymsLogic`);
   const beforeProperNouns = result;
   result = capitalizeProperNounsLogic(result);
   result = capitalizeAcronymsLogic(result);
   if (result !== beforeProperNouns) {
     console.log(`[GrammarPipeline] 🔧 Proper nouns capitalized: "${beforeProperNouns.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Proper nouns/acronyms checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Proper nouns/acronyms checked (no changes)`);
+  // }
   
   // CRITICAL: Final capitalization pass AFTER all punctuation is added
   // This ensures words after periods are capitalized even if punctuation was added later
-  console.log(`[GrammarPipeline] 🔍 Running: capitalizeSentencesLogic (final pass)`);
+  // console.log(`[GrammarPipeline] 🔍 Running: capitalizeSentencesLogic (final pass)`);
   const beforeFinalCapitalization = result;
   result = capitalizeSentencesLogic(result);
   if (result !== beforeFinalCapitalization) {
     console.log(`[GrammarPipeline] 🔧 Final capitalization: "${beforeFinalCapitalization.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-  } else {
-    console.log(`[GrammarPipeline] ✓ Final capitalization checked (no changes)`);
   }
+  // else {
+  //   console.log(`[GrammarPipeline] ✓ Final capitalization checked (no changes)`);
+  // }
   
   // Fix common grammar errors
   // "got to" → "have got to" or keep as "got to" (informal is OK, but fix "gotta")
@@ -183,14 +191,16 @@ export function processPartialSync(text, options = {}) {
   
   // CRITICAL: Fix STT transcription errors using context-aware detection
   // Don't hardcode fixes - use patterns that work for similar errors
-  
+
+  // DISABLED: This pattern is too aggressive and causes false positives
+  // It was splitting valid words like "Surgeon" → "Surge on"
   // Fix words incorrectly combined (missing space between word + common particle)
   // Pattern: word + (all|the|and|of|in|on|at|to|for|with|from) without space
-  result = result.replace(/\b([a-z]{5,})(all|the|and|of|in|on|at|to|for|with|from)\b/gi, (match, word, particle) => {
-    // Only fix if it's likely an error (word is substantial and lowercase)
-    // Check if splitting would make sense (word exists as standalone)
-    return `${word} ${particle}`;
-  });
+  // result = result.replace(/\b([a-z]{5,})(all|the|and|of|in|on|at|to|for|with|from)\b/gi, (match, word, particle) => {
+  //   // Only fix if it's likely an error (word is substantial and lowercase)
+  //   // Check if splitting would make sense (word exists as standalone)
+  //   return `${word} ${particle}`;
+  // });
   
   // Fix specific context-aware STT errors
   // "decades fight" → "to cage fight" (only in fighting context)
@@ -221,137 +231,149 @@ export function processPartialSync(text, options = {}) {
   
   // Stage 8: Normalize colloquialisms
   if (enableColloquialisms) {
-    console.log(`[GrammarPipeline] 🔍 Running: normalizeColloquialismsLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: normalizeColloquialismsLogic`);
     const beforeColloquialisms = result;
     result = normalizeColloquialismsLogic(result);
     if (result !== beforeColloquialisms) {
       console.log(`[GrammarPipeline] 🔧 Colloquialisms normalized: "${beforeColloquialisms.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Colloquialisms checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Colloquialisms checked (no changes)`);
+    // }
   }
   
   // Stage 9: Domain-specific fixes (Bible/worship)
   if (enableDomainSpecific) {
-    console.log(`[GrammarPipeline] 🔍 Running domain-specific fixes (Bible/worship)`);
+    // console.log(`[GrammarPipeline] 🔍 Running domain-specific fixes (Bible/worship)`);
     const doc2 = nlp(result);
     
     // Bible book names and verse references
-    console.log(`[GrammarPipeline] 🔍 Running: normalizeBibleBookNamesLogic, normalizeVerseReferencesLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: normalizeBibleBookNamesLogic, normalizeVerseReferencesLogic`);
     const beforeBibleBooks = result;
     result = normalizeBibleBookNamesLogic(result, doc2);
     result = normalizeVerseReferencesLogic(result, doc2);
     if (result !== beforeBibleBooks) {
       console.log(`[GrammarPipeline] 🔧 Bible books normalized: "${beforeBibleBooks.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Bible books/verses checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Bible books/verses checked (no changes)`);
+    // }
     
     // Capitalization rules
-    console.log(`[GrammarPipeline] 🔍 Running: capitalizeDivineTitlesLogic, capitalizeDivinePronounsLogic, capitalizeSacredTextsLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: capitalizeDivineTitlesLogic, capitalizeDivinePronounsLogic, capitalizeSacredTextsLogic`);
     const beforeDivine = result;
     result = capitalizeDivineTitlesLogic(result);
     result = capitalizeDivinePronounsLogic(result, doc2);
     result = capitalizeSacredTextsLogic(result);
     if (result !== beforeDivine) {
       console.log(`[GrammarPipeline] 🔧 Divine terms capitalized: "${beforeDivine.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Divine terms checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Divine terms checked (no changes)`);
+    // }
     
     // Religious homophones
-    console.log(`[GrammarPipeline] 🔍 Running: fixReligiousHomophonesLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: fixReligiousHomophonesLogic`);
     const beforeReligiousHomophones = result;
     result = fixReligiousHomophonesLogic(result, doc2);
     if (result !== beforeReligiousHomophones) {
       console.log(`[GrammarPipeline] 🔧 Religious homophones fixed: "${beforeReligiousHomophones.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Religious homophones checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Religious homophones checked (no changes)`);
+    // }
     
     // Sermon structure
-    console.log(`[GrammarPipeline] 🔍 Running: normalizeSermonStructureLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: normalizeSermonStructureLogic`);
     const beforeSermonStructure = result;
     result = normalizeSermonStructureLogic(result, doc2);
     if (result !== beforeSermonStructure) {
       console.log(`[GrammarPipeline] 🔧 Sermon structure normalized: "${beforeSermonStructure.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Sermon structure checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Sermon structure checked (no changes)`);
+    // }
     
     // Prayer language
-    console.log(`[GrammarPipeline] 🔍 Running: normalizePrayerLanguageLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: normalizePrayerLanguageLogic`);
     const beforePrayer = result;
     result = normalizePrayerLanguageLogic(result, doc2);
     if (result !== beforePrayer) {
       console.log(`[GrammarPipeline] 🔧 Prayer language normalized: "${beforePrayer.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Prayer language checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Prayer language checked (no changes)`);
+    // }
     
     // Theology terms
-    console.log(`[GrammarPipeline] 🔍 Running: normalizeTheologyTermsLogic, normalizeLiturgicalTermsLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: normalizeTheologyTermsLogic, normalizeLiturgicalTermsLogic`);
     const beforeTheology = result;
     result = normalizeTheologyTermsLogic(result);
     result = normalizeLiturgicalTermsLogic(result);
     if (result !== beforeTheology) {
       console.log(`[GrammarPipeline] 🔧 Theology terms normalized: "${beforeTheology.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Theology/liturgical terms checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Theology/liturgical terms checked (no changes)`);
+    // }
     
     // Quotation syntax - THIS IS CRITICAL FOR THE USER'S ISSUE
-    console.log(`[GrammarPipeline] 🔍 Running: normalizeQuotationSyntaxLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: normalizeQuotationSyntaxLogic`);
     const beforeQuotes = result;
     result = normalizeQuotationSyntaxLogic(result, doc2);
     if (result !== beforeQuotes) {
       console.log(`[GrammarPipeline] 🔧 QUOTES DETECTED AND ADDED: "${beforeQuotes.substring(0, 150)}" → "${result.substring(0, 150)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ⚠️ NO QUOTES DETECTED in: "${result.substring(0, 150)}"`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ⚠️ NO QUOTES DETECTED in: "${result.substring(0, 150)}"`);
+    // }
     
     // Run-on sentence fixes - CRITICAL: Must run after quotes and punctuation
-    console.log(`[GrammarPipeline] 🔍 Running: fixRunOnSentencesLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: fixRunOnSentencesLogic`);
     const doc4 = nlp(result);
     const beforeRunOns = result;
     result = fixRunOnSentencesLogic(result, doc4);
     if (result !== beforeRunOns) {
       console.log(`[GrammarPipeline] 🔧 Run-on sentences fixed: "${beforeRunOns.substring(0, 150)}" → "${result.substring(0, 150)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Run-on sentences checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Run-on sentences checked (no changes)`);
+    // }
     
     // Formatting commands
-    console.log(`[GrammarPipeline] 🔍 Running: normalizeFormattingCommandsLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: normalizeFormattingCommandsLogic`);
     const beforeFormatting = result;
     result = normalizeFormattingCommandsLogic(result);
     if (result !== beforeFormatting) {
       console.log(`[GrammarPipeline] 🔧 Formatting commands normalized: "${beforeFormatting.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Formatting commands checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Formatting commands checked (no changes)`);
+    // }
     
     // Additional fixes
-    console.log(`[GrammarPipeline] 🔍 Running: fixDivineNamesLogic`);
+    // console.log(`[GrammarPipeline] 🔍 Running: fixDivineNamesLogic`);
     const beforeDivineNames = result;
     result = fixDivineNamesLogic(result);
     if (result !== beforeDivineNames) {
       console.log(`[GrammarPipeline] 🔧 Divine names fixed: "${beforeDivineNames.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Divine names checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Divine names checked (no changes)`);
+    // }
     
     // CRITICAL: Re-apply homophone fixes AFTER domain-specific processing
     // This ensures "Nahum" → "Name" corrections aren't undone by Bible book normalization
-    console.log(`[GrammarPipeline] 🔍 Running: fixHomophonesLogic (final pass)`);
+    // console.log(`[GrammarPipeline] 🔍 Running: fixHomophonesLogic (final pass)`);
     const doc3 = nlp(result);
     const beforeFinalHomophones = result;
     result = fixHomophonesLogic(result, doc3);
     if (result !== beforeFinalHomophones) {
       console.log(`[GrammarPipeline] 🔧 Final homophones pass: "${beforeFinalHomophones.substring(0, 80)}" → "${result.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Final homophones checked (no changes)`);
     }
+    // else {
+    //   console.log(`[GrammarPipeline] ✓ Final homophones checked (no changes)`);
+    // }
   }
   
   // Final cleanup - PRESERVE QUOTES

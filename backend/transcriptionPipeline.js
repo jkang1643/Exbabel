@@ -1,12 +1,11 @@
 /**
  * Transcription Pipeline - Main orchestrator for comprehensive transcription cleanup
- * 
+ *
  * Uses hybrid approach:
- * - Partials: Fast synchronous processing (<10ms) via processPartialSync
- * - Finals: Comprehensive async processing (~100-200ms) via processWithRetext + Xenova model
- * 
- * Both paths use the same correction logic from retext-plugins/logic.js
- * to ensure 100% consistency.
+ * - Partials: Ultra-fast (<1ms) synchronous processing - NO Xenova, just whitespace cleanup
+ * - Finals: Comprehensive async processing (~100-200ms) with Xenova grammar correction
+ *
+ * ⚠️ CRITICAL: Partials do NOT use Xenova to avoid slowdown from frequent updates
  */
 
 // Load environment variables FIRST
@@ -114,11 +113,11 @@ function isProtected(word) {
 
 /**
  * Main transcription cleanup pipeline
- * 
+ *
  * Uses hybrid approach:
- * - Partials: Fast synchronous processing via processPartialSync (<10ms)
- * - Finals: Comprehensive async processing via processWithRetext (~100-200ms)
- * 
+ * - Partials: Ultra-fast synchronous - NO Xenova (just whitespace cleanup)
+ * - Finals: Comprehensive async with Xenova grammar correction (~100-200ms)
+ *
  * @param {string} rawText - Raw STT transcription text
  * @param {boolean} isPartial - Whether this is a partial (incomplete) transcript
  * @param {Object} options - Configuration options
@@ -129,138 +128,33 @@ export function cleanTranscription(rawText, isPartial = false, options = {}) {
     return rawText || '';
   }
   
-  const {
-    enableNumbers = false,      // Convert "twenty five" → "25"
-    enableDates = true,         // Normalize dates
-    enableTimes = true,         // Normalize times
-    enableColloquialisms = true, // "gonna" → "going to"
-    enableDomainSpecific = true  // Bible/worship terms
-  } = options;
+  // TEMPORARILY DISABLED: All grammar pipeline steps except Xenova
+  // const {
+  //   enableNumbers = false,
+  //   enableDates = true,
+  //   enableTimes = true,
+  //   enableColloquialisms = true,
+  //   enableDomainSpecific = true
+  // } = options;
+  
+  // Simple whitespace normalization only
+  let text = rawText.trim().replace(/\s+/g, ' ');
   
   if (isPartial) {
-    // FAST PATH: Use synchronous processing for partials (<10ms latency)
-    // This ensures instant feedback for live partial transcripts
-    let text = processPartialSync(rawText, {
-      enableNumbers,
-      enableDates,
-      enableTimes,
-      enableColloquialisms,
-      enableDomainSpecific
-    });
-    
-    // Apply additional fixes that aren't in the sync processor yet
-    if (enableDates) {
-      console.log(`[GrammarPipeline] 🔍 SYNC: Running normalizeDates`);
-      const beforeDates = text;
-      text = normalizeDates(text);
-      if (text !== beforeDates) {
-        console.log(`[GrammarPipeline] 🔧 Dates normalized (sync): "${beforeDates.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-      } else {
-        console.log(`[GrammarPipeline] ✓ Dates checked (sync, no changes)`);
-      }
-    }
-    if (enableTimes) {
-      console.log(`[GrammarPipeline] 🔍 SYNC: Running normalizeTimes`);
-      const beforeTimes = text;
-      text = normalizeTimes(text);
-      if (text !== beforeTimes) {
-        console.log(`[GrammarPipeline] 🔧 Times normalized (sync): "${beforeTimes.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-      } else {
-        console.log(`[GrammarPipeline] ✓ Times checked (sync, no changes)`);
-      }
-    }
-    if (enableNumbers) {
-      console.log(`[GrammarPipeline] 🔍 SYNC: Running normalizeNumbers`);
-      const beforeNumbers = text;
-      text = normalizeNumbers(text);
-      if (text !== beforeNumbers) {
-        console.log(`[GrammarPipeline] 🔧 Numbers normalized (sync): "${beforeNumbers.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-      } else {
-        console.log(`[GrammarPipeline] ✓ Numbers checked (sync, no changes)`);
-      }
-    }
-    
-    // Fix common grammar issues
-    console.log(`[GrammarPipeline] 🔍 SYNC: Running insertMissingWords, article fixes`);
-    const beforeGrammar = text;
-    text = insertMissingWords(text);
-    text = text.replace(/\ba\s+([aeiouAEIOU])/g, 'an $1');
-    text = text.replace(/\ban\s+([bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])/gi, 'a $1');
-    if (text !== beforeGrammar) {
-      console.log(`[GrammarPipeline] 🔧 Grammar fixes applied (sync): "${beforeGrammar.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-    } else {
-      console.log(`[GrammarPipeline] ✓ Grammar fixes checked (sync, no changes)`);
-    }
-    
+    // PARTIALS: NO Xenova - return immediately for speed
+    // Xenova grammar correction is ONLY for finals to avoid slowdown
     return text;
   } else {
-    // COMPREHENSIVE PATH: Use async retext processing for finals (~100-200ms)
-    // This provides more thorough cleanup using retext's AST-based processing
-    console.log(`[GrammarPipeline] 🚀 STARTING ASYNC PIPELINE (FINAL): "${rawText.substring(0, 100)}${rawText.length > 100 ? '...' : ''}"`);
-    console.log(`[GrammarPipeline] 📊 Options: enableNumbers=${enableNumbers}, enableDates=${enableDates}, enableTimes=${enableTimes}, enableColloquialisms=${enableColloquialisms}, enableDomainSpecific=${enableDomainSpecific}`);
-    
-    return processWithRetext(rawText, {
-      enableNumbers,
-      enableDates,
-      enableTimes,
-      enableColloquialisms,
-      enableDomainSpecific
-    }).then(async text => {
-      // Apply additional fixes that work better as text processing
-      if (enableDates) {
-        console.log(`[GrammarPipeline] 🔍 Running: normalizeDates`);
-        const beforeDates = text;
-        text = normalizeDates(text);
-        if (text !== beforeDates) {
-          console.log(`[GrammarPipeline] 🔧 Dates normalized: "${beforeDates.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-        } else {
-          console.log(`[GrammarPipeline] ✓ Dates checked (no changes)`);
-        }
-      }
-      if (enableTimes) {
-        console.log(`[GrammarPipeline] 🔍 Running: normalizeTimes`);
-        const beforeTimes = text;
-        text = normalizeTimes(text);
-        if (text !== beforeTimes) {
-          console.log(`[GrammarPipeline] 🔧 Times normalized: "${beforeTimes.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-        } else {
-          console.log(`[GrammarPipeline] ✓ Times checked (no changes)`);
-        }
-      }
-      if (enableNumbers) {
-        console.log(`[GrammarPipeline] 🔍 Running: normalizeNumbers`);
-        const beforeNumbers = text;
-        text = normalizeNumbers(text);
-        if (text !== beforeNumbers) {
-          console.log(`[GrammarPipeline] 🔧 Numbers normalized: "${beforeNumbers.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-        } else {
-          console.log(`[GrammarPipeline] ✓ Numbers checked (no changes)`);
-        }
-      }
-      
-      // Fix common grammar issues
-      console.log(`[GrammarPipeline] 🔍 Running: insertMissingWords, article fixes`);
-      const beforeGrammar = text;
-      text = insertMissingWords(text);
-      text = text.replace(/\ba\s+([aeiouAEIOU])/g, 'an $1');
-      text = text.replace(/\ban\s+([bcdfghjklmnpqrstvwxyzBCDFGHJKLMNPQRSTVWXYZ])/gi, 'a $1');
-      if (text !== beforeGrammar) {
-        console.log(`[GrammarPipeline] 🔧 Grammar fixes applied: "${beforeGrammar.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-      } else {
-        console.log(`[GrammarPipeline] ✓ Grammar fixes checked (no changes)`);
-      }
-      
+    // FINALS: Only Xenova
+    return (async () => {
       // Apply Xenova AI grammar model if enabled
       if (ENABLE_XENOVA_GRAMMAR && grammarModel) {
         try {
-          console.log(`[GrammarPipeline] 🤖 Running Xenova grammar model...`);
           const beforeXenova = text;
           const result = await grammarModel.correct(text);
           text = result.corrected || text;
           if (text !== beforeXenova) {
             console.log(`[GrammarPipeline] ✨ Xenova corrected (${result.matches} fix(es)): "${beforeXenova.substring(0, 80)}" → "${text.substring(0, 80)}"`);
-          } else {
-            console.log(`[GrammarPipeline] ✓ Xenova checked (no changes)`);
           }
         } catch (xenovaError) {
           console.warn(`[GrammarPipeline] ⚠️ Xenova model error, using text as-is:`, xenovaError.message);
@@ -268,30 +162,19 @@ export function cleanTranscription(rawText, isPartial = false, options = {}) {
       }
       
       return text;
-    }).catch(error => {
-      console.warn('[GrammarPipeline] ⚠️ Async processing failed, falling back to partial sync path:', error?.message || error);
-      try {
-        return processPartialSync(rawText, {
-          enableNumbers,
-          enableDates,
-          enableTimes,
-          enableColloquialisms,
-          enableDomainSpecific
-        });
-      } catch (fallbackError) {
-        console.error('[GrammarPipeline] ❌ Fallback sync processing failed:', fallbackError?.message || fallbackError);
-        return rawText;
-      }
-    });
+    })();
   }
 }
 
 /**
  * Clean partial transcript (wrapper for cleanTranscription with isPartial=true)
- * Synchronous - returns immediately
+ * Partials are FAST - no Xenova processing, just whitespace cleanup
+ * Returns synchronous result wrapped in Promise for consistency
  */
 export function cleanPartialTranscription(rawText, options = {}) {
-  return cleanTranscription(rawText, true, options);
+  const result = cleanTranscription(rawText, true, options);
+  // Partials return synchronously (no Xenova), wrap in Promise for consistency
+  return Promise.resolve(result);
 }
 
 /**

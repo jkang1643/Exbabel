@@ -654,7 +654,7 @@ export class GrammarCorrectorModel {
                       // CRITICAL: Also ensure data property is explicitly set
                       fixedTensor.data = typedArray;
                       
-                      console.log(`[GrammarCorrector] ✅ Fixed ${name} - dims:`, fixedTensor.dims, 'has data:', !!fixedTensor.data, 'location:', fixedTensor.location);
+                      // console.log(`[GrammarCorrector] ✅ Fixed ${name} - dims:`, fixedTensor.dims, 'has data:', !!fixedTensor.data, 'location:', fixedTensor.location);
                       return fixedTensor;
                     };
                     
@@ -669,14 +669,14 @@ export class GrammarCorrectorModel {
                         if (fixedAttentionMask instanceof Tensor) {
                           if (!fixedAttentionMask.dataLocation) {
                             fixedAttentionMask.dataLocation = 'cpu';
-                            console.log('[GrammarCorrector] 🔧 Force-set attention_mask.dataLocation = "cpu"');
+                            // console.log('[GrammarCorrector] 🔧 Force-set attention_mask.dataLocation = "cpu"');
                           }
                         if (!fixedAttentionMask.data) {
-                          console.warn('[GrammarCorrector] ⚠️ attention_mask still has no data after fix!');
+                          // console.warn('[GrammarCorrector] ⚠️ attention_mask still has no data after fix!');
                         }
                       }
                     } else {
-                      console.warn('[GrammarCorrector] ⚠️ No attention_mask found in inputs');
+                      // console.warn('[GrammarCorrector] ⚠️ No attention_mask found in inputs');
                     }
                     
                     // CRITICAL: model.generate() may access inputs.attention_mask directly from the tokenizer
@@ -799,7 +799,7 @@ export class GrammarCorrectorModel {
                       Tensor.prototype.slice = function(...args) {
                         // Guard against undefined data before calling slice
                         if (!this.data && this.cpuData) {
-                          console.warn('[GrammarCorrector] ⚠️ Tensor.slice called with undefined data, fixing from cpuData');
+                          // console.warn('[GrammarCorrector] ⚠️ Tensor.slice called with undefined data, fixing from cpuData');
                           // Convert cpuData to appropriate typed array for data
                           if (this.cpuData instanceof BigInt64Array) {
                             this.data = this.cpuData;
@@ -814,7 +814,7 @@ export class GrammarCorrectorModel {
                         
                         // If still no data, return empty tensor of same type
                         if (!this.data) {
-                          console.error('[GrammarCorrector] ❌ Tensor.slice called with no data/cpuData, returning empty tensor');
+                          // console.error('[GrammarCorrector] ❌ Tensor.slice called with no data/cpuData, returning empty tensor');
                           const EmptyArray = this.type?.includes('float') ? Float32Array : 
                                            this.type?.includes('int64') ? BigInt64Array : Int32Array;
                           return new Tensor(this.type, new EmptyArray(0), [0]);
@@ -885,7 +885,7 @@ export class GrammarCorrectorModel {
                       
                       const originalRun = session.handler.run.bind(session.handler);
                       session.handler.run = async function(feeds, fetches, options) {
-                        console.log(`[GrammarCorrector] 🔧 Patching ${sessionName} inputs before ONNX Runtime...`);
+                        // console.log(`[GrammarCorrector] 🔧 Patching ${sessionName} inputs before ONNX Runtime...`);
                         for (const key in feeds) {
                           const tensor = feeds[key];
                           if (tensor && typeof tensor === 'object') {
@@ -895,23 +895,23 @@ export class GrammarCorrectorModel {
                               if (tensor.cpuData instanceof BigInt64Array) {
                                 tensor.data = tensor.cpuData;
                                 tensor.type = 'int64';
-                                console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: set BigInt64Array data (int64, ${tensor.data.length})`);
+                                // console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: set BigInt64Array data (int64, ${tensor.data.length})`);
                               }
                               // If cpuData is Int32Array, convert to BigInt64Array for int64 models
                               else if (tensor.cpuData instanceof Int32Array && (tensor.type === 'int64' || key.includes('mask') || key.includes('ids'))) {
                                 tensor.data = new BigInt64Array(Array.from(tensor.cpuData, x => BigInt(x)));
                                 tensor.type = 'int64';
-                                console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: Int32Array → BigInt64Array (int64, ${tensor.data.length})`);
+                                // console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: Int32Array → BigInt64Array (int64, ${tensor.data.length})`);
                               }
                               // For float tensors, use directly
                               else if (tensor.cpuData instanceof Float32Array) {
                                 tensor.data = tensor.cpuData;
-                                console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: set Float32Array data`);
+                                // console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: set Float32Array data`);
                               }
                               // Fallback: use cpuData as-is
                               else {
                                 tensor.data = tensor.cpuData;
-                                console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: set data from cpuData (type: ${tensor.cpuData?.constructor?.name})`);
+                                // console.log(`[GrammarCorrector] ✅ Fixed ${sessionName} ${key}: set data from cpuData (type: ${tensor.cpuData?.constructor?.name})`);
                               }
                             }
                             
@@ -1286,6 +1286,501 @@ export class GrammarCorrectorModel {
   }
 
   /**
+   * Calculate Jaro-Winkler similarity between two strings
+   * Returns a value between 0 (completely different) and 1 (identical)
+   * Used to detect semantic drift in corrections
+   * @param {string} s1 - First string
+   * @param {string} s2 - Second string
+   * @returns {number} Similarity score (0-1)
+   */
+  jaroWinklerSimilarity(s1, s2) {
+    // Normalize strings
+    const str1 = s1.toLowerCase().trim();
+    const str2 = s2.toLowerCase().trim();
+
+    if (str1 === str2) return 1.0;
+    if (str1.length === 0 || str2.length === 0) return 0.0;
+
+    // Jaro similarity calculation
+    const matchWindow = Math.floor(Math.max(str1.length, str2.length) / 2) - 1;
+    const str1Matches = new Array(str1.length).fill(false);
+    const str2Matches = new Array(str2.length).fill(false);
+
+    let matches = 0;
+    let transpositions = 0;
+
+    // Identify matches
+    for (let i = 0; i < str1.length; i++) {
+      const start = Math.max(0, i - matchWindow);
+      const end = Math.min(i + matchWindow + 1, str2.length);
+
+      for (let j = start; j < end; j++) {
+        if (str2Matches[j] || str1[i] !== str2[j]) continue;
+        str1Matches[i] = str2Matches[j] = true;
+        matches++;
+        break;
+      }
+    }
+
+    if (matches === 0) return 0.0;
+
+    // Count transpositions
+    let k = 0;
+    for (let i = 0; i < str1.length; i++) {
+      if (!str1Matches[i]) continue;
+      while (!str2Matches[k]) k++;
+      if (str1[i] !== str2[k]) transpositions++;
+      k++;
+    }
+
+    // Jaro similarity
+    const jaro = (
+      matches / str1.length +
+      matches / str2.length +
+      (matches - transpositions / 2) / matches
+    ) / 3;
+
+    // Winkler modification (boost for common prefix)
+    let prefix = 0;
+    for (let i = 0; i < Math.min(str1.length, str2.length, 4); i++) {
+      if (str1[i] === str2[i]) prefix++;
+      else break;
+    }
+
+    return jaro + prefix * 0.1 * (1 - jaro);
+  }
+
+  /**
+   * Check if correction has drifted too far semantically from original
+   * Uses BOTH Jaro-Winkler similarity AND word-level semantic checks
+   * @param {string} original - Original text
+   * @param {string} corrected - Corrected text
+   * @returns {boolean} True if texts are semantically similar enough
+   */
+  isSemanticallyValid(original, corrected) {
+    // First check: Jaro-Winkler character-level similarity
+    const charSimilarity = this.jaroWinklerSimilarity(original, corrected);
+
+    // Count word changes EARLY to adjust thresholds
+    const origWords = original.toLowerCase().split(/\s+/).filter(w => w.length > 2); // Only check meaningful words (>2 chars)
+    const corrWords = corrected.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+    // Pre-scan: Count how many words actually changed
+    let quickChangeCount = 0;
+    for (let i = 0; i < Math.min(origWords.length, corrWords.length); i++) {
+      const origWord = origWords[i].replace(/[.,!?;:'"]/g, '');
+      const corrWord = corrWords[i].replace(/[.,!?;:'"]/g, '');
+      if (origWord !== corrWord) quickChangeCount++;
+    }
+
+    // SPECIAL HANDLING: If only 1 word changed, be MUCH more lenient
+    // This allows legitimate single-word corrections like "there" → "their"
+    const isSingleWordChange = quickChangeCount === 1;
+
+    // Adjust character similarity threshold based on number of changes
+    let MIN_CHAR_SIMILARITY = 0.85; // Default: 85% character similarity
+    if (isSingleWordChange) {
+      MIN_CHAR_SIMILARITY = 0.70; // More lenient: 70% for single-word changes
+      console.log(`[GrammarCorrector] 🔍 Single word change detected - using relaxed threshold (70%)`);
+    }
+
+    if (charSimilarity < MIN_CHAR_SIMILARITY) {
+      console.warn(`[GrammarCorrector] Character-level drift detected - similarity: ${(charSimilarity * 100).toFixed(1)}% (min: ${MIN_CHAR_SIMILARITY * 100}%)`);
+      console.warn(`[GrammarCorrector]   Original: "${original.substring(0, 100)}"`);
+      console.warn(`[GrammarCorrector]   Corrected: "${corrected.substring(0, 100)}"`);
+      return false;
+    }
+
+    // Second check: Word-level semantic validation
+    // This catches cases like "hear" → "tell" that have high character similarity
+
+    // Check if any core words were completely changed (substituted with semantically different words)
+    const meaningfulWordChanges = [];
+
+    for (let i = 0; i < Math.min(origWords.length, corrWords.length); i++) {
+      const origWord = origWords[i].replace(/[.,!?;:'"]/g, '');
+      const corrWord = corrWords[i].replace(/[.,!?;:'"]/g, '');
+
+      // Skip if words are the same or very similar (edit distance <= 2)
+      if (origWord === corrWord) continue;
+      if (Math.abs(origWord.length - corrWord.length) <= 1 && this.editDistance(origWord, corrWord) <= 2) continue;
+
+      // Check if this is a known acceptable transformation (capitalization, punctuation)
+      if (origWord.toLowerCase() === corrWord.toLowerCase()) continue;
+
+      // IMPORTANT: Check if this is a function word (grammatical word) change
+      // Function words like is/are/am/was/were/have/has/do/does are short and have low similarity
+      // but are legitimate grammar corrections
+      if (this.isFunctionWordPair(origWord, corrWord)) {
+        continue; // Allow function word changes (these are grammar corrections, not semantic)
+      }
+
+      // This is a meaningful word change - check if it's semantic drift
+      meaningfulWordChanges.push({ orig: origWord, corr: corrWord, position: i });
+    }
+
+    // If there are meaningful word substitutions, check if they're semantic changes
+    if (meaningfulWordChanges.length > 0) {
+      // SPECIAL CASE: If only 1 word changed AND it's the only meaningful change, be very lenient
+      // Allow the model to make single corrections when context strongly suggests it
+      const onlyOneWordChanged = meaningfulWordChanges.length === 1 && isSingleWordChange;
+
+      // Use PURELY ALGORITHMIC approach - no hardcoded word lists
+      const problematicChanges = meaningfulWordChanges.filter(change => {
+        const wordSimilarity = this.jaroWinklerSimilarity(change.orig, change.corr);
+        const editDist = this.editDistance(change.orig, change.corr);
+        const sharedPrefix = this.longestCommonPrefix(change.orig, change.corr);
+        const sharedSuffix = this.longestCommonSuffix(change.orig, change.corr);
+
+        // ALGORITHM: Determine if this is a grammar correction or semantic change
+
+        // Category 1: Very similar words (likely typos, punctuation, capitalization)
+        // Example: "hello" → "Hello", "dont" → "don't"
+        if (wordSimilarity > 0.85) {
+          return false; // Allow - very similar, likely grammatical
+        }
+
+        // Category 2: Shared root with suffix changes (likely verb tense, plurals)
+        // Example: "going" → "went" (different but same verb), "car" → "cars"
+        // Check: 3+ char prefix OR 3+ char suffix match
+        if (sharedPrefix >= 3 || sharedSuffix >= 3) {
+          return false; // Allow - shared root indicates related words
+        }
+
+        // Category 3: Small edit distance with reasonable similarity (likely homophones or related forms)
+        // Example: "there" → "their", "hear" → "here" (homophones)
+        // UPDATED: More lenient for single-word changes, stricter for clearly unrelated words
+        const maxWordLen = Math.max(change.orig.length, change.corr.length);
+        const editRatio = editDist / maxWordLen;
+
+        // Allow small edit distances more freely - these are often typo fixes or homophones
+        if (editDist <= 2) {
+          return false; // Allow - very small change, likely typo/homophone
+        }
+
+        // For edit distance 3, check similarity and ratio
+        if (editDist === 3) {
+          // More lenient similarity check for edit distance 3
+          const similarityThreshold = onlyOneWordChanged ? 0.40 : 0.55; // 40% vs 55%
+          if (wordSimilarity > similarityThreshold && editRatio < 0.6) {
+            return false; // Allow - decent similarity with small edit distance
+          }
+        }
+
+        // For edit distance 4+, require higher similarity
+        if (editDist >= 4 && wordSimilarity > 0.65 && editRatio < 0.7) {
+          return false; // Allow only if very similar
+        }
+
+        // Category 4: Same length with high character overlap (transpositions, homophones)
+        // Example: "form" → "from", "quiet" → "quite"
+        // UPDATED: Require EITHER high similarity OR shared structure (prefix/suffix)
+        const lengthSimilar = Math.abs(change.orig.length - change.corr.length) <= 1;
+        if (lengthSimilar) {
+          // For same-length words, require BOTH decent similarity AND some structure
+          // OR very high similarity (>70%) without structure
+          const hasStructure = sharedPrefix >= 2 || sharedSuffix >= 2;
+          const highSimilarity = wordSimilarity > 0.70; // 70%+ can pass without structure
+          const mediumSimilarityWithStructure = wordSimilarity > 0.50 && hasStructure;
+
+          if (highSimilarity || mediumSimilarityWithStructure) {
+            return false; // Allow - same length with good overlap AND structure
+          }
+        }
+
+        // Category 5: REJECT - Low similarity AND no shared structure (semantic change)
+        // Example: "hear" → "tell" (50% sim, no prefix/suffix)
+        //          "has" → "yet" (0% sim)
+        // Reject if: similarity < threshold AND no shared prefix/suffix
+        // UPDATED: Even for single-word changes, require EITHER high similarity OR structural similarity
+        let minSimilarityThreshold;
+        let requiresStructure = false;
+
+        if (onlyOneWordChanged) {
+          // For single-word changes: require 60% similarity if NO structural match
+          // OR accept lower similarity (35%) if there IS structural match (prefix/suffix >= 2)
+          if (sharedPrefix < 2 && sharedSuffix < 2) {
+            // No structural similarity - require higher word similarity
+            minSimilarityThreshold = 0.60; // Need 60% if no shared structure
+            requiresStructure = true;
+          } else {
+            // Has structural similarity - allow lower threshold
+            minSimilarityThreshold = 0.35; // Can be 35% if has shared root
+          }
+        } else {
+          // For multi-word changes, be stricter
+          minSimilarityThreshold = change.orig.length <= 3 || change.corr.length <= 3 ? 0.4 : 0.5; // 40%/50%
+        }
+
+        // CRITICAL: For single-word changes with NO structure, require high similarity
+        // This catches "hear" → "tell" (50% sim, no structure) while allowing "there" → "their" (50% sim, shared structure)
+        if (wordSimilarity < minSimilarityThreshold && (sharedPrefix < 3 && sharedSuffix < 2)) {
+          return true; // Reject - likely semantic substitution
+        }
+
+        // Category 6: Medium similarity but no structural relationship (borderline cases)
+        // UPDATED: More lenient for single-word changes
+        if (onlyOneWordChanged) {
+          // For single-word changes: accept if similarity >= 35% OR has any shared structure
+          if (wordSimilarity >= 0.35 || sharedPrefix >= 2 || sharedSuffix >= 2) {
+            return false; // Allow - enough similarity for single change
+          }
+        } else {
+          // For multi-word changes: be conservative - if 50-70% similar but no shared root, might be semantic
+          if (wordSimilarity >= 0.5 && wordSimilarity < 0.7 && sharedPrefix < 2 && sharedSuffix < 2) {
+            return true; // Reject - possible semantic change
+          }
+        }
+
+        // Default: Allow (benefit of the doubt for grammatical corrections)
+        return false;
+      });
+
+      if (problematicChanges.length > 0) {
+        console.warn(`[GrammarCorrector] Semantic word substitutions detected (algorithmic check):`);
+        problematicChanges.forEach(change => {
+          const wordSim = this.jaroWinklerSimilarity(change.orig, change.corr);
+          const edit = this.editDistance(change.orig, change.corr);
+          const prefix = this.longestCommonPrefix(change.orig, change.corr);
+          const suffix = this.longestCommonSuffix(change.orig, change.corr);
+          console.warn(`[GrammarCorrector]   Pos ${change.position}: "${change.orig}" → "${change.corr}"`);
+          console.warn(`[GrammarCorrector]     Similarity: ${(wordSim * 100).toFixed(1)}%, Edit: ${edit}, Prefix: ${prefix}, Suffix: ${suffix}`);
+        });
+        console.warn(`[GrammarCorrector]   Original: "${original}"`);
+        console.warn(`[GrammarCorrector]   Corrected: "${corrected}"`);
+        return false;
+      }
+
+      // Log accepted single-word changes for visibility
+      if (onlyOneWordChanged && meaningfulWordChanges.length > 0) {
+        const change = meaningfulWordChanges[0];
+        const wordSim = this.jaroWinklerSimilarity(change.orig, change.corr);
+        const edit = this.editDistance(change.orig, change.corr);
+        console.log(`[GrammarCorrector] ✅ Accepted single-word change: "${change.orig}" → "${change.corr}" (sim: ${(wordSim * 100).toFixed(1)}%, edit: ${edit})`);
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Calculate longest common prefix length between two words
+   * @param {string} a - First word
+   * @param {string} b - Second word
+   * @returns {number} Length of shared prefix
+   */
+  longestCommonPrefix(a, b) {
+    let i = 0;
+    while (i < Math.min(a.length, b.length) && a[i].toLowerCase() === b[i].toLowerCase()) {
+      i++;
+    }
+    return i;
+  }
+
+  /**
+   * Calculate longest common suffix length between two words
+   * @param {string} a - First word
+   * @param {string} b - Second word
+   * @returns {number} Length of shared suffix
+   */
+  longestCommonSuffix(a, b) {
+    let i = 0;
+    const aLower = a.toLowerCase();
+    const bLower = b.toLowerCase();
+    while (i < Math.min(a.length, b.length) &&
+           aLower[a.length - 1 - i] === bLower[b.length - 1 - i]) {
+      i++;
+    }
+    return i;
+  }
+
+  /**
+   * Check if two words are function words (grammatical words) that can legitimately change
+   * Function words: is/are/am/was/were, have/has/had, do/does/did, etc.
+   * These are SHORT grammatical words that have low similarity but are legitimate corrections
+   * Uses ALGORITHMIC approach: check if both are short (≤4 chars) and both are common function words
+   * @param {string} word1 - First word
+   * @param {string} word2 - Second word
+   * @returns {boolean} True if this is a legitimate function word pair
+   */
+  isFunctionWordPair(word1, word2) {
+    const w1 = word1.toLowerCase();
+    const w2 = word2.toLowerCase();
+
+    // Must both be short (≤4 characters) - function words are always short
+    if (w1.length > 4 || w2.length > 4) {
+      return false;
+    }
+
+    // Common function word patterns (grammatical, not semantic)
+    // Organized by grammatical category to catch semantic drift between categories
+    const verbForms = ['is', 'are', 'am', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does', 'did', 'done', 'doing'];
+    const modals = ['can', 'cant', 'could', 'will', 'wont', 'would', 'shall', 'may', 'might', 'must', 'ought'];
+    const articles = ['a', 'an', 'the'];
+    const demonstratives = ['this', 'that', 'these', 'those'];
+    const possessives = ['my', 'your', 'his', 'her', 'its', 'our', 'their'];
+    const pronouns = ['i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'them', 'us'];
+    const whWords = ['who', 'what', 'when', 'where', 'why', 'how'];
+    const conjunctions = ['and', 'or', 'but', 'nor', 'yet', 'so', 'for'];
+    const prepositions = ['in', 'on', 'at', 'to', 'by', 'with', 'from', 'of'];
+    const negations = ['not', 'no', 'yes'];
+
+    const allFunctionWords = [...verbForms, ...modals, ...articles, ...demonstratives, ...possessives, ...pronouns, ...whWords, ...conjunctions, ...prepositions, ...negations];
+
+    // Check if BOTH words are in the function word list
+    const w1IsFunction = allFunctionWords.includes(w1);
+    const w2IsFunction = allFunctionWords.includes(w2);
+
+    if (!w1IsFunction || !w2IsFunction) {
+      return false; // At least one is not a function word
+    }
+
+    // IMPORTANT: Both are function words, but check if they're in the SAME grammatical category
+    // Changing between categories is often semantic drift (e.g., "has" verb → "yet" conjunction)
+    const categories = [verbForms, modals, articles, demonstratives, possessives, pronouns, whWords, conjunctions, prepositions, negations];
+
+    for (const category of categories) {
+      const w1InCategory = category.includes(w1);
+      const w2InCategory = category.includes(w2);
+
+      // If both are in the same category, it's a legitimate grammar correction
+      if (w1InCategory && w2InCategory) {
+        return true;
+      }
+    }
+
+    // Both are function words but in DIFFERENT categories - likely semantic change
+    return false;
+  }
+
+  /**
+   * Calculate Levenshtein edit distance between two strings
+   * Used to detect if words are similar (typos) vs completely different (semantic changes)
+   * @param {string} a - First string
+   * @param {string} b - Second string
+   * @returns {number} Edit distance
+   */
+  editDistance(a, b) {
+    const matrix = [];
+
+    for (let i = 0; i <= b.length; i++) {
+      matrix[i] = [i];
+    }
+
+    for (let j = 0; j <= a.length; j++) {
+      matrix[0][j] = j;
+    }
+
+    for (let i = 1; i <= b.length; i++) {
+      for (let j = 1; j <= a.length; j++) {
+        if (b.charAt(i - 1) === a.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1, // substitution
+            matrix[i][j - 1] + 1,     // insertion
+            matrix[i - 1][j] + 1      // deletion
+          );
+        }
+      }
+    }
+
+    return matrix[b.length][a.length];
+  }
+
+  /**
+   * Validate that corrections are minimal - reject if model changed too much
+   * This prevents the model from rewriting/paraphrasing entire sentences
+   * Uses smarter heuristics that consider absolute word counts and semantic changes
+   * @param {string} original - Original text
+   * @param {string} corrected - Model-corrected text
+   * @returns {string} Validated text (returns original if changes are too extensive)
+   */
+  applyMinimalCorrection(original, corrected) {
+    // If texts are identical, accept immediately
+    if (original === corrected) {
+      return corrected;
+    }
+
+    // LAYER 1: Semantic similarity check (Jaro-Winkler)
+    // This catches cases where words were completely changed (hear → tell)
+    if (!this.isSemanticallyValid(original, corrected)) {
+      console.warn('[GrammarCorrector] Rejected due to semantic drift');
+      return original;
+    }
+
+    const origWords = original.split(/\s+/).filter(w => w.length > 0);
+    const corrWords = corrected.split(/\s+/).filter(w => w.length > 0);
+
+    // UPDATED: Smarter length validation
+    // For very short inputs (<5 words), allow more flexibility (up to 50% change)
+    // For longer inputs, be more strict
+    const absoluteDiff = Math.abs(corrWords.length - origWords.length);
+    const lengthChangeRatio = absoluteDiff / origWords.length;
+
+    let maxLengthChange = 0.3; // Default 30% for normal text
+    if (origWords.length <= 3) {
+      maxLengthChange = 0.8; // 80% for very short inputs (1-3 words)
+    } else if (origWords.length <= 5) {
+      maxLengthChange = 0.6; // 60% for short inputs (4-5 words)
+    } else if (origWords.length <= 10) {
+      maxLengthChange = 0.4; // 40% for medium inputs (6-10 words)
+    }
+
+    // Only reject if BOTH percentage is high AND absolute difference is large
+    if (lengthChangeRatio > maxLengthChange && absoluteDiff > 5) {
+      console.warn(`[GrammarCorrector] Rejected - word count changed by ${(lengthChangeRatio * 100).toFixed(1)}% (${origWords.length} → ${corrWords.length}, +${absoluteDiff} words)`);
+      return original;
+    }
+
+    // UPDATED: Smarter word-level difference check
+    // Use Levenshtein-style comparison: count substitutions, not just position changes
+    let substitutions = 0;
+    let additions = 0;
+    let deletions = 0;
+
+    // Simple alignment: compare word by word, counting differences
+    const minLength = Math.min(origWords.length, corrWords.length);
+    for (let i = 0; i < minLength; i++) {
+      const origWord = origWords[i].toLowerCase().replace(/[.,!?;:'"]/g, '');
+      const corrWord = corrWords[i].toLowerCase().replace(/[.,!?;:'"]/g, '');
+      if (origWord !== corrWord) {
+        // Check if it's a minor variation (capitalization, punctuation)
+        if (origWord.includes(corrWord) || corrWord.includes(origWord)) {
+          // Minor change, don't count as substitution
+          continue;
+        }
+        substitutions++;
+      }
+    }
+
+    // Count additions and deletions
+    if (corrWords.length > origWords.length) {
+      additions = corrWords.length - origWords.length;
+    } else {
+      deletions = origWords.length - corrWords.length;
+    }
+
+    // Calculate total change score
+    const totalChanges = substitutions + additions + deletions;
+    const changeRatio = totalChanges / Math.max(origWords.length, corrWords.length);
+
+    // UPDATED: More lenient thresholds
+    // Reject only if more than 50% of words were changed (was 30%)
+    // This allows legitimate grammar fixes while blocking complete rewrites
+    if (changeRatio > 0.5) {
+      console.warn(`[GrammarCorrector] Rejected - ${(changeRatio * 100).toFixed(1)}% of words changed (${substitutions} substitutions, ${additions} additions, ${deletions} deletions)`);
+      return original;
+    }
+
+    // Validation passed - accept the corrections
+    if (substitutions > 0 || additions > 0 || deletions > 0) {
+      console.log(`[GrammarCorrector] ✅ Accepted - ${substitutions} substitutions, ${additions} additions, ${deletions} deletions (${(changeRatio * 100).toFixed(1)}% change)`);
+    }
+    return corrected;
+  }
+
+  /**
    * Correct grammar in text using the model
    * @param {string} text - Text to correct
    * @param {string} language - Language code (mostly for future use)
@@ -1407,13 +1902,31 @@ export class GrammarCorrectorModel {
         // and outputs the corrected version
         let result;
         try {
-          // Try with minimal options first to avoid beam search issues
-          // Pass as string, not pre-tokenized, and use greedy decoding
+          // NOTE: This T5 model is NOT instruction-tuned, so we pass raw text only
+          // Instructions would confuse it and cause word additions
+          // Instead, we rely on:
+          // 1. Conservative decoding parameters (temperature, top_p, top_k)
+          // 2. Length constraints (max_new_tokens based on input length)
+          // 3. Post-processing validation (semantic similarity, word count)
+
+          // UPDATED: Constrain model to minimal changes
+          // Calculate max tokens based on input length
+          // IMPORTANT: Add buffer for punctuation tokens (they're separate tokens)
+          const inputWords = original.split(/\s+/).length;
+          const maxTokens = Math.ceil(inputWords * 1.3 + 10); // 30% buffer + 10 for punctuation
+
+          // UPDATED: VERY conservative parameters to prevent semantic drift
+          // BUT allow proper punctuation handling
           result = await this.pipeline(original, {
-            max_new_tokens: 256,
-            num_beams: 1,
-            // Try without early_stopping as it might trigger beam search code path
-          do_sample: false,
+            max_new_tokens: Math.min(maxTokens, 256), // Generous limit for punctuation
+            num_beams: 1, // Single beam - most conservative (no alternatives)
+            temperature: 0.01, // Near-zero for deterministic output
+            top_p: 0.85, // Narrower nucleus - fewer token choices
+            top_k: 20, // Much smaller pool - very conservative
+            length_penalty: 1.0, // CHANGED: Neutral - don't force exact length (was 2.5)
+            repetition_penalty: 1.0, // Neutral - don't affect grammar corrections
+            do_sample: false, // Greedy decoding only
+            early_stopping: false, // CHANGED: Don't stop early - let it finish punctuation (was true)
           });
         } catch (pipelineCallError) {
           // Log FULL error details before handling
@@ -1462,13 +1975,20 @@ export class GrammarCorrectorModel {
           // Handle object result
           corrected = result.generated_text || result.text || result.output || original;
         }
-        
+
+        // No need to extract from instruction prompt - we're passing raw text now
+        // The model outputs the corrected text directly
+
         // Log successful local correction (first time only to show it's working)
         if (corrected !== original && !this._localWorkingLogged) {
           console.log('[GrammarCorrector] ✅ Grammar correction via local model is working');
           this._localWorkingLogged = true;
         }
       }
+
+      // ADDED: Validate corrections before accepting them
+      // This prevents the model from rewriting too much
+      corrected = this.applyMinimalCorrection(original, corrected);
 
       // Ensure we have valid text
       if (!corrected || corrected.trim().length === 0) {
