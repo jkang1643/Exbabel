@@ -301,9 +301,23 @@ function TranslationInterface({ onBackToHome }) {
           // For translation mode, show both original and translated
           if (isTranslationMode) {
             // Always update original immediately (transcription is instant)
+            // Use correctedText if available, otherwise use originalText (raw STT)
+            // This allows live updates: show raw text first, then update with corrected text
+            const correctedText = message.correctedText
             const originalText = message.originalText || ''
-            if (originalText) {
-              setLivePartialOriginal(originalText)
+            
+            // CRITICAL: If correctedText exists, ALWAYS use it (grammar corrections take priority)
+            // This ensures grammar corrections are displayed even if a new raw partial arrives
+            const hasCorrection = correctedText && correctedText.trim()
+            const textToDisplay = hasCorrection ? correctedText : originalText
+            
+            if (textToDisplay) {
+              console.log(`[TranslationInterface] 📝 Updating original: hasCorrection=${hasCorrection}, originalLen=${originalText.length}, correctedLen=${correctedText?.length || 0}, displayLen=${textToDisplay.length}`)
+              console.log(`[TranslationInterface]   Raw: "${originalText.substring(0, 60)}${originalText.length > 60 ? '...' : ''}"`)
+              if (hasCorrection) {
+                console.log(`[TranslationInterface]   Corrected: "${correctedText.substring(0, 60)}${correctedText.length > 60 ? '...' : ''}"`)
+              }
+              setLivePartialOriginal(textToDisplay)
             }
             
             // Update translation (might be delayed due to throttling or streaming)
@@ -473,10 +487,17 @@ function TranslationInterface({ onBackToHome }) {
             pendingFinalRef.current = null;
           }
           
+          // Use correctedText if available (grammar-fixed), otherwise fall back to originalText (raw STT)
+          const originalTextForHistory = message.correctedText || message.originalText || '';
+          console.log(`[TranslationInterface] 📝 FINAL history text: hasCorrection=${!!message.correctedText}, length=${originalTextForHistory.length}`);
+          if (message.correctedText && message.correctedText !== message.originalText) {
+            console.log(`[TranslationInterface] 📝 FINAL used corrected text: "${message.originalText}" → "${message.correctedText}"`);
+          }
+          
           // Commit immediately - process through segmenter and add to history
           const finalData = {
             text: finalText,
-            original: message.originalText || '',
+            original: originalTextForHistory,  // Use grammar-corrected text for history
             timestamp: message.timestamp || Date.now(),
             serverTimestamp: message.serverTimestamp,
             seqId: finalSeqId

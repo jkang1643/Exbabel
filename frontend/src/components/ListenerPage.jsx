@@ -221,13 +221,17 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           case 'translation':
             // ✨ REAL-TIME STREAMING: Sentence segmented + throttled display
             if (message.isPartial) {
+              // Use correctedText if available, otherwise use originalText (raw STT)
+              const correctedText = message.correctedText;
               const originalText = message.originalText || '';
-              const translatedText = message.translatedText || message.originalText;
+              const textToDisplay = correctedText && correctedText.trim() ? correctedText : originalText;
+              const translatedText = message.translatedText || textToDisplay;
               const now = Date.now();
               
-              // Always update original text immediately (transcription)
-              if (originalText) {
-                setCurrentOriginal(originalText);
+              // Always update original text immediately (transcription, then corrected when available)
+              if (textToDisplay) {
+                console.log(`[ListenerPage] 📝 Updating original: hasCorrection=${!!correctedText}, length=${textToDisplay.length}`);
+                setCurrentOriginal(textToDisplay);
               }
               
               // Only update translation if this message is actually intended for this listener's language

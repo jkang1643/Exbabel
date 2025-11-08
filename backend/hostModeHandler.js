@@ -13,6 +13,7 @@ import WebSocket from 'ws';
 import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
+import { grammarWorker } from './grammarWorker.js';
 
 export async function handleHostConnection(clientWs, sessionId) {
   console.log(`[HostMode] ⚡ Host connecting to session ${sessionId} - Using Google Speech + OpenAI Translation`);
@@ -145,32 +146,46 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       
                       try {
-                        console.log(`[HostMode] 🔄 Translating partial to ${targetLanguages.length} language(s)`);
-                        // Use dedicated partial translation worker (fast, low-latency, gpt-4o-mini)
-                        const translations = await partialTranslationWorker.translateToMultipleLanguages(
-                          transcriptText,
-                          currentSourceLang,
-                          targetLanguages,
-                          process.env.OPENAI_API_KEY
-                        );
-                        
-                        // Broadcast translated partials to each language group
-                        for (const [targetLang, translatedText] of Object.entries(translations)) {
+                        console.log(`[HostMode] 🔄 Processing partial (grammar + translation to ${targetLanguages.length} language(s))`);
+                        // Run grammar correction and translation in parallel
+                        const [grammarResult, translationResult] = await Promise.allSettled([
+                          grammarWorker.correctPartial(transcriptText, process.env.OPENAI_API_KEY),
+                          partialTranslationWorker.translateToMultipleLanguages(
+                            transcriptText,
+                            currentSourceLang,
+                            targetLanguages,
+                            process.env.OPENAI_API_KEY
+                          )
+                        ]);
+
+                        const correctedText = grammarResult.status === 'fulfilled' 
+                          ? grammarResult.value 
+                          : transcriptText; // Fallback to original on error
+
+                        const translations = translationResult.status === 'fulfilled'
+                          ? translationResult.value
+                          : {}; // Empty translations on error
+
+                        // Broadcast corrected and translated partials to each language group
+                        for (const targetLang of targetLanguages) {
+                          const translatedText = translations[targetLang] || transcriptText;
                           lastPartialTranslations[targetLang] = transcriptText;
                           sessionStore.broadcastToListeners(sessionId, {
                             type: 'translation',
                             originalText: transcriptText,
+                            correctedText: correctedText,
                             translatedText: translatedText,
                             sourceLang: currentSourceLang,
                             targetLang: targetLang,
                             timestamp: Date.now(),
                             sequenceId: -1,
                             isPartial: true,
-                            hasTranslation: true
+                            hasTranslation: translationResult.status === 'fulfilled',
+                            hasCorrection: grammarResult.status === 'fulfilled'
                           }, targetLang);
                         }
                       } catch (error) {
-                        console.error('[HostMode] Partial translation error:', error);
+                        console.error('[HostMode] Partial processing error:', error);
                       }
                     } else {
                       // Schedule delayed translation
@@ -180,30 +195,44 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       pendingPartialTranslation = setTimeout(async () => {
                         try {
-                          // Use dedicated partial translation worker (fast, low-latency, gpt-4o-mini)
-                          const translations = await partialTranslationWorker.translateToMultipleLanguages(
-                            transcriptText,
-                            currentSourceLang,
-                            targetLanguages,
-                            process.env.OPENAI_API_KEY
-                          );
+                          // Run grammar correction and translation in parallel
+                          const [grammarResult, translationResult] = await Promise.allSettled([
+                            grammarWorker.correctPartial(transcriptText, process.env.OPENAI_API_KEY),
+                            partialTranslationWorker.translateToMultipleLanguages(
+                              transcriptText,
+                              currentSourceLang,
+                              targetLanguages,
+                              process.env.OPENAI_API_KEY
+                            )
+                          ]);
+
+                          const correctedText = grammarResult.status === 'fulfilled' 
+                            ? grammarResult.value 
+                            : transcriptText; // Fallback to original on error
+
+                          const translations = translationResult.status === 'fulfilled'
+                            ? translationResult.value
+                            : {}; // Empty translations on error
                           
-                          for (const [targetLang, translatedText] of Object.entries(translations)) {
+                          for (const targetLang of targetLanguages) {
+                            const translatedText = translations[targetLang] || transcriptText;
                             lastPartialTranslations[targetLang] = transcriptText;
                             sessionStore.broadcastToListeners(sessionId, {
                               type: 'translation',
                               originalText: transcriptText,
+                              correctedText: correctedText,
                               translatedText: translatedText,
                               sourceLang: currentSourceLang,
                               targetLang: targetLang,
                               timestamp: Date.now(),
                               sequenceId: -1,
                               isPartial: true,
-                              hasTranslation: true
+                              hasTranslation: translationResult.status === 'fulfilled',
+                              hasCorrection: grammarResult.status === 'fulfilled'
                             }, targetLang);
                           }
                         } catch (error) {
-                          console.error('[HostMode] Delayed partial translation error:', error);
+                          console.error('[HostMode] Delayed partial processing error:', error);
                         }
                       }, PARTIAL_TRANSLATION_THROTTLE);
                     }
@@ -253,31 +282,46 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
 
                 try {
-                  // Translate to all needed languages at once using final translation worker (high-quality)
-                  const translations = await finalTranslationWorker.translateToMultipleLanguages(
-                    transcriptText,
-                    currentSourceLang,
-                    targetLanguages,
-                    process.env.OPENAI_API_KEY
-                  );
+                  // Run grammar correction and translation in parallel for final transcript
+                  const [grammarResult, translationResult] = await Promise.allSettled([
+                    grammarWorker.correctFinal(transcriptText, process.env.OPENAI_API_KEY),
+                    finalTranslationWorker.translateToMultipleLanguages(
+                      transcriptText,
+                      currentSourceLang,
+                      targetLanguages,
+                      process.env.OPENAI_API_KEY
+                    )
+                  ]);
 
-                  console.log(`[HostMode] Translated to ${Object.keys(translations).length} languages`);
+                  const correctedText = grammarResult.status === 'fulfilled' 
+                    ? grammarResult.value 
+                    : transcriptText; // Fallback to original on error
+
+                  const translations = translationResult.status === 'fulfilled'
+                    ? translationResult.value
+                    : {}; // Empty translations on error
+
+                  console.log(`[HostMode] Processed final (grammar + translation to ${Object.keys(translations).length} languages)`);
 
                   // Broadcast to each language group
-                  for (const [targetLang, translatedText] of Object.entries(translations)) {
+                  for (const targetLang of targetLanguages) {
+                    const translatedText = translations[targetLang] || transcriptText;
                     sessionStore.broadcastToListeners(sessionId, {
                       type: 'translation',
                       originalText: transcriptText,
+                      correctedText: correctedText,
                       translatedText: translatedText,
                       sourceLang: currentSourceLang,
                       targetLang: targetLang,
                       timestamp: Date.now(),
                       sequenceId: Date.now(),
-                      isPartial: false
+                      isPartial: false,
+                      hasTranslation: translationResult.status === 'fulfilled',
+                      hasCorrection: grammarResult.status === 'fulfilled'
                     }, targetLang);
                   }
                 } catch (error) {
-                  console.error('[HostMode] Translation error:', error);
+                  console.error('[HostMode] Final processing error:', error);
                 }
               });
               
