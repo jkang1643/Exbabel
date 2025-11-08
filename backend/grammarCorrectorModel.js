@@ -1922,7 +1922,7 @@ export class GrammarCorrectorModel {
             num_beams: 1, // Single beam - most conservative (no alternatives)
             temperature: 0.01, // Near-zero for deterministic output
             top_p: 0.85, // Narrower nucleus - fewer token choices
-            top_k: 20, // Much smaller pool - very conservative
+            top_k: 10, // VERY small pool - extremely conservative (was 20)
             length_penalty: 1.0, // CHANGED: Neutral - don't force exact length (was 2.5)
             repetition_penalty: 1.0, // Neutral - don't affect grammar corrections
             do_sample: false, // Greedy decoding only
