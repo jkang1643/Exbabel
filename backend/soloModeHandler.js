@@ -173,8 +173,8 @@ export async function handleSoloMode(clientWs) {
               
               // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
               
-              // Simple consistent throttle - same for all text lengths
-              const THROTTLE_MS = 20; // Consistent 20ms throttle for all text
+              // Ultra-low throttle for real-time feel - updates every 1-2 chars
+              const THROTTLE_MS = 0; // No throttle - instant translation on every character
               
               // Set up result callback - handles both partials and finals
               speechStream.onResult(async (transcriptText, isPartial) => {
@@ -219,24 +219,23 @@ export async function handleSoloMode(clientWs) {
                   lastAudioTimestamp = Date.now();
                   silenceStartTime = null;
                   
-                  // EXTREME SPEED: Start translation with minimal text - INSTANT START (1-2 chars)
-                  if (!isTranscriptionOnly && transcriptText.length > 1) {
+                  // ULTRA-FAST: Start translation immediately on ANY text (even 1 char)
+                  if (!isTranscriptionOnly && transcriptText.length >= 1) {
                     // Update current partial text (used for delayed translations)
                     currentPartialText = transcriptText;
                     
                     const now = Date.now();
                     const timeSinceLastTranslation = now - lastPartialTranslationTime;
                     
-                    // Simple growth-based updates: update every 2 characters (half a word)
+                    // Ultra-fast growth-based updates: update every 1 character for real-time feel
                     const textGrowth = transcriptText.length - lastPartialTranslation.length;
-                    const GROWTH_THRESHOLD = 2; // Consistent threshold: update every 2 characters
+                    const GROWTH_THRESHOLD = 1; // Update on every single character for maximum responsiveness
                     const textGrewSignificantly = textGrowth >= GROWTH_THRESHOLD && transcriptText.length > lastPartialTranslation.length;
                     
-                    // Simple logic: translate if text grew OR throttle time passed OR first translation
+                    // Ultra-fast logic: translate immediately on ANY growth or first translation
                     const isFirstTranslation = lastPartialTranslation.length === 0;
-                    const shouldTranslateNow = isFirstTranslation || // INSTANT on first text (0ms throttle)
-                                               textGrewSignificantly || // Text grew by threshold
-                                               timeSinceLastTranslation >= THROTTLE_MS; // Throttle time passed
+                    const shouldTranslateNow = isFirstTranslation || // INSTANT on first text
+                                               textGrewSignificantly; // Text grew by 1+ character - translate immediately
                     
                     if (shouldTranslateNow) {
                       // Cancel any pending translation
@@ -254,147 +253,170 @@ export async function handleSoloMode(clientWs) {
                         console.log(`[SoloMode] 🔄 Processing partial (${transcriptText.length} chars): "${transcriptText.substring(0, 40)}..."`);
                         const capturedText = transcriptText; // Capture the text we're processing
                         
-                        // Run grammar correction and translation in parallel
-                        const [grammarResult, translationResult] = await Promise.allSettled([
-                          grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY),
-                          partialTranslationWorker.translatePartial(
-                            capturedText,
-                            currentSourceLang,
-                            currentTargetLang,
-                            process.env.OPENAI_API_KEY
-                          )
-                        ]);
+                        // OPTIMIZATION: Decouple grammar and translation for lowest latency
+                        // Fire both in parallel, but send results independently
+                        const grammarPromise = grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY);
+                        const translationPromise = partialTranslationWorker.translatePartial(
+                          capturedText,
+                          currentSourceLang,
+                          currentTargetLang,
+                          process.env.OPENAI_API_KEY
+                        );
 
-                        // CRITICAL: Only send if correction is still relevant (avoid race condition)
-                        // Skip ONLY if the new partial is significantly different (length change > 20% or completely different start)
-                        if (latestPartialTextForCorrection !== capturedText) {
-                          const lengthDiff = Math.abs(latestPartialTextForCorrection.length - capturedText.length);
-                          const lengthChangePercent = (lengthDiff / capturedText.length) * 100;
-                          const startsMatch = latestPartialTextForCorrection.startsWith(capturedText.substring(0, Math.min(50, capturedText.length)));
-                          
-                          // Skip if: new partial is 20%+ different in length OR starts completely different
-                          if (lengthChangePercent > 20 || !startsMatch) {
-                            console.log(`[SoloMode] ⏭️ Skipping outdated correction (${capturedText.length} → ${latestPartialTextForCorrection.length} chars, ${lengthChangePercent.toFixed(0)}% change)`);
+                        // Send translation IMMEDIATELY when ready (don't wait for grammar)
+                        translationPromise.then(translatedText => {
+                          // Validate translation result
+                          if (!translatedText || translatedText.trim().length === 0) {
+                            console.warn(`[SoloMode] ⚠️ Translation returned empty for ${capturedText.length} char text`);
                             return;
                           }
-                          console.log(`[SoloMode] ✅ Sending correction despite newer partial (${lengthChangePercent.toFixed(0)}% change, still relevant)`);
-                        }
 
-                        const correctedText = grammarResult.status === 'fulfilled' 
-                          ? grammarResult.value 
-                          : capturedText; // Fallback to original on error
-
-                        const translatedText = translationResult.status === 'fulfilled'
-                          ? translationResult.value
-                          : capturedText; // Fallback to source text on error
-
-                        console.log(`[SoloMode] ✅ GRAMMAR: "${correctedText.substring(0, 40)}..."`);
-                        console.log(`[SoloMode] ✅ TRANSLATION: "${translatedText.substring(0, 40)}..."`);
-                        
-                        // Validate results
-                        if (!translatedText || translatedText.trim().length === 0) {
-                          console.warn(`[SoloMode] ⚠️ Translation returned empty for ${capturedText.length} char text - NOT updating lastPartialTranslation`);
-                          // Don't send empty translation - it will cause UI to stop updating
-                          // Don't update lastPartialTranslation - allows retry on next update
-                        } else {
                           // CRITICAL: Only update lastPartialTranslation AFTER successful translation
                           lastPartialTranslation = capturedText;
                           
-                          // Send merged result - frontend will use correctedText if available, otherwise originalText
+                          console.log(`[SoloMode] ✅ TRANSLATION (IMMEDIATE): "${translatedText.substring(0, 40)}..."`);
+                          
+                          // Send translation result immediately - sequence IDs handle ordering
                           sendWithSequence({
                             type: 'translation',
-                            originalText: capturedText, // Raw STT text (shown immediately)
-                            correctedText: correctedText, // Grammar-corrected text (updates when available)
+                            originalText: capturedText,
                             translatedText: translatedText,
                             timestamp: Date.now(),
                             isTranscriptionOnly: false,
-                            hasTranslation: translationResult.status === 'fulfilled',
-                            hasCorrection: grammarResult.status === 'fulfilled'
+                            hasTranslation: true,
+                            hasCorrection: false // Grammar not ready yet
                           }, true);
-                          console.log(`[SoloMode] ✅ Sent merged result (corrected: ${correctedText.length} chars, translated: ${translatedText.length} chars)`);
-                        }
+                        }).catch(error => {
+                          console.error(`[SoloMode] ❌ Translation error (${capturedText.length} chars):`, error.message);
+                        });
+
+                        // Send grammar correction separately when ready
+                        grammarPromise.then(correctedText => {
+                          // Check if still relevant (more lenient check - only skip if text shrunk significantly)
+                          if (latestPartialTextForCorrection !== capturedText) {
+                            // Only skip if new text is significantly shorter (text was reset)
+                            if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
+                              console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                              return;
+                            }
+                            // Otherwise send it - extending text is fine, grammar still applies to the beginning
+                          }
+
+                          console.log(`[SoloMode] ✅ GRAMMAR (IMMEDIATE): "${correctedText.substring(0, 40)}..."`);
+                          
+                          // Send grammar update separately
+                          sendWithSequence({
+                            type: 'translation',
+                            originalText: capturedText,
+                            correctedText: correctedText,
+                            timestamp: Date.now(),
+                            isTranscriptionOnly: false,
+                            hasCorrection: true,
+                            updateType: 'grammar' // Flag for grammar-only update
+                          }, true);
+                        }).catch(error => {
+                          // Grammar errors are non-critical, just log
+                          if (error.name !== 'AbortError') {
+                            console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                          }
+                        });
                       } catch (error) {
                         console.error(`[SoloMode] ❌ Partial processing error (${transcriptText.length} chars):`, error.message);
                         // CRITICAL: Don't update lastPartialTranslation on error - allows retry
                         // Continue processing - don't stop translations on error
                       }
                     } else {
-                      // Schedule delayed translation with adaptive throttle
+                      // With THROTTLE_MS = 0 and GROWTH_THRESHOLD = 1, this path should rarely execute
+                      // But keep as fallback for edge cases
                       // Always cancel and reschedule to ensure we translate the latest text
                       if (pendingPartialTranslation) {
                         clearTimeout(pendingPartialTranslation);
                         pendingPartialTranslation = null;
                       }
                       
-                      // Simple consistent delay
-                      const delayMs = THROTTLE_MS;
+                      // Immediate execution (no delay) for real-time feel
+                      const delayMs = 0;
                       
                       pendingPartialTranslation = setTimeout(async () => {
                         // CRITICAL: Always capture LATEST text at timeout execution
                         const latestText = currentPartialText;
-                        if (!latestText || latestText.length < 3) {
+                        if (!latestText || latestText.length < 1) {
                           pendingPartialTranslation = null;
                           return;
                         }
                         
-                        // Skip if exact match and very recently translated
-                        const veryRecentlyTranslated = lastPartialTranslationTime && (Date.now() - lastPartialTranslationTime < THROTTLE_MS);
+                        // Skip only if exact match (no need to retranslate identical text)
                         const isExactMatch = latestText === lastPartialTranslation;
                         
-                        if (isExactMatch && veryRecentlyTranslated) {
-                          console.log(`[SoloMode] ⏭️ Skipping exact match translation (very recent)`);
+                        if (isExactMatch) {
+                          console.log(`[SoloMode] ⏭️ Skipping exact match translation`);
                           pendingPartialTranslation = null;
                           return;
                         }
                         
                         try {
                           console.log(`[SoloMode] ⏱️ Delayed processing partial (${latestText.length} chars): "${latestText.substring(0, 40)}..."`);
-                          // Run grammar correction and translation in parallel
-                          const [grammarResult, translationResult] = await Promise.allSettled([
-                            grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY),
-                            partialTranslationWorker.translatePartial(
-                              latestText,
-                              currentSourceLang,
-                              currentTargetLang,
-                              process.env.OPENAI_API_KEY
-                            )
-                          ]);
-
-                          const correctedText = grammarResult.status === 'fulfilled' 
-                            ? grammarResult.value 
-                            : latestText; // Fallback to original on error
-
-                          const translatedText = translationResult.status === 'fulfilled'
-                            ? translationResult.value
-                            : latestText; // Fallback to source text on error
                           
-                          // Validate translation result
-                          if (!translatedText || translatedText.trim().length === 0) {
-                            console.warn(`[SoloMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
-                            // Don't update lastPartialTranslation if translation failed - allow retry
-                            pendingPartialTranslation = null;
-                          } else {
-                            // CRITICAL: Always update tracking and send translation for long text
-                            // This ensures continuous updates throughout the entire passage
+                          // OPTIMIZATION: Decouple grammar and translation for lowest latency
+                          const grammarPromise = grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY);
+                          const translationPromise = partialTranslationWorker.translatePartial(
+                            latestText,
+                            currentSourceLang,
+                            currentTargetLang,
+                            process.env.OPENAI_API_KEY
+                          );
+
+                          // Send translation IMMEDIATELY when ready (don't wait for grammar)
+                          translationPromise.then(translatedText => {
+                            // Validate translation result
+                            if (!translatedText || translatedText.trim().length === 0) {
+                              console.warn(`[SoloMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
+                              return;
+                            }
+
+                            // CRITICAL: Update tracking and send translation
                             lastPartialTranslation = latestText;
                             lastPartialTranslationTime = Date.now();
                             
+                            console.log(`[SoloMode] ✅ TRANSLATION (DELAYED): "${translatedText.substring(0, 40)}..."`);
+                            
+                            // Send immediately - sequence IDs handle ordering
                             sendWithSequence({
                               type: 'translation',
-                              originalText: latestText, // Raw STT text (shown immediately)
-                              correctedText: correctedText, // Grammar-corrected text (updates when available)
+                              originalText: latestText,
                               translatedText: translatedText,
                               timestamp: Date.now(),
                               isTranscriptionOnly: false,
-                              hasTranslation: translationResult.status === 'fulfilled',
-                              hasCorrection: grammarResult.status === 'fulfilled'
+                              hasTranslation: true,
+                              hasCorrection: false // Grammar not ready yet
                             }, true);
-                            console.log(`[SoloMode] ✅ Sent delayed merged result (corrected: ${correctedText.length} chars, translated: ${translatedText.length} chars)`);
-                            pendingPartialTranslation = null;
-                          }
+                          }).catch(error => {
+                            console.error(`[SoloMode] ❌ Delayed translation error (${latestText.length} chars):`, error.message);
+                          });
+
+                          // Send grammar correction separately when ready
+                          grammarPromise.then(correctedText => {
+                            console.log(`[SoloMode] ✅ GRAMMAR (DELAYED): "${correctedText.substring(0, 40)}..."`);
+                            
+                            // Send grammar update - sequence IDs handle ordering
+                            sendWithSequence({
+                              type: 'translation',
+                              originalText: latestText,
+                              correctedText: correctedText,
+                              timestamp: Date.now(),
+                              isTranscriptionOnly: false,
+                              hasCorrection: true,
+                              updateType: 'grammar'
+                            }, true);
+                          }).catch(error => {
+                            if (error.name !== 'AbortError') {
+                              console.error(`[SoloMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
+                            }
+                          });
+
+                          pendingPartialTranslation = null;
                         } catch (error) {
                           console.error(`[SoloMode] ❌ Delayed partial processing error (${latestText.length} chars):`, error.message);
-                          // Don't update lastPartialTranslation on error - allows retry on next partial
                           pendingPartialTranslation = null;
                         }
                       }, delayMs);
@@ -447,41 +469,51 @@ export async function handleSoloMode(clientWs) {
                           }, false);
                         }
                       } else {
-                        // Different language - run grammar correction and translation in parallel
+                        // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
                         try {
-                          const [grammarResult, translationResult] = await Promise.allSettled([
-                            grammarWorker.correctFinal(transcriptText, process.env.OPENAI_API_KEY),
-                            finalTranslationWorker.translateFinal(
-                              transcriptText,
+                          // CRITICAL FIX: Get grammar correction FIRST, then translate the CORRECTED text
+                          // This ensures the translation matches the corrected English text
+                          let correctedText = transcriptText;
+                          try {
+                            correctedText = await grammarWorker.correctFinal(transcriptText, process.env.OPENAI_API_KEY);
+                          } catch (grammarError) {
+                            console.warn(`[SoloMode] Grammar correction failed, using original text:`, grammarError.message);
+                            correctedText = transcriptText; // Fallback to original on error
+                          }
+
+                          // Translate the CORRECTED text (not the original)
+                          // This ensures Spanish matches the corrected English
+                          let translatedText;
+                          try {
+                            translatedText = await finalTranslationWorker.translateFinal(
+                              correctedText, // Use corrected text for translation
                               currentSourceLang,
                               currentTargetLang,
                               process.env.OPENAI_API_KEY
-                            )
-                          ]);
+                            );
+                          } catch (translationError) {
+                            console.error(`[SoloMode] Translation failed:`, translationError.message);
+                            translatedText = `[Translation error: ${translationError.message}]`;
+                          }
 
-                          const correctedText = grammarResult.status === 'fulfilled' 
-                            ? grammarResult.value 
-                            : transcriptText; // Fallback to original on error
-
-                          const translatedText = translationResult.status === 'fulfilled'
-                            ? translationResult.value
-                            : `[Translation error: ${translationResult.reason?.message || 'Unknown error'}]`;
+                          const hasCorrection = correctedText !== transcriptText;
 
                           // Log FINAL with correction details
-                          console.log(`[SoloMode] 📤 Sending FINAL:`);
+                          console.log(`[SoloMode] 📤 Sending FINAL (coupled for history integrity):`);
                           console.log(`[SoloMode]   originalText: "${transcriptText}"`);
                           console.log(`[SoloMode]   correctedText: "${correctedText}"`);
-                          console.log(`[SoloMode]   hasCorrection: ${grammarResult.status === 'fulfilled'}`);
-                          console.log(`[SoloMode]   correction changed text: ${correctedText !== transcriptText}`);
+                          console.log(`[SoloMode]   translatedText: "${translatedText}"`);
+                          console.log(`[SoloMode]   hasCorrection: ${hasCorrection}`);
+                          console.log(`[SoloMode]   correction changed text: ${hasCorrection}`);
 
                           sendWithSequence({
                             type: 'translation',
                             originalText: transcriptText, // Raw STT text
                             correctedText: correctedText, // Grammar-corrected text (updates when available)
-                            translatedText: translatedText,
+                            translatedText: translatedText, // Translation of CORRECTED text
                             timestamp: Date.now(),
-                            hasTranslation: translationResult.status === 'fulfilled',
-                            hasCorrection: grammarResult.status === 'fulfilled'
+                            hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
+                            hasCorrection: hasCorrection
                           }, false);
                         } catch (error) {
                           console.error(`[SoloMode] Final processing error:`, error);

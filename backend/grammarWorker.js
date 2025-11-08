@@ -81,8 +81,8 @@ export class GrammarWorker {
    * @returns {Promise<string>} - Corrected text
    */
   async correctPartial(text, apiKey, signal = null) {
-    if (!text || text.trim().length < 3) {
-      return text; // Too short to correct
+    if (!text || text.trim().length < 8) {
+      return text; // Too short to correct (8 chars minimum - short words don't need grammar)
     }
 
     if (!apiKey) {
@@ -123,8 +123,15 @@ export class GrammarWorker {
       text 
     });
 
+    // Add 2-second timeout for partials to prevent blocking UI
+    const timeoutId = setTimeout(() => {
+      console.log(`[GrammarWorker] ⏱️ PARTIAL correction timeout after 2s - aborting`);
+      abortController.abort();
+    }, 2000);
+
     try {
       console.log(`[GrammarWorker] 🔄 Correcting PARTIAL (${text.length} chars): "${text}"`);
+      
       
       const response = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -139,10 +146,12 @@ export class GrammarWorker {
             { role: 'user', content: text }
           ],
           temperature: 0.2, // Lower temperature for consistency
-          max_tokens: 2000
+          max_tokens: 800 // Reduced for partials - they're typically short
         }),
         signal: abortController.signal
       });
+      
+      clearTimeout(timeoutId); // Clear timeout on success
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
@@ -172,9 +181,10 @@ export class GrammarWorker {
       return corrected;
 
     } catch (error) {
+      clearTimeout(timeoutId); // Clear timeout on error
       this.pendingRequests.delete(cancelKey);
       if (error.name === 'AbortError') {
-        console.log(`[GrammarWorker] 🚫 Grammar correction aborted (newer text arrived)`);
+        console.log(`[GrammarWorker] 🚫 Grammar correction aborted (timeout or newer text)`);
         throw error; // Re-throw abort errors
       }
       console.error(`[GrammarWorker] ❌ Error (${text.length} chars):`, error.message);

@@ -135,7 +135,7 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
             }
           ],
           temperature: 0.2, // Lower temperature for consistency in partials
-          max_tokens: 16000,
+          max_tokens: 16000, // Increased significantly to handle very long text passages without truncation
           stream: true // Enable streaming
         }),
         signal: signal
@@ -313,28 +313,33 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       }
     }
     
-    // Limit concurrent requests to prevent rate limiting (max 2-3 concurrent)
-    const MAX_CONCURRENT = 2;
+    // Increased concurrency for real-time updates - allow more parallel requests
+    // Higher limit enables 1-2 char updates without excessive cancellations
+    const MAX_CONCURRENT = 5; // Increased from 2 to allow more concurrent translations
     
-    // Check if new text is a reset (much shorter or completely different start)
+    // Smart cancellation: Only cancel on true resets, not on extensions
+    // With MAX_CONCURRENT = 5, we can allow more parallel requests for real-time updates
     let isReset = false;
     if (existingRequest && existingRequest.text) {
       const previousText = existingRequest.text;
+      // More lenient reset detection - only cancel if text shrunk significantly (>40% reduction)
+      // or completely different start (not just extending)
       isReset = text.length < previousText.length * 0.6 || 
-                !text.startsWith(previousText.substring(0, Math.min(previousText.length, 100)));
+                !text.startsWith(previousText.substring(0, Math.min(previousText.length, 50)));
     }
     
     if (existingRequest) {
       const { abortController, text: previousText } = existingRequest;
       
-      // Cancel if: reset OR too many concurrent requests
-      if (isReset || concurrentCount >= MAX_CONCURRENT) {
+      // Only cancel on resets OR if we're way over the concurrent limit (safety check)
+      // With MAX_CONCURRENT = 5, we rarely hit this, allowing smooth 1-2 char updates
+      if (isReset || concurrentCount > MAX_CONCURRENT + 2) {
         abortController.abort();
         this.pendingRequests.delete(existingRequest.key);
         const reason = isReset ? 'reset' : 'too many concurrent';
         console.log(`[PartialWorker] 🚫 Cancelled previous translation (${reason}: ${previousText?.length || 0} → ${text.length} chars)`);
       } else {
-        // Text is extending - allow concurrent for word-by-word updates
+        // Text is extending - allow concurrent for real-time word-by-word updates
         // Previous shows earlier part, new shows updated full text
         console.log(`[PartialWorker] ⏳ Text extended (${previousText.length} → ${text.length} chars) - allowing concurrent for word-by-word updates`);
       }
