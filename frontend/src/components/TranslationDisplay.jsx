@@ -145,13 +145,14 @@ function TranslationDisplay({
                   </span>
                 )}
               </div>
-              {/* CRITICAL: Only show livePartial if it's different from original (prevents English glitch) */}
-              {/* Check multiple ways to ensure we never show English in translation box */}
+              {/* CRITICAL: Show last partial translation - preserve it even when new partials arrive without translation */}
+              {/* Only prevent showing if it matches original (English glitch protection) */}
               {livePartial && 
                livePartial.trim() && 
                livePartial !== livePartialOriginal && 
                livePartial.trim() !== livePartialOriginal.trim() &&
                livePartial.toLowerCase() !== livePartialOriginal.toLowerCase() ? (
+                // Show last partial translation (preserved even when new partials arrive without translation)
                 <p className="text-white text-base sm:text-lg font-medium leading-relaxed whitespace-pre-wrap">
                   {livePartial}
                   {isListening && (
@@ -159,7 +160,7 @@ function TranslationDisplay({
                   )}
                 </p>
               ) : livePartialOriginal ? (
-                // Show "Translating..." when we have original but no translation yet
+                // Show "Translating..." only if we have original but never had any translation yet
                 <p className="text-white/50 text-xs sm:text-sm italic animate-pulse">Translating...</p>
               ) : (
                 <p className="text-white/40 text-xs sm:text-sm italic">Waiting for speech...</p>

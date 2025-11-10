@@ -12,6 +12,7 @@ import { GoogleSpeechStream } from './googleSpeechStream.js';
 import WebSocket from 'ws';
 import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
+import { grammarWorker } from './grammarWorker.js';
 
 export async function handleSoloMode(clientWs) {
   console.log("[SoloMode] ⚡ Connection using Google Speech + OpenAI Translation");
@@ -73,6 +74,14 @@ export async function handleSoloMode(clientWs) {
       isPartial,
       type: isPartial ? 'translation' : 'translation'
     };
+    
+    // DEBUG: Log if correctedText is present
+    if (message.correctedText && message.originalText !== message.correctedText) {
+      console.log(`[SoloMode] 📤 Sending message with CORRECTION (seq: ${seqId}, isPartial: ${isPartial}):`);
+      console.log(`[SoloMode]   originalText: "${message.originalText?.substring(0, 60)}${(message.originalText?.length || 0) > 60 ? '...' : ''}"`);
+      console.log(`[SoloMode]   correctedText: "${message.correctedText?.substring(0, 60)}${(message.correctedText?.length || 0) > 60 ? '...' : ''}"`);
+      console.log(`[SoloMode]   hasCorrection: ${message.hasCorrection}`);
+    }
     
     if (clientWs && clientWs.readyState === WebSocket.OPEN) {
       clientWs.send(JSON.stringify(message));
@@ -154,13 +163,145 @@ export async function handleSoloMode(clientWs) {
               let lastPartialTranslationTime = 0;
               let pendingPartialTranslation = null;
               let currentPartialText = ''; // Track current partial text for delayed translations
+              let latestPartialTextForCorrection = ''; // Track the absolute latest partial to avoid race conditions
               
-              // Adaptive throttle based on text length (longer text = shorter throttle to keep up)
-              const getAdaptiveThrottle = (textLength) => {
-                if (textLength > 500) return 300; // Very long text: 300ms throttle (reduced from 400ms)
-                if (textLength > 300) return 400; // Long text: 400ms throttle
-                if (textLength > 200) return 600; // Medium text: 600ms throttle
-                return 800; // Short text: 800ms throttle (default)
+              // CRITICAL: Track latest partial to prevent word loss
+              let latestPartialText = ''; // Most recent partial text from Google Speech
+              let latestPartialTime = 0; // Timestamp of latest partial
+              let longestPartialText = ''; // Track the longest partial seen in current segment
+              let longestPartialTime = 0; // Timestamp of longest partial
+              
+              // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
+              
+              // Ultra-low throttle for real-time feel - updates every 1-2 chars
+              const THROTTLE_MS = 0; // No throttle - instant translation on every character
+              
+              // Helper function to process final text (defined here so it can access closure variables)
+              const processFinalText = (textToProcess) => {
+                (async () => {
+                  try {
+                    if (isTranscriptionOnly) {
+                      // Same language - just send transcript with grammar correction (English only)
+                      if (currentSourceLang === 'en') {
+                        try {
+                          const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                          sendWithSequence({
+                            type: 'translation',
+                            originalText: textToProcess,
+                            correctedText: correctedText,
+                            translatedText: correctedText, // Use corrected text as the display text
+                            timestamp: Date.now(),
+                            hasCorrection: true,
+                            isTranscriptionOnly: true
+                          }, false);
+                        } catch (error) {
+                          console.error('[SoloMode] Grammar correction error:', error);
+                          sendWithSequence({
+                            type: 'translation',
+                            originalText: textToProcess,
+                            correctedText: textToProcess,
+                            translatedText: textToProcess,
+                            timestamp: Date.now(),
+                            hasCorrection: false,
+                            isTranscriptionOnly: true
+                          }, false);
+                        }
+                      } else {
+                        // Non-English transcription - no grammar correction
+                        sendWithSequence({
+                          type: 'translation',
+                          originalText: textToProcess,
+                          correctedText: textToProcess,
+                          translatedText: textToProcess,
+                          timestamp: Date.now(),
+                          hasCorrection: false,
+                          isTranscriptionOnly: true
+                        }, false);
+                      }
+                    } else {
+                      // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
+                      let correctedText = textToProcess; // Declare outside try for catch block access
+                      try {
+                        // CRITICAL FIX: Get grammar correction FIRST (English only), then translate the CORRECTED text
+                        // This ensures the translation matches the corrected English text
+                        if (currentSourceLang === 'en') {
+                          try {
+                            correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                          } catch (grammarError) {
+                            console.warn(`[SoloMode] Grammar correction failed, using original text:`, grammarError.message);
+                            correctedText = textToProcess; // Fallback to original on error
+                          }
+                        } else {
+                          // Non-English source - skip grammar correction
+                          correctedText = textToProcess;
+                        }
+
+                        // Translate the CORRECTED text (not the original)
+                        // This ensures Spanish matches the corrected English
+                        let translatedText;
+                        try {
+                          translatedText = await finalTranslationWorker.translateFinal(
+                            correctedText, // Use corrected text for translation
+                            currentSourceLang,
+                            currentTargetLang,
+                            process.env.OPENAI_API_KEY
+                          );
+                        } catch (translationError) {
+                          // If it's a skip request error (rate limited), use original text silently
+                          if (translationError.skipRequest) {
+                            console.log(`[SoloMode] ⏸️ Translation skipped (rate limited), using original text`);
+                            translatedText = correctedText; // Use corrected text (or original if grammar also failed)
+                          } else if (translationError.message && translationError.message.includes('truncated')) {
+                            // CRITICAL: If translation was truncated, log warning but use what we have
+                            // The text might be too long - we've already used longest partial
+                            console.warn(`[SoloMode] ⚠️ Translation truncated - text may be incomplete:`, translationError.message);
+                            translatedText = correctedText; // Fallback to corrected English
+                          } else {
+                            console.error(`[SoloMode] Translation failed:`, translationError.message);
+                            translatedText = `[Translation error: ${translationError.message}]`;
+                          }
+                        }
+
+                        const hasCorrection = correctedText !== textToProcess;
+
+                        // Log FINAL with correction details
+                        console.log(`[SoloMode] 📤 Sending FINAL (coupled for history integrity):`);
+                        console.log(`[SoloMode]   originalText: "${textToProcess}"`);
+                        console.log(`[SoloMode]   correctedText: "${correctedText}"`);
+                        console.log(`[SoloMode]   translatedText: "${translatedText}"`);
+                        console.log(`[SoloMode]   hasCorrection: ${hasCorrection}`);
+                        console.log(`[SoloMode]   correction changed text: ${hasCorrection}`);
+
+                        sendWithSequence({
+                          type: 'translation',
+                          originalText: textToProcess, // Use final text (may include recovered words from partials)
+                          correctedText: correctedText, // Grammar-corrected text (updates when available)
+                          translatedText: translatedText, // Translation of CORRECTED text
+                          timestamp: Date.now(),
+                          hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
+                          hasCorrection: hasCorrection,
+                          isTranscriptionOnly: false
+                        }, false);
+                      } catch (error) {
+                        console.error(`[SoloMode] Final processing error:`, error);
+                        // If it's a skip request error, use corrected text (or original if not set)
+                        const finalText = error.skipRequest ? (correctedText || textToProcess) : `[Translation error: ${error.message}]`;
+                        sendWithSequence({
+                          type: 'translation',
+                          originalText: textToProcess, // Use final text (may include recovered words)
+                          correctedText: correctedText || textToProcess, // Use corrected if available, otherwise final text
+                          translatedText: finalText,
+                          timestamp: Date.now(),
+                          hasTranslation: error.skipRequest, // True if skipped (we have text), false if real error
+                          hasCorrection: false,
+                          isTranscriptionOnly: false
+                        }, false);
+                      }
+                    }
+                  } catch (error) {
+                    console.error(`[SoloMode] Error processing final:`, error);
+                  }
+                })();
               };
               
               // Set up result callback - handles both partials and finals
@@ -168,82 +309,130 @@ export async function handleSoloMode(clientWs) {
                 if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
                 
                 if (isPartial) {
+                  // Track latest partial for correction race condition prevention
+                  latestPartialTextForCorrection = transcriptText;
+                  
+                  // Track latest partial
+                  if (!latestPartialText || transcriptText.length > latestPartialText.length) {
+                    latestPartialText = transcriptText;
+                    latestPartialTime = Date.now();
+                  }
+                  
+                  // CRITICAL FIX: Track the LONGEST partial we've seen
+                  // This prevents word loss when finals come before all words are captured
+                  if (!longestPartialText || transcriptText.length > longestPartialText.length) {
+                    longestPartialText = transcriptText;
+                    longestPartialTime = Date.now();
+                    console.log(`[SoloMode] 📏 New longest partial: ${longestPartialText.length} chars`);
+                  }
                   // Live partial transcript - send original immediately with sequence ID
+                  // Note: This is the initial send before grammar/translation, so use raw text
                   const seqId = sendWithSequence({
                     type: 'translation',
-                    originalText: transcriptText,
-                    translatedText: transcriptText, // Default to source text
+                    originalText: transcriptText, // Raw STT text (shown immediately)
+                    translatedText: isTranscriptionOnly ? transcriptText : undefined, // Only set if transcription-only mode
                     timestamp: Date.now(),
                     isTranscriptionOnly: isTranscriptionOnly,
-                    hasTranslation: false // Flag that translation is pending
+                    hasTranslation: false, // Flag that translation is pending
+                    hasCorrection: false // Flag that correction is pending
                   }, true);
                   
-                  // Cancel any pending finalization since we have new partials
+                  // CRITICAL: If we have pending finalization, extend the timeout if partials keep arriving
+                  // This ensures we wait long enough for all partials, especially for very long text
                   if (pendingFinalization) {
-                    clearTimeout(pendingFinalization.timeout);
-                    pendingFinalization = null;
+                    const timeSinceFinal = Date.now() - pendingFinalization.timestamp;
+                    // If partials are still arriving and we haven't waited long enough, extend the timeout
+                    if (timeSinceFinal < 1000 && transcriptText.length > pendingFinalization.text.length) {
+                      // Clear existing timeout and reschedule with fresh delay
+                      clearTimeout(pendingFinalization.timeout);
+                      const remainingWait = Math.max(300, 1000 - timeSinceFinal); // At least 300ms more
+                      console.log(`[SoloMode] ⏱️ Extending finalization wait by ${remainingWait}ms (partial still growing: ${transcriptText.length} chars)`);
+                      // Reschedule with the same processing logic
+                      pendingFinalization.timeout = setTimeout(() => {
+                        const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                        const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                        let finalTextToUse = pendingFinalization.text;
+                        if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
+                          finalTextToUse = longestPartialText;
+                        } else if (latestPartialText && latestPartialText.length > pendingFinalization.text.length && timeSinceLatest < 5000) {
+                          finalTextToUse = latestPartialText;
+                        }
+                        const textToProcess = finalTextToUse;
+                        latestPartialText = '';
+                        longestPartialText = '';
+                        const waitTime = Date.now() - pendingFinalization.timestamp;
+                        pendingFinalization = null;
+                        console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
+                        // Process final (reuse the async function logic from the main timeout)
+                        processFinalText(textToProcess);
+                      }, remainingWait);
+                    } else {
+                      // Partials are still arriving - update tracking but don't extend timeout
+                      console.log(`[SoloMode] 📝 Partial arrived during finalization wait - tracking updated (${transcriptText.length} chars)`);
+                    }
                   }
                   
                   // Update last audio timestamp (we have new audio activity)
                   lastAudioTimestamp = Date.now();
                   silenceStartTime = null;
                   
-                  // If translation needed and different from source lang
-                  if (!isTranscriptionOnly && transcriptText.length > 10) {
+                  // OPTIMIZATION: Handle transcription mode separately (no translation needed)
+                  if (isTranscriptionOnly && transcriptText.length >= 1) {
+                    // For transcription mode, the initial send above is enough
+                    // Just start grammar correction asynchronously (English only, don't wait for it)
+                    const capturedText = transcriptText;
+                    if (currentSourceLang === 'en') {
+                      grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                        .then(correctedText => {
+                          // Check if still relevant
+                          if (latestPartialTextForCorrection !== capturedText) {
+                            if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
+                              console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                              return;
+                            }
+                          }
+                          
+                          console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
+                          
+                          // Send grammar update separately
+                          sendWithSequence({
+                            type: 'translation',
+                            originalText: capturedText,
+                            correctedText: correctedText,
+                            translatedText: correctedText,
+                            timestamp: Date.now(),
+                            isTranscriptionOnly: true,
+                            hasTranslation: false,
+                            hasCorrection: true,
+                            updateType: 'grammar'
+                          }, true);
+                        })
+                        .catch(error => {
+                          if (error.name !== 'AbortError') {
+                            console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                          }
+                        });
+                    }
+                    return; // Skip translation processing for transcription mode
+                  }
+                  
+                  // ULTRA-FAST: Start translation immediately on ANY text (even 1 char)
+                  if (transcriptText.length >= 1) {
                     // Update current partial text (used for delayed translations)
                     currentPartialText = transcriptText;
                     
                     const now = Date.now();
                     const timeSinceLastTranslation = now - lastPartialTranslationTime;
-                    const adaptiveThrottle = getAdaptiveThrottle(transcriptText.length);
                     
-                    // Check if text has grown significantly since last translation
-                    // (20% growth or 100 chars, whichever is smaller)
-                    // Special handling for initial translation (lastPartialTranslation empty)
+                    // Ultra-fast growth-based updates: update every 1 character for real-time feel
                     const textGrowth = transcriptText.length - lastPartialTranslation.length;
-                    let growthThreshold = 100; // Default threshold
-                    if (lastPartialTranslation.length > 0) {
-                      growthThreshold = Math.min(100, Math.max(50, Math.floor(lastPartialTranslation.length * 0.2)));
-                    }
-                    const textGrewSignificantly = textGrowth >= growthThreshold && transcriptText.length > lastPartialTranslation.length;
+                    const GROWTH_THRESHOLD = 1; // Update on every single character for maximum responsiveness
+                    const textGrewSignificantly = textGrowth >= GROWTH_THRESHOLD && transcriptText.length > lastPartialTranslation.length;
                     
-                    // For long text (>300 chars), always translate more aggressively to keep up
-                    const isLongText = transcriptText.length > 300;
-                    
-                    // For long text, check if content changed even if length is same
-                    // Compare first 200 chars to detect content changes in long text
-                    let longTextNeedsUpdate = false;
-                    if (isLongText && lastPartialTranslation.length > 0) {
-                      const prefixMatch = transcriptText.substring(0, 200) === lastPartialTranslation.substring(0, 200);
-                      longTextNeedsUpdate = !prefixMatch || transcriptText.length !== lastPartialTranslation.length;
-                    } else if (isLongText && lastPartialTranslation.length === 0) {
-                      // First translation of long text - always translate
-                      longTextNeedsUpdate = true;
-                    }
-                    
-                    // For very long text (>500 chars), reduce throttle even more aggressively
-                    const isVeryLongText = transcriptText.length > 500;
-                    const effectiveThrottle = isVeryLongText ? Math.min(adaptiveThrottle, 300) : adaptiveThrottle;
-                    
-                    // CRITICAL: For long text, always translate if different - don't block on lastPartialTranslation
-                    // The comparison might fail if previous translation failed silently
-                    const textsAreDifferent = transcriptText !== lastPartialTranslation;
-                    const isStale = lastPartialTranslationTime === 0 || (Date.now() - lastPartialTranslationTime > 5000);
-                    
-                    // Force immediate translation if:
-                    // 1. Text grew significantly (20% or threshold chars)
-                    // 2. Throttle time passed (with more aggressive threshold for long text)
-                    // 3. Long text that needs update (different length or content changed)
-                    // 4. Very long text - always translate if different (max 300ms delay)
-                    // 5. Long text and stale (no translation in 5s) - force retry
-                    // CRITICAL: For long text, translate even if textsAreDifferent is false (might be caught up)
-                    // This ensures continuous updates for long passages
-                    const shouldTranslateNow = timeSinceLastTranslation >= effectiveThrottle || 
-                                               textGrewSignificantly || 
-                                               longTextNeedsUpdate ||
-                                               (isVeryLongText && textsAreDifferent) ||
-                                               (isLongText && isStale) ||
-                                               (isLongText && timeSinceLastTranslation >= 2000); // Force update every 2s for long text
+                    // Ultra-fast logic: translate immediately on ANY growth or first translation
+                    const isFirstTranslation = lastPartialTranslation.length === 0;
+                    const shouldTranslateNow = isFirstTranslation || // INSTANT on first text
+                                               textGrewSignificantly; // Text grew by 1+ character - translate immediately
                     
                     if (shouldTranslateNow) {
                       // Cancel any pending translation
@@ -258,172 +447,400 @@ export async function handleSoloMode(clientWs) {
                       // Don't set lastPartialTranslation here - only after successful translation
                       
                       try {
-                        console.log(`[SoloMode] 🔄 Translating partial (${transcriptText.length} chars, throttle: ${adaptiveThrottle}ms): "${transcriptText.substring(0, 40)}..."`);
-                        console.log(`[SoloMode] 📝 FULL TEXT BEING TRANSLATED (${transcriptText.length} chars): "${transcriptText}"`);
-                        // Use dedicated partial translation worker (fast, low-latency)
-                        const translatedText = await partialTranslationWorker.translatePartial(
-                          transcriptText,
-                          currentSourceLang,
-                          currentTargetLang,
-                          process.env.OPENAI_API_KEY
-                        );
-                        console.log(`[SoloMode] ✅ TRANSLATION RECEIVED (${translatedText.length} chars): "${translatedText}"`);
+                        console.log(`[SoloMode] 🔄 Processing partial (${transcriptText.length} chars): "${transcriptText.substring(0, 40)}..."`);
+                        const capturedText = transcriptText; // Capture the text we're processing
                         
-                        // Validate translation result
-                        if (!translatedText || translatedText.trim().length === 0) {
-                          console.warn(`[SoloMode] ⚠️ Translation returned empty for ${transcriptText.length} char text - NOT updating lastPartialTranslation`);
-                          // Don't send empty translation - it will cause UI to stop updating
-                          // Don't update lastPartialTranslation - allows retry on next update
-                        } else {
-                          // CRITICAL: Only update lastPartialTranslation AFTER successful translation
-                          lastPartialTranslation = transcriptText;
+                        // OPTIMIZATION: For same-language (transcription mode), send immediately without API calls
+                        const isTranscriptionMode = currentSourceLang === currentTargetLang;
+                        
+                        if (isTranscriptionMode) {
+                          // TRANSCRIPTION MODE: Send raw text immediately, no translation API call needed
+                          lastPartialTranslation = capturedText;
                           
-                          // Send updated translation with sequence ID
+                          console.log(`[SoloMode] ✅ TRANSCRIPTION (IMMEDIATE): "${capturedText.substring(0, 40)}..."`);
+                          
+                          // Send transcription immediately - same speed as translation mode
                           sendWithSequence({
                             type: 'translation',
-                            originalText: transcriptText,
-                            translatedText: translatedText,
+                            originalText: capturedText,
+                            translatedText: capturedText,
                             timestamp: Date.now(),
-                            isTranscriptionOnly: false,
-                            hasTranslation: true // Flag that this includes translation
+                            isTranscriptionOnly: true,
+                            hasTranslation: false, // No translation needed
+                            hasCorrection: false // Will be updated asynchronously
                           }, true);
-                          console.log(`[SoloMode] ✅ Sent translation (${translatedText.length} chars) for original (${transcriptText.length} chars)`);
+                          
+                          // Start grammar correction asynchronously (English only, don't wait for it)
+                          if (currentSourceLang === 'en') {
+                            grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                              .then(correctedText => {
+                                // Check if still relevant
+                                if (latestPartialTextForCorrection !== capturedText) {
+                                  if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
+                                    console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                                    return;
+                                  }
+                                }
+                                
+                                console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
+                                
+                                // Send grammar update separately
+                                sendWithSequence({
+                                  type: 'translation',
+                                  originalText: capturedText,
+                                  correctedText: correctedText,
+                                  translatedText: correctedText,
+                                  timestamp: Date.now(),
+                                  isTranscriptionOnly: true,
+                                  hasTranslation: false,
+                                  hasCorrection: true,
+                                  updateType: 'grammar'
+                                }, true);
+                              })
+                              .catch(error => {
+                                if (error.name !== 'AbortError') {
+                                  console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                                }
+                              });
+                          }
+                        } else {
+                          // TRANSLATION MODE: Decouple grammar and translation for lowest latency
+                          // Fire both in parallel, but send results independently (grammar only for English)
+                          const grammarPromise = currentSourceLang === 'en' 
+                            ? grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                            : Promise.resolve(capturedText); // Skip grammar for non-English
+                          const translationPromise = partialTranslationWorker.translatePartial(
+                            capturedText,
+                            currentSourceLang,
+                            currentTargetLang,
+                            process.env.OPENAI_API_KEY
+                          );
+
+                          // Send translation IMMEDIATELY when ready (don't wait for grammar)
+                          translationPromise.then(translatedText => {
+                            // Validate translation result
+                            if (!translatedText || translatedText.trim().length === 0) {
+                              console.warn(`[SoloMode] ⚠️ Translation returned empty for ${capturedText.length} char text`);
+                              return;
+                            }
+
+                            // CRITICAL: Validate that translation is different from original (prevent English leak)
+                            const isSameAsOriginal = translatedText === capturedText || 
+                                                     translatedText.trim() === capturedText.trim() ||
+                                                     translatedText.toLowerCase() === capturedText.toLowerCase();
+                            
+                            if (isSameAsOriginal) {
+                              console.warn(`[SoloMode] ⚠️ Translation matches original (English leak detected): "${translatedText.substring(0, 60)}..."`);
+                              return; // Don't send English as translation
+                            }
+
+                            // CRITICAL: Only update lastPartialTranslation AFTER successful translation
+                            lastPartialTranslation = capturedText;
+                            
+                            console.log(`[SoloMode] ✅ TRANSLATION (IMMEDIATE): "${translatedText.substring(0, 40)}..."`);
+                            
+                            // Send translation result immediately - sequence IDs handle ordering
+                            sendWithSequence({
+                              type: 'translation',
+                              originalText: capturedText,
+                              translatedText: translatedText,
+                              timestamp: Date.now(),
+                              isTranscriptionOnly: false,
+                              hasTranslation: true,
+                              hasCorrection: false // Grammar not ready yet
+                            }, true);
+                          }).catch(error => {
+                            if (error.name !== 'AbortError') {
+                              if (error.message && error.message.includes('truncated')) {
+                                // Translation was truncated - log warning but don't send incomplete translation
+                                // Wait for a longer partial or final to come through
+                                console.warn(`[SoloMode] ⚠️ Partial translation truncated (${capturedText.length} chars) - waiting for longer partial`);
+                              } else {
+                                console.error(`[SoloMode] ❌ Translation error (${capturedText.length} chars):`, error.message);
+                              }
+                            }
+                            // Don't send anything on error - keep last partial translation
+                          });
+
+                          // Send grammar correction separately when ready (English only)
+                          if (currentSourceLang === 'en') {
+                            grammarPromise.then(correctedText => {
+                              // Check if still relevant (more lenient check - only skip if text shrunk significantly)
+                              if (latestPartialTextForCorrection !== capturedText) {
+                                // Only skip if new text is significantly shorter (text was reset)
+                                if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
+                                  console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                                  return;
+                                }
+                                // Otherwise send it - extending text is fine, grammar still applies to the beginning
+                              }
+
+                              console.log(`[SoloMode] ✅ GRAMMAR (IMMEDIATE): "${correctedText.substring(0, 40)}..."`);
+                              
+                              // Send grammar update separately
+                              sendWithSequence({
+                                type: 'translation',
+                                originalText: capturedText,
+                                correctedText: correctedText,
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasCorrection: true,
+                                updateType: 'grammar' // Flag for grammar-only update
+                              }, true);
+                            }).catch(error => {
+                              // Grammar errors are non-critical, just log
+                              if (error.name !== 'AbortError') {
+                                console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                              }
+                            });
+                          }
                         }
                       } catch (error) {
-                        console.error(`[SoloMode] ❌ Partial translation error (${transcriptText.length} chars):`, error.message);
+                        console.error(`[SoloMode] ❌ Partial processing error (${transcriptText.length} chars):`, error.message);
                         // CRITICAL: Don't update lastPartialTranslation on error - allows retry
                         // Continue processing - don't stop translations on error
                       }
                     } else {
-                      // Schedule delayed translation with adaptive throttle
+                      // With THROTTLE_MS = 0 and GROWTH_THRESHOLD = 1, this path should rarely execute
+                      // But keep as fallback for edge cases
                       // Always cancel and reschedule to ensure we translate the latest text
                       if (pendingPartialTranslation) {
                         clearTimeout(pendingPartialTranslation);
                         pendingPartialTranslation = null;
                       }
                       
-                      // Use shorter delay for longer text (max 400ms for very long, 600ms for others)
-                      const maxDelay = transcriptText.length > 500 ? 400 : 600;
-                      const delayMs = Math.min(effectiveThrottle, maxDelay);
+                      // Immediate execution (no delay) for real-time feel
+                      const delayMs = 0;
                       
                       pendingPartialTranslation = setTimeout(async () => {
                         // CRITICAL: Always capture LATEST text at timeout execution
                         const latestText = currentPartialText;
-                        if (!latestText || latestText.length < 10) {
+                        if (!latestText || latestText.length < 1) {
                           pendingPartialTranslation = null;
                           return;
                         }
                         
-                        // For long text, ALWAYS translate regardless of exact match
-                        // This ensures continuous updates throughout long passages
-                        const isLongTextNow = latestText.length > 300;
-                        const veryRecentlyTranslated = lastPartialTranslationTime && (Date.now() - lastPartialTranslationTime < 200);
+                        // Skip only if exact match (no need to retranslate identical text)
                         const isExactMatch = latestText === lastPartialTranslation;
                         
-                        // Only skip if it's short text AND exact match AND very recent (<200ms)
-                        // For long text, always translate to ensure continuous updates
-                        if (isExactMatch && !isLongTextNow && veryRecentlyTranslated) {
-                          console.log(`[SoloMode] ⏭️ Skipping exact match translation (short text, very recent)`);
+                        if (isExactMatch) {
+                          console.log(`[SoloMode] ⏭️ Skipping exact match translation`);
                           pendingPartialTranslation = null;
                           return;
                         }
                         
                         try {
-                          console.log(`[SoloMode] ⏱️ Delayed translating partial (${latestText.length} chars): "${latestText.substring(0, 40)}..."`);
-                          // Use dedicated partial translation worker (fast, low-latency)
-                          const translatedText = await partialTranslationWorker.translatePartial(
-                            latestText,
-                            currentSourceLang,
-                            currentTargetLang,
-                            process.env.OPENAI_API_KEY
-                          );
+                          console.log(`[SoloMode] ⏱️ Delayed processing partial (${latestText.length} chars): "${latestText.substring(0, 40)}..."`);
                           
-                          // Validate translation result
-                          if (!translatedText || translatedText.trim().length === 0) {
-                            console.warn(`[SoloMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
-                            // Don't update lastPartialTranslation if translation failed - allow retry
-                            pendingPartialTranslation = null;
-                          } else {
-                            // CRITICAL: Always update tracking and send translation for long text
-                            // This ensures continuous updates throughout the entire passage
+                          // OPTIMIZATION: For same-language (transcription mode), send immediately without API calls
+                          const isTranscriptionMode = currentSourceLang === currentTargetLang;
+                          
+                          if (isTranscriptionMode) {
+                            // TRANSCRIPTION MODE: Send raw text immediately, no translation API call needed
                             lastPartialTranslation = latestText;
                             lastPartialTranslationTime = Date.now();
                             
+                            console.log(`[SoloMode] ✅ TRANSCRIPTION (DELAYED): "${latestText.substring(0, 40)}..."`);
+                            
+                            // Send transcription immediately
                             sendWithSequence({
                               type: 'translation',
                               originalText: latestText,
-                              translatedText: translatedText,
+                              translatedText: latestText,
                               timestamp: Date.now(),
-                              isTranscriptionOnly: false,
-                              hasTranslation: true // Flag that this includes translation
+                              isTranscriptionOnly: true,
+                              hasTranslation: false,
+                              hasCorrection: false
                             }, true);
-                            console.log(`[SoloMode] ✅ Sent delayed translation (${translatedText.length} chars) for original (${latestText.length} chars)`);
-                            pendingPartialTranslation = null;
+                            
+                            // Start grammar correction asynchronously (English only)
+                            if (currentSourceLang === 'en') {
+                              grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
+                                .then(correctedText => {
+                                  console.log(`[SoloMode] ✅ GRAMMAR (DELAYED ASYNC): "${correctedText.substring(0, 40)}..."`);
+                                  
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: latestText,
+                                    correctedText: correctedText,
+                                    translatedText: correctedText,
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: true,
+                                    hasTranslation: false,
+                                    hasCorrection: true,
+                                    updateType: 'grammar'
+                                  }, true);
+                                })
+                                .catch(error => {
+                                  if (error.name !== 'AbortError') {
+                                    console.error(`[SoloMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
+                                  }
+                                });
+                            }
+                          } else {
+                            // TRANSLATION MODE: Decouple grammar and translation for lowest latency (grammar only for English)
+                            const grammarPromise = currentSourceLang === 'en' 
+                              ? grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
+                              : Promise.resolve(latestText); // Skip grammar for non-English
+                            const translationPromise = partialTranslationWorker.translatePartial(
+                              latestText,
+                              currentSourceLang,
+                              currentTargetLang,
+                              process.env.OPENAI_API_KEY
+                            );
+
+                            // Send translation IMMEDIATELY when ready (don't wait for grammar)
+                            translationPromise.then(translatedText => {
+                              // Validate translation result
+                              if (!translatedText || translatedText.trim().length === 0) {
+                                console.warn(`[SoloMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
+                                return;
+                              }
+
+                              // CRITICAL: Update tracking and send translation
+                              lastPartialTranslation = latestText;
+                              lastPartialTranslationTime = Date.now();
+                              
+                              console.log(`[SoloMode] ✅ TRANSLATION (DELAYED): "${translatedText.substring(0, 40)}..."`);
+                              
+                              // Send immediately - sequence IDs handle ordering
+                              sendWithSequence({
+                                type: 'translation',
+                                originalText: latestText,
+                                translatedText: translatedText,
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasTranslation: true,
+                                hasCorrection: false // Grammar not ready yet
+                              }, true);
+                            }).catch(error => {
+                              console.error(`[SoloMode] ❌ Delayed translation error (${latestText.length} chars):`, error.message);
+                            });
+
+                            // Send grammar correction separately when ready (English only)
+                            if (currentSourceLang === 'en') {
+                              grammarPromise.then(correctedText => {
+                                // Only send if correction actually changed the text
+                                if (correctedText !== latestText && correctedText.trim() !== latestText.trim()) {
+                                  console.log(`[SoloMode] ✅ GRAMMAR (DELAYED): "${correctedText.substring(0, 40)}..."`);
+                                  
+                                  // Send grammar update - sequence IDs handle ordering
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: latestText,
+                                    correctedText: correctedText,
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: false,
+                                    hasCorrection: true,
+                                    updateType: 'grammar'
+                                  }, true);
+                                }
+                              }).catch(error => {
+                                if (error.name !== 'AbortError') {
+                                  console.error(`[SoloMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
+                                }
+                              });
+                            }
                           }
+
+                          pendingPartialTranslation = null;
                         } catch (error) {
-                          console.error(`[SoloMode] ❌ Delayed partial translation error (${latestText.length} chars):`, error.message);
-                          // Don't update lastPartialTranslation on error - allows retry on next partial
+                          console.error(`[SoloMode] ❌ Delayed partial processing error (${latestText.length} chars):`, error.message);
                           pendingPartialTranslation = null;
                         }
                       }, delayMs);
                     }
                   }
                 } else {
-                  // Final transcript from Google Speech - send immediately (restored simple approach)
-                  console.log(`[SoloMode] 📝 FINAL Transcript (raw): "${transcriptText.substring(0, 50)}..."`);
+                  // Final transcript from Google Speech
+                  console.log(`[SoloMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
                   
-                  // Cancel any pending finalization timeout (in case we had delayed finalization)
-                  if (pendingFinalization && pendingFinalization.timeout) {
-                    clearTimeout(pendingFinalization.timeout);
-                    pendingFinalization = null;
+                  // CRITICAL: For long text, wait proportionally longer before processing final
+                  // Google Speech may send final signal but still have partials for the last few words in flight
+                  // Very long text (>300 chars) needs more time for all partials to arrive
+                  const BASE_WAIT_MS = 300;
+                  const LONG_TEXT_THRESHOLD = 200;
+                  const VERY_LONG_TEXT_THRESHOLD = 300;
+                  const CHAR_DELAY_MS = 2; // 2ms per character for very long text
+                  
+                  let WAIT_FOR_PARTIALS_MS;
+                  if (transcriptText.length > VERY_LONG_TEXT_THRESHOLD) {
+                    // Very long text: base wait + proportional delay (up to 1500ms max)
+                    WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (transcriptText.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
+                  } else if (transcriptText.length > LONG_TEXT_THRESHOLD) {
+                    // Long text: fixed longer wait
+                    WAIT_FOR_PARTIALS_MS = 800;
+                  } else {
+                    // Short text: base wait
+                    WAIT_FOR_PARTIALS_MS = BASE_WAIT_MS;
                   }
                   
-                  // Process final immediately - translate and send to client
-                  (async () => {
-                    try {
-                      if (isTranscriptionOnly) {
-                        // Same language - just send transcript
-                        console.log(`[SoloMode] ✅ Sending final transcript: "${transcriptText.substring(0, 50)}..."`);
-                        sendWithSequence({
-                          type: 'translation',
-                          originalText: '',
-                          translatedText: transcriptText,
-                          timestamp: Date.now()
-                        }, false);
-                      } else {
-                        // Different language - translate the transcript
-                        try {
-                          // Use dedicated final translation worker (high-quality, GPT-4o)
-                          const translatedText = await finalTranslationWorker.translateFinal(
-                            transcriptText,
-                            currentSourceLang,
-                            currentTargetLang,
-                            process.env.OPENAI_API_KEY
-                          );
-                          
-                          console.log(`[SoloMode] ✅ Sending final translation: "${translatedText.substring(0, 50)}..." (original: "${transcriptText.substring(0, 50)}...")`);
-                          
-                          sendWithSequence({
-                            type: 'translation',
-                            originalText: transcriptText,
-                            translatedText: translatedText,
-                            timestamp: Date.now()
-                          }, false);
-                        } catch (error) {
-                          console.error(`[SoloMode] Final translation error:`, error);
-                          // Send transcript as fallback
-                          sendWithSequence({
-                            type: 'translation',
-                            originalText: transcriptText,
-                            translatedText: `[Translation error: ${error.message}]`,
-                            timestamp: Date.now()
-                          }, false);
-                        }
+                  // If we have a pending finalization, check if this final extends it
+                  // Google can send multiple finals for long phrases - accumulate them
+                  if (pendingFinalization) {
+                    // Check if this final extends the pending one (common for long phrases)
+                    if (transcriptText.length > pendingFinalization.text.length && 
+                        transcriptText.startsWith(pendingFinalization.text.trim())) {
+                      // This final extends the pending one - update it
+                      console.log(`[SoloMode] 📦 Final extends pending (${pendingFinalization.text.length} → ${transcriptText.length} chars)`);
+                      pendingFinalization.text = transcriptText;
+                      pendingFinalization.timestamp = Date.now();
+                      // Reset the timeout to give more time for partials
+                      clearTimeout(pendingFinalization.timeout);
+                      // Recalculate wait time for the longer text
+                      if (transcriptText.length > VERY_LONG_TEXT_THRESHOLD) {
+                        WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (transcriptText.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
                       }
-                    } catch (error) {
-                      console.error(`[SoloMode] Error processing final:`, error);
+                    } else {
+                      // Different final - cancel old one and start new
+                      clearTimeout(pendingFinalization.timeout);
                     }
-                  })();
+                  }
+                  
+                  // Schedule final processing after a delay to catch any remaining partials
+                  // If pendingFinalization exists and was extended, we'll reschedule it below
+                  if (!pendingFinalization || transcriptText.length <= pendingFinalization.text.length) {
+                    pendingFinalization = {
+                      seqId: null,
+                      text: transcriptText,
+                      timestamp: Date.now(),
+                      timeout: null
+                    };
+                  }
+                  
+                  // Schedule or reschedule the timeout
+                  pendingFinalization.timeout = setTimeout(() => {
+                      // After waiting, check again for longer partials
+                      const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                      const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                      
+                      // Use the longest available partial (within reasonable time window)
+                      let finalTextToUse = pendingFinalization.text;
+                      if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
+                        const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
+                        console.log(`[SoloMode] ⚠️ Using LONGEST partial (${pendingFinalization.text.length} → ${longestPartialText.length} chars)`);
+                        console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
+                        finalTextToUse = longestPartialText;
+                      } else if (latestPartialText && latestPartialText.length > pendingFinalization.text.length && timeSinceLatest < 5000) {
+                        // Fallback to latest partial if longest is too old
+                        const missingWords = latestPartialText.substring(pendingFinalization.text.length).trim();
+                        console.log(`[SoloMode] ⚠️ Using LATEST partial (${pendingFinalization.text.length} → ${latestPartialText.length} chars)`);
+                        console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
+                        finalTextToUse = latestPartialText;
+                      }
+                      
+                      // Reset for next segment AFTER processing
+                      const textToProcess = finalTextToUse;
+                      const waitTime = Date.now() - pendingFinalization.timestamp;
+                      latestPartialText = '';
+                      longestPartialText = '';
+                      pendingFinalization = null;
+                      
+                      console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
+                      
+                      // Process final - translate and send to client
+                      processFinalText(textToProcess);
+                    }, WAIT_FOR_PARTIALS_MS);
                 }
               });
               

@@ -32,6 +32,55 @@ class StreamProcessor extends AudioWorkletProcessor {
     this.bufferIndex = 0;
     this.chunkCounter = 0;
     this.startTime = currentTime;
+    
+    // AUDIO NORMALIZATION: Automatic Gain Control (AGC) to prevent clipping when shouting
+    this.peakLevel = 0.0; // Track peak audio level
+    this.targetPeak = 0.65; // Target peak level (65% to leave more headroom for shouts)
+    this.currentGain = 1.0; // Current gain multiplier
+    this.attackTime = 0.95; // Fast attack when volume increases (0.95 = ~50ms)
+    this.releaseTime = 0.9995; // Slow release when volume decreases (0.9995 = ~2s)
+    this.peakDecayRate = 0.999; // Faster peak decay (0.999 = ~1s) for responsive AGC
+  }
+
+  // Soft limiter function (smoother than hard clipping)
+  softLimit(sample) {
+    // Soft knee compression for values above threshold
+    const threshold = 0.7; // Lower threshold (70%) to start compression earlier
+    const absValue = Math.abs(sample);
+    
+    if (absValue <= threshold) {
+      return sample;
+    }
+    
+    // Soft clipping using tanh (natural compression)
+    // This prevents distortion when shouting - handles peaks up to 3x over threshold
+    const overThreshold = absValue - threshold;
+    const compressed = Math.tanh(overThreshold * 3.0) * 0.25 + threshold;
+    return sample < 0 ? -compressed : compressed;
+  }
+  
+  // Automatic Gain Control (AGC) - adjusts volume dynamically
+  applyAGC(sample) {
+    const absSample = Math.abs(sample);
+    
+    // Update peak level with decay
+    this.peakLevel = Math.max(absSample, this.peakLevel * this.peakDecayRate);
+    
+    // Calculate target gain based on peak
+    let targetGain = 1.0;
+    if (this.peakLevel > 0.01) { // Avoid division by zero and noise gate
+      targetGain = this.targetPeak / this.peakLevel;
+      targetGain = Math.min(targetGain, 4.0); // Limit max gain to 4x (boost quiet speech)
+      targetGain = Math.max(targetGain, 0.05); // Limit min gain to 0.05x (compress loud shouts)
+    }
+    
+    // Fast attack, slow release - respond quickly to loud sounds, recover slowly
+    const smoothingFactor = (targetGain < this.currentGain) ? this.attackTime : this.releaseTime;
+    this.currentGain = this.currentGain * smoothingFactor + targetGain * (1 - smoothingFactor);
+    
+    // Apply gain and soft limit
+    const gained = sample * this.currentGain;
+    return this.softLimit(gained);
   }
 
   process(inputs, outputs, parameters) {
@@ -45,7 +94,9 @@ class StreamProcessor extends AudioWorkletProcessor {
     
     // Accumulate samples into ring buffer with overlap
     for (let i = 0; i < channelData.length; i++) {
-      this.buffer[this.bufferIndex++] = channelData[i];
+      // Apply AGC and soft limiting to prevent clipping when shouting
+      const processedSample = this.applyAGC(channelData[i]);
+      this.buffer[this.bufferIndex++] = processedSample;
       
       // For first chunk: Wait for INITIAL_BUFFER_MS to ensure enough context
       // This prevents Google Speech from missing words at sentence start

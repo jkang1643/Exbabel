@@ -9,62 +9,8 @@
  */
 
 import fetch from 'node-fetch';
-
-// Language code to full name mapping
-const LANGUAGE_NAMES = {
-  'en': 'English',
-  'es': 'Spanish',
-  'fr': 'French',
-  'de': 'German',
-  'it': 'Italian',
-  'pt': 'Portuguese',
-  'pt-BR': 'Portuguese (Brazil)',
-  'ru': 'Russian',
-  'ja': 'Japanese',
-  'ko': 'Korean',
-  'zh': 'Chinese (Simplified)',
-  'zh-TW': 'Chinese (Traditional)',
-  'ar': 'Arabic',
-  'hi': 'Hindi',
-  'nl': 'Dutch',
-  'pl': 'Polish',
-  'tr': 'Turkish',
-  'bn': 'Bengali',
-  'vi': 'Vietnamese',
-  'th': 'Thai',
-  'id': 'Indonesian',
-  'sv': 'Swedish',
-  'no': 'Norwegian',
-  'da': 'Danish',
-  'fi': 'Finnish',
-  'el': 'Greek',
-  'cs': 'Czech',
-  'ro': 'Romanian',
-  'hu': 'Hungarian',
-  'he': 'Hebrew',
-  'uk': 'Ukrainian',
-  'fa': 'Persian',
-  'ur': 'Urdu',
-  'ta': 'Tamil',
-  'te': 'Telugu',
-  'mr': 'Marathi',
-  'gu': 'Gujarati',
-  'kn': 'Kannada',
-  'ml': 'Malayalam',
-  'sw': 'Swahili',
-  'fil': 'Filipino',
-  'ms': 'Malay',
-  'ca': 'Catalan',
-  'sk': 'Slovak',
-  'bg': 'Bulgarian',
-  'hr': 'Croatian',
-  'sr': 'Serbian',
-  'lt': 'Lithuanian',
-  'lv': 'Latvian',
-  'et': 'Estonian',
-  'sl': 'Slovenian',
-  'af': 'Afrikaans'
-};
+import { fetchWithRateLimit } from './openaiRateLimiter.js';
+import { getLanguageName } from './languageConfig.js';
 
 class TranslationManager {
   constructor() {
@@ -83,7 +29,7 @@ class TranslationManager {
     }
 
     const translations = {};
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
+    const sourceLangName = getLanguageName(sourceLang);
 
     // If source language is in target languages, include original text
     if (targetLangs.includes(sourceLang)) {
@@ -135,8 +81,8 @@ class TranslationManager {
       }
     }
 
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+    const sourceLangName = getLanguageName(sourceLang);
+    const targetLangName = getLanguageName(targetLang);
     
     if (!apiKey) {
       console.error('[TranslationManager] ERROR: No OpenAI API key provided!');
@@ -175,14 +121,14 @@ class TranslationManager {
    * MIGRATION NOTE: This replaces the Gemini WebSocket translation
    */
   async translateViaOpenAI(text, sourceLangName, targetLangName, apiKey) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'gpt-4o', // Use GPT-4o for high-quality translation
+        model: 'gpt-4o-mini', // Use GPT-4o-mini for faster translation
         messages: [
           {
             role: 'system',
@@ -208,11 +154,6 @@ Output: Only the translated text in ${targetLangName}.`
       })
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-      throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
-    }
-
     const result = await response.json();
     
     if (!result.choices || result.choices.length === 0) {
@@ -229,8 +170,8 @@ Output: Only the translated text in ${targetLangName}.`
    * Kept for backward compatibility
    */
   getSystemInstruction(sourceLang, targetLang) {
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+    const sourceLangName = getLanguageName(sourceLang);
+    const targetLangName = getLanguageName(targetLang);
 
     return {
       parts: [{

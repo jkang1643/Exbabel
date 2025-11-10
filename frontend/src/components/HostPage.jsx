@@ -10,6 +10,7 @@ import { Header } from './Header';
 import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
 import { SentenceSegmenter } from '../utils/sentenceSegmenter';
+import { TRANSCRIPTION_LANGUAGES } from '../config/languages.js';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -45,60 +46,7 @@ const getWebSocketUrl = () => {
 const API_URL = import.meta.env.VITE_API_URL || getBackendUrl();
 const WS_URL = import.meta.env.VITE_WS_URL || getWebSocketUrl();
 
-const LANGUAGES = [
-  { code: 'en', name: 'English' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'fr', name: 'French' },
-  { code: 'de', name: 'German' },
-  { code: 'it', name: 'Italian' },
-  { code: 'pt', name: 'Portuguese' },
-  { code: 'pt-BR', name: 'Portuguese (Brazil)' },
-  { code: 'ru', name: 'Russian' },
-  { code: 'ja', name: 'Japanese' },
-  { code: 'ko', name: 'Korean' },
-  { code: 'zh', name: 'Chinese (Simplified)' },
-  { code: 'zh-TW', name: 'Chinese (Traditional)' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'hi', name: 'Hindi' },
-  { code: 'nl', name: 'Dutch' },
-  { code: 'pl', name: 'Polish' },
-  { code: 'tr', name: 'Turkish' },
-  { code: 'bn', name: 'Bengali' },
-  { code: 'vi', name: 'Vietnamese' },
-  { code: 'th', name: 'Thai' },
-  { code: 'id', name: 'Indonesian' },
-  { code: 'sv', name: 'Swedish' },
-  { code: 'no', name: 'Norwegian' },
-  { code: 'da', name: 'Danish' },
-  { code: 'fi', name: 'Finnish' },
-  { code: 'el', name: 'Greek' },
-  { code: 'cs', name: 'Czech' },
-  { code: 'ro', name: 'Romanian' },
-  { code: 'hu', name: 'Hungarian' },
-  { code: 'he', name: 'Hebrew' },
-  { code: 'uk', name: 'Ukrainian' },
-  { code: 'fa', name: 'Persian' },
-  { code: 'ur', name: 'Urdu' },
-  { code: 'ta', name: 'Tamil' },
-  { code: 'te', name: 'Telugu' },
-  { code: 'mr', name: 'Marathi' },
-  { code: 'gu', name: 'Gujarati' },
-  { code: 'kn', name: 'Kannada' },
-  { code: 'ml', name: 'Malayalam' },
-  { code: 'sw', name: 'Swahili' },
-  { code: 'fil', name: 'Filipino' },
-  { code: 'ms', name: 'Malay' },
-  { code: 'ca', name: 'Catalan' },
-  { code: 'sk', name: 'Slovak' },
-  { code: 'bg', name: 'Bulgarian' },
-  { code: 'hr', name: 'Croatian' },
-  { code: 'sr', name: 'Serbian' },
-  { code: 'lt', name: 'Lithuanian' },
-  { code: 'lv', name: 'Latvian' },
-  { code: 'et', name: 'Estonian' },
-  { code: 'sl', name: 'Slovenian' },
-  { code: 'af', name: 'Afrikaans' }
-];
+const LANGUAGES = TRANSCRIPTION_LANGUAGES; // Host speaks - needs transcription support
 
 export function HostPage({ onBackToHome }) {
   const [sessionCode, setSessionCode] = useState('');

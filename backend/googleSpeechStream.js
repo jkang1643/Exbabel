@@ -12,61 +12,7 @@
 
 import speech from '@google-cloud/speech';
 import { Buffer } from 'buffer';
-
-const LANGUAGE_CODES = {
-  'en': 'en-US',
-  'es': 'es-ES',
-  'fr': 'fr-FR',
-  'de': 'de-DE',
-  'it': 'it-IT',
-  'pt': 'pt-PT',
-  'pt-BR': 'pt-BR',
-  'ru': 'ru-RU',
-  'ja': 'ja-JP',
-  'ko': 'ko-KR',
-  'zh': 'zh-CN',
-  'zh-TW': 'zh-TW',
-  'ar': 'ar-SA',
-  'hi': 'hi-IN',
-  'nl': 'nl-NL',
-  'pl': 'pl-PL',
-  'tr': 'tr-TR',
-  'bn': 'bn-IN',
-  'vi': 'vi-VN',
-  'th': 'th-TH',
-  'id': 'id-ID',
-  'sv': 'sv-SE',
-  'no': 'no-NO',
-  'da': 'da-DK',
-  'fi': 'fi-FI',
-  'el': 'el-GR',
-  'cs': 'cs-CZ',
-  'ro': 'ro-RO',
-  'hu': 'hu-HU',
-  'he': 'he-IL',
-  'uk': 'uk-UA',
-  'fa': 'fa-IR',
-  'ur': 'ur-PK',
-  'ta': 'ta-IN',
-  'te': 'te-IN',
-  'mr': 'mr-IN',
-  'gu': 'gu-IN',
-  'kn': 'kn-IN',
-  'ml': 'ml-IN',
-  'sw': 'sw-KE',
-  'fil': 'fil-PH',
-  'ms': 'ms-MY',
-  'ca': 'ca-ES',
-  'sk': 'sk-SK',
-  'bg': 'bg-BG',
-  'hr': 'hr-HR',
-  'sr': 'sr-RS',
-  'lt': 'lt-LT',
-  'lv': 'lv-LV',
-  'et': 'et-EE',
-  'sl': 'sl-SI',
-  'af': 'af-ZA'
-};
+import { TRANSCRIPTION_LANGUAGES, getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
 
 export class GoogleSpeechStream {
   constructor() {
@@ -84,17 +30,30 @@ export class GoogleSpeechStream {
     this.isSending = false;
     this.shouldAutoRestart = true;
     this.lastAudioTime = null;
+    this.useEnhancedModel = true; // Track if we should use enhanced model (fallback to default if not supported)
+    this.hasTriedEnhancedModel = false; // Track if we've already tried enhanced model for this language
 
     // Google Speech has a 305 second (5 min) streaming limit
     // We'll restart the stream every 4 minutes to be safe
     this.STREAMING_LIMIT = 240000; // 4 minutes in milliseconds
+    
+    // CRITICAL: Auto-restart at 25 seconds to prevent VAD cutoff
+    // Google's VAD becomes aggressive after ~30 seconds, causing premature finalization
+    this.VAD_CUTOFF_LIMIT = 25000; // 25 seconds - restart before VAD cutoff
+    this.cumulativeAudioTime = 0; // Track total audio sent in current session
+    this.lastAudioChunkTime = Date.now();
+    
     this.startTime = Date.now();
     
-    // Jitter buffer: Queue audio chunks to handle network jitter (200-400ms, target 300ms)
+    // Speech context: Track last transcript for context carry-forward between sessions
+    this.lastTranscriptContext = ''; // Last 50 chars of transcript for context
+    
+    // Audio batching: Batch chunks into 100-150ms groups for optimal flow
+    // Balance between smooth flow (prevent VAD gaps) and responsiveness
     this.jitterBuffer = [];
-    this.jitterBufferDelay = 250; // 250ms target delay (reduced from 300ms for better responsiveness)
-    this.jitterBufferMin = 200; // Minimum 200ms
-    this.jitterBufferMax = 400; // Maximum 400ms
+    this.jitterBufferDelay = 100; // 100ms batching (sweet spot: smooth but responsive)
+    this.jitterBufferMin = 80; // Minimum 80ms
+    this.jitterBufferMax = 150; // Maximum 150ms
     this.jitterBufferTimer = null;
     this.lastJitterRelease = Date.now();
     
@@ -104,9 +63,9 @@ export class GoogleSpeechStream {
     this.RETRY_BACKOFF_MS = [100, 200, 400]; // Exponential backoff delays
     
     // Per-chunk timeout tracking: Detect stuck chunks
-    // Increased timeout to account for jitter buffer (300ms) + processing time
+    // Timeout accounts for audio batching (100ms) + processing time
     this.chunkTimeouts = new Map(); // chunkId -> { timeout handle, sendTimestamp }
-    this.CHUNK_TIMEOUT_MS = 7000; // 7 seconds (5s + 2s buffer for jitter/processing)
+    this.CHUNK_TIMEOUT_MS = 7000; // 7 seconds (5s + 2s buffer for processing)
     this.chunkIdCounter = 0;
     
     // Track pending chunks in send order for better timeout clearing
@@ -139,8 +98,24 @@ export class GoogleSpeechStream {
 
     this.client = new speech.SpeechClient(clientOptions);
 
-    // Get language code for Google Speech
-    this.languageCode = LANGUAGE_CODES[sourceLang] || LANGUAGE_CODES[sourceLang.split('-')[0]] || 'en-US';
+    // Get language code for Google Speech (only supports transcription languages)
+    // If language is not supported for transcription, fall back to English
+    const newLanguageCode = isTranscriptionSupported(sourceLang) 
+      ? getTranscriptionLanguageCode(sourceLang)
+      : 'en-US';
+    
+    if (!isTranscriptionSupported(sourceLang)) {
+      console.warn(`[GoogleSpeech] Language ${sourceLang} not supported for transcription, falling back to English`);
+    }
+    
+    // Reset enhanced model flags if language changed
+    if (this.languageCode !== newLanguageCode) {
+      console.log(`[GoogleSpeech] Language changed from ${this.languageCode} to ${newLanguageCode}, resetting enhanced model flags`);
+      this.hasTriedEnhancedModel = false;
+      this.useEnhancedModel = true;
+    }
+    
+    this.languageCode = newLanguageCode;
     console.log(`[GoogleSpeech] Using language code: ${this.languageCode}`);
 
     // Start the streaming session
@@ -168,18 +143,32 @@ export class GoogleSpeechStream {
     this.startTime = Date.now();
     this.isActive = true;
     this.isRestarting = false;
+    
+    // Reset cumulative audio time for new session
+    this.cumulativeAudioTime = 0;
+    console.log(`[GoogleSpeech] Reset cumulative audio time. Context: "${this.lastTranscriptContext || 'none'}"`);
+
+    // Build request config - conditionally include model based on language support
+    const requestConfig = {
+      encoding: 'LINEAR16',
+      sampleRateHertz: 24000, // Match frontend audio capture
+      languageCode: this.languageCode,
+      enableAutomaticPunctuation: true,
+      alternativeLanguageCodes: [],
+    };
+
+    // Only use enhanced model if it's enabled and we haven't failed with it before for this language
+    if (this.useEnhancedModel && !this.hasTriedEnhancedModel) {
+      requestConfig.useEnhanced = true;
+      requestConfig.model = 'latest_long'; // Enhanced Chirp 3 model for best accuracy
+      console.log(`[GoogleSpeech] Using enhanced model (latest_long) for ${this.languageCode}`);
+    } else {
+      // Use default model (no model parameter) - works for all languages
+      console.log(`[GoogleSpeech] Using default model for ${this.languageCode} (enhanced model not supported or disabled)`);
+    }
 
     const request = {
-      config: {
-        encoding: 'LINEAR16',
-        sampleRateHertz: 24000, // Match frontend audio capture
-        languageCode: this.languageCode,
-        enableAutomaticPunctuation: true,
-        useEnhanced: true,
-        model: 'latest_long', // Use latest_long model for best accuracy
-        // Enable Chirp 3 model if available
-        alternativeLanguageCodes: [],
-      },
+      config: requestConfig,
       interimResults: true, // CRITICAL: Enable partial results
     };
 
@@ -188,25 +177,72 @@ export class GoogleSpeechStream {
       .streamingRecognize(request)
       .on('error', (error) => {
         console.error('[GoogleSpeech] Stream error:', error);
+        console.error('[GoogleSpeech] Error code:', error.code, 'Details:', error.details);
         
         // Mark as inactive immediately
         this.isActive = false;
 
         // Handle common errors
         if (error.code === 11) {
-          console.log('[GoogleSpeech] Audio timeout - restarting stream...');
+          console.log('[GoogleSpeech] Audio timeout (code 11) - restarting stream...');
           if (!this.isRestarting) {
             this.restartStream();
           }
+        } else if (error.code === 2 || (error.details && error.details.includes('408'))) {
+          // Handle 408 Request Timeout (code 2 UNKNOWN with 408 details)
+          console.log('[GoogleSpeech] Request timeout (408) - restarting stream...');
+          if (!this.isRestarting) {
+            // Small delay before restart to allow cleanup
+            setTimeout(() => {
+              if (!this.isRestarting) {
+                this.restartStream();
+              }
+            }, 500);
+          }
         } else if (error.code === 3) {
           console.error('[GoogleSpeech] Invalid argument error - check audio format');
+          
+          // Check if error is about model not being supported for this language
+          if (error.message && error.message.includes('model is currently not supported for language')) {
+            console.log(`[GoogleSpeech] ⚠️ Enhanced model not supported for ${this.languageCode}, falling back to default model...`);
+            
+            // Mark that we've tried enhanced model and it failed
+            this.hasTriedEnhancedModel = true;
+            this.useEnhancedModel = false;
+            
+            // Retry with default model (no model parameter)
+            if (!this.isRestarting) {
+              setTimeout(() => {
+                if (!this.isRestarting) {
+                  console.log(`[GoogleSpeech] Retrying with default model for ${this.languageCode}...`);
+                  this.restartStream();
+                }
+              }, 500);
+            }
+            return; // Don't notify error callback yet - we're retrying
+          }
+          
+          // Don't restart on other invalid argument errors
         } else {
-          console.error('[GoogleSpeech] Unhandled error:', error.message);
+          console.error('[GoogleSpeech] Unhandled error:', error.message, 'Code:', error.code);
+          // For other errors, attempt restart if auto-restart is enabled
+          if (this.shouldAutoRestart && !this.isRestarting) {
+            console.log('[GoogleSpeech] Attempting restart for unhandled error...');
+            setTimeout(() => {
+              if (!this.isRestarting) {
+                this.restartStream();
+              }
+            }, 1000);
+          }
         }
 
         // Notify caller of error if callback exists
         if (this.errorCallback) {
-          this.errorCallback(error);
+          try {
+            this.errorCallback(error);
+          } catch (callbackError) {
+            console.error('[GoogleSpeech] Error in error callback:', callbackError);
+          }
         }
       })
       .on('data', (data) => {
@@ -240,6 +276,39 @@ export class GoogleSpeechStream {
    * Restart the stream (for long sessions)
    */
   async restartStream() {
+    // Prevent multiple simultaneous restarts
+    if (this.isRestarting) {
+      console.log('[GoogleSpeech] Restart already in progress, skipping...');
+      return;
+    }
+
+    this.isRestarting = true;
+    this.restartCount++;
+    console.log(`[GoogleSpeech] 🔄 Restarting stream (restart #${this.restartCount})...`);
+
+    // Mark as inactive during restart
+    this.isActive = false;
+
+    // Clean up old stream first to prevent unhandled errors
+    if (this.recognizeStream) {
+      try {
+        // Remove all listeners to prevent error propagation
+        this.recognizeStream.removeAllListeners('error');
+        this.recognizeStream.removeAllListeners('data');
+        this.recognizeStream.removeAllListeners('end');
+        
+        // Try to destroy the stream gracefully
+        if (typeof this.recognizeStream.destroy === 'function') {
+          this.recognizeStream.destroy();
+        } else if (typeof this.recognizeStream.end === 'function') {
+          this.recognizeStream.end();
+        }
+      } catch (cleanupError) {
+        console.warn('[GoogleSpeech] Error cleaning up old stream:', cleanupError.message);
+      }
+      this.recognizeStream = null;
+    }
+
     // Clear jitter buffer and retry tracking on restart
     this.clearJitterBuffer();
     
@@ -257,18 +326,6 @@ export class GoogleSpeechStream {
     }
     this.chunkTimeouts.clear();
     this.pendingChunks = [];
-    // Prevent multiple simultaneous restarts
-    if (this.isRestarting) {
-      console.log('[GoogleSpeech] Restart already in progress, skipping...');
-      return;
-    }
-
-    this.isRestarting = true;
-    this.restartCount++;
-    console.log(`[GoogleSpeech] 🔄 Restarting stream (restart #${this.restartCount})...`);
-
-    // Mark as inactive during restart
-    this.isActive = false;
 
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -276,7 +333,7 @@ export class GoogleSpeechStream {
     }
 
     // Small delay to ensure clean shutdown
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 200));
 
     try {
       await this.startStream();
@@ -310,14 +367,40 @@ export class GoogleSpeechStream {
       return;
     }
 
-    const result = data.results[0];
-    if (!result.alternatives || result.alternatives.length === 0) {
+    // CRITICAL FIX: Google Speech can send multiple results in one response
+    // For long phrases, we need to accumulate ALL results, not just the first one
+    let allTranscripts = [];
+    let hasFinal = false;
+    
+    for (const result of data.results) {
+      if (!result.alternatives || result.alternatives.length === 0) {
+        continue;
+      }
+      
+      const transcript = result.alternatives[0].transcript;
+      if (transcript && transcript.trim()) {
+        allTranscripts.push(transcript.trim());
+        if (result.isFinal) {
+          hasFinal = true;
+        }
+      }
+    }
+    
+    if (allTranscripts.length === 0) {
       return;
     }
-
-    const transcript = result.alternatives[0].transcript;
-    const isFinal = result.isFinal;
-    const stability = result.stability || 0;
+    
+    // Combine all transcripts (Google may split long phrases across multiple results)
+    const combinedTranscript = allTranscripts.join(' ');
+    const isFinal = hasFinal;
+    const stability = data.results[0].stability || 0;
+    
+    // Update speech context when we get a final result
+    if (isFinal && combinedTranscript.length > 20) {
+      // Store last 50 characters for context carry-forward
+      this.lastTranscriptContext = combinedTranscript.slice(-50).trim();
+      console.log(`[GoogleSpeech] 📝 Updated context: "${this.lastTranscriptContext}"`);
+    }
 
     // Clear chunk timeouts on successful result
     // Google Speech processes chunks in order, so clear oldest pending chunks
@@ -335,15 +418,15 @@ export class GoogleSpeechStream {
 
     if (isFinal) {
       // Final result - high confidence
-      console.log(`[GoogleSpeech] ✅ FINAL: "${transcript}"`);
+      console.log(`[GoogleSpeech] ✅ FINAL (${data.results.length} result(s)): "${combinedTranscript}"`);
       if (this.resultCallback) {
-        this.resultCallback(transcript, false); // isPartial = false
+        this.resultCallback(combinedTranscript, false); // isPartial = false
       }
     } else {
       // Interim result - partial transcription
-      // console.log(`[GoogleSpeech] 🔵 PARTIAL (stability: ${stability.toFixed(2)}): "${transcript}"`);
+      // console.log(`[GoogleSpeech] 🔵 PARTIAL (stability: ${stability.toFixed(2)}): "${combinedTranscript}"`);
       if (this.resultCallback) {
-        this.resultCallback(transcript, true); // isPartial = true
+        this.resultCallback(combinedTranscript, true); // isPartial = true
       }
     }
   }
@@ -389,6 +472,20 @@ export class GoogleSpeechStream {
         return;
       }
 
+      // Track cumulative audio time (assume ~20ms per chunk based on 24kHz sampling)
+      const chunkDurationMs = 20; // Approximate duration of each audio chunk
+      this.cumulativeAudioTime += chunkDurationMs;
+      
+      // CRITICAL: Check for VAD cutoff limit (25 seconds)
+      // Restart proactively BEFORE Google's VAD becomes aggressive
+      // DISABLED FOR NOW - causing timeout issues
+      // if (this.cumulativeAudioTime >= this.VAD_CUTOFF_LIMIT) {
+      //   console.log(`[GoogleSpeech] ⚠️ VAD cutoff approaching (${this.cumulativeAudioTime}ms) - proactive restart to prevent word loss...`);
+      //   this.queueChunkForRetry(chunkId, audioData, metadata, 0);
+      //   await this.restartStream();
+      //   return;
+      // }
+      
       // Check if we need to restart due to time limit
       const elapsedTime = Date.now() - this.startTime;
       if (elapsedTime >= this.STREAMING_LIMIT) {
@@ -445,7 +542,7 @@ export class GoogleSpeechStream {
   }
 
   /**
-   * Set timeout for chunk processing (7s to account for jitter buffer + processing)
+   * Set timeout for chunk processing (7s to account for processing + network delays)
    */
   setChunkTimeout(chunkId, sendTimestamp, audioData, metadata) {
     // Clear any existing timeout for this chunk
@@ -599,7 +696,7 @@ export class GoogleSpeechStream {
       const chunk = this.jitterBuffer[0];
       const delay = now - chunk.receivedAt;
       
-      // Release if delay is at least jitterBufferMin (200ms) and past release time
+      // Release if delay is at least jitterBufferMin (80ms) and past release time
       if (delay >= this.jitterBufferMin && now >= chunk.shouldReleaseAt) {
         const released = this.jitterBuffer.shift();
         this.releaseChunkFromBuffer(released.chunkId, released.audioData, released.metadata);
