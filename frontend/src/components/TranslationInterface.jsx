@@ -99,6 +99,11 @@ function TranslationInterface({ onBackToHome }) {
   const pendingTextRef = useRef(null)
   const throttleTimerRef = useRef(null)
   
+  // Lag detection and catch-up mode
+  const messageTimestampsRef = useRef([]) // Track message arrival times
+  const catchUpModeRef = useRef(false) // Flag for catch-up mode
+  const lastTextLengthRef = useRef(0) // Track text length to detect rapid growth
+  
   // Track longest grammar-corrected text to merge with new raw partials
   const longestCorrectedTextRef = useRef('')
   const longestCorrectedOriginalRef = useRef('')
@@ -106,6 +111,56 @@ function TranslationInterface({ onBackToHome }) {
   // Sentence segmenter for smart text management
   const segmenterRef = useRef(null)
   const sendMessageRef = useRef(null)
+  const handleStopListeningRef = useRef(null)
+  
+  // Function to detect lag and activate catch-up mode
+  const detectLag = useCallback((currentTextLength) => {
+    const now = Date.now()
+    messageTimestampsRef.current.push(now)
+    
+    // Keep only last 10 timestamps (last ~1-2 seconds)
+    if (messageTimestampsRef.current.length > 10) {
+      messageTimestampsRef.current.shift()
+    }
+    
+    // Detect rapid text growth (indicates backlog)
+    const textGrowth = currentTextLength - lastTextLengthRef.current
+    lastTextLengthRef.current = currentTextLength
+    
+    // Check if messages are arriving faster than we can process
+    if (messageTimestampsRef.current.length >= 5) {
+      const timeSpan = messageTimestampsRef.current[messageTimestampsRef.current.length - 1] - messageTimestampsRef.current[0]
+      const messagesPerSecond = (messageTimestampsRef.current.length / timeSpan) * 1000
+      
+      // If receiving > 5 messages/second OR text growing > 100 chars per update, we're lagging
+      const isLagging = messagesPerSecond > 5 || textGrowth > 100 || currentTextLength > 1500
+      
+      if (isLagging && !catchUpModeRef.current) {
+        console.log('[TranslationInterface] 🚀 CATCH-UP MODE ACTIVATED (lag detected)')
+        catchUpModeRef.current = true
+        
+        // Temporarily reduce segmenter thresholds for faster flushing
+        if (segmenterRef.current) {
+          segmenterRef.current.maxSentences = 3 // Reduced from 10
+          segmenterRef.current.maxChars = 800   // Reduced from 2000
+          segmenterRef.current.maxTimeMs = 3000 // Reduced from 15000
+        }
+      } else if (!isLagging && catchUpModeRef.current && currentTextLength < 500) {
+        // Deactivate catch-up mode when caught up
+        console.log('[TranslationInterface] ✅ CATCH-UP MODE DEACTIVATED (caught up)')
+        catchUpModeRef.current = false
+        
+        // Restore normal thresholds
+        if (segmenterRef.current) {
+          segmenterRef.current.maxSentences = 10
+          segmenterRef.current.maxChars = 2000
+          segmenterRef.current.maxTimeMs = 15000
+        }
+      }
+    }
+    
+    return catchUpModeRef.current
+  }, [])
   
   if (!segmenterRef.current) {
     segmenterRef.current = new SentenceSegmenter({
@@ -435,9 +490,12 @@ function TranslationInterface({ onBackToHome }) {
                 
                 // Adaptive throttle: Streaming updates need very frequent updates for smooth feel
                 // For longer text (>300 chars), reduce throttle to 20ms for streaming
-                const throttleMs = isIncremental 
+                // In catch-up mode, reduce throttling significantly
+                const isCatchingUp = detectLag(translatedText.length)
+                const baseThrottleMs = isIncremental 
                   ? (translatedText.length > 300 ? 20 : 30) // Streaming: faster updates
                   : (translatedText.length > 300 ? 30 : 50); // Non-streaming: normal updates
+                const throttleMs = isCatchingUp ? Math.max(5, baseThrottleMs / 3) : baseThrottleMs // Much faster in catch-up mode
                 
                 if (timeSinceLastUpdate >= throttleMs) {
                   lastUpdateTimeRef.current = now
@@ -490,7 +548,11 @@ function TranslationInterface({ onBackToHome }) {
                 pendingTextRef.current = translatedText
                 const timeSinceLastUpdate = now - lastUpdateTimeRef.current
                 
-                if (timeSinceLastUpdate >= 50) {
+                // Detect lag for fallback updates too
+                const isCatchingUp = detectLag(translatedText.length)
+                const fallbackThrottleMs = isCatchingUp ? 10 : 50 // Faster in catch-up mode
+                
+                if (timeSinceLastUpdate >= fallbackThrottleMs) {
                   lastUpdateTimeRef.current = now
                   flushSync(() => {
                     setLivePartial(translatedText)
@@ -515,7 +577,7 @@ function TranslationInterface({ onBackToHome }) {
                         console.log(`[TranslationInterface] ⏱️ FALLBACK THROTTLED: "${latestText.substring(0, 40)}..."`)
                       }
                     }
-                  }, 50)
+                  }, fallbackThrottleMs)
                 }
               } else {
                 console.log('[TranslationInterface] ⚠️ Fallback translation equals original, skipping');
@@ -602,6 +664,9 @@ function TranslationInterface({ onBackToHome }) {
               return;
             }
             
+            // Detect lag for transcription mode too
+            detectLag(rawText.length)
+            
             // Process through segmenter (auto-flushes complete sentences to history)
             const { liveText } = segmenterRef.current.processPartial(rawText)
             
@@ -682,20 +747,37 @@ function TranslationInterface({ onBackToHome }) {
         break
       case 'warning':
         console.warn('[TranslationInterface] ⚠️ Warning:', message.message)
-        // Could show a toast notification here
+        // If we're listening and get a warning about service restarting/timeout, stop listening
+        // This allows the user to restart by clicking the button again
+        if (isListening && (message.message.includes('restarting') || message.message.includes('timeout') || message.code === 11)) {
+          console.log('[TranslationInterface] 🔄 Auto-stopping listening due to service restart/timeout')
+          if (handleStopListeningRef.current) {
+            handleStopListeningRef.current()
+          }
+        }
         break
         
       case 'error':
         console.error('[TranslationInterface] ❌ Translation error:', message.message)
+        // Auto-stop listening on errors to allow restart
+        if (isListening) {
+          console.log('[TranslationInterface] 🔄 Auto-stopping listening due to error')
+          if (handleStopListeningRef.current) {
+            handleStopListeningRef.current()
+          }
+        }
         // Show quota errors prominently
         if (message.code === 1011 || message.message.includes('Quota') || message.message.includes('quota')) {
           alert('⚠️ API Quota Exceeded!\n\n' + message.message + '\n\nPlease check your API limits and try again later.')
+        } else if (message.message.includes('timeout') || message.message.includes('Timeout')) {
+          // Show timeout error to user
+          console.warn('[TranslationInterface] ⚠️ Service timeout - you can restart by clicking the listening button again')
         }
         break
       default:
         console.log('[TranslationInterface] ⚠️ Unknown message type:', message.type)
     }
-  }, [commitFinalToHistory]) // Include commitFinalToHistory in dependencies
+  }, [commitFinalToHistory, isListening]) // Include dependencies for error handling
   
   useEffect(() => {
     console.log('[TranslationInterface] 🚀 Initializing WebSocket connection')
@@ -748,9 +830,31 @@ function TranslationInterface({ onBackToHome }) {
   }, [connectionState, sourceLang, targetLang]) // Remove sendMessage from deps to prevent re-render loop
 
   const handleStartListening = async () => {
-    if (!isConnected) return
+    if (!isConnected) {
+      console.warn('[TranslationInterface] ⚠️ Cannot start listening - WebSocket not connected')
+      return
+    }
+    
+    // If already listening, stop first to reset state
+    if (isListening) {
+      console.log('[TranslationInterface] 🔄 Already listening, stopping first to reset...')
+      handleStopListening()
+      // Wait a bit for cleanup before restarting
+      await new Promise(resolve => setTimeout(resolve, 500))
+    }
     
     try {
+      // Reinitialize session when starting to ensure clean state
+      console.log('[TranslationInterface] 🔄 Reinitializing session before starting...')
+      sendMessage({
+        type: 'init',
+        sourceLang,
+        targetLang
+      })
+      
+      // Small delay to ensure backend is ready
+      await new Promise(resolve => setTimeout(resolve, 200))
+      
       // Enable streaming mode (second parameter = true)
       await startRecording((audioChunk, metadata) => {
         // Send audio chunk to backend in real-time with language information and metadata
@@ -773,8 +877,10 @@ function TranslationInterface({ onBackToHome }) {
         sendMessage(message)
       }, true) // true = streaming mode
       setIsListening(true)
+      console.log('[TranslationInterface] ✅ Started listening successfully')
     } catch (error) {
       console.error('Failed to start recording:', error)
+      setIsListening(false)
       
       // Show user-friendly error message
       let errorMessage = 'Failed to start audio capture.'
@@ -792,9 +898,19 @@ function TranslationInterface({ onBackToHome }) {
     }
   }
 
-  const handleStopListening = () => {
+  const handleStopListening = useCallback(() => {
+    console.log('[TranslationInterface] 🛑 Stopping listening...')
     stopRecording()
     setIsListening(false)
+    
+    // Clear live partials when stopping
+    setLivePartial('')
+    setLivePartialOriginal('')
+    
+    // Reset catch-up mode and lag detection
+    catchUpModeRef.current = false
+    messageTimestampsRef.current = []
+    lastTextLengthRef.current = 0
     
     // Reset segmenter deduplication memory after significant stop
     // This prevents old text from interfering with new sessions
@@ -802,9 +918,23 @@ function TranslationInterface({ onBackToHome }) {
       if (segmenterRef.current) {
         console.log('[TranslationInterface] 🔄 Resetting segmenter deduplication memory')
         segmenterRef.current.reset()
+        // Restore normal thresholds
+        segmenterRef.current.maxSentences = 10
+        segmenterRef.current.maxChars = 2000
+        segmenterRef.current.maxTimeMs = 15000
       }
     }, 2000) // Wait 2 seconds after stop before resetting
-  }
+    
+    // Send audio_end message to backend to signal end of audio stream
+    if (isConnected) {
+      sendMessage({
+        type: 'audio_end'
+      })
+    }
+  }, [stopRecording, isConnected, sendMessage])
+  
+  // Store handleStopListening in ref for use in message handler
+  handleStopListeningRef.current = handleStopListening
 
   const handleLanguageChange = (type, language) => {
     if (type === 'source') {

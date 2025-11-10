@@ -107,6 +107,29 @@ export class SentenceSegmenter {
     // This is critical - we need to detect 3+ sentences in the full cumulative stream
     const allSentences = this.detectSentences(cumulativeText);
     const allCompleteSentences = allSentences.filter(s => this.isComplete(s));
+    
+    // Step 4.5: In catch-up mode with reduced thresholds, be more aggressive about flushing
+    // If we have a lot of text and many sentences, flush more aggressively
+    // This happens after updating cumulativeText so we have the latest data
+    const isCatchUpMode = this.maxSentences <= 5 || this.maxChars <= 1000;
+    if (isCatchUpMode && allCompleteSentences.length >= 2 && cumulativeText.length > 500) {
+      // In catch-up mode, flush after just 2 sentences instead of waiting for maxSentences
+      const numToFlush = Math.max(1, allCompleteSentences.length - 1); // Keep only the latest sentence
+      const candidateFlush = allCompleteSentences.slice(0, numToFlush);
+      
+      const catchUpFlushed = candidateFlush.filter(sentence => {
+        return !this.flushedText.includes(sentence.trim());
+      });
+      
+      if (catchUpFlushed.length > 0) {
+        this.flushedText += ' ' + catchUpFlushed.join(' ');
+        this.flushedText = this.flushedText.trim();
+        console.log(`[Segmenter] 🚀 CATCH-UP FLUSH: ${catchUpFlushed.length} sentence(s) → history (catch-up mode)`);
+        this.onFlush(catchUpFlushed);
+        this.lastUpdateTime = now;
+      }
+    }
+    
     const incompleteSentence = allSentences.find(s => !this.isComplete(s)) || '';
     
     // DEBUG: Log sentence count

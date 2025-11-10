@@ -203,25 +203,51 @@ export class GoogleSpeechStream {
       .streamingRecognize(request)
       .on('error', (error) => {
         console.error('[GoogleSpeech] Stream error:', error);
+        console.error('[GoogleSpeech] Error code:', error.code, 'Details:', error.details);
         
         // Mark as inactive immediately
         this.isActive = false;
 
         // Handle common errors
         if (error.code === 11) {
-          console.log('[GoogleSpeech] Audio timeout - restarting stream...');
+          console.log('[GoogleSpeech] Audio timeout (code 11) - restarting stream...');
           if (!this.isRestarting) {
             this.restartStream();
           }
+        } else if (error.code === 2 || (error.details && error.details.includes('408'))) {
+          // Handle 408 Request Timeout (code 2 UNKNOWN with 408 details)
+          console.log('[GoogleSpeech] Request timeout (408) - restarting stream...');
+          if (!this.isRestarting) {
+            // Small delay before restart to allow cleanup
+            setTimeout(() => {
+              if (!this.isRestarting) {
+                this.restartStream();
+              }
+            }, 500);
+          }
         } else if (error.code === 3) {
           console.error('[GoogleSpeech] Invalid argument error - check audio format');
+          // Don't restart on invalid argument errors
         } else {
-          console.error('[GoogleSpeech] Unhandled error:', error.message);
+          console.error('[GoogleSpeech] Unhandled error:', error.message, 'Code:', error.code);
+          // For other errors, attempt restart if auto-restart is enabled
+          if (this.shouldAutoRestart && !this.isRestarting) {
+            console.log('[GoogleSpeech] Attempting restart for unhandled error...');
+            setTimeout(() => {
+              if (!this.isRestarting) {
+                this.restartStream();
+              }
+            }, 1000);
+          }
         }
 
         // Notify caller of error if callback exists
         if (this.errorCallback) {
-          this.errorCallback(error);
+          try {
+            this.errorCallback(error);
+          } catch (callbackError) {
+            console.error('[GoogleSpeech] Error in error callback:', callbackError);
+          }
         }
       })
       .on('data', (data) => {
@@ -255,6 +281,39 @@ export class GoogleSpeechStream {
    * Restart the stream (for long sessions)
    */
   async restartStream() {
+    // Prevent multiple simultaneous restarts
+    if (this.isRestarting) {
+      console.log('[GoogleSpeech] Restart already in progress, skipping...');
+      return;
+    }
+
+    this.isRestarting = true;
+    this.restartCount++;
+    console.log(`[GoogleSpeech] 🔄 Restarting stream (restart #${this.restartCount})...`);
+
+    // Mark as inactive during restart
+    this.isActive = false;
+
+    // Clean up old stream first to prevent unhandled errors
+    if (this.recognizeStream) {
+      try {
+        // Remove all listeners to prevent error propagation
+        this.recognizeStream.removeAllListeners('error');
+        this.recognizeStream.removeAllListeners('data');
+        this.recognizeStream.removeAllListeners('end');
+        
+        // Try to destroy the stream gracefully
+        if (typeof this.recognizeStream.destroy === 'function') {
+          this.recognizeStream.destroy();
+        } else if (typeof this.recognizeStream.end === 'function') {
+          this.recognizeStream.end();
+        }
+      } catch (cleanupError) {
+        console.warn('[GoogleSpeech] Error cleaning up old stream:', cleanupError.message);
+      }
+      this.recognizeStream = null;
+    }
+
     // Clear jitter buffer and retry tracking on restart
     this.clearJitterBuffer();
     
@@ -272,18 +331,6 @@ export class GoogleSpeechStream {
     }
     this.chunkTimeouts.clear();
     this.pendingChunks = [];
-    // Prevent multiple simultaneous restarts
-    if (this.isRestarting) {
-      console.log('[GoogleSpeech] Restart already in progress, skipping...');
-      return;
-    }
-
-    this.isRestarting = true;
-    this.restartCount++;
-    console.log(`[GoogleSpeech] 🔄 Restarting stream (restart #${this.restartCount})...`);
-
-    // Mark as inactive during restart
-    this.isActive = false;
 
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
@@ -291,7 +338,7 @@ export class GoogleSpeechStream {
     }
 
     // Small delay to ensure clean shutdown
-    await new Promise(resolve => setTimeout(resolve, 100));
+    await new Promise(resolve => setTimeout(resolve, 200));
 
     try {
       await this.startStream();

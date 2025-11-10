@@ -154,6 +154,38 @@ Output: "Some have entertained angels unaware."
 ### Output format:
 Return only the corrected text as a single line, no explanations.`;
 
+// Helper function to validate that AI response is actually a correction, not an error message
+function validateCorrectionResponse(corrected, original) {
+  // Filter out common AI error/help responses that shouldn't be treated as transcriptions
+  const errorPatterns = [
+    /I'm sorry/i,
+    /I need the text/i,
+    /would like me to correct/i,
+    /Please provide/i,
+    /I'll be happy to assist/i,
+    /I can help/i,
+    /I don't understand/i,
+    /Could you please/i,
+    /Can you provide/i,
+    /I'm here to help/i,
+    /What text would you like/i,
+    /I cannot/i,
+    /I'm unable/i,
+    /I don't have/i,
+    /I need more information/i
+  ];
+  
+  const isErrorResponse = errorPatterns.some(pattern => pattern.test(corrected));
+  
+  if (isErrorResponse) {
+    console.warn(`[GrammarWorker] ⚠️ AI returned error/question instead of correction: "${corrected.substring(0, 100)}..."`);
+    console.warn(`[GrammarWorker] ⚠️ Using original text instead: "${original.substring(0, 100)}..."`);
+    return original; // Use original text instead of error message
+  }
+  
+  return corrected;
+}
+
 export class GrammarWorker {
   constructor() {
     this.cache = new Map();
@@ -191,6 +223,13 @@ export class GrammarWorker {
   async _processPartialCorrection(text, apiKey) {
     if (!text || text.trim().length < 8) {
       return text; // Too short to correct
+    }
+    
+    // Additional validation: ensure text doesn't look like an error message
+    const trimmed = text.trim();
+    if (trimmed.length < 10 || /^(I'm sorry|I need|Please provide|I can help|I'll be happy)/i.test(trimmed)) {
+      console.warn(`[GrammarWorker] ⚠️ Skipping correction - text looks like error message: "${trimmed.substring(0, 50)}..."`);
+      return text; // Return as-is, don't send to API
     }
 
     // Check cache
@@ -262,7 +301,10 @@ export class GrammarWorker {
       }
 
       const data = await response.json();
-      const corrected = data.choices[0]?.message?.content?.trim() || text;
+      let corrected = data.choices[0]?.message?.content?.trim() || text;
+      
+      // Validate that response is actually a correction, not an error message
+      corrected = validateCorrectionResponse(corrected, text);
       
       if (corrected !== text) {
         // Show full diff for better visibility
@@ -478,7 +520,10 @@ export class GrammarWorker {
       clearTimeout(timeoutId); // Clear timeout on success
       
       const elapsed = Date.now() - startTime;
-      const corrected = data.choices[0]?.message?.content?.trim() || text;
+      let corrected = data.choices[0]?.message?.content?.trim() || text;
+      
+      // Validate that response is actually a correction, not an error message
+      corrected = validateCorrectionResponse(corrected, text);
       
       if (corrected !== text) {
         // Show full diff for better visibility
