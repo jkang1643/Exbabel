@@ -3,61 +3,9 @@ import { Send, Volume2, Copy, ArrowLeft } from 'lucide-react'
 import { LanguageSelector } from './LanguageSelector'
 import { Header } from './Header'
 import { useWebSocket } from '../hooks/useWebSocket'
+import { TRANSLATION_LANGUAGES } from '../config/languages.js'
 
-const LANGUAGES = [
-  { code: 'en', name: 'English' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'fr', name: 'French' },
-  { code: 'de', name: 'German' },
-  { code: 'it', name: 'Italian' },
-  { code: 'pt', name: 'Portuguese' },
-  { code: 'pt-BR', name: 'Portuguese (Brazil)' },
-  { code: 'ru', name: 'Russian' },
-  { code: 'ja', name: 'Japanese' },
-  { code: 'ko', name: 'Korean' },
-  { code: 'zh', name: 'Chinese (Simplified)' },
-  { code: 'zh-TW', name: 'Chinese (Traditional)' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'hi', name: 'Hindi' },
-  { code: 'nl', name: 'Dutch' },
-  { code: 'pl', name: 'Polish' },
-  { code: 'tr', name: 'Turkish' },
-  { code: 'bn', name: 'Bengali' },
-  { code: 'vi', name: 'Vietnamese' },
-  { code: 'th', name: 'Thai' },
-  { code: 'id', name: 'Indonesian' },
-  { code: 'sv', name: 'Swedish' },
-  { code: 'no', name: 'Norwegian' },
-  { code: 'da', name: 'Danish' },
-  { code: 'fi', name: 'Finnish' },
-  { code: 'el', name: 'Greek' },
-  { code: 'cs', name: 'Czech' },
-  { code: 'ro', name: 'Romanian' },
-  { code: 'hu', name: 'Hungarian' },
-  { code: 'he', name: 'Hebrew' },
-  { code: 'uk', name: 'Ukrainian' },
-  { code: 'fa', name: 'Persian' },
-  { code: 'ur', name: 'Urdu' },
-  { code: 'ta', name: 'Tamil' },
-  { code: 'te', name: 'Telugu' },
-  { code: 'mr', name: 'Marathi' },
-  { code: 'gu', name: 'Gujarati' },
-  { code: 'kn', name: 'Kannada' },
-  { code: 'ml', name: 'Malayalam' },
-  { code: 'sw', name: 'Swahili' },
-  { code: 'fil', name: 'Filipino' },
-  { code: 'ms', name: 'Malay' },
-  { code: 'ca', name: 'Catalan' },
-  { code: 'sk', name: 'Slovak' },
-  { code: 'bg', name: 'Bulgarian' },
-  { code: 'hr', name: 'Croatian' },
-  { code: 'sr', name: 'Serbian' },
-  { code: 'lt', name: 'Lithuanian' },
-  { code: 'lv', name: 'Latvian' },
-  { code: 'et', name: 'Estonian' },
-  { code: 'sl', name: 'Slovenian' },
-  { code: 'af', name: 'Afrikaans' }
-]
+const LANGUAGES = TRANSLATION_LANGUAGES; // Text translation can use all languages
 
 function DemoPage({ onBackToHome }) {
   const [inputText, setInputText] = useState('')

@@ -181,39 +181,59 @@ export async function handleSoloMode(clientWs) {
                 (async () => {
                   try {
                     if (isTranscriptionOnly) {
-                      // Same language - just send transcript with grammar correction
-                      try {
-                        const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
-                        sendWithSequence({
-                          type: 'translation',
-                          originalText: textToProcess,
-                          correctedText: correctedText,
-                          translatedText: correctedText, // Use corrected text as the display text
-                          timestamp: Date.now(),
-                          hasCorrection: true
-                        }, false);
-                      } catch (error) {
-                        console.error('[SoloMode] Grammar correction error:', error);
+                      // Same language - just send transcript with grammar correction (English only)
+                      if (currentSourceLang === 'en') {
+                        try {
+                          const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                          sendWithSequence({
+                            type: 'translation',
+                            originalText: textToProcess,
+                            correctedText: correctedText,
+                            translatedText: correctedText, // Use corrected text as the display text
+                            timestamp: Date.now(),
+                            hasCorrection: true,
+                            isTranscriptionOnly: true
+                          }, false);
+                        } catch (error) {
+                          console.error('[SoloMode] Grammar correction error:', error);
+                          sendWithSequence({
+                            type: 'translation',
+                            originalText: textToProcess,
+                            correctedText: textToProcess,
+                            translatedText: textToProcess,
+                            timestamp: Date.now(),
+                            hasCorrection: false,
+                            isTranscriptionOnly: true
+                          }, false);
+                        }
+                      } else {
+                        // Non-English transcription - no grammar correction
                         sendWithSequence({
                           type: 'translation',
                           originalText: textToProcess,
                           correctedText: textToProcess,
                           translatedText: textToProcess,
                           timestamp: Date.now(),
-                          hasCorrection: false
+                          hasCorrection: false,
+                          isTranscriptionOnly: true
                         }, false);
                       }
                     } else {
                       // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
                       let correctedText = textToProcess; // Declare outside try for catch block access
                       try {
-                        // CRITICAL FIX: Get grammar correction FIRST, then translate the CORRECTED text
+                        // CRITICAL FIX: Get grammar correction FIRST (English only), then translate the CORRECTED text
                         // This ensures the translation matches the corrected English text
-                        try {
-                          correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
-                        } catch (grammarError) {
-                          console.warn(`[SoloMode] Grammar correction failed, using original text:`, grammarError.message);
-                          correctedText = textToProcess; // Fallback to original on error
+                        if (currentSourceLang === 'en') {
+                          try {
+                            correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                          } catch (grammarError) {
+                            console.warn(`[SoloMode] Grammar correction failed, using original text:`, grammarError.message);
+                            correctedText = textToProcess; // Fallback to original on error
+                          }
+                        } else {
+                          // Non-English source - skip grammar correction
+                          correctedText = textToProcess;
                         }
 
                         // Translate the CORRECTED text (not the original)
@@ -259,7 +279,8 @@ export async function handleSoloMode(clientWs) {
                           translatedText: translatedText, // Translation of CORRECTED text
                           timestamp: Date.now(),
                           hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
-                          hasCorrection: hasCorrection
+                          hasCorrection: hasCorrection,
+                          isTranscriptionOnly: false
                         }, false);
                       } catch (error) {
                         console.error(`[SoloMode] Final processing error:`, error);
@@ -272,7 +293,8 @@ export async function handleSoloMode(clientWs) {
                           translatedText: finalText,
                           timestamp: Date.now(),
                           hasTranslation: error.skipRequest, // True if skipped (we have text), false if real error
-                          hasCorrection: false
+                          hasCorrection: false,
+                          isTranscriptionOnly: false
                         }, false);
                       }
                     }
@@ -357,38 +379,40 @@ export async function handleSoloMode(clientWs) {
                   // OPTIMIZATION: Handle transcription mode separately (no translation needed)
                   if (isTranscriptionOnly && transcriptText.length >= 1) {
                     // For transcription mode, the initial send above is enough
-                    // Just start grammar correction asynchronously (don't wait for it)
+                    // Just start grammar correction asynchronously (English only, don't wait for it)
                     const capturedText = transcriptText;
-                    grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
-                      .then(correctedText => {
-                        // Check if still relevant
-                        if (latestPartialTextForCorrection !== capturedText) {
-                          if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
-                            console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
-                            return;
+                    if (currentSourceLang === 'en') {
+                      grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                        .then(correctedText => {
+                          // Check if still relevant
+                          if (latestPartialTextForCorrection !== capturedText) {
+                            if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
+                              console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                              return;
+                            }
                           }
-                        }
-                        
-                        console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
-                        
-                        // Send grammar update separately
-                        sendWithSequence({
-                          type: 'translation',
-                          originalText: capturedText,
-                          correctedText: correctedText,
-                          translatedText: correctedText,
-                          timestamp: Date.now(),
-                          isTranscriptionOnly: true,
-                          hasTranslation: false,
-                          hasCorrection: true,
-                          updateType: 'grammar'
-                        }, true);
-                      })
-                      .catch(error => {
-                        if (error.name !== 'AbortError') {
-                          console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
-                        }
-                      });
+                          
+                          console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
+                          
+                          // Send grammar update separately
+                          sendWithSequence({
+                            type: 'translation',
+                            originalText: capturedText,
+                            correctedText: correctedText,
+                            translatedText: correctedText,
+                            timestamp: Date.now(),
+                            isTranscriptionOnly: true,
+                            hasTranslation: false,
+                            hasCorrection: true,
+                            updateType: 'grammar'
+                          }, true);
+                        })
+                        .catch(error => {
+                          if (error.name !== 'AbortError') {
+                            console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                          }
+                        });
+                    }
                     return; // Skip translation processing for transcription mode
                   }
                   
@@ -446,41 +470,45 @@ export async function handleSoloMode(clientWs) {
                             hasCorrection: false // Will be updated asynchronously
                           }, true);
                           
-                          // Start grammar correction asynchronously (don't wait for it)
-                          grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
-                            .then(correctedText => {
-                              // Check if still relevant
-                              if (latestPartialTextForCorrection !== capturedText) {
-                                if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
-                                  console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
-                                  return;
+                          // Start grammar correction asynchronously (English only, don't wait for it)
+                          if (currentSourceLang === 'en') {
+                            grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                              .then(correctedText => {
+                                // Check if still relevant
+                                if (latestPartialTextForCorrection !== capturedText) {
+                                  if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
+                                    console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                                    return;
+                                  }
                                 }
-                              }
-                              
-                              console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
-                              
-                              // Send grammar update separately
-                              sendWithSequence({
-                                type: 'translation',
-                                originalText: capturedText,
-                                correctedText: correctedText,
-                                translatedText: correctedText,
-                                timestamp: Date.now(),
-                                isTranscriptionOnly: true,
-                                hasTranslation: false,
-                                hasCorrection: true,
-                                updateType: 'grammar'
-                              }, true);
-                            })
-                            .catch(error => {
-                              if (error.name !== 'AbortError') {
-                                console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
-                              }
-                            });
+                                
+                                console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
+                                
+                                // Send grammar update separately
+                                sendWithSequence({
+                                  type: 'translation',
+                                  originalText: capturedText,
+                                  correctedText: correctedText,
+                                  translatedText: correctedText,
+                                  timestamp: Date.now(),
+                                  isTranscriptionOnly: true,
+                                  hasTranslation: false,
+                                  hasCorrection: true,
+                                  updateType: 'grammar'
+                                }, true);
+                              })
+                              .catch(error => {
+                                if (error.name !== 'AbortError') {
+                                  console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                                }
+                              });
+                          }
                         } else {
                           // TRANSLATION MODE: Decouple grammar and translation for lowest latency
-                          // Fire both in parallel, but send results independently
-                          const grammarPromise = grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY);
+                          // Fire both in parallel, but send results independently (grammar only for English)
+                          const grammarPromise = currentSourceLang === 'en' 
+                            ? grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                            : Promise.resolve(capturedText); // Skip grammar for non-English
                           const translationPromise = partialTranslationWorker.translatePartial(
                             capturedText,
                             currentSourceLang,
@@ -534,36 +562,38 @@ export async function handleSoloMode(clientWs) {
                             // Don't send anything on error - keep last partial translation
                           });
 
-                          // Send grammar correction separately when ready
-                          grammarPromise.then(correctedText => {
-                            // Check if still relevant (more lenient check - only skip if text shrunk significantly)
-                            if (latestPartialTextForCorrection !== capturedText) {
-                              // Only skip if new text is significantly shorter (text was reset)
-                              if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
-                                console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
-                                return;
+                          // Send grammar correction separately when ready (English only)
+                          if (currentSourceLang === 'en') {
+                            grammarPromise.then(correctedText => {
+                              // Check if still relevant (more lenient check - only skip if text shrunk significantly)
+                              if (latestPartialTextForCorrection !== capturedText) {
+                                // Only skip if new text is significantly shorter (text was reset)
+                                if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
+                                  console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                                  return;
+                                }
+                                // Otherwise send it - extending text is fine, grammar still applies to the beginning
                               }
-                              // Otherwise send it - extending text is fine, grammar still applies to the beginning
-                            }
 
-                            console.log(`[SoloMode] ✅ GRAMMAR (IMMEDIATE): "${correctedText.substring(0, 40)}..."`);
-                            
-                            // Send grammar update separately
-                            sendWithSequence({
-                              type: 'translation',
-                              originalText: capturedText,
-                              correctedText: correctedText,
-                              timestamp: Date.now(),
-                              isTranscriptionOnly: false,
-                              hasCorrection: true,
-                              updateType: 'grammar' // Flag for grammar-only update
-                            }, true);
-                          }).catch(error => {
-                            // Grammar errors are non-critical, just log
-                            if (error.name !== 'AbortError') {
-                              console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
-                            }
-                          });
+                              console.log(`[SoloMode] ✅ GRAMMAR (IMMEDIATE): "${correctedText.substring(0, 40)}..."`);
+                              
+                              // Send grammar update separately
+                              sendWithSequence({
+                                type: 'translation',
+                                originalText: capturedText,
+                                correctedText: correctedText,
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasCorrection: true,
+                                updateType: 'grammar' // Flag for grammar-only update
+                              }, true);
+                            }).catch(error => {
+                              // Grammar errors are non-critical, just log
+                              if (error.name !== 'AbortError') {
+                                console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                              }
+                            });
+                          }
                         }
                       } catch (error) {
                         console.error(`[SoloMode] ❌ Partial processing error (${transcriptText.length} chars):`, error.message);
@@ -623,31 +653,35 @@ export async function handleSoloMode(clientWs) {
                               hasCorrection: false
                             }, true);
                             
-                            // Start grammar correction asynchronously
-                            grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
-                              .then(correctedText => {
-                                console.log(`[SoloMode] ✅ GRAMMAR (DELAYED ASYNC): "${correctedText.substring(0, 40)}..."`);
-                                
-                                sendWithSequence({
-                                  type: 'translation',
-                                  originalText: latestText,
-                                  correctedText: correctedText,
-                                  translatedText: correctedText,
-                                  timestamp: Date.now(),
-                                  isTranscriptionOnly: true,
-                                  hasTranslation: false,
-                                  hasCorrection: true,
-                                  updateType: 'grammar'
-                                }, true);
-                              })
-                              .catch(error => {
-                                if (error.name !== 'AbortError') {
-                                  console.error(`[SoloMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
-                                }
-                              });
+                            // Start grammar correction asynchronously (English only)
+                            if (currentSourceLang === 'en') {
+                              grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
+                                .then(correctedText => {
+                                  console.log(`[SoloMode] ✅ GRAMMAR (DELAYED ASYNC): "${correctedText.substring(0, 40)}..."`);
+                                  
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: latestText,
+                                    correctedText: correctedText,
+                                    translatedText: correctedText,
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: true,
+                                    hasTranslation: false,
+                                    hasCorrection: true,
+                                    updateType: 'grammar'
+                                  }, true);
+                                })
+                                .catch(error => {
+                                  if (error.name !== 'AbortError') {
+                                    console.error(`[SoloMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
+                                  }
+                                });
+                            }
                           } else {
-                            // TRANSLATION MODE: Decouple grammar and translation for lowest latency
-                            const grammarPromise = grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY);
+                            // TRANSLATION MODE: Decouple grammar and translation for lowest latency (grammar only for English)
+                            const grammarPromise = currentSourceLang === 'en' 
+                              ? grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
+                              : Promise.resolve(latestText); // Skip grammar for non-English
                             const translationPromise = partialTranslationWorker.translatePartial(
                               latestText,
                               currentSourceLang,
@@ -683,25 +717,30 @@ export async function handleSoloMode(clientWs) {
                               console.error(`[SoloMode] ❌ Delayed translation error (${latestText.length} chars):`, error.message);
                             });
 
-                            // Send grammar correction separately when ready
-                            grammarPromise.then(correctedText => {
-                              console.log(`[SoloMode] ✅ GRAMMAR (DELAYED): "${correctedText.substring(0, 40)}..."`);
-                              
-                              // Send grammar update - sequence IDs handle ordering
-                              sendWithSequence({
-                                type: 'translation',
-                                originalText: latestText,
-                                correctedText: correctedText,
-                                timestamp: Date.now(),
-                                isTranscriptionOnly: false,
-                                hasCorrection: true,
-                                updateType: 'grammar'
-                              }, true);
-                            }).catch(error => {
-                              if (error.name !== 'AbortError') {
-                                console.error(`[SoloMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
-                              }
-                            });
+                            // Send grammar correction separately when ready (English only)
+                            if (currentSourceLang === 'en') {
+                              grammarPromise.then(correctedText => {
+                                // Only send if correction actually changed the text
+                                if (correctedText !== latestText && correctedText.trim() !== latestText.trim()) {
+                                  console.log(`[SoloMode] ✅ GRAMMAR (DELAYED): "${correctedText.substring(0, 40)}..."`);
+                                  
+                                  // Send grammar update - sequence IDs handle ordering
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: latestText,
+                                    correctedText: correctedText,
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: false,
+                                    hasCorrection: true,
+                                    updateType: 'grammar'
+                                  }, true);
+                                }
+                              }).catch(error => {
+                                if (error.name !== 'AbortError') {
+                                  console.error(`[SoloMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
+                                }
+                              });
+                            }
                           }
 
                           pendingPartialTranslation = null;

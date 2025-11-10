@@ -16,61 +16,7 @@
 
 import fetch from 'node-fetch';
 import { fetchWithRateLimit, isCurrentlyRateLimited } from './openaiRateLimiter.js';
-
-const LANGUAGE_NAMES = {
-  'en': 'English',
-  'es': 'Spanish',
-  'fr': 'French',
-  'de': 'German',
-  'it': 'Italian',
-  'pt': 'Portuguese',
-  'pt-BR': 'Portuguese (Brazil)',
-  'ru': 'Russian',
-  'ja': 'Japanese',
-  'ko': 'Korean',
-  'zh': 'Chinese (Simplified)',
-  'zh-TW': 'Chinese (Traditional)',
-  'ar': 'Arabic',
-  'hi': 'Hindi',
-  'nl': 'Dutch',
-  'pl': 'Polish',
-  'tr': 'Turkish',
-  'bn': 'Bengali',
-  'vi': 'Vietnamese',
-  'th': 'Thai',
-  'id': 'Indonesian',
-  'sv': 'Swedish',
-  'no': 'Norwegian',
-  'da': 'Danish',
-  'fi': 'Finnish',
-  'el': 'Greek',
-  'cs': 'Czech',
-  'ro': 'Romanian',
-  'hu': 'Hungarian',
-  'he': 'Hebrew',
-  'uk': 'Ukrainian',
-  'fa': 'Persian',
-  'ur': 'Urdu',
-  'ta': 'Tamil',
-  'te': 'Telugu',
-  'mr': 'Marathi',
-  'gu': 'Gujarati',
-  'kn': 'Kannada',
-  'ml': 'Malayalam',
-  'sw': 'Swahili',
-  'fil': 'Filipino',
-  'ms': 'Malay',
-  'ca': 'Catalan',
-  'sk': 'Slovak',
-  'bg': 'Bulgarian',
-  'hr': 'Croatian',
-  'sr': 'Serbian',
-  'lt': 'Lithuanian',
-  'lv': 'Latvian',
-  'et': 'Estonian',
-  'sl': 'Slovenian',
-  'af': 'Afrikaans'
-};
+import { getLanguageName } from './languageConfig.js';
 
 /**
  * Partial Translation Worker - Optimized for speed and low latency
@@ -110,8 +56,8 @@ export class PartialTranslationWorker {
       return text; // Too short to translate
     }
 
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+    const sourceLangName = getLanguageName(sourceLang);
+    const targetLangName = getLanguageName(targetLang);
 
     if (!apiKey) {
       console.error('[PartialWorker] ERROR: No API key provided');
@@ -346,8 +292,8 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       }
     }
 
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+    const sourceLangName = getLanguageName(sourceLang);
+    const targetLangName = getLanguageName(targetLang);
 
     if (!apiKey) {
       console.error('[PartialWorker] ERROR: No API key provided');
@@ -744,8 +690,8 @@ export class FinalTranslationWorker {
       }
     }
 
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+    const sourceLangName = getLanguageName(sourceLang);
+    const targetLangName = getLanguageName(targetLang);
 
     if (!apiKey) {
       console.error('[FinalWorker] ERROR: No API key provided');

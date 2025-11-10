@@ -9,61 +9,7 @@ import { useWebSocket } from '../hooks/useWebSocket'
 import { useAudioCapture } from '../hooks/useAudioCapture'
 import { SentenceSegmenter } from '../utils/sentenceSegmenter'
 import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection'
-
-const LANGUAGES = [
-  { code: 'en', name: 'English' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'fr', name: 'French' },
-  { code: 'de', name: 'German' },
-  { code: 'it', name: 'Italian' },
-  { code: 'pt', name: 'Portuguese' },
-  { code: 'pt-BR', name: 'Portuguese (Brazil)' },
-  { code: 'ru', name: 'Russian' },
-  { code: 'ja', name: 'Japanese' },
-  { code: 'ko', name: 'Korean' },
-  { code: 'zh', name: 'Chinese (Simplified)' },
-  { code: 'zh-TW', name: 'Chinese (Traditional)' },
-  { code: 'ar', name: 'Arabic' },
-  { code: 'hi', name: 'Hindi' },
-  { code: 'nl', name: 'Dutch' },
-  { code: 'pl', name: 'Polish' },
-  { code: 'tr', name: 'Turkish' },
-  { code: 'bn', name: 'Bengali' },
-  { code: 'vi', name: 'Vietnamese' },
-  { code: 'th', name: 'Thai' },
-  { code: 'id', name: 'Indonesian' },
-  { code: 'sv', name: 'Swedish' },
-  { code: 'no', name: 'Norwegian' },
-  { code: 'da', name: 'Danish' },
-  { code: 'fi', name: 'Finnish' },
-  { code: 'el', name: 'Greek' },
-  { code: 'cs', name: 'Czech' },
-  { code: 'ro', name: 'Romanian' },
-  { code: 'hu', name: 'Hungarian' },
-  { code: 'he', name: 'Hebrew' },
-  { code: 'uk', name: 'Ukrainian' },
-  { code: 'fa', name: 'Persian' },
-  { code: 'ur', name: 'Urdu' },
-  { code: 'ta', name: 'Tamil' },
-  { code: 'te', name: 'Telugu' },
-  { code: 'mr', name: 'Marathi' },
-  { code: 'gu', name: 'Gujarati' },
-  { code: 'kn', name: 'Kannada' },
-  { code: 'ml', name: 'Malayalam' },
-  { code: 'sw', name: 'Swahili' },
-  { code: 'fil', name: 'Filipino' },
-  { code: 'ms', name: 'Malay' },
-  { code: 'ca', name: 'Catalan' },
-  { code: 'sk', name: 'Slovak' },
-  { code: 'bg', name: 'Bulgarian' },
-  { code: 'hr', name: 'Croatian' },
-  { code: 'sr', name: 'Serbian' },
-  { code: 'lt', name: 'Lithuanian' },
-  { code: 'lv', name: 'Latvian' },
-  { code: 'et', name: 'Estonian' },
-  { code: 'sl', name: 'Slovenian' },
-  { code: 'af', name: 'Afrikaans' }
-]
+import { TRANSCRIPTION_LANGUAGES, TRANSLATION_LANGUAGES } from '../config/languages.js'
 
 function TranslationInterface({ onBackToHome }) {
   const [isListening, setIsListening] = useState(false)
@@ -689,9 +635,14 @@ function TranslationInterface({ onBackToHome }) {
             pendingFinalRef.current = null;
           }
           
+          // CRITICAL: Check if this is transcription-only mode (same language)
+          // Use message flag first, then fall back to language comparison
+          const isTranscriptionMode = message.isTranscriptionOnly === true || (sourceLang === targetLang && !message.hasTranslation);
+          
+          // Only include original text if it's translation mode (not transcription mode)
           // Use correctedText if available (grammar-fixed), otherwise fall back to originalText (raw STT)
-          const originalTextForHistory = message.correctedText || message.originalText || '';
-          console.log(`[TranslationInterface] 📝 FINAL history text: hasCorrection=${!!message.correctedText}, length=${originalTextForHistory.length}`);
+          const originalTextForHistory = isTranscriptionMode ? '' : (message.correctedText || message.originalText || '');
+          console.log(`[TranslationInterface] 📝 FINAL history text: isTranscriptionMode=${isTranscriptionMode}, hasCorrection=${!!message.correctedText}, length=${originalTextForHistory.length}`);
           if (message.correctedText && message.correctedText !== message.originalText) {
             console.log(`[TranslationInterface] 📝 FINAL used corrected text: "${message.originalText}" → "${message.correctedText}"`);
           }
@@ -699,7 +650,7 @@ function TranslationInterface({ onBackToHome }) {
           // Commit immediately - process through segmenter and add to history
           const finalData = {
             text: finalText,
-            original: originalTextForHistory,  // Use grammar-corrected text for history
+            original: originalTextForHistory,  // Only set if translation mode, empty string for transcription mode
             timestamp: message.timestamp || Date.now(),
             serverTimestamp: message.serverTimestamp,
             seqId: finalSeqId
@@ -994,13 +945,13 @@ function TranslationInterface({ onBackToHome }) {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 mb-4 sm:mb-6">
           <LanguageSelector
             label="Source Language"
-            languages={LANGUAGES}
+            languages={TRANSCRIPTION_LANGUAGES}
             selectedLanguage={sourceLang}
             onLanguageChange={(lang) => handleLanguageChange('source', lang)}
           />
           <LanguageSelector
             label="Target Language"
-            languages={LANGUAGES}
+            languages={TRANSLATION_LANGUAGES}
             selectedLanguage={targetLang}
             onLanguageChange={(lang) => handleLanguageChange('target', lang)}
           />

@@ -12,61 +12,7 @@
 
 import speech from '@google-cloud/speech';
 import { Buffer } from 'buffer';
-
-const LANGUAGE_CODES = {
-  'en': 'en-US',
-  'es': 'es-ES',
-  'fr': 'fr-FR',
-  'de': 'de-DE',
-  'it': 'it-IT',
-  'pt': 'pt-PT',
-  'pt-BR': 'pt-BR',
-  'ru': 'ru-RU',
-  'ja': 'ja-JP',
-  'ko': 'ko-KR',
-  'zh': 'zh-CN',
-  'zh-TW': 'zh-TW',
-  'ar': 'ar-SA',
-  'hi': 'hi-IN',
-  'nl': 'nl-NL',
-  'pl': 'pl-PL',
-  'tr': 'tr-TR',
-  'bn': 'bn-IN',
-  'vi': 'vi-VN',
-  'th': 'th-TH',
-  'id': 'id-ID',
-  'sv': 'sv-SE',
-  'no': 'no-NO',
-  'da': 'da-DK',
-  'fi': 'fi-FI',
-  'el': 'el-GR',
-  'cs': 'cs-CZ',
-  'ro': 'ro-RO',
-  'hu': 'hu-HU',
-  'he': 'he-IL',
-  'uk': 'uk-UA',
-  'fa': 'fa-IR',
-  'ur': 'ur-PK',
-  'ta': 'ta-IN',
-  'te': 'te-IN',
-  'mr': 'mr-IN',
-  'gu': 'gu-IN',
-  'kn': 'kn-IN',
-  'ml': 'ml-IN',
-  'sw': 'sw-KE',
-  'fil': 'fil-PH',
-  'ms': 'ms-MY',
-  'ca': 'ca-ES',
-  'sk': 'sk-SK',
-  'bg': 'bg-BG',
-  'hr': 'hr-HR',
-  'sr': 'sr-RS',
-  'lt': 'lt-LT',
-  'lv': 'lv-LV',
-  'et': 'et-EE',
-  'sl': 'sl-SI',
-  'af': 'af-ZA'
-};
+import { TRANSCRIPTION_LANGUAGES, getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
 
 export class GoogleSpeechStream {
   constructor() {
@@ -84,6 +30,8 @@ export class GoogleSpeechStream {
     this.isSending = false;
     this.shouldAutoRestart = true;
     this.lastAudioTime = null;
+    this.useEnhancedModel = true; // Track if we should use enhanced model (fallback to default if not supported)
+    this.hasTriedEnhancedModel = false; // Track if we've already tried enhanced model for this language
 
     // Google Speech has a 305 second (5 min) streaming limit
     // We'll restart the stream every 4 minutes to be safe
@@ -150,8 +98,24 @@ export class GoogleSpeechStream {
 
     this.client = new speech.SpeechClient(clientOptions);
 
-    // Get language code for Google Speech
-    this.languageCode = LANGUAGE_CODES[sourceLang] || LANGUAGE_CODES[sourceLang.split('-')[0]] || 'en-US';
+    // Get language code for Google Speech (only supports transcription languages)
+    // If language is not supported for transcription, fall back to English
+    const newLanguageCode = isTranscriptionSupported(sourceLang) 
+      ? getTranscriptionLanguageCode(sourceLang)
+      : 'en-US';
+    
+    if (!isTranscriptionSupported(sourceLang)) {
+      console.warn(`[GoogleSpeech] Language ${sourceLang} not supported for transcription, falling back to English`);
+    }
+    
+    // Reset enhanced model flags if language changed
+    if (this.languageCode !== newLanguageCode) {
+      console.log(`[GoogleSpeech] Language changed from ${this.languageCode} to ${newLanguageCode}, resetting enhanced model flags`);
+      this.hasTriedEnhancedModel = false;
+      this.useEnhancedModel = true;
+    }
+    
+    this.languageCode = newLanguageCode;
     console.log(`[GoogleSpeech] Using language code: ${this.languageCode}`);
 
     // Start the streaming session
@@ -184,17 +148,27 @@ export class GoogleSpeechStream {
     this.cumulativeAudioTime = 0;
     console.log(`[GoogleSpeech] Reset cumulative audio time. Context: "${this.lastTranscriptContext || 'none'}"`);
 
+    // Build request config - conditionally include model based on language support
+    const requestConfig = {
+      encoding: 'LINEAR16',
+      sampleRateHertz: 24000, // Match frontend audio capture
+      languageCode: this.languageCode,
+      enableAutomaticPunctuation: true,
+      alternativeLanguageCodes: [],
+    };
+
+    // Only use enhanced model if it's enabled and we haven't failed with it before for this language
+    if (this.useEnhancedModel && !this.hasTriedEnhancedModel) {
+      requestConfig.useEnhanced = true;
+      requestConfig.model = 'latest_long'; // Enhanced Chirp 3 model for best accuracy
+      console.log(`[GoogleSpeech] Using enhanced model (latest_long) for ${this.languageCode}`);
+    } else {
+      // Use default model (no model parameter) - works for all languages
+      console.log(`[GoogleSpeech] Using default model for ${this.languageCode} (enhanced model not supported or disabled)`);
+    }
 
     const request = {
-      config: {
-        encoding: 'LINEAR16',
-        sampleRateHertz: 24000, // Match frontend audio capture
-        languageCode: this.languageCode,
-        enableAutomaticPunctuation: true,
-        useEnhanced: true, // Enhanced version of Chirp 3
-        model: 'latest_long', // Enhanced Chirp 3 model for best accuracy (better for long-form)
-        alternativeLanguageCodes: [],
-      },
+      config: requestConfig,
       interimResults: true, // CRITICAL: Enable partial results
     };
 
@@ -227,7 +201,28 @@ export class GoogleSpeechStream {
           }
         } else if (error.code === 3) {
           console.error('[GoogleSpeech] Invalid argument error - check audio format');
-          // Don't restart on invalid argument errors
+          
+          // Check if error is about model not being supported for this language
+          if (error.message && error.message.includes('model is currently not supported for language')) {
+            console.log(`[GoogleSpeech] ⚠️ Enhanced model not supported for ${this.languageCode}, falling back to default model...`);
+            
+            // Mark that we've tried enhanced model and it failed
+            this.hasTriedEnhancedModel = true;
+            this.useEnhancedModel = false;
+            
+            // Retry with default model (no model parameter)
+            if (!this.isRestarting) {
+              setTimeout(() => {
+                if (!this.isRestarting) {
+                  console.log(`[GoogleSpeech] Retrying with default model for ${this.languageCode}...`);
+                  this.restartStream();
+                }
+              }, 500);
+            }
+            return; // Don't notify error callback yet - we're retrying
+          }
+          
+          // Don't restart on other invalid argument errors
         } else {
           console.error('[GoogleSpeech] Unhandled error:', error.message, 'Code:', error.code);
           // For other errors, attempt restart if auto-restart is enabled

@@ -10,62 +10,7 @@
 
 import fetch from 'node-fetch';
 import { fetchWithRateLimit } from './openaiRateLimiter.js';
-
-// Language code to full name mapping
-const LANGUAGE_NAMES = {
-  'en': 'English',
-  'es': 'Spanish',
-  'fr': 'French',
-  'de': 'German',
-  'it': 'Italian',
-  'pt': 'Portuguese',
-  'pt-BR': 'Portuguese (Brazil)',
-  'ru': 'Russian',
-  'ja': 'Japanese',
-  'ko': 'Korean',
-  'zh': 'Chinese (Simplified)',
-  'zh-TW': 'Chinese (Traditional)',
-  'ar': 'Arabic',
-  'hi': 'Hindi',
-  'nl': 'Dutch',
-  'pl': 'Polish',
-  'tr': 'Turkish',
-  'bn': 'Bengali',
-  'vi': 'Vietnamese',
-  'th': 'Thai',
-  'id': 'Indonesian',
-  'sv': 'Swedish',
-  'no': 'Norwegian',
-  'da': 'Danish',
-  'fi': 'Finnish',
-  'el': 'Greek',
-  'cs': 'Czech',
-  'ro': 'Romanian',
-  'hu': 'Hungarian',
-  'he': 'Hebrew',
-  'uk': 'Ukrainian',
-  'fa': 'Persian',
-  'ur': 'Urdu',
-  'ta': 'Tamil',
-  'te': 'Telugu',
-  'mr': 'Marathi',
-  'gu': 'Gujarati',
-  'kn': 'Kannada',
-  'ml': 'Malayalam',
-  'sw': 'Swahili',
-  'fil': 'Filipino',
-  'ms': 'Malay',
-  'ca': 'Catalan',
-  'sk': 'Slovak',
-  'bg': 'Bulgarian',
-  'hr': 'Croatian',
-  'sr': 'Serbian',
-  'lt': 'Lithuanian',
-  'lv': 'Latvian',
-  'et': 'Estonian',
-  'sl': 'Slovenian',
-  'af': 'Afrikaans'
-};
+import { getLanguageName } from './languageConfig.js';
 
 class TranslationManager {
   constructor() {
@@ -84,7 +29,7 @@ class TranslationManager {
     }
 
     const translations = {};
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
+    const sourceLangName = getLanguageName(sourceLang);
 
     // If source language is in target languages, include original text
     if (targetLangs.includes(sourceLang)) {
@@ -136,8 +81,8 @@ class TranslationManager {
       }
     }
 
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+    const sourceLangName = getLanguageName(sourceLang);
+    const targetLangName = getLanguageName(targetLang);
     
     if (!apiKey) {
       console.error('[TranslationManager] ERROR: No OpenAI API key provided!');
@@ -225,8 +170,8 @@ Output: Only the translated text in ${targetLangName}.`
    * Kept for backward compatibility
    */
   getSystemInstruction(sourceLang, targetLang) {
-    const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
-    const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+    const sourceLangName = getLanguageName(sourceLang);
+    const targetLangName = getLanguageName(targetLang);
 
     return {
       parts: [{
