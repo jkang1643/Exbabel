@@ -235,9 +235,10 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
    * @param {string} sourceLang - Source language code
    * @param {string} targetLang - Target language code
    * @param {string} apiKey - OpenAI API key
+   * @param {string} sessionId - Optional session ID for multi-session tracking
    * @returns {Promise<string>} - Translated text
    */
-  async _processPartialTranslation(text, sourceLang, targetLang, apiKey) {
+  async _processPartialTranslation(text, sourceLang, targetLang, apiKey, sessionId = null) {
     // REAL-TIME INSTANT: Allow translation of absolute minimum text
     if (!text || text.length < 1) {
       return text; // Too short to translate (minimum 1 char)
@@ -315,8 +316,10 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       }
     }
     
-    // Reduced concurrency when rate limits detected to prevent bursts
-    const MAX_CONCURRENT = this.rateLimitDetected ? 1 : 2; // Reduce to 1 if rate limited, otherwise 2
+    // MULTI-SESSION OPTIMIZATION: Increased concurrency for better multi-session support
+    // Conservative increase: 2->5 normal, 1->2 rate-limited (preserves single-session performance)
+    // This allows multiple sessions to process translations in parallel
+    const MAX_CONCURRENT = this.rateLimitDetected ? 2 : 5; // Increased from 1/2 to 2/5 for multi-session
     
     // Smart cancellation: Only cancel on true resets, not on extensions
     // With MAX_CONCURRENT = 5, we can allow more parallel requests for real-time updates
@@ -388,7 +391,8 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
           max_tokens: 16000, // Increased significantly to handle very long text passages without truncation
           stream: false // No streaming for partials (simpler)
         }),
-        signal: abortController.signal
+        signal: abortController.signal,
+        sessionId: sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
       });
 
       // Remove from pending requests (find by abort controller)
@@ -479,8 +483,13 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
   /**
    * Fast translation for partial text - optimized for latency with throttling
    * Uses GPT-4o-mini or GPT-3.5-turbo for speed
+   * @param {string} text - Text to translate
+   * @param {string} sourceLang - Source language code
+   * @param {string} targetLang - Target language code
+   * @param {string} apiKey - OpenAI API key
+   * @param {string} sessionId - Optional session ID for multi-session tracking
    */
-  async translatePartial(text, sourceLang, targetLang, apiKey) {
+  async translatePartial(text, sourceLang, targetLang, apiKey, sessionId = null) {
     // REAL-TIME INSTANT: Allow translation of absolute minimum text
     if (!text || text.length < 1) {
       throw new Error('Text too short to translate'); // Don't return English
@@ -549,11 +558,12 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       }
 
       // Process the translation
-      return await this._processPartialTranslation(text, sourceLang, targetLang, apiKey);
+      return await this._processPartialTranslation(text, sourceLang, targetLang, apiKey, sessionId);
     } else {
       // Throttle: buffer the request and schedule it
       const bufferedText = text;
       const bufferedIsShortText = isShortText; // Capture for closure
+      const bufferedSessionId = sessionId; // Capture sessionId for closure
       
       // Clear previous timeout if exists
       if (this.pendingPartialTimeout) {
@@ -585,7 +595,7 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
           this.lastPartialRequestTime = Date.now();
 
           try {
-            const translated = await this._processPartialTranslation(textToProcess, sourceLang, targetLang, apiKey);
+            const translated = await this._processPartialTranslation(textToProcess, sourceLang, targetLang, apiKey, bufferedSessionId);
             
             // Resolve all pending promises with the translated text
             for (const { resolve } of this.pendingPartialResolvers.values()) {
@@ -629,7 +639,7 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
     // Translate to each target language in parallel for speed
     const translationPromises = langsToTranslate.map(async (targetLang) => {
       try {
-        const translated = await this.translatePartial(text, sourceLang, targetLang, apiKey);
+        const translated = await this.translatePartial(text, sourceLang, targetLang, apiKey, sessionId);
         return { lang: targetLang, text: translated };
       } catch (error) {
         console.error(`[PartialWorker] Failed to translate to ${targetLang}:`, error.message);
@@ -673,8 +683,13 @@ export class FinalTranslationWorker {
   /**
    * Fast translation for final text - optimized for speed
    * Uses GPT-4o-mini for faster, cost-effective translations
+   * @param {string} text - Text to translate
+   * @param {string} sourceLang - Source language code
+   * @param {string} targetLang - Target language code
+   * @param {string} apiKey - OpenAI API key
+   * @param {string} sessionId - Optional session ID for multi-session tracking
    */
-  async translateFinal(text, sourceLang, targetLang, apiKey) {
+  async translateFinal(text, sourceLang, targetLang, apiKey, sessionId = null) {
     if (!text || text.trim().length === 0) {
       return text;
     }
@@ -739,7 +754,8 @@ Output: Only the translated text in ${targetLangName}.`
           ],
           temperature: 0.3, // Balanced temperature for quality
           max_tokens: 16000 // Increased significantly to handle very long final translations without truncation
-        })
+        }),
+        sessionId: sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
       });
 
       const result = await response.json();
@@ -808,7 +824,7 @@ Output: Only the translated text in ${targetLangName}.`
     // Translate to each target language in parallel
     const translationPromises = langsToTranslate.map(async (targetLang) => {
       try {
-        const translated = await this.translateFinal(text, sourceLang, targetLang, apiKey);
+        const translated = await this.translateFinal(text, sourceLang, targetLang, apiKey, sessionId);
         return { lang: targetLang, text: translated };
       } catch (error) {
         console.error(`[FinalWorker] Failed to translate to ${targetLang}:`, error.message);

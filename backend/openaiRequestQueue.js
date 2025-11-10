@@ -5,8 +5,13 @@
  * Features:
  * - Single queue for all OpenAI API requests (grammar, translation, etc.)
  * - Tracks approximate token usage to stay under TPM limits
- * - Processes requests sequentially with smart batching
+ * - Processes requests in parallel (3-5 concurrent) for multi-session support
  * - Respects rate limits and retries automatically
+ * 
+ * MULTI-SESSION OPTIMIZATION:
+ * - Parallel processing allows multiple sessions to share API capacity fairly
+ * - Per-session tracking prevents single session from starving others
+ * - Maintains backward compatibility with single-session performance
  */
 
 import { fetchWithRateLimit } from './openaiRateLimiter.js';
@@ -15,10 +20,15 @@ class OpenAIRequestQueue {
   constructor() {
     this.queue = [];
     this.processing = false;
+    this.activeRequests = 0; // Track concurrent active requests
+    this.maxConcurrent = 4; // Process up to 4 requests in parallel (conservative for trial)
     this.lastRequestTime = 0;
-    this.minRequestInterval = 50; // Minimum 50ms between requests
+    this.minRequestInterval = 50; // Minimum 50ms between requests (preserved for single-session stability)
     this.estimatedTokensUsed = 0;
     this.tokenResetTime = Date.now() + 60000; // Reset tokens every minute
+    
+    // Per-session tracking for fair-share allocation
+    this.sessionRequestCounts = new Map(); // sessionId -> { count, lastRequestTime }
   }
 
   /**
@@ -75,48 +85,81 @@ class OpenAIRequestQueue {
   }
 
   /**
-   * Process the queue
+   * Process a single queue item
+   * @private
+   */
+  async processItem(item) {
+    // Estimate tokens
+    const estimatedTokens = this.estimateTokens(item.text, item.maxTokens || 800);
+    
+    // Check if we should wait (respects rate limits and intervals)
+    const waitTime = this.shouldWait(estimatedTokens);
+    if (waitTime > 0) {
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      this.resetTokenCounterIfNeeded();
+    }
+
+    try {
+      // Make the request
+      this.lastRequestTime = Date.now();
+      
+      // Update per-session tracking if sessionId provided
+      if (item.sessionId) {
+        const sessionData = this.sessionRequestCounts.get(item.sessionId) || { count: 0, lastRequestTime: 0 };
+        sessionData.count++;
+        sessionData.lastRequestTime = Date.now();
+        this.sessionRequestCounts.set(item.sessionId, sessionData);
+      }
+      
+      const result = await item.requestFn();
+      
+      // Update token usage
+      this.estimatedTokensUsed += estimatedTokens;
+      
+      // Resolve the promise
+      item.resolve(result);
+    } catch (error) {
+      // Reject the promise
+      item.reject(error);
+    } finally {
+      this.activeRequests--;
+      // Continue processing queue
+      this.processQueue();
+    }
+  }
+
+  /**
+   * Process the queue with parallel execution
+   * MULTI-SESSION: Processes up to maxConcurrent requests in parallel
+   * This allows multiple sessions to share API capacity without blocking each other
    */
   async processQueue() {
-    if (this.processing || this.queue.length === 0) {
+    // Don't start new processing if already at max concurrency or queue empty
+    if (this.queue.length === 0) {
+      this.processing = false;
       return;
     }
 
-    this.processing = true;
-
-    while (this.queue.length > 0) {
-      const item = this.queue[0];
-      
-      // Estimate tokens
-      const estimatedTokens = this.estimateTokens(item.text, item.maxTokens || 800);
-      
-      // Check if we should wait
-      const waitTime = this.shouldWait(estimatedTokens);
-      if (waitTime > 0) {
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-        this.resetTokenCounterIfNeeded();
-      }
-
-      // Remove from queue
-      this.queue.shift();
-
-      try {
-        // Make the request
-        this.lastRequestTime = Date.now();
-        const result = await item.requestFn();
-        
-        // Update token usage
-        this.estimatedTokensUsed += estimatedTokens;
-        
-        // Resolve the promise
-        item.resolve(result);
-      } catch (error) {
-        // Reject the promise
-        item.reject(error);
-      }
+    // Start processing flag
+    if (!this.processing) {
+      this.processing = true;
     }
 
-    this.processing = false;
+    // Process items in parallel up to maxConcurrent limit
+    while (this.queue.length > 0 && this.activeRequests < this.maxConcurrent) {
+      const item = this.queue.shift();
+      this.activeRequests++;
+      
+      // Process item asynchronously (don't await - allows parallel execution)
+      this.processItem(item).catch(err => {
+        console.error('[RequestQueue] Error processing item:', err);
+      });
+    }
+
+    // If queue is empty and no active requests, mark as not processing
+    if (this.queue.length === 0 && this.activeRequests === 0) {
+      this.processing = false;
+    }
   }
 
   /**
@@ -124,14 +167,16 @@ class OpenAIRequestQueue {
    * @param {Function} requestFn - Function that returns a Promise for the API call
    * @param {string} text - Input text (for token estimation)
    * @param {number} maxTokens - Max tokens requested (for token estimation)
+   * @param {string} sessionId - Optional session ID for per-session tracking
    * @returns {Promise<any>} - Result of the API call
    */
-  async enqueue(requestFn, text = '', maxTokens = 800) {
+  async enqueue(requestFn, text = '', maxTokens = 800, sessionId = null) {
     return new Promise((resolve, reject) => {
       this.queue.push({
         requestFn,
         text,
         maxTokens,
+        sessionId, // Track which session this request belongs to
         resolve,
         reject,
         timestamp: Date.now()
@@ -182,13 +227,38 @@ class OpenAIRequestQueue {
    * @returns {Object} - Queue status information
    */
   getStatus() {
+    // Convert session counts to plain object for JSON serialization
+    const sessionStats = {};
+    for (const [sessionId, data] of this.sessionRequestCounts.entries()) {
+      sessionStats[sessionId] = {
+        requestCount: data.count,
+        lastRequestTime: data.lastRequestTime
+      };
+    }
+
     return {
       queueLength: this.queue.length,
       processing: this.processing,
+      activeRequests: this.activeRequests,
+      maxConcurrent: this.maxConcurrent,
       estimatedTokensUsed: this.estimatedTokensUsed,
       tokenResetTime: this.tokenResetTime - Date.now(),
-      lastRequestTime: Date.now() - this.lastRequestTime
+      lastRequestTime: Date.now() - this.lastRequestTime,
+      sessionStats: sessionStats,
+      activeSessions: this.sessionRequestCounts.size
     };
+  }
+
+  /**
+   * Clear session tracking (for cleanup/testing)
+   * @param {string} sessionId - Session ID to clear, or null to clear all
+   */
+  clearSessionTracking(sessionId = null) {
+    if (sessionId) {
+      this.sessionRequestCounts.delete(sessionId);
+    } else {
+      this.sessionRequestCounts.clear();
+    }
   }
 }
 

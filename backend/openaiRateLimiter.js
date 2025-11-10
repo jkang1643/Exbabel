@@ -24,6 +24,70 @@ let isRateLimited = false; // Track if we're currently rate limited
 let estimatedTokensUsed = 0; // Track token usage for TPM limits
 let tokenWindowStart = Date.now();
 
+// MULTI-SESSION OPTIMIZATION: Per-session tracking for fair-share allocation
+// Tracks token usage per session to ensure fair distribution across multiple sessions
+const sessionTokenUsage = new Map(); // sessionId -> { tokensUsed, windowStart }
+const sessionRequestCounts = new Map(); // sessionId -> { count, windowStart }
+
+/**
+ * Get active session count (for fair-share allocation)
+ * @returns {number} - Number of active sessions
+ */
+function getActiveSessionCount() {
+  const now = Date.now();
+  let activeCount = 0;
+  
+  // Count sessions that have made requests in the last 5 minutes
+  for (const [sessionId, data] of sessionRequestCounts.entries()) {
+    if (now - data.windowStart < 300000) { // 5 minutes
+      activeCount++;
+    }
+  }
+  
+  return Math.max(1, activeCount); // At least 1 to avoid division by zero
+}
+
+/**
+ * Track session request (for fair-share allocation)
+ * @param {string} sessionId - Session identifier
+ */
+function trackSessionRequest(sessionId) {
+  if (!sessionId) return;
+  
+  const now = Date.now();
+  const sessionData = sessionRequestCounts.get(sessionId) || { count: 0, windowStart: now };
+  
+  // Reset if window expired (1 minute)
+  if (now - sessionData.windowStart >= 60000) {
+    sessionData.count = 0;
+    sessionData.windowStart = now;
+  }
+  
+  sessionData.count++;
+  sessionRequestCounts.set(sessionId, sessionData);
+}
+
+/**
+ * Track session token usage (for fair-share allocation)
+ * @param {string} sessionId - Session identifier
+ * @param {number} tokens - Token count to add
+ */
+function trackSessionTokens(sessionId, tokens) {
+  if (!sessionId) return;
+  
+  const now = Date.now();
+  const sessionData = sessionTokenUsage.get(sessionId) || { tokensUsed: 0, windowStart: now };
+  
+  // Reset if window expired (1 minute)
+  if (now - sessionData.windowStart >= 60000) {
+    sessionData.tokensUsed = 0;
+    sessionData.windowStart = now;
+  }
+  
+  sessionData.tokensUsed += tokens;
+  sessionTokenUsage.set(sessionId, sessionData);
+}
+
 /**
  * Parse rate limit error message to extract retry-after time in milliseconds
  * @param {string} errorMessage - Error message from OpenAI API
@@ -103,8 +167,11 @@ function estimateTokens(fetchOptions) {
 
 /**
  * Check if we're exceeding per-minute rate or token limits
+ * MULTI-SESSION: Implements fair-share allocation when multiple sessions are active
+ * @param {Object} fetchOptions - Fetch options
+ * @param {string} sessionId - Optional session ID for per-session tracking
  */
-function checkPerMinuteLimit(fetchOptions = {}) {
+function checkPerMinuteLimit(fetchOptions = {}, sessionId = null) {
   const now = Date.now();
   
   // Reset counters if 1 minute has passed
@@ -113,25 +180,67 @@ function checkPerMinuteLimit(fetchOptions = {}) {
     estimatedTokensUsed = 0;
     globalRequestWindowStart = now;
     tokenWindowStart = now;
+    
+    // Clean up expired session tracking
+    for (const [sid, data] of sessionTokenUsage.entries()) {
+      if (now - data.windowStart >= 60000) {
+        sessionTokenUsage.delete(sid);
+      }
+    }
+    for (const [sid, data] of sessionRequestCounts.entries()) {
+      if (now - data.windowStart >= 60000) {
+        sessionRequestCounts.delete(sid);
+      }
+    }
   }
   
   // Estimate tokens for this request
   const estimatedTokens = estimateTokens(fetchOptions);
   
-  // Check RPM limit
+  // MULTI-SESSION: Fair-share allocation when multiple sessions active
+  const activeSessions = getActiveSessionCount();
+  const fairShareRPM = Math.floor(MAX_REQUESTS_PER_MINUTE / activeSessions);
+  const fairShareTPM = Math.floor(MAX_TOKENS_PER_MINUTE / activeSessions);
+  
+  // Track session request if sessionId provided
+  if (sessionId) {
+    trackSessionRequest(sessionId);
+    const sessionData = sessionRequestCounts.get(sessionId);
+    
+    // Check per-session RPM limit (fair-share)
+    if (sessionData && sessionData.count > fairShareRPM) {
+      const waitTime = 60000 - (now - sessionData.windowStart);
+      if (waitTime > 0) {
+        console.warn(`[RateLimiter] ⚠️ Session ${sessionId} RPM fair-share limit (${sessionData.count}/${fairShareRPM}), waiting ${Math.round(waitTime)}ms`);
+        return waitTime;
+      }
+    }
+    
+    // Check per-session TPM limit (fair-share)
+    const sessionTokenData = sessionTokenUsage.get(sessionId);
+    if (sessionTokenData && sessionTokenData.tokensUsed + estimatedTokens > fairShareTPM) {
+      const waitTime = 60000 - (now - sessionTokenData.windowStart);
+      if (waitTime > 0) {
+        console.warn(`[RateLimiter] ⚠️ Session ${sessionId} TPM fair-share limit (${sessionTokenData.tokensUsed}/${fairShareTPM}), waiting ${Math.round(waitTime)}ms`);
+        return waitTime;
+      }
+    }
+  }
+  
+  // Check global RPM limit (safety check)
   if (globalRequestCount >= MAX_REQUESTS_PER_MINUTE) {
     const waitTime = 60000 - (now - globalRequestWindowStart);
     if (waitTime > 0) {
-      console.warn(`[RateLimiter] ⚠️ RPM limit reached (${globalRequestCount}/${MAX_REQUESTS_PER_MINUTE}), waiting ${Math.round(waitTime)}ms`);
+      console.warn(`[RateLimiter] ⚠️ Global RPM limit reached (${globalRequestCount}/${MAX_REQUESTS_PER_MINUTE}), waiting ${Math.round(waitTime)}ms`);
       return waitTime;
     }
   }
   
-  // Check TPM limit
+  // Check global TPM limit (safety check)
   if (estimatedTokensUsed + estimatedTokens > MAX_TOKENS_PER_MINUTE) {
     const waitTime = 60000 - (now - tokenWindowStart);
     if (waitTime > 0) {
-      console.warn(`[RateLimiter] ⚠️ TPM limit reached (${estimatedTokensUsed}/${MAX_TOKENS_PER_MINUTE}), waiting ${Math.round(waitTime)}ms`);
+      console.warn(`[RateLimiter] ⚠️ Global TPM limit reached (${estimatedTokensUsed}/${MAX_TOKENS_PER_MINUTE}), waiting ${Math.round(waitTime)}ms`);
       return waitTime;
     }
   }
@@ -261,8 +370,11 @@ export async function withRateLimitRetry(apiCall, options = {}) {
  * @returns {Promise<Response>} - Fetch response
  */
 export async function fetchWithRateLimit(url, fetchOptions = {}, retryOptions = {}) {
+  // Extract sessionId from fetchOptions if provided (for multi-session tracking)
+  const sessionId = fetchOptions.sessionId || null;
+  
   // Check per-minute limits BEFORE making request (now we have fetchOptions)
-  const perMinuteWait = checkPerMinuteLimit(fetchOptions);
+  const perMinuteWait = checkPerMinuteLimit(fetchOptions, sessionId);
   if (perMinuteWait > 0) {
     isRateLimited = true;
     // If we have to wait more than 2 seconds, skip the request entirely (return original text)
@@ -295,6 +407,11 @@ export async function fetchWithRateLimit(url, fetchOptions = {}, retryOptions = 
     globalRequestCount++;
     const estimatedTokens = estimateTokens(fetchOptions);
     estimatedTokensUsed += estimatedTokens;
+    
+    // Track session token usage if sessionId provided
+    if (sessionId) {
+      trackSessionTokens(sessionId, estimatedTokens);
+    }
     
     const response = await fetch(url, fetchOptions);
     
@@ -329,6 +446,7 @@ export function isCurrentlyRateLimited() {
 
 /**
  * Get current request statistics
+ * MULTI-SESSION: Includes per-session statistics
  */
 export function getRequestStats() {
   checkDailyLimit();
@@ -336,12 +454,28 @@ export function getRequestStats() {
   const requestsInLastMinute = (now - globalRequestWindowStart < 60000) ? globalRequestCount : 0;
   const tokensInLastMinute = (now - tokenWindowStart < 60000) ? estimatedTokensUsed : 0;
   
+  // Convert session stats to plain objects
+  const sessionStats = {};
+  for (const [sessionId, data] of sessionRequestCounts.entries()) {
+    if (now - data.windowStart < 60000) {
+      const tokenData = sessionTokenUsage.get(sessionId);
+      sessionStats[sessionId] = {
+        requestsLastMinute: data.count,
+        tokensLastMinute: tokenData ? tokenData.tokensUsed : 0,
+        fairShareRPM: Math.floor(MAX_REQUESTS_PER_MINUTE / getActiveSessionCount()),
+        fairShareTPM: Math.floor(MAX_TOKENS_PER_MINUTE / getActiveSessionCount())
+      };
+    }
+  }
+  
   return {
     requestsLastMinute: requestsInLastMinute,
     requestsPerMinuteLimit: MAX_REQUESTS_PER_MINUTE,
     tokensLastMinute: tokensInLastMinute,
     tokensPerMinuteLimit: MAX_TOKENS_PER_MINUTE,
-    isRateLimited: isRateLimited
+    isRateLimited: isRateLimited,
+    activeSessions: getActiveSessionCount(),
+    sessionStats: sessionStats
   };
 }
 

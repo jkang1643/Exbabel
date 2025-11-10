@@ -22,6 +22,10 @@ export async function handleSoloMode(clientWs) {
   let currentTargetLang = 'es';
   let legacySessionId = `session_${Date.now()}`;
   
+  // MULTI-SESSION OPTIMIZATION: Track this session for fair-share allocation
+  // This allows the rate limiter to distribute capacity fairly across sessions
+  const sessionId = legacySessionId;
+  
   // Sequence tracking and RTT measurement
   let sequenceCounter = 0;
   let latestSeqId = -1;
@@ -244,7 +248,8 @@ export async function handleSoloMode(clientWs) {
                             correctedText, // Use corrected text for translation
                             currentSourceLang,
                             currentTargetLang,
-                            process.env.OPENAI_API_KEY
+                            process.env.OPENAI_API_KEY,
+                            sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
                           );
                         } catch (translationError) {
                           // If it's a skip request error (rate limited), use original text silently
@@ -513,7 +518,8 @@ export async function handleSoloMode(clientWs) {
                             capturedText,
                             currentSourceLang,
                             currentTargetLang,
-                            process.env.OPENAI_API_KEY
+                            process.env.OPENAI_API_KEY,
+                            sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
                           );
 
                           // Send translation IMMEDIATELY when ready (don't wait for grammar)

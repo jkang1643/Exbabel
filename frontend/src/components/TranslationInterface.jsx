@@ -315,7 +315,16 @@ function TranslationInterface({ onBackToHome }) {
     }
   }, []);
   
+  // Use ref to track isListening to avoid recreating handleWebSocketMessage
+  const isListeningRef = useRef(false)
+  
+  // Update ref when isListening changes
+  useEffect(() => {
+    isListeningRef.current = isListening
+  }, [isListening])
+  
   // Define message handler with useCallback to prevent re-creation
+  // CRITICAL: Don't include isListening in dependencies - use ref instead to prevent WebSocket reconnection
   const handleWebSocketMessage = useCallback((message) => {
     console.log('[TranslationInterface] 🔔 MESSAGE HANDLER CALLED:', message.type, message.isPartial ? '(PARTIAL)' : '(FINAL)', `seqId: ${message.seqId}`)
     
@@ -700,7 +709,8 @@ function TranslationInterface({ onBackToHome }) {
         console.warn('[TranslationInterface] ⚠️ Warning:', message.message)
         // If we're listening and get a warning about service restarting/timeout, stop listening
         // This allows the user to restart by clicking the button again
-        if (isListening && (message.message.includes('restarting') || message.message.includes('timeout') || message.code === 11)) {
+        // Use ref instead of isListening to avoid dependency issues
+        if (isListeningRef.current && (message.message.includes('restarting') || message.message.includes('timeout') || message.code === 11)) {
           console.log('[TranslationInterface] 🔄 Auto-stopping listening due to service restart/timeout')
           if (handleStopListeningRef.current) {
             handleStopListeningRef.current()
@@ -711,7 +721,8 @@ function TranslationInterface({ onBackToHome }) {
       case 'error':
         console.error('[TranslationInterface] ❌ Translation error:', message.message)
         // Auto-stop listening on errors to allow restart
-        if (isListening) {
+        // Use ref instead of isListening to avoid dependency issues
+        if (isListeningRef.current) {
           console.log('[TranslationInterface] 🔄 Auto-stopping listening due to error')
           if (handleStopListeningRef.current) {
             handleStopListeningRef.current()
@@ -728,25 +739,48 @@ function TranslationInterface({ onBackToHome }) {
       default:
         console.log('[TranslationInterface] ⚠️ Unknown message type:', message.type)
     }
-  }, [commitFinalToHistory, isListening]) // Include dependencies for error handling
+  }, [commitFinalToHistory, sourceLang, targetLang]) // Removed isListening - use ref instead to prevent WebSocket reconnection
+  
+  // CRITICAL: Use refs for functions to prevent WebSocket reconnection on every render
+  // Note: sendMessageRef already declared above (line 59), so we reuse it
+  const handleWebSocketMessageRef = useRef(handleWebSocketMessage)
+  const connectRef = useRef(connect)
+  const addMessageHandlerRef = useRef(addMessageHandler)
+  const disconnectRef = useRef(disconnect)
+  
+  // Update refs when functions change (these are stable from useWebSocket, but update refs anyway)
+  useEffect(() => {
+    handleWebSocketMessageRef.current = handleWebSocketMessage
+  }, [handleWebSocketMessage])
+  
+  // sendMessageRef is already updated at line 186, no need to update again here
+  
+  useEffect(() => {
+    connectRef.current = connect
+    addMessageHandlerRef.current = addMessageHandler
+    disconnectRef.current = disconnect
+  }, [connect, addMessageHandler, disconnect])
   
   useEffect(() => {
     console.log('[TranslationInterface] 🚀 Initializing WebSocket connection')
-    connect()
+    connectRef.current()
     
-    // Add message handler
-    const removeHandler = addMessageHandler(handleWebSocketMessage)
+    // Add message handler using ref to avoid dependency issues
+    // This wrapper function will always call the latest handleWebSocketMessage via ref
+    const removeHandler = addMessageHandlerRef.current((message) => {
+      handleWebSocketMessageRef.current(message)
+    })
     
     // Handle tab visibility changes (background/foreground)
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         console.log('[TranslationInterface] 📴 Tab hidden - notifying server');
-        sendMessage({
+        sendMessageRef.current({
           type: 'client_hidden'
         });
       } else {
         console.log('[TranslationInterface] 📴 Tab visible - notifying server');
-        sendMessage({
+        sendMessageRef.current({
           type: 'client_visible'
         });
       }
@@ -757,10 +791,13 @@ function TranslationInterface({ onBackToHome }) {
     return () => {
       console.log('[TranslationInterface] 🔌 Cleaning up WebSocket')
       removeHandler()
-      disconnect()
+      disconnectRef.current()
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     }
-  }, [handleWebSocketMessage, sendMessage])
+    // CRITICAL: Empty dependency array - only run on mount/unmount
+    // All functions are accessed via refs to ensure we always use the latest versions
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount
 
   useEffect(() => {
     if (connectionState === 'open') {
@@ -790,8 +827,26 @@ function TranslationInterface({ onBackToHome }) {
     if (isListening) {
       console.log('[TranslationInterface] 🔄 Already listening, stopping first to reset...')
       handleStopListening()
-      // Wait a bit for cleanup before restarting
-      await new Promise(resolve => setTimeout(resolve, 500))
+      // Wait longer for cleanup and WebSocket to stabilize
+      await new Promise(resolve => setTimeout(resolve, 800))
+    }
+    
+    // CRITICAL: Ensure WebSocket is connected before proceeding
+    // Check connectionState directly as it's more reliable than isConnected state
+    if (connectionState !== 'open') {
+      console.warn('[TranslationInterface] ⚠️ WebSocket not connected, waiting for connection...')
+      // Wait up to 5 seconds for connection
+      let waitCount = 0
+      while (connectionState !== 'open' && waitCount < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100))
+        waitCount++
+      }
+      
+      if (connectionState !== 'open') {
+        console.error('[TranslationInterface] ❌ WebSocket connection timeout')
+        alert('⚠️ Unable to connect to server. Please refresh the page.')
+        return
+      }
     }
     
     try {
@@ -808,6 +863,13 @@ function TranslationInterface({ onBackToHome }) {
       
       // Enable streaming mode (second parameter = true)
       await startRecording((audioChunk, metadata) => {
+        // CRITICAL: Only send if WebSocket is connected
+        // This prevents errors when audio chunks arrive after stopping
+        if (!isConnected) {
+          console.warn('[TranslationInterface] ⚠️ Skipping audio chunk - WebSocket not connected')
+          return
+        }
+        
         // Send audio chunk to backend in real-time with language information and metadata
         const message = {
           type: 'audio',

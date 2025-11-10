@@ -17,6 +17,7 @@ export function useAudioCapture() {
   const audioProcessorRef = useRef(null)
   const streamRef = useRef(null)
   const stopRecordingRef = useRef(null)
+  const isRecordingActiveRef = useRef(false) // Flag to prevent messages after stopping
 
   const startRecording = useCallback(async (onAudioChunk, streaming = false) => {
     try {
@@ -166,6 +167,12 @@ export function useAudioCapture() {
           
           // Listen for processed audio from worklet (runs on separate thread!)
           workletNode.port.onmessage = (event) => {
+            // CRITICAL: Only process audio if recording is still active
+            // This prevents messages from being sent after stopRecording() is called
+            if (!isRecordingActiveRef.current) {
+              return
+            }
+            
             if (event.data.type === 'audio') {
               // Convert Int16Array to base64
               const pcmData = event.data.data
@@ -203,6 +210,11 @@ export function useAudioCapture() {
           audioProcessorRef.current = processor
           
           processor.onaudioprocess = (e) => {
+            // CRITICAL: Only process audio if recording is still active
+            if (!isRecordingActiveRef.current) {
+              return
+            }
+            
             const inputData = e.inputBuffer.getChannelData(0)
             
             // Convert Float32Array to Int16Array (PCM format)
@@ -257,6 +269,8 @@ export function useAudioCapture() {
         mediaRecorderRef.current.start(100)
       }
       
+      // Set recording active flag BEFORE setIsRecording to prevent race conditions
+      isRecordingActiveRef.current = true
       setIsRecording(true)
 
     } catch (error) {
@@ -266,9 +280,17 @@ export function useAudioCapture() {
   }, [selectedDeviceId, audioSource])
 
   const stopRecording = useCallback(() => {
+    // CRITICAL: Set flag FIRST to stop any pending audio messages
+    isRecordingActiveRef.current = false
+    
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop()
       mediaRecorderRef.current = null
+    }
+
+    // Clear worklet message handler BEFORE disconnecting to prevent race conditions
+    if (audioProcessorRef.current && audioProcessorRef.current.port) {
+      audioProcessorRef.current.port.onmessage = null
     }
 
     // Disconnect audio processor
