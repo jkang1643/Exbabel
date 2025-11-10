@@ -222,7 +222,8 @@ GET /health HTTP/1.1
   "status": "ok",
   "activeSessions": 5,
   "liveTranslationSessions": 3,
-  "model": "gemini-1.5-flash-latest",
+  "transcriptionProvider": "Google Cloud Speech-to-Text",
+  "translationProvider": "OpenAI GPT-4o-mini",
   "endpoint": "/translate"
 }
 ```
@@ -282,7 +283,19 @@ ws://localhost:3001/translate
 {
   "type": "audio",
   "audioData": "base64_encoded_pcm_audio",
+  "chunkIndex": 123,
+  "startMs": 1000,
+  "endMs": 1300,
+  "clientTimestamp": 1234567890000,
   "streaming": true
+}
+```
+
+**Ping (Keep-Alive)**
+```json
+{
+  "type": "ping",
+  "timestamp": 1234567890000
 }
 ```
 
@@ -305,27 +318,35 @@ ws://localhost:3001/translate
 }
 ```
 
-**Gemini Ready**
+**Translation Result (Partial)**
 ```json
 {
-  "type": "gemini_ready",
-  "message": "Ready to receive audio"
-}
-```
-
-**Transcript Received**
-```json
-{
-  "type": "transcript",
-  "text": "Hello everyone, welcome to today's sermon",
+  "type": "translation",
+  "seqId": 123,
+  "serverTimestamp": 1234567890000,
+  "isPartial": true,
+  "originalText": "Hello everyone, welcome",
+  "translatedText": "Hola a todos, bienvenidos",
+  "correctedText": "Hello everyone, welcome.",
+  "hasTranslation": true,
+  "hasCorrection": true,
+  "updateType": "grammar",
   "timestamp": 1234567890000
 }
 ```
 
-**Turn Complete**
+**Translation Result (Final)**
 ```json
 {
-  "type": "turn_complete",
+  "type": "translation",
+  "seqId": 124,
+  "serverTimestamp": 1234567890000,
+  "isPartial": false,
+  "originalText": "Hello everyone, welcome to today's sermon",
+  "translatedText": "Hola a todos, bienvenidos al sermón de hoy",
+  "correctedText": "Hello everyone, welcome to today's sermon.",
+  "hasTranslation": true,
+  "hasCorrection": true,
   "timestamp": 1234567890000
 }
 ```
@@ -369,14 +390,47 @@ ws://localhost:3001/translate
 }
 ```
 
-**Translation Received**
+**Translation Received (Partial)**
 ```json
 {
   "type": "translation",
+  "seqId": 123,
+  "serverTimestamp": 1234567890000,
+  "isPartial": true,
   "originalText": "Hello everyone, welcome",
   "translatedText": "Hola a todos, bienvenidos",
+  "correctedText": "Hello everyone, welcome.",
   "sourceLang": "en",
   "targetLang": "es",
+  "hasTranslation": true,
+  "hasCorrection": true,
+  "updateType": "grammar",
+  "timestamp": 1234567890000
+}
+```
+
+**Translation Received (Final)**
+```json
+{
+  "type": "translation",
+  "seqId": 124,
+  "serverTimestamp": 1234567890000,
+  "isPartial": false,
+  "originalText": "Hello everyone, welcome to today's sermon",
+  "translatedText": "Hola a todos, bienvenidos al sermón de hoy",
+  "correctedText": "Hello everyone, welcome to today's sermon.",
+  "sourceLang": "en",
+  "targetLang": "es",
+  "hasTranslation": true,
+  "hasCorrection": true,
+  "timestamp": 1234567890000
+}
+```
+
+**Pong (Keep-Alive Response)**
+```json
+{
+  "type": "pong",
   "timestamp": 1234567890000
 }
 ```
@@ -481,11 +535,20 @@ The following language codes are supported:
 
 ## 📊 Rate Limits
 
-Current implementation has no explicit rate limits, but consider:
+### OpenAI API Rate Limits
+- **Requests Per Minute (RPM):** 4,500 requests/minute (with 10% safety margin)
+- **Tokens Per Minute (TPM):** 1,800,000 tokens/minute (with 10% safety margin)
+- **Retry Strategy:** Exponential backoff with up to 5 retries
+- **Request Skipping:** Requests skipped if wait time exceeds 2 seconds
 
-- **Gemini API limits** apply to transcription/translation
-- **WebSocket connections** limited by server resources
-- **Session creation** should be rate-limited in production
+### Google Speech-to-Text Limits
+- **Streaming Duration:** 5 minutes maximum (auto-restarts at 4 minutes)
+- **VAD Cutoff:** Auto-restarts at 25 seconds to prevent aggressive VAD
+- **Concurrent Streams:** Limited by Google Cloud quota
+
+### WebSocket Connections
+- **Concurrent Sessions:** Limited by server resources
+- **Session Cleanup:** Inactive sessions cleaned up after 1 hour
 
 ---
 
@@ -497,10 +560,11 @@ Current implementation has no explicit rate limits, but consider:
 2. Connect WebSocket with role=host
 3. Send init message with sourceLang
 4. Wait for session_ready
-5. Wait for gemini_ready
-6. Send audio chunks continuously
-7. Receive transcripts
-8. Disconnect to end session
+5. Google Speech stream initializes automatically
+6. Send audio chunks continuously (with chunkIndex, timestamps)
+7. Receive translation results (partial and final)
+8. Send ping messages periodically for keep-alive
+9. Disconnect to end session
 ```
 
 ### Listener Flow
@@ -553,11 +617,48 @@ curl http://localhost:3001/health
 
 ## 📝 Notes
 
+### Architecture
+- **Transcription:** Google Cloud Speech-to-Text (71 languages supported)
+- **Translation:** OpenAI GPT-4o-mini (131+ languages supported)
+- **Grammar Correction:** OpenAI GPT-4o-mini (English only)
+- **Processing:** Parallel transcription, translation, and grammar correction
+
+### Message Format
 - All timestamps are Unix timestamps in milliseconds
 - Session codes are 6 characters, case-insensitive
 - WebSocket messages must be valid JSON
-- Audio data should be base64-encoded PCM format (16kHz, 16-bit, mono)
-- Inactive sessions are cleaned up after 1 hour
+- Sequence IDs (`seqId`) ensure message ordering
+- Partial results (`isPartial: true`) are live updates
+- Final results (`isPartial: false`) are complete sentences
+
+### Audio Format
+- **Encoding:** LINEAR16 PCM
+- **Sample Rate:** 24kHz (24,000 Hz)
+- **Channels:** Mono (1 channel)
+- **Chunk Size:** 300ms chunks with 500ms overlap
+- **Format:** Base64-encoded Int16 PCM data
+
+### Processing Flow
+1. **Partial Results (DECOUPLED):**
+   - Translation sent immediately when ready
+   - Grammar correction sent separately when ready
+   - Frontend merges updates incrementally
+
+2. **Final Results (COUPLED):**
+   - Translation and grammar run in parallel
+   - Wait for both to complete
+   - Single message with complete data
+
+### Language Support
+- **Transcription:** 71 languages (Google Speech-to-Text maximum)
+- **Translation:** 131+ languages (GPT-4o-mini comprehensive support)
+- See `LANGUAGE_EXPANSION_COMPLETE.md` for full language list
+
+### Performance
+- **Latency:** 600-2000ms end-to-end for partial results
+- **Update Frequency:** Character-by-character updates (1-2 chars)
+- **Concurrency:** Up to 5 parallel translation requests
+- **Rate Limits:** 4,500 RPM / 1.8M TPM (with automatic retry)
 
 ---
 

@@ -43,8 +43,15 @@ const getWebSocketUrl = () => {
   return `ws://${hostname}:3001`;
 };
 
+// Get the frontend app URL for QR code generation
+// Uses VITE_APP_URL if set (for production), otherwise falls back to window.location.origin
+const getAppUrl = () => {
+  return import.meta.env.VITE_APP_URL || window.location.origin;
+};
+
 const API_URL = import.meta.env.VITE_API_URL || getBackendUrl();
 const WS_URL = import.meta.env.VITE_WS_URL || getWebSocketUrl();
+const APP_URL = getAppUrl();
 
 const LANGUAGES = TRANSCRIPTION_LANGUAGES; // Host speaks - needs transcription support
 
@@ -111,8 +118,10 @@ export function HostPage({ onBackToHome }) {
         setSessionId(data.sessionId);
         setSessionCode(data.sessionCode);
         
-        // Generate QR code with join URL
-        const joinUrl = `${window.location.origin}?join=${data.sessionCode}`;
+        // Generate QR code with join URL using configured app URL
+        // This ensures QR codes work on mobile devices by using the production domain
+        const joinUrl = `${APP_URL}?join=${data.sessionCode}`;
+        console.log('[HostPage] Generated QR code URL:', joinUrl);
         const qrUrl = await QRCode.toDataURL(joinUrl, {
           width: 300,
           margin: 2,

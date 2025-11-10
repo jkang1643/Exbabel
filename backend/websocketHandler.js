@@ -349,6 +349,15 @@ export async function handleHostConnection(clientWs, sessionId) {
     attachGeminiHandlers(geminiWs);
     sessionStore.setHost(sessionId, clientWs, geminiWs);
     
+    // Send initial session stats to host
+    if (clientWs.readyState === WebSocket.OPEN) {
+      const stats = sessionStore.getSessionStats(sessionId);
+      clientWs.send(JSON.stringify({
+        type: 'session_stats',
+        stats: stats
+      }));
+    }
+    
     console.log(`[Host] Session ${session.sessionCode} is now active`);
   } catch (error) {
     console.error('[Host] Initialization error:', error);
@@ -384,6 +393,16 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
     // Add listener to session
     sessionStore.addListener(sessionId, socketId, clientWs, targetLang, userName);
     
+    // Notify host about new listener
+    const hostSocket = session.hostSocket;
+    if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
+      const stats = sessionStore.getSessionStats(sessionId);
+      hostSocket.send(JSON.stringify({
+        type: 'session_stats',
+        stats: stats
+      }));
+    }
+    
     // Send welcome message
     if (clientWs.readyState === WebSocket.OPEN) {
       clientWs.send(JSON.stringify({
@@ -413,6 +432,16 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       console.log(`[Listener] ${userName} disconnected`);
       clearInterval(statsInterval);
       sessionStore.removeListener(sessionId, socketId);
+      
+      // Notify host about listener leaving
+      const updatedSession = sessionStore.getSession(sessionId);
+      if (updatedSession && updatedSession.hostSocket && updatedSession.hostSocket.readyState === WebSocket.OPEN) {
+        const stats = sessionStore.getSessionStats(sessionId);
+        updatedSession.hostSocket.send(JSON.stringify({
+          type: 'session_stats',
+          stats: stats
+        }));
+      }
     });
 
     // Handle listener messages (if any)
@@ -429,6 +458,16 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           
           // Add to new language group
           sessionStore.addListener(sessionId, socketId, clientWs, message.targetLang, userName);
+          
+          // Notify host about language change
+          const updatedSession = sessionStore.getSession(sessionId);
+          if (updatedSession && updatedSession.hostSocket && updatedSession.hostSocket.readyState === WebSocket.OPEN) {
+            const stats = sessionStore.getSessionStats(sessionId);
+            updatedSession.hostSocket.send(JSON.stringify({
+              type: 'session_stats',
+              stats: stats
+            }));
+          }
           
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({

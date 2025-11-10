@@ -19,3 +19,10 @@ VITE_WS_URL=ws://YOUR_EC2_IP/translate
 # VITE_API_URL=https://api.yourdomain.com
 # VITE_WS_URL=wss://api.yourdomain.com/translate
 
+# ===================================
+# Frontend App URL (for QR codes)
+# ===================================
+# This is the public URL where your frontend is hosted
+# QR codes will use this URL so mobile devices can join sessions
+VITE_APP_URL=https://app.exbabel.com
+

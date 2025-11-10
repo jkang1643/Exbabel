@@ -209,6 +209,7 @@ cd frontend
 cat > .env.production << EOF
 VITE_API_URL=https://api.exbabel.com
 VITE_WS_URL=wss://api.exbabel.com/translate
+VITE_APP_URL=https://app.exbabel.com
 EOF
 
 # Build

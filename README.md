@@ -1,37 +1,45 @@
 # Exbabel
 
-A production-quality web application that performs **real-time speech translation** using the **Google Gemini Realtime API**. The app captures live microphone input, streams it to the Gemini API, and displays translated text with optional audio playback.
+A production-quality web application that performs **real-time speech translation** using **Google Cloud Speech-to-Text** for transcription and **OpenAI GPT-4o-mini** for translation and grammar correction. The app captures live microphone input, streams it to Google Speech, and displays translated text with parallel grammar correction.
 
 ## 🚀 Features
 
 - **🎙️ Live Streaming Translation** - Real-time translation as you speak (perfect for conferences!)
-- **📡 Continuous Audio Streaming** - Audio sent in 2-second chunks for live updates
-- **🌍 Multi-language support** (10+ languages)
+- **📡 Continuous Audio Streaming** - Audio sent in 300ms chunks with 500ms overlap for smooth updates
+- **🌍 Multi-language support** - 71 transcription languages, 131+ translation languages
+- **✏️ Parallel Grammar Correction** - Real-time grammar correction for English (non-blocking)
 - **📝 Live captions** showing both original and translated text
-- **🔊 Audio playback** for translated speech
 - **💬 Text demo mode** for testing without microphone
-- **⚡ Low latency** WebSocket communication
+- **⚡ Ultra-low latency** - Character-by-character updates (1-2 chars)
+- **🔄 Parallel Processing** - Translation and grammar run in parallel for speed
 - **🎨 Modern UI** with Tailwind CSS and smooth animations
 - **📊 Connection status** and latency monitoring
 - **💾 Transcript download** functionality
 - **🔴 LIVE badge** indicator during active streaming
+- **👥 Multi-user sessions** - Host/listener mode for conferences
 
 ## 🏗️ Architecture
 
 ```
-Frontend (React) ←→ WebSocket ←→ Node.js Backend ←→ Gemini Realtime API
+Frontend (React) ←→ WebSocket ←→ Node.js Backend
+                                      ├─→ Google Cloud Speech-to-Text (Transcription)
+                                      └─→ OpenAI GPT-4o-mini (Translation + Grammar)
 ```
 
 - **Frontend**: React + Vite + Tailwind CSS
 - **Backend**: Node.js + Express + WebSocket
-- **AI**: Google Gemini Realtime API
+- **Transcription**: Google Cloud Speech-to-Text (71 languages)
+- **Translation**: OpenAI GPT-4o-mini (131+ languages)
+- **Grammar**: OpenAI GPT-4o-mini (English only, parallel processing)
 - **Communication**: WebSocket for real-time data streaming
+- **Processing**: Parallel transcription, translation, and grammar correction
 
 ## 📋 Prerequisites
 
 - Node.js 18+ 
 - npm or yarn
-- Google Gemini API key
+- Google Cloud Speech-to-Text API key or service account
+- OpenAI API key
 - Modern browser with microphone access
 
 ## 🛠️ Installation
@@ -54,9 +62,16 @@ Frontend (React) ←→ WebSocket ←→ Node.js Backend ←→ Gemini Realtime 
    cp env.example .env
    ```
    
-   Edit `.env` and add your Gemini API key:
+   Edit `.env` and add your API keys:
    ```
-   GEMINI_API_KEY=your_gemini_api_key_here
+   # Google Cloud Speech-to-Text (choose one):
+   GOOGLE_SPEECH_API_KEY=your_google_api_key_here
+   # OR
+   GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+   
+   # OpenAI API
+   OPENAI_API_KEY=your_openai_api_key_here
+   
    PORT=3001
    ```
    
@@ -67,11 +82,16 @@ Frontend (React) ←→ WebSocket ←→ Node.js Backend ←→ Gemini Realtime 
    VITE_WS_URL=ws://localhost:3001
    ```
 
-4. **Get a Gemini API key**
-   - Visit [Google AI Studio](https://aistudio.google.com/)
-   - Create a new project
-   - Generate an API key
-   - Add it to your `.env` file
+4. **Get API keys**
+   - **Google Cloud Speech-to-Text:**
+     - Visit [Google Cloud Console](https://console.cloud.google.com/)
+     - Enable Speech-to-Text API
+     - Create API key or service account JSON
+     - Add to `.env` file
+   - **OpenAI:**
+     - Visit [OpenAI Platform](https://platform.openai.com/)
+     - Create API key
+     - Add to `.env` file
 
 ## 🚀 Running the Application
 
@@ -115,26 +135,32 @@ npm start
 ## 🔧 Configuration
 
 ### Language Support
-The app supports 53+ languages including:
-- **European**: English, Spanish, French, German, Italian, Portuguese, Russian, Polish, Dutch, Turkish, Greek, Romanian, Hungarian, Czech, Slovak, Bulgarian, Croatian, Serbian, Ukrainian, and more
-- **Asian**: Chinese (Simplified & Traditional), Japanese, Korean, Hindi, Bengali, Tamil, Telugu, Thai, Vietnamese, Indonesian, Filipino, Malay, and more
-- **Middle Eastern**: Arabic, Persian, Hebrew, Urdu
-- **Other**: Swahili, Afrikaans, Catalan, and more
+
+**Transcription (71 languages):** Google Cloud Speech-to-Text maximum
+- English, Spanish, French, German, Italian, Portuguese, Russian, Japanese, Korean, Chinese, Arabic, Hindi, and 60+ more
+
+**Translation (131+ languages):** GPT-4o-mini comprehensive support
+- All 71 transcription languages PLUS 60+ additional languages
+- Includes Esperanto, Latin, Yiddish, and many more
+
+See `LANGUAGE_EXPANSION_COMPLETE.md` for the complete language list.
 
 ### Audio Settings
-- **Sample Rate**: 16kHz (optimized for speech)
+- **Sample Rate**: 24kHz (optimized for speech)
 - **Channels**: Mono
-- **Format**: WebM with Opus codec
-- **Chunk Size**: 2 seconds (for streaming)
+- **Format**: LINEAR16 PCM
+- **Chunk Size**: 300ms chunks with 500ms overlap
 - **Echo Cancellation**: Enabled
 - **Noise Suppression**: Enabled
 - **Auto Gain Control**: Enabled
 
 ### Streaming Configuration
-- **Update Frequency**: Every 2 seconds
-- **Mode**: Continuous streaming (not batch)
-- **Latency**: ~1-3 seconds total
-- See `STREAMING_TRANSLATION.md` for detailed configuration options
+- **Update Frequency**: Character-by-character (1-2 chars)
+- **Mode**: Continuous streaming with parallel processing
+- **Latency**: 600-2000ms end-to-end for partial results
+- **Translation Throttle**: 0ms (instant)
+- **Grammar Throttle**: 2000ms (non-blocking)
+- See `STREAMING_LATENCY_PARAMETERS.md` for detailed configuration
 
 ## 📁 Project Structure
 
@@ -250,9 +276,10 @@ exbabel/
    - Check browser console for errors
 
 3. **Translation not working**
-   - Verify Gemini API key is correct
-   - Check API quota limits
+   - Verify OpenAI API key is correct
+   - Check OpenAI API quota limits (4,500 RPM / 1.8M TPM)
    - Ensure internet connection
+   - Check rate limiter logs for throttling
 
 4. **Audio playback issues**
    - Check browser audio permissions
@@ -268,25 +295,37 @@ localStorage.setItem('debug', 'true')
 ## 🔒 Security
 
 - API keys are never exposed to the frontend
-- All Gemini communication goes through the backend
+- All Google Speech and OpenAI communication goes through the backend
 - WebSocket connections are validated
 - Audio data is processed securely
+- Rate limiting prevents API abuse
 
 ## 📈 Performance
 
-- **Streaming Latency**: 1-3 seconds for live audio translation
-- **Text Latency**: < 500ms for text-only translation
-- **Audio Chunks**: 2-second segments for optimal balance
-- **Bandwidth**: ~8-12 KB per 2-second audio chunk
-- **Memory**: Optimized for long-running sessions (chunks not accumulated)
+- **Streaming Latency**: 600-2000ms end-to-end for partial results
+- **Update Frequency**: Character-by-character (1-2 chars)
+- **Translation Latency**: 200-800ms (decoupled from grammar)
+- **Grammar Latency**: 100-500ms (non-blocking, sent separately)
+- **Audio Chunks**: 300ms segments with 500ms overlap
+- **Bandwidth**: ~8-12 KB per 300ms audio chunk
+- **Memory**: Optimized for long-running sessions (~50-100MB per session)
 - **CPU**: Low impact (browser handles audio encoding)
 - **Concurrent Sessions**: Supports multiple simultaneous users
+- **Parallel Processing**: Translation and grammar run in parallel
+- **Rate Limits**: 4,500 RPM / 1.8M TPM with automatic retry
 
 ## 🚀 Deployment
 
 ### Environment Variables
 ```bash
-GEMINI_API_KEY=your_api_key
+# Google Cloud Speech-to-Text (choose one):
+GOOGLE_SPEECH_API_KEY=your_api_key
+# OR
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+
+# OpenAI API
+OPENAI_API_KEY=your_openai_api_key
+
 PORT=3001
 NODE_ENV=production
 ```
@@ -333,17 +372,28 @@ This software and all associated intellectual property, including but not limite
 
 - [x] **Live streaming translation** (✅ Completed!)
 - [x] **Continuous audio chunking** (✅ Completed!)
+- [x] **Parallel grammar correction** (✅ Completed!)
+- [x] **Multi-user sessions** (✅ Completed!)
+- [x] **Language expansion** (✅ 71 transcription, 131+ translation!)
+- [x] **Ultra-low latency** (✅ Character-by-character updates!)
 - [ ] Voice Activity Detection (VAD) for smart chunking
-- [ ] Multi-user sessions
 - [ ] Language auto-detection
 - [ ] Custom voice models
 - [ ] Offline mode
 - [ ] Mobile app
-- [ ] Sentence boundary detection
-- [ ] Translation merging for coherent output
 - [ ] Translation history and search
 - [ ] Custom language models
 
 ---
 
-**Built with ❤️ using React, Node.js, and Google Gemini AI**
+## 📚 Documentation
+
+- **API_REFERENCE.md** - Complete API documentation
+- **ARCHITECTURE.md** - System architecture and processing flow
+- **STREAMING_LATENCY_PARAMETERS.md** - All latency-related parameters
+- **OPTIMIZATIONS_STATUS.md** - Optimization implementation status
+- **LANGUAGE_EXPANSION_COMPLETE.md** - Language support details
+
+---
+
+**Built with ❤️ using React, Node.js, Google Cloud Speech-to-Text, and OpenAI GPT-4o-mini**
