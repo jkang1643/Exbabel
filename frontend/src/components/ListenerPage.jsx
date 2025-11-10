@@ -225,7 +225,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const correctedText = message.correctedText;
               const originalText = message.originalText || '';
               const textToDisplay = correctedText && correctedText.trim() ? correctedText : originalText;
-              const translatedText = message.translatedText || textToDisplay;
+              // CRITICAL: Only use translatedText if hasTranslation is true - never fallback to English
+              const translatedText = message.hasTranslation ? (message.translatedText || undefined) : undefined;
               const now = Date.now();
               
               // Always update original text immediately (transcription, then corrected when available)
@@ -247,8 +248,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               console.log(`[ListenerPage] 🔍 Partial: hasTranslation=${message.hasTranslation}, msgTarget=${message.targetLang}, myTarget=${targetLang}, shouldUpdate=${shouldUpdateTranslation}`);
               
               if (shouldUpdateTranslation) {
+                // OPTIMIZATION: For transcription mode (same language), use correctedText if available
+                // For translation mode, use translatedText; for transcription mode, use correctedText or originalText
+                let textToDisplay = isTranscriptionMode 
+                  ? (correctedText && correctedText.trim() ? correctedText : originalText)
+                  : translatedText;
+                
                 // Process translated text through segmenter (auto-flushes complete sentences)
-                const { liveText } = segmenterRef.current.processPartial(translatedText);
+                const { liveText } = segmenterRef.current.processPartial(textToDisplay);
                 
                 // Store the segmented text
                 pendingTextRef.current = liveText;
@@ -256,10 +263,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 // Handle streaming incremental updates with faster throttling
                 const isIncremental = message.isIncremental || false;
                 
+                // OPTIMIZATION: Faster throttling for transcription mode (same as translation mode)
                 // THROTTLE: Streaming updates get faster throttling (20-30ms) vs normal (50ms)
-                const throttleMs = isIncremental 
-                  ? (translatedText.length > 300 ? 20 : 30) // Streaming: faster updates
-                  : 50; // Non-streaming: normal updates
+                // For transcription mode, use faster throttling even if not incremental
+                const throttleMs = isTranscriptionMode
+                  ? 20 // Fast updates for transcription mode (same as streaming)
+                  : (isIncremental 
+                      ? (translatedText.length > 300 ? 20 : 30) // Streaming: faster updates
+                      : 50); // Non-streaming: normal updates
                 
                 const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
                 

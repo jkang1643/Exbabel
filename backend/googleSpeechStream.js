@@ -191,8 +191,8 @@ export class GoogleSpeechStream {
         sampleRateHertz: 24000, // Match frontend audio capture
         languageCode: this.languageCode,
         enableAutomaticPunctuation: true,
-        useEnhanced: true,
-        model: 'latest_long', // Use latest_long model for best accuracy (better for long-form)
+        useEnhanced: true, // Enhanced version of Chirp 3
+        model: 'latest_long', // Enhanced Chirp 3 model for best accuracy (better for long-form)
         alternativeLanguageCodes: [],
       },
       interimResults: true, // CRITICAL: Enable partial results

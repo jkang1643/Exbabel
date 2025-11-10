@@ -15,6 +15,7 @@
  */
 
 import fetch from 'node-fetch';
+import { fetchWithRateLimit, isCurrentlyRateLimited } from './openaiRateLimiter.js';
 
 const LANGUAGE_NAMES = {
   'en': 'English',
@@ -80,6 +81,17 @@ export class PartialTranslationWorker {
     this.pendingRequests = new Map(); // Track pending requests for cancellation
     this.MAX_CACHE_SIZE = 200; // Larger cache for partials
     this.CACHE_TTL = 120000; // 2 minutes cache for partials (longer since partials repeat)
+    
+    // Throttling configuration for partial translations
+    this.THROTTLE_MS = 2000; // Throttle to ~1 request every 2 seconds (was 800ms)
+    this.GROWTH_THRESHOLD = 25; // Wait until text grows by 25 chars or punctuation appears (was 15)
+    this.lastPartialRequestTime = 0;
+    this.pendingPartialBuffer = null;
+    this.pendingPartialTimeout = null;
+    this.pendingPartialResolvers = new Map();
+    this.rateLimitDetected = false; // Circuit breaker flag
+    this.isFirstTranslation = true; // Track if this is the first translation (instant for first sentence)
+    this.rateLimitCooldownUntil = 0; // When to resume after rate limit
   }
 
   /**
@@ -109,7 +121,7 @@ export class PartialTranslationWorker {
     try {
       console.log(`[PartialWorker] ⚡ Streaming translation: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
 
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -140,11 +152,6 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
         }),
         signal: signal
       });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
-      }
 
       let fullTranslation = '';
       let buffer = '';
@@ -250,13 +257,51 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
   }
 
   /**
-   * Fast translation for partial text - optimized for latency (non-streaming fallback)
-   * Uses GPT-4o-mini or GPT-3.5-turbo for speed
+   * Check if text has sentence-ending punctuation (indicates natural pause)
+   * @param {string} text - Text to check
+   * @returns {boolean} - True if text ends with sentence punctuation
    */
-  async translatePartial(text, sourceLang, targetLang, apiKey) {
+  hasSentencePunctuation(text) {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return false;
+    const lastChar = trimmed[trimmed.length - 1];
+    return lastChar === '.' || lastChar === '!' || lastChar === '?' || lastChar === ';';
+  }
+
+  /**
+   * Mark rate limit detected (circuit breaker)
+   */
+  markRateLimitDetected() {
+    this.rateLimitDetected = true;
+    this.rateLimitCooldownUntil = Date.now() + 60000; // Cooldown for 1 minute
+    console.warn('[PartialWorker] 🚨 Rate limit detected - entering cooldown mode (reduced concurrency)');
+    
+    // Auto-reset after cooldown
+    setTimeout(() => {
+      this.rateLimitDetected = false;
+      console.log('[PartialWorker] ✅ Rate limit cooldown expired - resuming normal operation');
+    }, 60000);
+  }
+
+  /**
+   * Process batched partial translation (internal method)
+   * @param {string} text - Text to translate
+   * @param {string} sourceLang - Source language code
+   * @param {string} targetLang - Target language code
+   * @param {string} apiKey - OpenAI API key
+   * @returns {Promise<string>} - Translated text
+   */
+  async _processPartialTranslation(text, sourceLang, targetLang, apiKey) {
     // REAL-TIME INSTANT: Allow translation of absolute minimum text
     if (!text || text.length < 1) {
       return text; // Too short to translate (minimum 1 char)
+    }
+
+    // Check if we're in cooldown mode
+    if (this.rateLimitDetected && Date.now() < this.rateLimitCooldownUntil) {
+      const waitTime = this.rateLimitCooldownUntil - Date.now();
+      console.log(`[PartialWorker] ⏸️ In cooldown mode, waiting ${Math.round(waitTime)}ms before retry`);
+      await new Promise(resolve => setTimeout(resolve, Math.min(waitTime, 5000))); // Max 5s wait
     }
 
     // CRITICAL: For long extending text, cache key must include full text length or suffix
@@ -280,12 +325,23 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       const cached = this.cache.get(cacheKey);
       // CRITICAL: Also check if cached text length matches current text length
       // If text has extended, cache hit is invalid - need new translation
-      if (Date.now() - cached.timestamp < this.CACHE_TTL && cached.text.length >= text.length * 0.9) {
+      // ALSO validate that cached text is different from original (prevents English leak)
+      const isCachedSameAsOriginal = cached.text === text || 
+                                      cached.text.trim() === text.trim() ||
+                                      cached.text.toLowerCase() === text.toLowerCase();
+      
+      if (Date.now() - cached.timestamp < this.CACHE_TTL && 
+          cached.text.length >= text.length * 0.9 && 
+          !isCachedSameAsOriginal) {
         console.log(`[PartialWorker] ✅ Cache hit for partial`);
         return cached.text;
-      } else if (cached.text.length < text.length * 0.9) {
-        // Text has extended significantly - remove stale cache entry
-        console.log(`[PartialWorker] 🗑️ Cache entry too short (${cached.text.length} vs ${text.length} chars) - invalidating`);
+      } else if (cached.text.length < text.length * 0.9 || isCachedSameAsOriginal) {
+        // Text has extended significantly OR cache contains English - remove stale cache entry
+        if (isCachedSameAsOriginal) {
+          console.log(`[PartialWorker] 🗑️ Cache entry contains English (invalid) - invalidating`);
+        } else {
+          console.log(`[PartialWorker] 🗑️ Cache entry too short (${cached.text.length} vs ${text.length} chars) - invalidating`);
+        }
         this.cache.delete(cacheKey);
       }
     }
@@ -313,9 +369,8 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       }
     }
     
-    // Increased concurrency for real-time updates - allow more parallel requests
-    // Higher limit enables 1-2 char updates without excessive cancellations
-    const MAX_CONCURRENT = 5; // Increased from 2 to allow more concurrent translations
+    // Reduced concurrency when rate limits detected to prevent bursts
+    const MAX_CONCURRENT = this.rateLimitDetected ? 1 : 2; // Reduce to 1 if rate limited, otherwise 2
     
     // Smart cancellation: Only cancel on true resets, not on extensions
     // With MAX_CONCURRENT = 5, we can allow more parallel requests for real-time updates
@@ -358,7 +413,7 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       console.log(`[PartialWorker] 📝 FULL TEXT INPUT TO API (${text.length} chars): "${text}"`);
 
       // Use GPT-4o-mini for fast partials (faster and cheaper than GPT-4o)
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -398,18 +453,30 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
         }
       }
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
-      }
-
       const result = await response.json();
       
       if (!result.choices || result.choices.length === 0) {
         throw new Error('No translation result from OpenAI');
       }
 
-      const translatedText = result.choices[0].message.content.trim() || text;
+      const rawTranslatedText = result.choices[0].message.content.trim();
+      
+      // CRITICAL: Never fallback to English - if API returns empty, throw error instead
+      if (!rawTranslatedText || rawTranslatedText.length === 0) {
+        throw new Error('Translation API returned empty result');
+      }
+      
+      // CRITICAL: Validate that translation is actually different from original (prevents English leak)
+      const translatedText = rawTranslatedText;
+      const isSameAsOriginal = translatedText === text || 
+                               translatedText.trim() === text.trim() ||
+                               translatedText.toLowerCase() === text.toLowerCase();
+      
+      if (isSameAsOriginal) {
+        console.warn(`[PartialWorker] ⚠️ Translation matches original (likely English leak): "${translatedText.substring(0, 60)}..."`);
+        throw new Error('Translation returned same as original (likely English)');
+      }
+      
       console.log(`[PartialWorker] ✅ FULL TRANSLATION OUTPUT FROM API (${translatedText.length} chars): "${translatedText}"`);
       
       // CRITICAL: Check if response was truncated
@@ -419,6 +486,8 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
         console.error(`[PartialWorker] Original: ${text.length} chars, Translated: ${translatedText.length} chars`);
         console.error(`[PartialWorker] Original end: "...${text.substring(Math.max(0, text.length - 150))}"`);
         console.error(`[PartialWorker] Translated end: "...${translatedText.substring(Math.max(0, translatedText.length - 150))}"`);
+        // CRITICAL: Throw error for truncated translations - caller should wait for longer partial or retry
+        throw new Error(`Translation truncated (finish_reason: length) - text too long (${text.length} chars)`);
       } else {
         console.log(`[PartialWorker] ✅ Translation complete (finish_reason: ${finishReason})`);
       }
@@ -448,11 +517,144 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
 
       if (error.name === 'AbortError') {
         console.log(`[PartialWorker] 🚫 Translation aborted (newer text arrived)`);
-        return text; // Return original on abort
+        throw error; // Re-throw abort errors - don't return English
+      }
+
+      // Check if it's a rate limit error and activate circuit breaker
+      if (error.message && (error.message.includes('rate limit') || error.message.includes('TPM') || error.message.includes('RPM'))) {
+        this.markRateLimitDetected();
       }
 
       console.error(`[PartialWorker] Translation error:`, error.message);
-      return text; // Fallback to original
+      throw error; // Don't return English as fallback - let caller handle error
+    }
+  }
+
+  /**
+   * Fast translation for partial text - optimized for latency with throttling
+   * Uses GPT-4o-mini or GPT-3.5-turbo for speed
+   */
+  async translatePartial(text, sourceLang, targetLang, apiKey) {
+    // REAL-TIME INSTANT: Allow translation of absolute minimum text
+    if (!text || text.length < 1) {
+      throw new Error('Text too short to translate'); // Don't return English
+    }
+
+    if (!apiKey) {
+      console.error('[PartialWorker] ERROR: No API key provided');
+      throw new Error('No API key provided'); // Don't return English
+    }
+
+    // Skip API call if rate limited - throw error instead of returning English
+    if (isCurrentlyRateLimited()) {
+      console.log(`[PartialWorker] ⏸️ Rate limited - skipping translation`);
+      throw new Error('Rate limited - cannot translate'); // Don't return English
+    }
+
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastPartialRequestTime;
+    const textGrowth = this.pendingPartialBuffer 
+      ? text.length - this.pendingPartialBuffer.length 
+      : text.length;
+    
+    // OPTIMIZATION: First sentence gets instant translation (no throttling)
+    // This ensures the first words appear immediately, keeping translation in sync with transcription
+    const isFirstSentence = this.isFirstTranslation;
+    
+    // OPTIMIZATION: For short text (< 50 chars), use instant translation with minimal throttling
+    // This keeps translation in sync with fast transcription for short phrases
+    const isShortText = text.length < 50;
+    const SHORT_TEXT_THROTTLE_MS = 100; // Very short throttle for short text (100ms)
+    const SHORT_TEXT_GROWTH_THRESHOLD = 5; // Small growth threshold for short text (5 chars)
+    
+    // Check if we should send immediately:
+    // FIRST SENTENCE: Always instant (no throttling) - critical for UX
+    // For short text: Use much lower thresholds for instant feel
+    // For long text: Use normal throttling to avoid API spam
+    const hasPunctuation = this.hasSentencePunctuation(text);
+    const throttleMs = isFirstSentence ? 0 : (isShortText ? SHORT_TEXT_THROTTLE_MS : this.THROTTLE_MS);
+    const growthThreshold = isFirstSentence ? 1 : (isShortText ? SHORT_TEXT_GROWTH_THRESHOLD : this.GROWTH_THRESHOLD);
+    
+    const shouldSendImmediately = isFirstSentence || // FIRST SENTENCE: Always instant
+                                   timeSinceLastRequest >= throttleMs ||
+                                   textGrowth >= growthThreshold ||
+                                   hasPunctuation ||
+                                   this.rateLimitDetected; // Skip throttling if rate limited (circuit breaker active)
+
+    if (shouldSendImmediately) {
+      // Clear any pending timeout
+      if (this.pendingPartialTimeout) {
+        clearTimeout(this.pendingPartialTimeout);
+        this.pendingPartialTimeout = null;
+      }
+
+      // Don't cancel pending promises - let them complete naturally
+      // The API abort controller handles actual request cancellation
+      // Multiple concurrent translations for extending text are fine and improve UX
+      // Only the timeout-based throttled promises need clearing (handled above)
+
+      // Update buffer and send request
+      this.pendingPartialBuffer = text;
+      this.lastPartialRequestTime = now;
+      
+      // Mark that first translation is complete (after we start processing)
+      if (this.isFirstTranslation) {
+        this.isFirstTranslation = false;
+      }
+
+      // Process the translation
+      return await this._processPartialTranslation(text, sourceLang, targetLang, apiKey);
+    } else {
+      // Throttle: buffer the request and schedule it
+      const bufferedText = text;
+      const bufferedIsShortText = isShortText; // Capture for closure
+      
+      // Clear previous timeout if exists
+      if (this.pendingPartialTimeout) {
+        clearTimeout(this.pendingPartialTimeout);
+      }
+
+      // Update buffer to latest text
+      this.pendingPartialBuffer = bufferedText;
+
+      // Create a promise that will be resolved when the batch is processed
+      return new Promise((resolve, reject) => {
+        const requestId = `${bufferedText.length}_${Date.now()}_${Math.random()}`;
+        this.pendingPartialResolvers.set(requestId, { resolve, reject });
+
+        // Schedule batch processing after throttle period
+        // Use shorter throttle for short text, and instant (0ms) for first sentence
+        const isFirstSentenceBuffered = this.isFirstTranslation;
+        const throttleDelay = isFirstSentenceBuffered ? 0 : (bufferedIsShortText ? SHORT_TEXT_THROTTLE_MS : this.THROTTLE_MS);
+        
+        // Mark first translation as complete when we schedule it
+        if (isFirstSentenceBuffered) {
+          this.isFirstTranslation = false;
+        }
+        
+        this.pendingPartialTimeout = setTimeout(async () => {
+          const textToProcess = this.pendingPartialBuffer;
+          this.pendingPartialBuffer = null;
+          this.pendingPartialTimeout = null;
+          this.lastPartialRequestTime = Date.now();
+
+          try {
+            const translated = await this._processPartialTranslation(textToProcess, sourceLang, targetLang, apiKey);
+            
+            // Resolve all pending promises with the translated text
+            for (const { resolve } of this.pendingPartialResolvers.values()) {
+              resolve(translated);
+            }
+            this.pendingPartialResolvers.clear();
+          } catch (error) {
+            // CRITICAL: Don't resolve with English on error - reject instead
+            for (const { reject } of this.pendingPartialResolvers.values()) {
+              reject(error);
+            }
+            this.pendingPartialResolvers.clear();
+          }
+        }, Math.max(0, throttleDelay - timeSinceLastRequest));
+      });
     }
   }
 
@@ -485,14 +687,18 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
         return { lang: targetLang, text: translated };
       } catch (error) {
         console.error(`[PartialWorker] Failed to translate to ${targetLang}:`, error.message);
-        return { lang: targetLang, text: text }; // Fallback to original
+        // CRITICAL: Don't return English as fallback - return null to indicate failure
+        return { lang: targetLang, text: null };
       }
     });
 
     const results = await Promise.all(translationPromises);
     
+    // Only include successful translations (not null) - prevents English leak
     results.forEach(({ lang, text }) => {
-      translations[lang] = text;
+      if (text !== null) {
+        translations[lang] = text;
+      }
     });
 
     return translations;
@@ -546,11 +752,17 @@ export class FinalTranslationWorker {
       throw new Error('No OpenAI API key provided for translation');
     }
 
+    // Skip API call if rate limited - just return original text
+    if (isCurrentlyRateLimited()) {
+      console.log(`[FinalWorker] ⏸️ Rate limited - skipping FINAL translation, returning original text`);
+      return text;
+    }
+
     console.log(`[FinalWorker] 🎯 High-quality translating final: "${text.substring(0, 50)}..." (${sourceLangName} → ${targetLangName})`);
 
     try {
       // Use GPT-4o for high-quality final translations
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -584,11 +796,6 @@ Output: Only the translated text in ${targetLangName}.`
         })
       });
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
-      }
-
       const result = await response.json();
       
       if (!result.choices || result.choices.length === 0) {
@@ -620,6 +827,11 @@ Output: Only the translated text in ${targetLangName}.`
 
       return translatedText;
     } catch (error) {
+      // If it's a skip request error (rate limited), return original text instead of throwing
+      if (error.skipRequest) {
+        console.log(`[FinalWorker] ⏸️ Translation skipped (rate limited), returning original text`);
+        return text;
+      }
       console.error(`[FinalWorker] Translation error:`, error.message);
       throw error;
     }

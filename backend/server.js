@@ -26,6 +26,7 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import sessionStore from "./sessionStore.js";
 import translationManager from "./translationManager.js";
+import { fetchWithRateLimit } from "./openaiRateLimiter.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -314,7 +315,7 @@ app.post('/test-translation', async (req, res) => {
     const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang || 'auto-detect';
     const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang || 'English';
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -335,11 +336,6 @@ app.post('/test-translation', async (req, res) => {
         temperature: 0.3
       })
     });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-      throw new Error(`Translation request failed: ${error.error?.message || response.statusText}`);
-    }
 
     const result = await response.json();
     const translatedText = result.choices?.[0]?.message?.content?.trim() || '';

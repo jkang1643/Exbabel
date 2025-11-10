@@ -9,6 +9,7 @@
  */
 
 import fetch from 'node-fetch';
+import { fetchWithRateLimit } from './openaiRateLimiter.js';
 
 // Language code to full name mapping
 const LANGUAGE_NAMES = {
@@ -175,7 +176,7 @@ class TranslationManager {
    * MIGRATION NOTE: This replaces the Gemini WebSocket translation
    */
   async translateViaOpenAI(text, sourceLangName, targetLangName, apiKey) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -207,11 +208,6 @@ Output: Only the translated text in ${targetLangName}.`
         max_tokens: 16000 // Increased significantly to handle very long translations without truncation
       })
     });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-      throw new Error(`OpenAI API error: ${error.error?.message || response.statusText}`);
-    }
 
     const result = await response.json();
     
