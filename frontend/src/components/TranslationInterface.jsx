@@ -796,7 +796,6 @@ function TranslationInterface({ onBackToHome }) {
     }
     // CRITICAL: Empty dependency array - only run on mount/unmount
     // All functions are accessed via refs to ensure we always use the latest versions
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only run once on mount
 
   useEffect(() => {
