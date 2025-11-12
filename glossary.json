@@ -268,7 +268,7 @@
       "value": "Ashkelon"
     },
     {
-      "value": "Ashur/Asshur/Assur"
+      "value": "Ashur"
     },
     {
       "value": "Assyria"
@@ -280,7 +280,7 @@
       "value": "Babel"
     },
     {
-      "value": "Babylon/Babylonia"
+      "value": "Babylon"
     },
     {
       "value": "Beer-Sheba"
@@ -313,7 +313,7 @@
       "value": "Bethsaida"
     },
     {
-      "value": "Beth Shemesh in Judah"
+      "value": "Beth Shemesh"
     },
     {
       "value": "Betshean"
@@ -328,7 +328,7 @@
       "value": "Cabul"
     },
     {
-      "value": "Calah/Kalhu/Nimrud"
+      "value": "Calah"
     },
     {
       "value": "Calneh"
@@ -358,7 +358,7 @@
       "value": "Chaldea"
     },
     {
-      "value": "Chezib of Judah"
+      "value": "Chezib"
     },
     {
       "value": "Chorazin"
@@ -415,13 +415,16 @@
       "value": "En Gedi"
     },
     {
-      "value": "Ephesia/Ephesus"
+      "value": "Ephesus"
+    },   
+    {
+      "value": "Ephesia"
     },
     {
       "value": "Eridu"
     },
     {
-      "value": "Eritrea- Erythraean Sea Ancient name for Red Sea and surrounding region"
+      "value": "Eritrea"
     },
     {
       "value": "Eshcol"
@@ -439,7 +442,7 @@
       "value": "Gabriel"
     },
     {
-      "value": "Gabatha  - several"
+      "value": "Gabatha"
     },
     {
       "value": "Gabbatha or Lithostrotos"
@@ -592,7 +595,7 @@
       "value": "Kish"
     },
     {
-      "value": "Kush/Cush"
+      "value": "Kush"
     },
     {
       "value": "Lachish"
@@ -850,10 +853,16 @@
       "value": "Spain"
     },
     {
-      "value": "Sumer/Sumeria"
+      "value": "Sumer"
     },
     {
-      "value": "Syria/Aramea"
+      "value": "Sumeria"
+    },
+    {
+      "value": "Syria"
+    },
+    {
+      "value": "Aramea"
     },
     {
       "value": "Tabal"
@@ -908,6 +917,9 @@
     },
     {
       "value": "The Land of Uz"
+    },
+    {
+      "value": "Uz"
     },
     {
       "value": "Via Dolorosa"
@@ -2089,7 +2101,7 @@
       "value": "Adnah"
     },
     {
-      "value": "Adonibezek or Adoni-Bezek"
+      "value": "Adonibezek"
     },
     {
       "value": "Adonijah"
@@ -7765,7 +7777,7 @@
       "value": "Doctrinal Bible Studies"
     },
     {
-      "value": "agape (ἀγάπη)"
+      "value": "agape"
     },
     {
       "value": "agnosticism"
@@ -7786,7 +7798,7 @@
       "value": "apocalyptic"
     },
     {
-      "value": "apocrypha, apocryphal"
+      "value": "apocrypha"
     },
     {
       "value": "apophatic"
@@ -7828,13 +7840,13 @@
       "value": "blasphemy"
     },
     {
-      "value": "Calvin, John"
+      "value": "John Calvin"
     },
     {
       "value": "canon law"
     },
     {
-      "value": "canon, canon of scripture, canonical"
+      "value": "canonical"
     },
     {
       "value": "casuistry"
@@ -7861,13 +7873,13 @@
       "value": "Centessimus Annus"
     },
     {
-      "value": "charism, charisma"
+      "value": "charisma"
     },
     {
       "value": "charity"
     },
     {
-      "value": "chiastic structure, chiasmus"
+      "value": "chiasmus"
     },
     {
       "value": "chiliasm"
@@ -7876,7 +7888,7 @@
       "value": "Christian community"
     },
     {
-      "value": "christology, christological"
+      "value": "christology"
     },
     {
       "value": "christos (χριστός)"
@@ -7909,7 +7921,7 @@
       "value": "collegiality"
     },
     {
-      "value": "common good theory of Thomas Aquinas"
+      "value": "Thomas Aquinas"
     },
     {
       "value": "communion"
@@ -7921,7 +7933,7 @@
       "value": "conciliar decree"
     },
     {
-      "value": "conscience, freedom of"
+      "value": "freedom of conscience"
     },
     {
       "value": "consensus"
@@ -7975,10 +7987,10 @@
       "value": "criticism"
     },
     {
-      "value": "cross, crucifix, crucifixion"
+      "value": "crucifixion"
     },
     {
-      "value": "culture, cultural studies"
+      "value": "cultural studies"
     },
     {
       "value": "curia"
@@ -8002,10 +8014,10 @@
       "value": "Deuteronomistic"
     },
     {
-      "value": "development of doctrine (or dogma)"
+      "value": "development of doctrine"
     },
     {
-      "value": "diakonia (διακονία)"
+      "value": "diakonia"
     },
     {
       "value": "dialectical method"
@@ -8047,7 +8059,7 @@
       "value": "donation of Constantine"
     },
     {
-      "value": "double-effect, principle of"
+      "value": "double-effect"
     },
     {
       "value": "doxology"
@@ -8071,10 +8083,10 @@
       "value": "economic Trinity"
     },
     {
-      "value": "ecumenism, ecumenical"
+      "value": "ecumenical"
     },
     {
-      "value": "efficacy, efficacious"
+      "value": "efficacy"
     },
     {
       "value": "Elohist"
@@ -8089,13 +8101,13 @@
       "value": "epistemology"
     },
     {
-      "value": "eschatology, eschatological, eschaton"
+      "value": "eschatology"
     },
     {
-      "value": "establishment of the Church, i.e., state religion"
+      "value": "establishment of the Church"
     },
     {
-      "value": "ethics, ethical"
+      "value": "ethical"
     },
     {
       "value": "euchology"
@@ -8113,7 +8125,7 @@
       "value": "evil"
     },
     {
-      "value": "exegesis, exegetical"
+      "value": "exegesis"
     },
     {
       "value": "faith"
@@ -8167,7 +8179,7 @@
       "value": "hermeneutics"
     },
     {
-      "value": "hesed (חסד)"
+      "value": "hesed"
     },
     {
       "value": "heuristic theology"
@@ -8194,7 +8206,7 @@
       "value": "Humanae Vitae"
     },
     {
-      "value": "hypostasis, hypostatic"
+      "value": "hypostasis"
     },
     {
       "value": "hypostatic union"
@@ -8212,7 +8224,7 @@
       "value": "imago Dei"
     },
     {
-      "value": "immanent, immanence"
+      "value": "immanence"
     },
     {
       "value": "immanent Trinity"
@@ -8248,7 +8260,10 @@
       "value": "Johannine"
     },
     {
-      "value": "Just War Theory of St. Augustine"
+      "value": "Just War Theory"
+    },
+    {
+      "value": "St. Augustine"
     },
     {
       "value": "justice"
@@ -8257,28 +8272,28 @@
       "value": "justification"
     },
     {
-      "value": "kairos (καιρός)"
+      "value": "kairos"
     },
     {
       "value": "kataphatic"
     },
     {
-      "value": "katholos, katholikos (καθόλου, καθολικός)"
+      "value": "katholos"
     },
     {
-      "value": "kenosis (κενόσις)"
+      "value": "kenosis"
     },
     {
-      "value": "kerygma, kerygmatic"
+      "value": "kerygma"
     },
     {
-      "value": "Kierkegaard, Søren"
+      "value": "Søren Kierkegaard"
     },
     {
-      "value": "koinonia (κοινωνία)"
+      "value": "koinonia"
     },
     {
-      "value": "laity, lay person"
+      "value": "laity"
     },
     {
       "value": "liberation"
@@ -8308,7 +8323,7 @@
       "value": "Lumen Gentium"
     },
     {
-      "value": "Luther, Martin"
+      "value": "Martin Luther"
     },
     {
       "value": "magisterium"
@@ -8326,7 +8341,7 @@
       "value": "mercy"
     },
     {
-      "value": "messiah (משׁח)"
+      "value": "messiah"
     },
     {
       "value": "metanoia"
@@ -8335,7 +8350,7 @@
       "value": "metaphysics"
     },
     {
-      "value": "methodology, method in theology"
+      "value": "methodology"
     },
     {
       "value": "middle axiom"
@@ -8356,7 +8371,7 @@
       "value": "mystery"
     },
     {
-      "value": "mystic, mystical"
+      "value": "mystical"
     },
     {
       "value": "mysticism"
@@ -8368,13 +8383,13 @@
       "value": "narrative theology"
     },
     {
-      "value": "natural law v. divine command ethics"
+      "value": "natural law"
     },
     {
       "value": "neophyte"
     },
     {
-      "value": "Niebuhr, H. Richard"
+      "value": "H. Richard Niebuhr"
     },
     {
       "value": "norms and principles"
@@ -8386,7 +8401,7 @@
       "value": "Octagesima Adveniens"
     },
     {
-      "value": "ontology, ontological"
+      "value": "ontological"
     },
     {
       "value": "orthodoxy"
@@ -8395,16 +8410,16 @@
       "value": "Pacem in Terris"
     },
     {
-      "value": "palpable, palpably"
+      "value": "palpable"
     },
     {
-      "value": "pantheism, panentheism"
+      "value": "pantheism"
     },
     {
-      "value": "parousia (παρουσία)"
+      "value": "parousia"
     },
     {
-      "value": "parresia (παρρησία)"
+      "value": "parresia"
     },
     {
       "value": "paschal mystery"
@@ -8437,10 +8452,10 @@
       "value": "pneuma"
     },
     {
-      "value": "pneumatology, pneumatological"
+      "value": "pneumatology"
     },
     {
-      "value": "polemic, polemical"
+      "value": "polemic"
     },
     {
       "value": "polity"
@@ -8458,7 +8473,7 @@
       "value": "praxis"
     },
     {
-      "value": "preferential option for the poor"
+      "value": "preferential"
     },
     {
       "value": "pre-moral evil"
@@ -8470,7 +8485,7 @@
       "value": "process theology"
     },
     {
-      "value": "proleptic, prolepsis"
+      "value": "proleptic"
     },
     {
       "value": "promotion of peace"
@@ -8494,7 +8509,7 @@
       "value": "prudential certitude"
     },
     {
-      "value": "psychoanalysis, psychoanalytic theory"
+      "value": "psychoanalysis"
     },
     {
       "value": "public theology"
@@ -8503,16 +8518,16 @@
       "value": "Q tradition"
     },
     {
-      "value": "Rahner, Karl"
+      "value": "Karl Rahner"
     },
     {
       "value": "real presence"
     },
     {
-      "value": "reasoning, deductive"
+      "value": "deductive reasoning"
     },
     {
-      "value": "reasoning, inductive"
+      "value": "inductive reasoning"
     },
     {
       "value": "redemption"
@@ -8545,13 +8560,13 @@
       "value": "ritual theory"
     },
     {
-      "value": "rubrics, rubrical, rubricism"
+      "value": "rubrics"
     },
     {
-      "value": "sacerdotal, sacerdotalism"
+      "value": "sacerdotal"
     },
     {
-      "value": "sacrament, sacraments"
+      "value": "sacrament"
     },
     {
       "value": "sacramentalism"
@@ -8584,10 +8599,13 @@
       "value": "scholasticism"
     },
     {
-      "value": "scripture, sacred scripture"
+      "value": "sacred scripture"
     },
     {
-      "value": "sect, sectarianism"
+      "value": "sect"
+    },
+    {
+      "value": "sectarianism"
     },
     {
       "value": "secularism"
@@ -8614,13 +8632,13 @@
       "value": "syllogism"
     },
     {
-      "value": "syncretism, syncretic"
+      "value": "syncretic"
     },
     {
-      "value": "synod, Synod of Bishops"
+      "value": "synod"
     },
     {
-      "value": "synoptic, synoptic gospels"
+      "value": "synoptic"
     },
     {
       "value": "synoptic problem"
@@ -8632,13 +8650,16 @@
       "value": "systematic theology"
     },
     {
-      "value": "teleology, teleological argument"
+      "value": "teleology"
     },
     {
       "value": "theocentrism"
     },
     {
-      "value": "theocracy (hierocracy)"
+      "value": "theocracy"
+    },
+    {
+      "value": "hierocracy"
     },
     {
       "value": "theodicy"
@@ -8683,7 +8704,7 @@
       "value": "Troeltsch, Ernst"
     },
     {
-      "value": "Twelve, the"
+      "value": "The Twelve"
     },
     {
       "value": "Two-Source Hypothesis"
@@ -19859,6 +19880,1239 @@
     },
     {
       "value": "ivory tower"
+    },
+    {
+      "value": "Agape"
+    },
+    {
+      "value": "Logos"
+    },
+    {
+      "value": "Kyrios"
+    },
+    {
+      "value": "Ekklesia"
+    },
+    {
+      "value": "Dikaios"
+    },
+    {
+      "value": "Pistis"
+    },
+    {
+      "value": "Charis"
+    },
+    {
+      "value": "Diakonos"
+    },
+    {
+      "value": "Metanoia"
+    },
+    {
+      "value": "Soteria"
+    },
+    {
+      "value": "Parakletos"
+    },
+    {
+      "value": "Koinonia"
+    },
+    {
+      "value": "Sabbaton"
+    },
+    {
+      "value": "Eucharistia"
+    },
+    {
+      "value": "Anastasis"
+    },
+    {
+      "value": "Euangelion"
+    },
+    {
+      "value": "Doxa"
+    },
+    {
+      "value": "Hagios"
+    },
+    {
+      "value": "Phileo"
+    },
+    {
+      "value": "Theos"
+    },
+    {
+      "value": "Anthropos"
+    },
+    {
+      "value": "Baptizo"
+    },
+    {
+      "value": "Martys"
+    },
+    {
+      "value": "Aletheia"
+    },
+    {
+      "value": "Charisma"
+    },
+    {
+      "value": "Sophia"
+    },
+    {
+      "value": "Apokalypsis"
+    },
+    {
+      "value": "Hamartia"
+    },
+    {
+      "value": "Pneuma"
+    },
+    {
+      "value": "Soter"
+    },
+    {
+      "value": "Episkopos"
+    },
+    {
+      "value": "Doulos"
+    },
+    {
+      "value": "Kerygma"
+    },
+    {
+      "value": "Anomia"
+    },
+    {
+      "value": "Proskuneo"
+    },
+    {
+      "value": "Thelema"
+    },
+    {
+      "value": "Eirene"
+    },
+    {
+      "value": "Phobos"
+    },
+    {
+      "value": "Zoe"
+    },
+    {
+      "value": "Diatheke"
+    },
+    {
+      "value": "Eleos"
+    },
+    {
+      "value": "Dikaiosyne"
+    },
+    {
+      "value": "Kardia"
+    },
+    {
+      "value": "Makarismos"
+    },
+    {
+      "value": "Basileia"
+    },
+    {
+      "value": "Hagiasmos"
+    },
+    {
+      "value": "Krisis"
+    },
+    {
+      "value": "Mysterion"
+    },
+    {
+      "value": "Chara"
+    },
+    {
+      "value": "Makarios"
+    },
+    {
+      "value": "Aion"
+    },
+    {
+      "value": "Kratos"
+    },
+    {
+      "value": "Hypomone"
+    },
+    {
+      "value": "Eleutheria"
+    },
+    {
+      "value": "Telos"
+    },
+    {
+      "value": "Phos"
+    },
+    {
+      "value": "Thanatos"
+    },
+    {
+      "value": "Angeloi"
+    },
+    {
+      "value": "Erchomai"
+    },
+    {
+      "value": "Gehenna"
+    },
+    {
+      "value": "Archon"
+    },
+    {
+      "value": "Hierosolyma"
+    },
+    {
+      "value": "Ergon"
+    },
+    {
+      "value": "Arche"
+    },
+    {
+      "value": "Kainos"
+    },
+    {
+      "value": "Paradeisos"
+    },
+    {
+      "value": "Lychnia"
+    },
+    {
+      "value": "Ophis"
+    },
+    {
+      "value": "Thronos"
+    },
+    {
+      "value": "Gymnos"
+    },
+    {
+      "value": "Sphragis"
+    },
+    {
+      "value": "Ouranos"
+    },
+    {
+      "value": "Phaneros"
+    },
+    {
+      "value": "Nike"
+    },
+    {
+      "value": "Biblion"
+    },
+    {
+      "value": "Pyr"
+    },
+    {
+      "value": "Thumos"
+    },
+    {
+      "value": "Arnia"
+    },
+    {
+      "value": "Martus"
+    },
+    {
+      "value": "Apokalupsis"
+    },
+    {
+      "value": "Nomos"
+    },
+    {
+      "value": "Hodos"
+    },
+    {
+      "value": "Angelos"
+    },
+    {
+      "value": "Pistos"
+    },
+    {
+      "value": "Dynamis"
+    },
+    {
+      "value": "Meleto"
+    },
+    {
+      "value": "Apoleia"
+    },
+    {
+      "value": "Ethnos"
+    },
+    {
+      "value": "Afikomen"
+    },
+    {
+      "value": "Agadah"
+    },
+    {
+      "value": "Aggadah"
+    },
+    {
+      "value": "Aleinu"
+    },
+    {
+      "value": "Aliyah"
+    },
+    {
+      "value": "Amidah"
+    },
+    {
+      "value": "Aron Hakodesh"
+    },
+    {
+      "value": "Bar Mitzvah"
+    },
+    {
+      "value": "Bat Mitzvah"
+    },
+    {
+      "value": "Bat Chayil"
+    },
+    {
+      "value": "Bet ha Knesset"
+    },
+    {
+      "value": "Beit ha Knesset"
+    },
+    {
+      "value": "Shul"
+    },
+    {
+      "value": "Bimah"
+    },
+    {
+      "value": "Brit Milah"
+    },
+    {
+      "value": "Berit Milah, Bris"
+    },
+    {
+      "value": "Challah"
+    },
+    {
+      "value": "Hallah"
+    },
+    {
+      "value": "Chazan"
+    },
+    {
+      "value": "Hazan Cantor"
+    },
+    {
+      "value": "Chumash"
+    },
+    {
+      "value": "Gemara"
+    },
+    {
+      "value": "Gemarah"
+    },
+    {
+      "value": "Genizah"
+    },
+    {
+      "value": "Haftarah"
+    },
+    {
+      "value": "Haggadah"
+    },
+    {
+      "value": "Halakhah"
+    },
+    {
+      "value": "Halacha"
+    },
+    {
+      "value": "Hanukiah"
+    },
+    {
+      "value": "Chanukiah"
+    },
+    {
+      "value": "Menorah"
+    },
+    {
+      "value": "Hanukkah"
+    },
+    {
+      "value": "Chanukah"
+    },
+    {
+      "value": "Hasid"
+    },
+    {
+      "value": "Chasid"
+    },
+    {
+      "value": "Chasidim"
+    },
+    {
+      "value": "Hasidism"
+    },
+    {
+      "value": "Chasidism"
+    },
+    {
+      "value": "Havdalah"
+    },
+    {
+      "value": "Ìvrit"
+    },
+    {
+      "value": "Chuppah"
+    },
+    {
+      "value": "Ìsrael"
+    },
+    {
+      "value": "Kabbalah"
+    },
+    {
+      "value": "Cabala"
+    },
+    {
+      "value": "Kaddish"
+    },
+    {
+      "value": "Kashrut"
+    },
+    {
+      "value": "Ketubah"
+    },
+    {
+      "value": "Ketubbah"
+    },
+    {
+      "value": "Ketuvim"
+    },
+    {
+      "value": "Kibbutz"
+    },
+    {
+      "value": "Kiddush"
+    },
+    {
+      "value": "Kippah"
+    },
+    {
+      "value": "Yamulkah"
+    },
+    {
+      "value": "Capel"
+    },
+    {
+      "value": "Head"
+    },
+    {
+      "value": "Knesset"
+    },
+    {
+      "value": "Kol Nidrei"
+    },
+    {
+      "value": "Kol Nidre"
+    },
+    {
+      "value": "Korach"
+    },
+    {
+      "value": "Name"
+    },
+    {
+      "value": "Kasher"
+    },
+    {
+      "value": "Ladino"
+    },
+    {
+      "value": "Magen David"
+    },
+    {
+      "value": "Maimonides"
+    },
+    {
+      "value": "Mashiach"
+    },
+    {
+      "value": "Moshiach"
+    },
+    {
+      "value": "Matzah"
+    },
+    {
+      "value": "Mezuzah"
+    },
+    {
+      "value": "Mikveh"
+    },
+    {
+      "value": "Mishkan"
+    },
+    {
+      "value": "Moshav"
+    },
+    {
+      "value": "Ner Tamid"
+    },
+    {
+      "value": "Nevi’im"
+    },
+    {
+      "value": "Noachide Laws"
+    },
+    {
+      "value": "Parev"
+    },
+    {
+      "value": "Parveh"
+    },
+    {
+      "value": "Pikei Avot"
+    },
+    {
+      "value": "Pirke Avoth"
+    },
+    {
+      "value": "Pikuakh Nefesh"
+    },
+    {
+      "value": "Progrom"
+    },
+    {
+      "value": "Purim"
+    },
+    {
+      "value": "Rashi"
+    },
+    {
+      "value": "Rebbe"
+    },
+    {
+      "value": "Rosh Hashanah"
+    },
+    {
+      "value": "Rosh Ha-Shanah"
+    },
+    {
+      "value": "Seder"
+    },
+    {
+      "value": "Sefer Torah"
+    },
+    {
+      "value": "Sefardim"
+    },
+    {
+      "value": "Shabbat"
+    },
+    {
+      "value": "Shabbos"
+    },
+    {
+      "value": "Shatnez"
+    },
+    {
+      "value": "Shaatnez"
+    },
+    {
+      "value": "Shekhina"
+    },
+    {
+      "value": "Shemot"
+    },
+    {
+      "value": "Shiva"
+    },
+    {
+      "value": "Shoah"
+    },
+    {
+      "value": "Shofar"
+    },
+    {
+      "value": "Siddur"
+    },
+    {
+      "value": "Simchat Torah"
+    },
+    {
+      "value": "Sukkah"
+    },
+    {
+      "value": "Bet Haknesset"
+    },
+    {
+      "value": "Bet Hamidrash"
+    },
+    {
+      "value": "Tallith"
+    },
+    {
+      "value": "Tefila"
+    },
+    {
+      "value": "Tefillin"
+    },
+    {
+      "value": "Tephilin"
+    },
+    {
+      "value": "T’filin"
+    },
+    {
+      "value": "Phylacteries"
+    },
+    {
+      "value": "Tenakh"
+    },
+    {
+      "value": "Tanakh"
+    },
+    {
+      "value": "Tikkun Olam"
+    },
+    {
+      "value": "Tikun"
+    },
+    {
+      "value": "Tzedaka"
+    },
+    {
+      "value": "Tzizit"
+    },
+    {
+      "value": "Tzittzit"
+    },
+    {
+      "value": "Yad"
+    },
+    {
+      "value": "Yahrzeit"
+    },
+    {
+      "value": "Yeshiva"
+    },
+    {
+      "value": "Yiddish"
+    },
+    {
+      "value": "Yishuv"
+    },
+    {
+      "value": "Yom Hashoah"
+    },
+    {
+      "value": "Yom Kippur"
+    },
+    {
+      "value": "Zionism"
+    },
+    {
+      "value": "Adoptionism"
+    },
+    {
+      "value": "Advocate"
+    },
+    {
+      "value": "Aggiornamento"
+    },
+    {
+      "value": "Agnosticism"
+    },
+    {
+      "value": "Alexandrian theology"
+    },
+    {
+      "value": "Allegorical"
+    },
+    {
+      "value": "Already"
+    },
+    {
+      "value": "Anamnesis"
+    },
+    {
+      "value": "Anathema"
+    },
+    {
+      "value": "Anthropocentrism"
+    },
+    {
+      "value": "Anthropomorphism"
+    },
+    {
+      "value": "Anthropopathism"
+    },
+    {
+      "value": "Anti-Semitism"
+    },
+    {
+      "value": "Apatheia Greek"
+    },
+    {
+      "value": "Apocatastasis"
+    },
+    {
+      "value": "Apollinarianism"
+    },
+    {
+      "value": "Apologetics"
+    },
+    {
+      "value": "Apophatic statements"
+    },
+    {
+      "value": "Apophatic theology"
+    },
+    {
+      "value": "Apostasy"
+    },
+    {
+      "value": "Apostolate"
+    },
+    {
+      "value": "Apostolic succession"
+    },
+    {
+      "value": "Apostolicity"
+    },
+    {
+      "value": "Aridity"
+    },
+    {
+      "value": "Asceticism"
+    },
+    {
+      "value": "Assent"
+    },
+    {
+      "value": "Assumption"
+    },
+    {
+      "value": "Atheism"
+    },
+    {
+      "value": "Attrition"
+    },
+    {
+      "value": "Augustinianism"
+    },
+    {
+      "value": "Babylonian Captivity"
+    },
+    {
+      "value": "Baptism of desire"
+    },
+    {
+      "value": "Barthian"
+    },
+    {
+      "value": "Barthianism"
+    },
+    {
+      "value": "Bible"
+    },
+    {
+      "value": "Black theology"
+    },
+    {
+      "value": "Bultmannian"
+    },
+    {
+      "value": "Calvinism"
+    },
+    {
+      "value": "Cappadocian theologians"
+    },
+    {
+      "value": "Cardinal sins Roman Catholic"
+    },
+    {
+      "value": "Cardinal virtues Roman Catholic"
+    },
+    {
+      "value": "Cataphatic theology"
+    },
+    {
+      "value": "Catechesis"
+    },
+    {
+      "value": "Catechetical"
+    },
+    {
+      "value": "Catechetics"
+    },
+    {
+      "value": "Catechism"
+    },
+    {
+      "value": "Catechist"
+    },
+    {
+      "value": "Catechumen"
+    },
+    {
+      "value": "Chastity"
+    },
+    {
+      "value": "Christology"
+    },
+    {
+      "value": "Christology from below"
+    },
+    {
+      "value": "Christomonism"
+    },
+    {
+      "value": "Christotokos"
+    },
+    {
+      "value": "Church"
+    },
+    {
+      "value": "Clericalism"
+    },
+    {
+      "value": "Comforter"
+    },
+    {
+      "value": "Communion"
+    },
+    {
+      "value": "Conciliarism"
+    },
+    {
+      "value": "Concupiscence"
+    },
+    {
+      "value": "Congregation for"
+    },
+    {
+      "value": "Conscience"
+    },
+    {
+      "value": "Consubstantial"
+    },
+    {
+      "value": "Consubstantiation"
+    },
+    {
+      "value": "Contrition"
+    },
+    {
+      "value": "Catholic"
+    },
+    {
+      "value": "Credo quia absurdum"
+    },
+    {
+      "value": "Credo ut intelligam"
+    },
+    {
+      "value": "Creed"
+    },
+    {
+      "value": "Crisis"
+    },
+    {
+      "value": "Dark Ages"
+    },
+    {
+      "value": "Dark night of"
+    },
+    {
+      "value": "Deism"
+    },
+    {
+      "value": "Dialectic"
+    },
+    {
+      "value": "Dialectical"
+    },
+    {
+      "value": "Disciple"
+    },
+    {
+      "value": "Docetism"
+    },
+    {
+      "value": "Doctrine"
+    },
+    {
+      "value": "Dogma"
+    },
+    {
+      "value": "Dogmatics"
+    },
+    {
+      "value": "Dogmatism"
+    },
+    {
+      "value": "Domestic church"
+    },
+    {
+      "value": "Donatism"
+    },
+    {
+      "value": "Double procession of"
+    },
+    {
+      "value": "Dulia"
+    },
+    {
+      "value": "Dyophysitism"
+    },
+    {
+      "value": "Dyothelitism"
+    },
+    {
+      "value": "Ebionism"
+    },
+    {
+      "value": "Ecclesia"
+    },
+    {
+      "value": "Ecclesiology"
+    },
+    {
+      "value": "Ecumenism"
+    },
+    {
+      "value": "Epiclesis"
+    },
+    {
+      "value": "Euthanasia"
+    },
+    {
+      "value": "Eutychianism"
+    },
+    {
+      "value": "Ex cathedra"
+    },
+    {
+      "value": "Ex opere operantis"
+    },
+    {
+      "value": "Ex opere operato"
+    },
+    {
+      "value": "Exclusivism"
+    },
+    {
+      "value": "Excommunication"
+    },
+    {
+      "value": "Exegesis"
+    },
+    {
+      "value": "Extra ecclesiam nulla salus"
+    },
+    {
+      "value": "Fideism"
+    },
+    {
+      "value": "Fides qua creditur"
+    },
+    {
+      "value": "Fides quae creditur"
+    },
+    {
+      "value": "Fides quaerens intellectum"
+    },
+    {
+      "value": "Filioque"
+    },
+    {
+      "value": "Fundamental theology"
+    },
+    {
+      "value": "Fundamentalism"
+    },
+    {
+      "value": "Gallicanism"
+    },
+    {
+      "value": "Gnosticism"
+    },
+    {
+      "value": "Hagiography"
+    },
+    {
+      "value": "Hagiolatry"
+    },
+    {
+      "value": "Hellenization of Christianity"
+    },
+    {
+      "value": "Hermit"
+    },
+    {
+      "value": "Homiletics"
+    },
+    {
+      "value": "Immaculate"
+    },
+    {
+      "value": "Infallibility"
+    },
+    {
+      "value": "Interreligious"
+    },
+    {
+      "value": "Jansenism"
+    },
+    {
+      "value": "Kataphatic statements"
+    },
+    {
+      "value": "Kenosis"
+    },
+    {
+      "value": "Lex talionis"
+    },
+    {
+      "value": "Liturgy"
+    },
+    {
+      "value": "Loci"
+    },
+    {
+      "value": "Loci theologici"
+    },
+    {
+      "value": "Logos spermatikos"
+    },
+    {
+      "value": "Manichaeism"
+    },
+    {
+      "value": "Marcionites"
+    },
+    {
+      "value": "Mariolatry"
+    },
+    {
+      "value": "Mariology"
+    },
+    {
+      "value": "Marks of"
+    },
+    {
+      "value": "Mass"
+    },
+    {
+      "value": "Modalism"
+    },
+    {
+      "value": "Modalistic Monarchianism"
+    },
+    {
+      "value": "Monenergism"
+    },
+    {
+      "value": "Monergism"
+    },
+    {
+      "value": "Monism"
+    },
+    {
+      "value": "Monogenism"
+    },
+    {
+      "value": "Monophysitism"
+    },
+    {
+      "value": "Monotheism"
+    },
+    {
+      "value": "Monothelitism"
+    },
+    {
+      "value": "Mormonism"
+    },
+    {
+      "value": "Munus triplex"
+    },
+    {
+      "value": "Mystagogy"
+    },
+    {
+      "value": "Mystery"
+    },
+    {
+      "value": "Nestorianism"
+    },
+    {
+      "value": "Nicaea"
+    },
+    {
+      "value": "Niceno-Constantinopolitan Creed"
+    },
+    {
+      "value": "Ninety-five Theses"
+    },
+    {
+      "value": "Original righteousness"
+    },
+    {
+      "value": "Original sin"
+    },
+    {
+      "value": "Paedobaptism"
+    },
+    {
+      "value": "Panentheism"
+    },
+    {
+      "value": "Pantheism"
+    },
+    {
+      "value": "Pasch"
+    },
+    {
+      "value": "Pascha"
+    },
+    {
+      "value": "Paschal"
+    },
+    {
+      "value": "Paschal mystery"
+    },
+    {
+      "value": "Pastor"
+    },
+    {
+      "value": "Patripassianism"
+    },
+    {
+      "value": "Perichoresis"
+    },
+    {
+      "value": "Pneumatology"
+    },
+    {
+      "value": "Pneumatomachians"
+    },
+    {
+      "value": "Protology"
+    },
+    {
+      "value": "Sacrament"
+    },
+    {
+      "value": "Sacramentals"
+    },
+    {
+      "value": "Scandal"
+    },
+    {
+      "value": "Scotism"
+    },
+    {
+      "value": "Senses of Scripture"
+    },
+    {
+      "value": "Soteriological"
+    },
+    {
+      "value": "Subordinationism"
+    },
+    {
+      "value": "Syncretism"
+    },
+    {
+      "value": "Synod"
+    },
+    {
+      "value": "Systematic theology"
+    },
+    {
+      "value": "Theotokos"
+    },
+    {
+      "value": "Tradition"
+    },
+    {
+      "value": "Vatican Council I"
+    },
+    {
+      "value": "Vatican Council II"
+    },
+    {
+      "value": "Via negativa"
+    },
+    {
+      "value": "Via positiva"
+    },
+    {
+      "value": "Vice"
+    },
+    {
+      "value": "Virtue"
+    },
+    {
+      "value": "Apollinarianism"
+    },
+    {
+      "value": "Apatheia"
+    },
+    {
+      "value": "Barthianism"
+    },
+    {
+      "value": "Cardinal sins"
+    },
+    {
+      "value": "Cardinal virtues"
+    },
+    {
+      "value": "Catechetical schools"
+    },
+    {
+      "value": "Congregation for the Doctrine of"
+    },
+    {
+      "value": "Dark Ages"
+    },
+    {
+      "value": "Domestic church"
+    },
+    {
+      "value": "Eutychianism"
+    },
+    {
+      "value": "Hellenization"
+    },
+    {
+      "value": "Lex talionis"
+    },
+    {
+      "value": "Manichaeism"
+    },
+    {
+      "value": "Marcionites"
+    },
+    {
+      "value": "Montanism"
+    },
+    {
+      "value": "Protology"
+    },
+    {
+      "value": "Sabellianism"
+    },
+    {
+      "value": "Sacramentals"
+    },
+    {
+      "value": "Subordinationism"
     }
   ]
 }
