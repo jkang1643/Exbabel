@@ -29,6 +29,8 @@ Frontend (React) ←→ WebSocket ←→ Node.js Backend
 - **Frontend**: React + Vite + Tailwind CSS
 - **Backend**: Node.js + Express + WebSocket
 - **Transcription**: Google Cloud Speech-to-Text (71 languages)
+  - **PhraseSet Support**: Optional domain-specific vocabulary (6,614 phrases, boost 20)
+  - **Model**: `latest_long` (enhanced Chirp 3) with v1p1beta1 API
 - **Translation**: OpenAI GPT-4o-mini (131+ languages)
 - **Grammar**: OpenAI GPT-4o-mini (English only, parallel processing)
 - **Communication**: WebSocket for real-time data streaming
@@ -68,6 +70,11 @@ Frontend (React) ←→ WebSocket ←→ Node.js Backend
    GOOGLE_SPEECH_API_KEY=your_google_api_key_here
    # OR
    GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+   
+   # Optional: PhraseSet for improved recognition accuracy
+   # See PHRASESET_FEATURE.md for setup instructions
+   # GOOGLE_CLOUD_PROJECT_ID=your-project-id
+   # GOOGLE_PHRASE_SET_ID=your-phrase-set-id
    
    # OpenAI API
    OPENAI_API_KEY=your_openai_api_key_here
@@ -322,6 +329,11 @@ localStorage.setItem('debug', 'true')
 GOOGLE_SPEECH_API_KEY=your_api_key
 # OR
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+
+# Optional: PhraseSet for improved recognition accuracy
+# See PHRASESET_FEATURE.md for setup instructions
+# GOOGLE_CLOUD_PROJECT_ID=your-project-id
+# GOOGLE_PHRASE_SET_ID=your-phrase-set-id
 
 # OpenAI API
 OPENAI_API_KEY=your_openai_api_key

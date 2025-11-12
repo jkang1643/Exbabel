@@ -18,6 +18,27 @@ GOOGLE_SPEECH_API_KEY=your-google-api-key-here
 # GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/realtimetranslationapp/backend/google-credentials.json
 
 # ===================================
+# Google Cloud PhraseSet Configuration (Optional)
+# ===================================
+# PhraseSet improves recognition accuracy for specific terms (e.g., church glossary)
+# 
+# Setup:
+# 1. Create PhraseSet in Google Cloud Console (Speech-to-Text > Adaptation)
+# 2. Populate with: node backend/scripts/populatePhraseSet.js
+# 3. Set these environment variables:
+#
+# Current Configuration:
+# - API Version: v1p1beta1 (required for PhraseSet support)
+# - Model: latest_long (enhanced Chirp 3)
+# - Boost Value: 20 (maximum)
+# - Phrase Count: 6,614 phrases
+#
+# See PHRASESET_FEATURE.md for complete documentation
+#
+# GOOGLE_CLOUD_PROJECT_ID=222662040787
+# GOOGLE_PHRASE_SET_ID=church-glossary-10k
+
+# ===================================
 # Server Configuration
 # ===================================
 

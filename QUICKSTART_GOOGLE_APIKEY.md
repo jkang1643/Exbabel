@@ -42,6 +42,11 @@ GOOGLE_SPEECH_API_KEY=AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # OpenAI for translation
 OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
+# Google Cloud PhraseSet (Optional - improves recognition accuracy)
+# See PHRASESET_FEATURE.md for setup instructions
+# GOOGLE_CLOUD_PROJECT_ID=your-project-id
+# GOOGLE_PHRASE_SET_ID=your-phrase-set-id
+
 # Server
 PORT=3001
 ```
@@ -122,12 +127,27 @@ Google Speech + OpenAI Translation:
 - TRUE word-by-word partials ✨
 ```
 
+## Optional: Enable PhraseSet for Better Accuracy
+
+PhraseSet improves recognition for specific terms (e.g., church glossary, technical terms):
+
+1. Create PhraseSet in Google Cloud Console
+2. Populate with: `node backend/scripts/populatePhraseSet.js`
+3. Add to `.env`:
+   ```bash
+   GOOGLE_CLOUD_PROJECT_ID=your-project-id
+   GOOGLE_PHRASE_SET_ID=your-phrase-set-id
+   ```
+
+See **[PHRASESET_FEATURE.md](PHRASESET_FEATURE.md)** for complete setup guide.
+
 ## Next Steps
 
 Once it's working:
 - Try different languages
 - Test the live partial results
 - Monitor your API usage in Google Cloud Console
+- Consider enabling PhraseSet for domain-specific terms
 
 ## Switch to Service Account Later
 

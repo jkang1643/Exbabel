@@ -63,3 +63,9 @@ logs/
 *.seed
 *.pid.lock
 
+# Google Cloud Service Account credentials (contains secrets)
+backend/gen-lang-client-*.json
+backend/*-credentials.json
+backend/*-service-account.json
+*.json:Zone.Identifier
+

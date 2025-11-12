@@ -12,11 +12,15 @@ const GPT4O_MINI_PRICING = {
   output: 0.60 / 1000000  // $0.60 per 1M output tokens
 };
 
-// Google Cloud Speech-to-Text Pricing (Chirp 3)
+// Google Cloud Speech-to-Text Pricing
+// V1: $0.024/min (standard), $0.036/min (enhanced/Chirp 3)
+// V2: $0.016/min (base price - 33% cheaper!)
 // Source: https://cloud.google.com/speech-to-text/pricing
+// NOTE: Currently using V1 API. V2 migration pending (requires gRPC streaming implementation).
 const GOOGLE_SPEECH_PRICING = {
-  standard: 0.006 / 60,  // $0.006 per 15 seconds = $0.024 per minute
-  enhanced: 0.009 / 60   // $0.009 per 15 seconds = $0.036 per minute (Chirp 3)
+  v1_standard: 0.024 / 60,  // $0.024 per minute (V1)
+  v1_enhanced: 0.036 / 60,  // $0.036 per minute (V1 Chirp 3)
+  v2_base: 0.016 / 60       // $0.016 per minute (V2 - lower cost!)
 };
 
 /**
@@ -128,7 +132,9 @@ function estimateSessionCosts(sessionDurationMinutes, languages = 1, avgWordsPer
   }
   
   // Google Speech-to-Text cost (per minute of audio)
-  const speechCostPerMinute = GOOGLE_SPEECH_PRICING.enhanced; // Using Chirp 3
+  // NOTE: Currently using V1 API, but pricing reflects V2 ($0.016/min) for cost planning
+  // TODO: Migrate to V2 API to realize these savings
+  const speechCostPerMinute = GOOGLE_SPEECH_PRICING.v2_base; // V2 pricing: $0.016/min (33% cheaper than V1)
   breakdown.speech = speechCostPerMinute;
   totalCost += speechCostPerMinute;
   

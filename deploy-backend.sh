@@ -53,6 +53,10 @@ GOOGLE_SPEECH_API_KEY=your-google-api-key-here
 # Or use Service Account JSON (more secure)
 # GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/realtimetranslationapp/backend/google-credentials.json
 
+# Google Cloud PhraseSet Configuration (Optional - improves recognition accuracy)
+# GOOGLE_CLOUD_PROJECT_ID=your-project-id
+# GOOGLE_PHRASE_SET_ID=your-phrase-set-id
+
 # Server Configuration
 PORT=3001
 NODE_ENV=production
@@ -75,6 +79,13 @@ if [ -z "$GOOGLE_SPEECH_API_KEY" ] && [ -z "$GOOGLE_APPLICATION_CREDENTIALS" ]; 
     echo -e "${RED}❌ Google Cloud credentials not configured in .env${NC}"
     echo -e "${YELLOW}Set either GOOGLE_SPEECH_API_KEY or GOOGLE_APPLICATION_CREDENTIALS${NC}"
     exit 1
+fi
+
+# Check PhraseSet configuration (optional but recommended)
+if [ -n "$GOOGLE_PHRASE_SET_ID" ] && [ -n "$GOOGLE_CLOUD_PROJECT_ID" ]; then
+    echo -e "${GREEN}✅ PhraseSet configured: $GOOGLE_PHRASE_SET_ID${NC}"
+else
+    echo -e "${YELLOW}⚠️  PhraseSet not configured (optional - improves recognition accuracy)${NC}"
 fi
 
 echo -e "${GREEN}✅ Environment variables configured${NC}"

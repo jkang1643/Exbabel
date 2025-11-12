@@ -171,6 +171,13 @@ See the full list: https://cloud.google.com/speech-to-text/docs/languages
 - Seamless continuation across stream boundaries
 - Automatic punctuation and formatting
 
+### PhraseSet Support (Optional)
+- **Improved accuracy** for domain-specific terms (e.g., church glossary)
+- **6,614 phrases** with maximum boost (20) for better recognition
+- **API Version**: v1p1beta1 (required for PhraseSet support)
+- **Model**: `latest_long` with PhraseSet enabled
+- See **[PHRASESET_FEATURE.md](PHRASESET_FEATURE.md)** for complete documentation
+
 ### Translation Pipeline
 1. Audio → Google Speech → Live partial transcript (shown immediately)
 2. Speech pause detected → Final transcript

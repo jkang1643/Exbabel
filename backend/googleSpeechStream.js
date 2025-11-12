@@ -2,17 +2,27 @@
  * Google Cloud Speech-to-Text Streaming Service
  * Provides live streaming transcription with partial results
  *
- * This replaces OpenAI Realtime API with Google's superior streaming transcription
- * which provides true word-by-word partial results with high accuracy.
- *
+ * CRITICAL: Using v1p1beta1 API for PhraseSet support
+ * - v1 API does NOT support PhraseSets (they are silently ignored)
+ * - v1p1beta1 API DOES support PhraseSets via adaptation.phraseSets
+ * - v2 API requires a Recognizer resource which adds complexity
+ * 
  * AUTHENTICATION OPTIONS:
  * 1. Service Account JSON (default) - More secure, recommended for production
  * 2. API Key (simpler) - Set GOOGLE_SPEECH_API_KEY env variable
  */
 
 import speech from '@google-cloud/speech';
+// Use v1p1beta1 for PhraseSet support (v1 doesn't support PhraseSets, v2 requires Recognizer resource)
+const speechClient = speech.v1p1beta1;
 import { Buffer } from 'buffer';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { TRANSCRIPTION_LANGUAGES, getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export class GoogleSpeechStream {
   constructor() {
@@ -74,9 +84,11 @@ export class GoogleSpeechStream {
 
   /**
    * Initialize the Google Speech client and start streaming
+   * NOTE: Using API V1 for now. V2 migration pending (requires gRPC streaming implementation).
    */
   async initialize(sourceLang) {
     console.log(`[GoogleSpeech] Initializing streaming transcription for ${sourceLang}...`);
+    console.log(`[GoogleSpeech] ✅ Using API v1p1beta1 for PhraseSet support`);
 
     // Create Speech client with authentication options
     const clientOptions = {};
@@ -96,7 +108,8 @@ export class GoogleSpeechStream {
       console.log('[GoogleSpeech] Using default credentials (GCP environment)');
     }
 
-    this.client = new speech.SpeechClient(clientOptions);
+    // Use v1p1beta1 client for PhraseSet support (v1 doesn't support PhraseSets, v2 requires Recognizer resource)
+    this.client = new speechClient.SpeechClient(clientOptions);
 
     // Get language code for Google Speech (only supports transcription languages)
     // If language is not supported for transcription, fall back to English
@@ -157,27 +170,102 @@ export class GoogleSpeechStream {
       alternativeLanguageCodes: [],
     };
 
-    // Only use enhanced model if it's enabled and we haven't failed with it before for this language
+    // Check if PhraseSet is configured
+    const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && process.env.GOOGLE_CLOUD_PROJECT_ID);
+    
+    // Use enhanced model with PhraseSets for best accuracy
     if (this.useEnhancedModel && !this.hasTriedEnhancedModel) {
       requestConfig.useEnhanced = true;
-      requestConfig.model = 'latest_long'; // Enhanced Chirp 3 model for best accuracy
-      console.log(`[GoogleSpeech] Using enhanced model (latest_long) for ${this.languageCode}`);
+      requestConfig.model = 'latest_long'; // Enhanced model for long-form audio
+      if (hasPhraseSet) {
+        console.log(`[GoogleSpeech] ✅ Using latest_long model WITH PhraseSet (v1p1beta1 API - recommended configuration)`);
+        console.log(`[GoogleSpeech]    latest_long supports PhraseSets and provides best accuracy for sermons`);
+      } else {
+        console.log(`[GoogleSpeech] Using enhanced model (latest_long) for ${this.languageCode}`);
+      }
     } else {
-      // Use default model (no model parameter) - works for all languages
-      console.log(`[GoogleSpeech] Using default model for ${this.languageCode} (enhanced model not supported or disabled)`);
+      // Use default model (no model parameter) - fallback if enhanced model failed
+      if (hasPhraseSet) {
+        console.log(`[GoogleSpeech] Using default model for ${this.languageCode} (enhanced model failed, PhraseSet still active)`);
+      } else {
+        console.log(`[GoogleSpeech] Using default model for ${this.languageCode} (enhanced model not supported or disabled)`);
+      }
+    }
+
+    // Add PhraseSet reference if configured (for improved recognition of glossary terms)
+    // CRITICAL: v1p1beta1 API uses adaptation.phraseSets format
+    if (hasPhraseSet) {
+      const phraseSetRef = `projects/${process.env.GOOGLE_CLOUD_PROJECT_ID}/locations/global/phraseSets/${process.env.GOOGLE_PHRASE_SET_ID}`;
+      // v1p1beta1 API uses adaptation.phraseSets format
+      requestConfig.adaptation = {
+        phraseSets: [
+          {
+            name: phraseSetRef
+          }
+        ]
+      };
+      console.log(`[GoogleSpeech] ✅ PhraseSet ENABLED (v1p1beta1 API): ${phraseSetRef}`);
+      console.log(`[GoogleSpeech]    Using adaptation.phraseSets format for PhraseSet support`);
+      console.log(`[GoogleSpeech]    Glossary terms will be recognized with improved accuracy`);
+      console.log(`[GoogleSpeech]    Request config includes adaptation: ${JSON.stringify(requestConfig.adaptation)}`);
+    } else {
+      console.log(`[GoogleSpeech] ⚠️  PhraseSet NOT configured - set GOOGLE_PHRASE_SET_ID and GOOGLE_CLOUD_PROJECT_ID to enable`);
     }
 
     const request = {
       config: requestConfig,
       interimResults: true, // CRITICAL: Enable partial results
     };
+    
+    // Always log PhraseSet status for verification
+    if (requestConfig.adaptation && requestConfig.adaptation.phraseSets && requestConfig.adaptation.phraseSets.length > 0) {
+      console.log(`[GoogleSpeech] 🔍 VERIFICATION: PhraseSet will be sent in API request (v1p1beta1 API)`);
+      console.log(`[GoogleSpeech]    adaptation.phraseSets: ${JSON.stringify(requestConfig.adaptation.phraseSets)}`);
+      console.log(`[GoogleSpeech]    Model: ${requestConfig.model || 'default'} (enhanced: ${requestConfig.useEnhanced || false})`);
+    } else {
+      console.log(`[GoogleSpeech] ⚠️  WARNING: No adaptation.phraseSets in request config!`);
+    }
+    
+    // Log the full request config for debugging (without sensitive data)
+    if (process.env.DEBUG_PHRASESET === 'true') {
+      console.log(`[GoogleSpeech] DEBUG - Full request config:`, JSON.stringify({
+        encoding: requestConfig.encoding,
+        sampleRateHertz: requestConfig.sampleRateHertz,
+        languageCode: requestConfig.languageCode,
+        adaptation: requestConfig.adaptation,
+        useEnhanced: requestConfig.useEnhanced,
+        model: requestConfig.model
+      }, null, 2));
+    }
 
+    // Log the actual request being sent (for debugging PhraseSet)
+    if (requestConfig.adaptation && requestConfig.adaptation.phraseSets && requestConfig.adaptation.phraseSets.length > 0) {
+      console.log(`[GoogleSpeech] 📤 SENDING REQUEST WITH PHRASESET (v1p1beta1 API):`);
+      console.log(`[GoogleSpeech]    Config: ${JSON.stringify({
+        languageCode: requestConfig.languageCode,
+        adaptation: requestConfig.adaptation,
+        model: requestConfig.model || 'default',
+        useEnhanced: requestConfig.useEnhanced || false
+      })}`);
+    }
+    
     // Create streaming recognition stream
     this.recognizeStream = this.client
       .streamingRecognize(request)
       .on('error', (error) => {
         console.error('[GoogleSpeech] Stream error:', error);
         console.error('[GoogleSpeech] Error code:', error.code, 'Details:', error.details);
+        
+        // Check specifically for PhraseSet errors
+        if (error.message && (
+          error.message.includes('phraseSet') || 
+          error.message.includes('phrase_set') ||
+          error.message.includes('adaptation') ||
+          error.message.includes('PhraseSet')
+        )) {
+          console.error(`[GoogleSpeech] ❌ PHRASESET ERROR: ${error.message}`);
+          console.error(`[GoogleSpeech]    This means Google rejected the PhraseSet reference`);
+        }
         
         // Mark as inactive immediately
         this.isActive = false;
@@ -201,6 +289,7 @@ export class GoogleSpeechStream {
           }
         } else if (error.code === 3) {
           console.error('[GoogleSpeech] Invalid argument error - check audio format');
+          console.error('[GoogleSpeech] Full error message:', error.message);
           
           // Check if error is about model not being supported for this language
           if (error.message && error.message.includes('model is currently not supported for language')) {
@@ -220,6 +309,39 @@ export class GoogleSpeechStream {
               }, 500);
             }
             return; // Don't notify error callback yet - we're retrying
+          }
+          
+          // Check if error is about PhraseSet not being supported with enhanced model
+          const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && process.env.GOOGLE_CLOUD_PROJECT_ID);
+          if (hasPhraseSet && this.useEnhancedModel && error.message && (
+            error.message.includes('phraseSet') || 
+            error.message.includes('phrase_set') || 
+            error.message.includes('adaptation') ||
+            error.message.toLowerCase().includes('phrase')
+          )) {
+            console.error(`[GoogleSpeech] ❌ CONFIRMED: Enhanced model does NOT support PhraseSets!`);
+            console.error(`[GoogleSpeech]    Error: ${error.message}`);
+            console.error(`[GoogleSpeech]    Falling back to default model with PhraseSet...`);
+            
+            // Disable enhanced model and retry
+            this.hasTriedEnhancedModel = true;
+            this.useEnhancedModel = false;
+            
+            if (!this.isRestarting) {
+              setTimeout(() => {
+                if (!this.isRestarting) {
+                  console.log(`[GoogleSpeech] Retrying with default model (PhraseSet compatible)...`);
+                  this.restartStream();
+                }
+              }, 500);
+            }
+            return; // Don't notify error callback yet - we're retrying
+          }
+          
+          // Check if error is about PhraseSet configuration
+          if (error.message && (error.message.includes('phraseSet') || error.message.includes('phrase_set') || error.message.includes('adaptation'))) {
+            console.error(`[GoogleSpeech] ❌ PhraseSet error detected: ${error.message}`);
+            console.error(`[GoogleSpeech]    Check PhraseSet configuration and permissions`);
           }
           
           // Don't restart on other invalid argument errors
@@ -394,6 +516,50 @@ export class GoogleSpeechStream {
     const combinedTranscript = allTranscripts.join(' ');
     const isFinal = hasFinal;
     const stability = data.results[0].stability || 0;
+    
+    // Check if recognized text matches PhraseSet entries (for verification)
+    // Log when PhraseSet terms are recognized to confirm it's working
+    if (combinedTranscript && process.env.GOOGLE_PHRASE_SET_ID) {
+      try {
+        const glossaryPath = path.resolve(__dirname, '../glossary.json');
+        if (fs.existsSync(glossaryPath)) {
+          const glossary = JSON.parse(fs.readFileSync(glossaryPath, 'utf8'));
+          if (glossary.phrases && Array.isArray(glossary.phrases)) {
+            // Strip punctuation and normalize transcript for matching
+            const transcriptClean = combinedTranscript.toLowerCase().replace(/[.,!?;:]/g, '').trim();
+            
+            // Check if transcript contains any PhraseSet term
+            const matched = glossary.phrases.find(phrase => {
+              const phraseValue = phrase.value.toLowerCase();
+              
+              // Handle entries with "/" separator (e.g., "Ephesia/Ephesus")
+              const phraseVariants = phraseValue.includes('/') 
+                ? phraseValue.split('/').map(v => v.trim())
+                : [phraseValue];
+              
+              // Check each variant
+              return phraseVariants.some(variant => {
+                const variantClean = variant.replace(/[.,!?;:]/g, '').trim();
+                // Check for exact match or phrase contained in transcript
+                return transcriptClean === variantClean || 
+                       transcriptClean.includes(variantClean) ||
+                       variantClean.includes(transcriptClean);
+              });
+            });
+            
+            if (matched) {
+              console.log(`[GoogleSpeech] 🎯✅ PHRASESET TERM RECOGNIZED: "${matched.value}" in transcript "${combinedTranscript}"`);
+            }
+          }
+        }
+      } catch (err) {
+        // Silently fail - don't break transcription if glossary check fails
+        // Only log errors if DEBUG_PHRASESET is enabled
+        if (process.env.DEBUG_PHRASESET === 'true') {
+          console.error(`[GoogleSpeech] ⚠️ Error checking PhraseSet recognition:`, err.message);
+        }
+      }
+    }
     
     // Update speech context when we get a final result
     if (isFinal && combinedTranscript.length > 20) {
