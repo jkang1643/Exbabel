@@ -12,7 +12,6 @@
 
 import WebSocket from 'ws';
 import { getLanguageName } from './languageConfig.js';
-import { isCurrentlyRateLimited } from './openaiRateLimiter.js';
 
 /**
  * Realtime Partial Translation Worker - Optimized for speed and low latency
@@ -34,35 +33,6 @@ export class RealtimePartialTranslationWorker {
     
     // Concurrency limits
     this.MAX_CONCURRENT = 5;
-    this._deleteItem = (session, itemId) => {
-      if (!session || !itemId || !session.ws || session.ws.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      try {
-        session.ws.send(JSON.stringify({
-          type: 'conversation.item.delete',
-          item_id: itemId
-        }));
-      } catch (error) {
-        console.warn(`[RealtimePartialWorker] ⚠️ Failed to delete item ${itemId} for ${session.connectionKey}:`, error.message);
-      }
-    };
-
-    this._resetSession = (session) => {
-      if (!session) {
-        return;
-      }
-      if (session.responseQueue) {
-        session.responseQueue.length = 0;
-      }
-      if (session.startResponseForItem) {
-        session.startResponseForItem = null;
-      }
-      for (const itemId of session.pendingItems.keys()) {
-        this._deleteItem(session, itemId);
-      }
-      session.pendingItems.clear();
-    };
   }
 
   /**
@@ -75,9 +45,6 @@ export class RealtimePartialTranslationWorker {
     if (this.connectionPool.has(connectionKey)) {
       const session = this.connectionPool.get(connectionKey);
       if (session.ws && session.ws.readyState === WebSocket.OPEN && session.setupComplete) {
-        if (!session.responseQueue) {
-          session.responseQueue = [];
-        }
         return session;
       } else {
         // Connection is dead, remove it
@@ -209,42 +176,30 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                   originalText: originalText, // Store original for validation
                   isComplete: false
                 });
-
-                if (!session.responseQueue) {
-                  session.responseQueue = [];
-                }
-
-                if (!session.startResponseForItem) {
-                  session.startResponseForItem = (itemIdToStart) => {
-                    const itemData = session.pendingItems.get(itemIdToStart);
-                    if (!itemData) return;
-                    const pendingReq = this.pendingResponses.get(itemData.requestId);
-                    if (!pendingReq) return;
-
-                    session.activeRequestId = itemData.requestId;
-
-                    const sourceLangName = getLanguageName(session.sourceLang);
-                    const targetLangName = getLanguageName(session.targetLang);
-                    const createResponseEvent = {
-                      type: 'response.create',
-                      response: {
-                        modalities: ['text'],
-                        instructions: `Translate text from ${sourceLangName} to ${targetLangName}. Translate the partial text naturally even if sentence is incomplete. Maintain the same tense and context. Do NOT complete or extend the sentence - only translate what's given. Keep translation concise and natural in ${targetLangName}. No explanations, only the translation.`
-                      }
-                    };
-                    console.log(`[RealtimePartialWorker] 🚀 Creating response for item ${itemIdToStart}, linked to request ${itemData.requestId}`);
-                    session.ws.send(JSON.stringify(createResponseEvent));
-                  };
-                }
-
-                const startResponseForItem = session.startResponseForItem;
-
+                
+                // Check if there's already an active response - wait for it to finish
                 if (session.activeResponseId) {
-                  console.log(`[RealtimePartialWorker] ⏳ Active response (${session.activeResponseId}) in progress, queuing item ${event.item.id}`);
-                  session.responseQueue.push(event.item.id);
-                } else {
-                  startResponseForItem(event.item.id);
+                  console.warn(`[RealtimePartialWorker] ⚠️ Active response ${session.activeResponseId} in progress, queuing item ${event.item.id}`);
+                  // Store the item and create response after current one finishes
+                  // For now, we'll wait - the response.done handler will clear activeResponseId
+                  return;
                 }
+                
+                // Now create the response since we have the item ID and no active response
+                // Set activeRequestId immediately so deltas can match even if response.created arrives late
+                session.activeRequestId = matchedRequestId;
+                
+                const sourceLangName = getLanguageName(session.sourceLang);
+                const targetLangName = getLanguageName(session.targetLang);
+                const createResponseEvent = {
+                  type: 'response.create',
+                  response: {
+                    modalities: ['text'],
+                    instructions: `Translate text from ${sourceLangName} to ${targetLangName}. Translate the partial text naturally even if sentence is incomplete. Maintain the same tense and context. Do NOT complete or extend the sentence - only translate what's given. Keep translation concise and natural in ${targetLangName}. No explanations, only the translation.`
+                  }
+                };
+                console.log(`[RealtimePartialWorker] 🚀 Creating response for item ${event.item.id}, linked to request ${matchedRequestId}`);
+                session.ws.send(JSON.stringify(createResponseEvent));
               }
               break;
               
@@ -320,29 +275,6 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                 }
               }
               break;
-
-            case 'response.done':
-              console.log(`[RealtimePartialWorker] ✅ Response done: ${session.activeResponseId}`);
-              session.activeResponseId = null; // Clear active response, allow new ones
-              session.activeRequestId = null; // Clear active request tracking
-
-              if (this.pendingResponses.size === 0) {
-                this._resetSession(session);
-              } else if (session.responseQueue && session.responseQueue.length > 0) {
-                while (session.responseQueue.length > 0) {
-                  const nextItemId = session.responseQueue.shift();
-                  if (!nextItemId) continue;
-                  const itemData = session.pendingItems.get(nextItemId);
-                  if (!itemData) continue;
-                  const pendingReq = this.pendingResponses.get(itemData.requestId);
-                  if (!pendingReq) continue;
-                  if (session.startResponseForItem) {
-                    session.startResponseForItem(nextItemId);
-                  }
-                  break;
-                }
-              }
-              break;
               
             case 'response.text.done':
               // Text response complete
@@ -356,34 +288,38 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                     item.isComplete = true;
                     const translatedText = item.text.trim();
                     console.log(`[RealtimePartialWorker] ✅ Response done: "${translatedText.substring(0, 50)}..."`);
-
-                    // PERFORMANCE FIX: Soften validation - warn instead of reject
+                    
+                    // CRITICAL: Validate that translation is actually different from original
                     const originalText = pending.originalText || '';
                     if (!translatedText || translatedText.length === 0) {
-                      console.warn(`[RealtimePartialWorker] ⚠️ Translation is empty, using original text as fallback`);
+                      console.error(`[RealtimePartialWorker] ❌ Translation is empty`);
                       if (pending.timeoutId) {
                         clearTimeout(pending.timeoutId);
                       }
-                      // Use original text instead of rejecting
-                      pending.resolve(originalText);
+                      pending.reject(new Error('Translation API returned empty result'));
                       this.pendingResponses.delete(session.activeRequestId);
                       session.pendingItems.delete(pending.itemId);
                       session.activeRequestId = null;
                       return;
                     }
-
+                    
                     // Check if translation matches original (likely API returned original instead of translating)
-                    // PERFORMANCE FIX: Accept it anyway - better to show something than fail
-                    const isSameAsOriginal = translatedText === originalText ||
+                    const isSameAsOriginal = translatedText === originalText || 
                                            translatedText.trim() === originalText.trim() ||
                                            translatedText.toLowerCase() === originalText.toLowerCase();
-
+                    
                     if (isSameAsOriginal && originalText.length > 0) {
-                      console.warn(`[RealtimePartialWorker] ⚠️ Translation matches original (accepting anyway): "${translatedText.substring(0, 60)}..."`);
-                      // Don't reject - just continue and resolve with the text
-                      // The frontend can handle displaying the same text
+                      console.error(`[RealtimePartialWorker] ❌ Translation matches original (likely API error): "${translatedText.substring(0, 60)}..."`);
+                      if (pending.timeoutId) {
+                        clearTimeout(pending.timeoutId);
+                      }
+                      pending.reject(new Error('Translation returned same as original - API likely returned original text instead of translating'));
+                      this.pendingResponses.delete(session.activeRequestId);
+                      session.pendingItems.delete(pending.itemId);
+                      session.activeRequestId = null;
+                      return;
                     }
-
+                    
                     // Clear timeout
                     if (pending.timeoutId) {
                       clearTimeout(pending.timeoutId);
@@ -394,18 +330,8 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                     }
                     pending.resolve(translatedText);
                     this.pendingResponses.delete(session.activeRequestId);
-
-                    // FIXED: Only delete the INPUT item, not the response item
-                    // OpenAI doesn't allow deleting response items, only user input items
-                    this._deleteItem(session, pending.itemId);
-
                     session.pendingItems.delete(pending.itemId);
                     session.activeRequestId = null;
-
-                    // Reset conversation to avoid context build-up causing conversational replies
-                    if (this.pendingResponses.size === 0) {
-                      this._resetSession(session);
-                    }
                   }
                 } else {
                   console.warn(`[RealtimePartialWorker] ⚠️ Response done but active request not found`);
@@ -419,10 +345,6 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
               console.log(`[RealtimePartialWorker] ✅ Response done: ${session.activeResponseId}`);
               session.activeResponseId = null; // Clear active response, allow new ones
               session.activeRequestId = null; // Clear active request tracking
-
-              if (this.pendingResponses.size === 0) {
-                this._resetSession(session);
-              }
               break;
               
             case 'error':
@@ -436,11 +358,6 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                     pendingResponse.reject(new Error(event.error.message || 'Realtime API error'));
                     this.pendingResponses.delete(item.requestId);
                   }
-                  // FIXED: Only try to delete if it's an input item, not a response item
-                  // Check if the error is about item deletion before attempting to delete
-                  if (event.error.code !== 'item_delete_invalid_item_id') {
-                    this._deleteItem(session, item.itemId);
-                  }
                   session.pendingItems.delete(event.item_id);
                 } else {
                   // If no requestId mapped, find by searching pending responses
@@ -450,10 +367,6 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                       this.pendingResponses.delete(reqId);
                       break;
                     }
-                  }
-                  // Don't try to delete on deletion errors
-                  if (event.error.code !== 'item_delete_invalid_item_id') {
-                    this._deleteItem(session, event.item_id);
                   }
                   session.pendingItems.delete(event.item_id);
                 }
@@ -561,17 +474,16 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
 
         console.log(`[RealtimePartialWorker] ⚡ Translating partial: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
 
-        // PERFORMANCE FIX: Adaptive timeout - longer for first request (connection setup)
-        const timeoutMs = session.setupComplete ? 15000 : 30000; // 15s normal, 30s for first request
+        // Set timeout for request (15 seconds - realtime should be fast but allow buffer for connection setup)
         const timeoutId = setTimeout(() => {
           if (this.pendingResponses.has(requestId)) {
             const pending = this.pendingResponses.get(requestId);
-            console.error(`[RealtimePartialWorker] ⏱️ Translation timeout after ${timeoutMs/1000}s for request ${requestId}`);
+            console.error(`[RealtimePartialWorker] ⏱️ Translation timeout after 15s for request ${requestId}`);
             console.error(`[RealtimePartialWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
             this.pendingResponses.delete(requestId);
             reject(new Error('Translation timeout - realtime API did not respond'));
           }
-        }, timeoutMs);
+        }, 15000);
         
         // Store timeout ID so we can clear it if response arrives
         const pending = this.pendingResponses.get(requestId);
@@ -685,36 +597,6 @@ export class RealtimeFinalTranslationWorker {
     this.connectionSetupPromises = new Map();
     this.requestCounter = 0;
     this.pendingResponses = new Map();
-
-    this._deleteItem = (session, itemId) => {
-      if (!session || !itemId || !session.ws || session.ws.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      try {
-        session.ws.send(JSON.stringify({
-          type: 'conversation.item.delete',
-          item_id: itemId
-        }));
-      } catch (error) {
-        console.warn(`[RealtimeFinalWorker] ⚠️ Failed to delete item ${itemId} for ${session.connectionKey}:`, error.message);
-      }
-    };
-
-    this._resetSession = (session) => {
-      if (!session) {
-        return;
-      }
-      if (session.responseQueue) {
-        session.responseQueue.length = 0;
-      }
-      if (session.startResponseForItem) {
-        session.startResponseForItem = null;
-      }
-      for (const itemId of session.pendingItems.keys()) {
-        this._deleteItem(session, itemId);
-      }
-      session.pendingItems.clear();
-    };
   }
 
   /**
@@ -726,9 +608,6 @@ export class RealtimeFinalTranslationWorker {
     if (this.connectionPool.has(connectionKey)) {
       const session = this.connectionPool.get(connectionKey);
       if (session.ws && session.ws.readyState === WebSocket.OPEN && session.setupComplete) {
-        if (!session.responseQueue) {
-          session.responseQueue = [];
-        }
         return session;
       } else {
         this.connectionPool.delete(connectionKey);
@@ -781,7 +660,7 @@ export class RealtimeFinalTranslationWorker {
       
       ws.on('open', () => {
         console.log(`[RealtimeFinalWorker] Connection opened for ${sourceLang} → ${targetLang}`);
-
+        
         const translationInstructions = `You are a translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName}.
 
 CRITICAL RULES - YOU MUST FOLLOW THESE:
@@ -812,12 +691,12 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
           session: {
             modalities: ['text'],
             instructions: translationInstructions,
-            temperature: 0.6, // Minimum allowed by realtime API
-            max_response_output_tokens: 2000, // OPTIMIZED: Reduced from 16000 for faster responses
+            temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
+            max_response_output_tokens: 16000,
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
-
+        
         ws.send(JSON.stringify(sessionConfig));
       });
       
@@ -871,56 +750,32 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                   originalText: originalText, // Store original for validation
                   isComplete: false
                 });
-
-                if (!session.responseQueue) {
-                  session.responseQueue = [];
-                }
-
-                if (!session.startResponseForItem) {
-                  session.startResponseForItem = (itemIdToStart) => {
-                    const itemData = session.pendingItems.get(itemIdToStart);
-                    if (!itemData) return;
-                    const pendingReq = this.pendingResponses.get(itemData.requestId);
-                    if (!pendingReq) return;
-
-                    session.activeRequestId = itemData.requestId;
-
-                    const sourceLangName = getLanguageName(session.sourceLang);
-                    const targetLangName = getLanguageName(session.targetLang);
-                    const originalTextForResponse = pendingReq.originalText || '';
-                    const sanitizedText = originalTextForResponse.replace(/`/g, "'").trim();
-
-                    const createResponseEvent = {
-                      type: 'response.create',
-                      response: {
-                        modalities: ['text'],
-                        instructions: `You are a translation engine. Translate the text between the <input> tags from ${sourceLangName} to ${targetLangName}.
-
-Rules:
-- Output ONLY the translation.
-- Do NOT answer questions or add commentary.
-- Preserve meaning, tone, and formality.
-
-<input>
-${sanitizedText}
-</input>
-
-<output>`
-                      }
-                    };
-                    console.log(`[RealtimeFinalWorker] 🚀 Creating response for item ${itemIdToStart}, linked to request ${itemData.requestId}`);
-                    session.ws.send(JSON.stringify(createResponseEvent));
-                  };
-                }
-
-                const startResponseForItem = session.startResponseForItem;
-
+                
+                // Check if there's already an active response - wait for it to finish
                 if (session.activeResponseId) {
-                  console.log(`[RealtimeFinalWorker] ⏳ Active response (${session.activeResponseId}) in progress, queuing item ${event.item.id}`);
-                  session.responseQueue.push(event.item.id);
-                } else {
-                  startResponseForItem(event.item.id);
+                  console.warn(`[RealtimeFinalWorker] ⚠️ Active response ${session.activeResponseId} in progress, queuing item ${event.item.id}`);
+                  // Store the item and create response after current one finishes
+                  // For now, we'll wait - the response.done handler will clear activeResponseId
+                  return;
                 }
+                
+                // Now create the response since we have the item ID and no active response
+                // Set activeRequestId immediately so deltas can match even if response.created arrives late
+                session.activeRequestId = matchedRequestId;
+                
+                const sourceLangName = getLanguageName(session.sourceLang);
+                const targetLangName = getLanguageName(session.targetLang);
+                
+                // Use SIMPLE instructions like partial worker - verbosity confuses the API
+                const createResponseEvent = {
+                  type: 'response.create',
+                  response: {
+                    modalities: ['text'],
+                    instructions: `Translate text from ${sourceLangName} to ${targetLangName}. Only provide the direct translation - no explanations, no commentary, no responses to questions. Translate questions as questions, statements as statements. Output only the translated text in ${targetLangName}.`
+                  }
+                };
+                console.log(`[RealtimeFinalWorker] 🚀 Creating response for item ${event.item.id}, linked to request ${matchedRequestId}`);
+                session.ws.send(JSON.stringify(createResponseEvent));
               }
               break;
               
@@ -993,22 +848,6 @@ ${sanitizedText}
               console.log(`[RealtimeFinalWorker] ✅ Response done: ${session.activeResponseId}`);
               session.activeResponseId = null; // Clear active response, allow new ones
               session.activeRequestId = null; // Clear active request tracking
-              if (this.pendingResponses.size === 0) {
-                this._resetSession(session);
-              } else if (session.responseQueue && session.responseQueue.length > 0) {
-                while (session.responseQueue.length > 0) {
-                  const nextItemId = session.responseQueue.shift();
-                  if (!nextItemId) continue;
-                  const itemData = session.pendingItems.get(nextItemId);
-                  if (!itemData) continue;
-                  const pendingReq = this.pendingResponses.get(itemData.requestId);
-                  if (!pendingReq) continue;
-                  if (session.startResponseForItem) {
-                    session.startResponseForItem(nextItemId);
-                  }
-                  break;
-                }
-              }
               break;
               
             case 'response.text.done':
@@ -1023,34 +862,38 @@ ${sanitizedText}
                     item.isComplete = true;
                     const translatedText = item.text.trim();
                     console.log(`[RealtimeFinalWorker] ✅ Response done: "${translatedText.substring(0, 50)}..."`);
-
-                    // PERFORMANCE FIX: Soften validation - warn instead of reject
+                    
+                    // CRITICAL: Validate that translation is actually different from original
                     const originalText = pending.originalText || '';
                     if (!translatedText || translatedText.length === 0) {
-                      console.warn(`[RealtimeFinalWorker] ⚠️ Translation is empty, using original text as fallback`);
+                      console.error(`[RealtimeFinalWorker] ❌ Translation is empty`);
                       if (pending.timeoutId) {
                         clearTimeout(pending.timeoutId);
                       }
-                      // Use original text instead of rejecting
-                      pending.resolve(originalText);
+                      pending.reject(new Error('Translation API returned empty result'));
                       this.pendingResponses.delete(session.activeRequestId);
                       session.pendingItems.delete(pending.itemId);
                       session.activeRequestId = null;
                       return;
                     }
-
+                    
                     // Check if translation matches original (likely API returned original instead of translating)
-                    // PERFORMANCE FIX: Accept it anyway - better to show something than fail
-                    const isSameAsOriginal = translatedText === originalText ||
+                    const isSameAsOriginal = translatedText === originalText || 
                                            translatedText.trim() === originalText.trim() ||
                                            translatedText.toLowerCase() === originalText.toLowerCase();
-
+                    
                     if (isSameAsOriginal && originalText.length > 0) {
-                      console.warn(`[RealtimeFinalWorker] ⚠️ Translation matches original (accepting anyway): "${translatedText.substring(0, 60)}..."`);
-                      // Don't reject - just continue and resolve with the text
-                      // The frontend can handle displaying the same text
+                      console.error(`[RealtimeFinalWorker] ❌ Translation matches original (likely API error): "${translatedText.substring(0, 60)}..."`);
+                      if (pending.timeoutId) {
+                        clearTimeout(pending.timeoutId);
+                      }
+                      pending.reject(new Error('Translation returned same as original - API likely returned original text instead of translating'));
+                      this.pendingResponses.delete(session.activeRequestId);
+                      session.pendingItems.delete(pending.itemId);
+                      session.activeRequestId = null;
+                      return;
                     }
-
+                    
                     // Clear timeout
                     if (pending.timeoutId) {
                       clearTimeout(pending.timeoutId);
@@ -1058,17 +901,8 @@ ${sanitizedText}
                     
                     pending.resolve(translatedText);
                     this.pendingResponses.delete(session.activeRequestId);
-
-                    // FIXED: Only delete the INPUT item, not the response item
-                    // OpenAI doesn't allow deleting response items, only user input items
-                    this._deleteItem(session, pending.itemId);
-
                     session.pendingItems.delete(pending.itemId);
                     session.activeRequestId = null;
-
-                    if (this.pendingResponses.size === 0) {
-                      this._resetSession(session);
-                    }
                   }
                 } else {
                   console.warn(`[RealtimeFinalWorker] ⚠️ Response done but active request not found`);
@@ -1088,11 +922,6 @@ ${sanitizedText}
                     pendingResponse.reject(new Error(event.error.message || 'Realtime API error'));
                     this.pendingResponses.delete(item.requestId);
                   }
-                  // FIXED: Only try to delete if it's an input item, not a response item
-                  // Check if the error is about item deletion before attempting to delete
-                  if (event.error.code !== 'item_delete_invalid_item_id') {
-                    this._deleteItem(session, item.itemId);
-                  }
                   session.pendingItems.delete(event.item_id);
                 } else {
                   // If no requestId mapped, find by searching pending responses
@@ -1102,10 +931,6 @@ ${sanitizedText}
                       this.pendingResponses.delete(reqId);
                       break;
                     }
-                  }
-                  // Don't try to delete on deletion errors
-                  if (event.error.code !== 'item_delete_invalid_item_id') {
-                    this._deleteItem(session, event.item_id);
                   }
                   session.pendingItems.delete(event.item_id);
                 }
@@ -1146,11 +971,6 @@ ${sanitizedText}
       return text;
     }
 
-    if (isCurrentlyRateLimited()) {
-      console.warn('[RealtimeFinalWorker] ⏸️ Rate limited - returning original text');
-      return text;
-    }
-
     const cacheKey = `final:${sourceLang}:${targetLang}:${text.substring(0, 200)}`;
     
     if (this.cache.has(cacheKey)) {
@@ -1170,8 +990,7 @@ ${sanitizedText}
 
     console.log(`[RealtimeFinalWorker] 🎯 Translating final: "${text.substring(0, 50)}..." (${sourceLangName} → ${targetLangName})`);
 
-    // CRITICAL FIX: Reuse connection pool instead of creating new connection every time
-    // This restores 150-300ms latency by reusing persistent WebSocket connections
+    // Get or create connection
     const connectionKey = `${sourceLang}:${targetLang}`;
     let session;
     try {
@@ -1183,61 +1002,56 @@ ${sanitizedText}
 
     const requestId = `req_${Date.now()}_${++this.requestCounter}`;
 
-    try {
-      const translatedText = await new Promise((resolve, reject) => {
-        // Store pending response (itemId will be set when item.created arrives)
-        this.pendingResponses.set(requestId, {
-          resolve,
-          reject,
-          itemId: null, // Will be set when item.created event arrives
-          session: session, // Track which session this request belongs to
-          connectionKey: session.connectionKey, // Track connection for debugging
-          originalText: text
-        });
-
-        const createItemEvent = {
-          type: 'conversation.item.create',
-          item: {
-            type: 'message',
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: text
-              }
-            ]
-          }
-        };
-
-        try {
-          // Send item creation event (response will be created when item.created arrives)
-          console.log(`[RealtimeFinalWorker] 📤 Sending item.create for request ${requestId}`);
-          session.ws.send(JSON.stringify(createItemEvent));
-          console.log(`[RealtimeFinalWorker] ✅ Item.create sent, waiting for item.created...`);
-
-          // PERFORMANCE FIX: Adaptive timeout - longer for first request (connection setup)
-          const timeoutMs = session.setupComplete ? 20000 : 40000; // 20s normal, 40s for first request
-          const timeoutId = setTimeout(() => {
-            if (this.pendingResponses.has(requestId)) {
-              const pending = this.pendingResponses.get(requestId);
-              console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after ${timeoutMs/1000}s for request ${requestId}`);
-              console.error(`[RealtimeFinalWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
-              this.pendingResponses.delete(requestId);
-              reject(new Error('Translation timeout - realtime API did not respond'));
-            }
-          }, timeoutMs);
-          
-          // Store timeout ID
-          const pending = this.pendingResponses.get(requestId);
-          if (pending) {
-            pending.timeoutId = timeoutId;
-          }
-        } catch (error) {
-          this.pendingResponses.delete(requestId);
-          reject(error);
-        }
+    return new Promise((resolve, reject) => {
+      // Store pending response (itemId will be set when item.created arrives)
+      this.pendingResponses.set(requestId, {
+        resolve,
+        reject,
+        itemId: null, // Will be set when item.created event arrives
+        session: session, // Track which session this request belongs to
+        connectionKey: connectionKey // Track connection for debugging
       });
 
+      const createItemEvent = {
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: text
+            }
+          ]
+        }
+      };
+
+      try {
+        // Send item creation event (response will be created when item.created arrives)
+        console.log(`[RealtimeFinalWorker] 📤 Sending item.create for request ${requestId}`);
+        session.ws.send(JSON.stringify(createItemEvent));
+        console.log(`[RealtimeFinalWorker] ✅ Item.create sent, waiting for item.created...`);
+
+        const timeoutId = setTimeout(() => {
+          if (this.pendingResponses.has(requestId)) {
+            const pending = this.pendingResponses.get(requestId);
+            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 20s for request ${requestId}`);
+            console.error(`[RealtimeFinalWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
+            this.pendingResponses.delete(requestId);
+            reject(new Error('Translation timeout - realtime API did not respond'));
+          }
+        }, 20000); // 20 second timeout for finals
+        
+        // Store timeout ID
+        const pending = this.pendingResponses.get(requestId);
+        if (pending) {
+          pending.timeoutId = timeoutId;
+        }
+      } catch (error) {
+        this.pendingResponses.delete(requestId);
+        reject(error);
+      }
+    }).then((translatedText) => {
       // Cache the result
       this.cache.set(cacheKey, {
         text: translatedText,
@@ -1250,12 +1064,10 @@ ${sanitizedText}
       }
 
       return translatedText;
-    } catch (error) {
+    }).catch((error) => {
       console.error(`[RealtimeFinalWorker] Translation error:`, error.message);
       throw error;
-    }
-    // REMOVED: Don't close connection - we're reusing the connection pool now
-    // Connection stays open for subsequent requests to reduce latency
+    });
   }
 
   /**
