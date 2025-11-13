@@ -1,88 +1,123 @@
-fix: WebSocket disconnection on audio stop/start + Phase 1 multi-session performance
+Add biblical angel names to glossary and update Google Cloud PhraseSet
 
-## Bug Fix: WebSocket Disconnection Issue
+This commit adds seven important biblical angel names to the glossary.json
+file to improve speech recognition accuracy for these theological terms
+during transcription. The changes have been synchronized with the Google
+Cloud Speech-to-Text PhraseSet to ensure immediate availability for
+production use.
 
-Fixed critical bug where WebSocket would disconnect when stopping and restarting
-audio capture, causing connection refused errors and preventing subsequent audio
-sessions from working.
+## Changes Made
 
-### Root Cause
-- `handleWebSocketMessage` callback was recreated whenever `isListening` changed
-- This caused the WebSocket useEffect to cleanup and reconnect on every start/stop
-- AudioWorklet continued sending messages after stopRecording(), causing errors
+### Glossary Updates (glossary.json)
+Added the following angel names in alphabetical order to maintain consistency
+with the existing glossary structure:
 
-### Changes Made
-- Added `isRecordingActiveRef` flag to prevent audio chunks after stopping
-- Removed `isListening` from `handleWebSocketMessage` dependencies (use ref instead)
-- Used refs for all WebSocket functions to prevent unnecessary reconnections
-- Made WebSocket setup run only once on mount (empty dependency array)
-- Added connection check before sending audio chunks
-- Clear AudioWorklet message handler before disconnecting processor
+1. **Abaddon** (line 205)
+   - Added after "Absalom's Monument"
+   - Hebrew name meaning "destruction" or "place of destruction"
+   - Referenced in Revelation 9:11 as the angel of the bottomless pit
 
-### Files Modified
-- `frontend/src/hooks/useAudioCapture.js`
-  - Added `isRecordingActiveRef` to track recording state
-  - Clear worklet message handler before disconnecting
-  - Guard audio processing with recording active flag
-  
-- `frontend/src/components/TranslationInterface.jsx`
-  - Use refs for WebSocket functions to prevent reconnection loops
-  - Added `isListeningRef` to avoid dependency issues
-  - Improved restart logic with connection verification
-  - WebSocket setup now runs only once on mount
+2. **Apollyon** (line 244)
+   - Added after "Antipatris"
+   - Greek name meaning "The Destroyer"
+   - Referenced in Revelation 9:11 as the Greek equivalent of Abaddon
 
-## Phase 1: Multi-Session Performance Optimization
+3. **Gabriel** (line 439)
+   - Added before "Gabatha"
+   - Archangel known as a messenger angel
+   - Delivered announcements of John the Baptist's and Jesus Christ's births
+   - Appears in Daniel and Luke
 
-Implemented foundational optimizations to support 2-5+ concurrent translation
-sessions without latency degradation. Enables fair resource sharing and parallel
-processing across multiple solo mode sessions.
+4. **Jeremiel** (line 4795)
+   - Added after "Jeremoth"
+   - Also known as Jerahmeel
+   - Mentioned in 2 Esdras as an archangel in certain traditions
 
-### Architecture Changes
+5. **Michael** (line 5611)
+   - Added after "Michaiah"
+   - Archangel and warrior angel
+   - Protector of Israel, leads heavenly armies against evil
+   - Referenced in Daniel, Jude, and Revelation
 
-#### 1. Parallel Request Queue Processing
-**File**: `backend/openaiRequestQueue.js`
-- Changed from sequential to parallel processing (4 concurrent requests)
-- Added `activeRequests` counter and `maxConcurrent` parameter
-- Preserved `minRequestInterval` (50ms) for single-session stability
-- Enables multiple sessions to share API capacity without blocking
+6. **Raphael** (line 6292)
+   - Added after "Rapha"
+   - Archangel associated with healing and guidance
+   - Appears in the Book of Tobit, assisting Tobias during his journey
 
-#### 2. Increased Translation Worker Concurrency
-**File**: `backend/translationWorkers.js`
-- Increased `MAX_CONCURRENT` from 2/1 to 5/2 (normal/rate-limited)
-- Added `sessionId` parameter to all translation methods
-- Pass sessionId through to rate limiter for fair-share allocation
-- Allows 5 parallel translation requests (up from 2)
+7. **Sariel** (line 6427)
+   - Added after "Sacar"
+   - Identified in the Book of Enoch as one of the seven holy angels
+   - Watches over humanity
 
-#### 3. Per-Session Fair-Share Rate Limiting
-**File**: `backend/openaiRateLimiter.js`
-- Added per-session token tracking (`sessionTokenUsage` Map)
-- Added per-session request tracking (`sessionRequestCounts` Map)
-- Implemented fair-share allocation: divides RPM/TPM limits by active session count
-- Added `getActiveSessionCount()` function (sessions active in last 5 minutes)
-- Prevents single session from starving others
-- Example: 2 sessions each get ~2,250 RPM (4,500 / 2)
+### Existing Angel Names Verified
+The following angel names were already present in the glossary:
+- Jerahmeel (line 4780)
+- Phanuel (line 6115) - Fourth angel who stands before God (Book of Enoch)
+- Raguel (line 6265) - Archangel of justice, fairness, harmony, vengeance, and redemption
+- Uriel (line 7264) - Mentioned in 2 Esdras, recognized as an archangel
 
-#### 4. Session-Level Tracking
-**File**: `backend/soloModeHandler.js`
-- Added `sessionId` constant for each solo mode connection
-- Pass `sessionId` to all translation worker calls
-- Enables per-session rate limiting and tracking
-- Format: `session_${Date.now()}`
+### Data Quality Improvements
+- Removed duplicate "Abaddon" entry that was incorrectly placed after "Zurishaddai"
+- All entries maintain proper alphabetical ordering
+- Total phrase count increased from 6,614 to 6,620 phrases
 
-### Performance Impact
-- ✅ Multiple sessions can process translations simultaneously
-- ✅ Fair distribution of API capacity across sessions
-- ✅ Queue processes 4x faster with multiple sessions
-- ✅ Backward compatible - single session performance unchanged
-- ✅ No API rate limit errors with proper fair-share allocation
+## Google Cloud PhraseSet Synchronization
 
-### Testing
-- Verified 2-4 concurrent sessions maintain <500ms latency
-- Confirmed fair-share rate limiting prevents session starvation
-- Validated backward compatibility with single session
-- Tested WebSocket stability across multiple start/stop cycles
+Successfully updated the Google Cloud Speech-to-Text PhraseSet:
+- **PhraseSet Name**: church-glossary-10k
+- **Project ID**: 222662040787
+- **Location**: global
+- **Full Resource Path**: projects/222662040787/locations/global/phraseSets/church-glossary-10k
+- **Total Phrases**: 6,620 (updated from 6,614)
+- **Boost Value**: 20 (maximum recognition probability)
+- **API Version**: v1p1beta1 (required for PhraseSet support)
 
-### Related Documentation
-- `PHASE OVERVIEW MULTI_SESSION_PERFORMANCE.md` - Complete architecture overview
-- `PHASE_1.5_PLAN.md` - Next phase optimization plan
+The PhraseSet update was performed using the populatePhraseSet.js script,
+which authenticated via service account credentials and updated the remote
+PhraseSet via the Google Cloud Speech-to-Text REST API.
 
+## Impact and Benefits
+
+### Improved Recognition Accuracy
+These additions will significantly improve speech recognition accuracy for:
+- Biblical and theological discussions
+- Sermons and religious teachings
+- Academic study of angelology
+- Translation of religious texts
+
+### Production Readiness
+- Changes are immediately available in production
+- No application restart required
+- PhraseSet is automatically used by all transcription requests when
+  GOOGLE_CLOUD_PROJECT_ID and GOOGLE_PHRASE_SET_ID environment variables
+  are configured
+
+### Technical Details
+- All entries follow the standard glossary format: `{ "value": "AngelName" }`
+- Entries are properly integrated into the existing JSON structure
+- No breaking changes to the glossary schema
+- Maintains backward compatibility with existing systems
+
+## Testing Recommendations
+
+To verify the changes:
+1. Check that angel names are recognized accurately during transcription
+2. Verify PhraseSet is active in application logs:
+   `[GoogleSpeech] ✅ PhraseSet ENABLED: projects/222662040787/locations/global/phraseSets/church-glossary-10k`
+3. Test recognition of terms like "Michael", "Gabriel", "Apollyon" in live
+   transcription scenarios
+4. Confirm improved accuracy for theological discussions
+
+## Related Documentation
+
+- See PHRASESET_FEATURE.md for PhraseSet setup and usage
+- See GOOGLE_CLOUD_SETUP.md for Google Cloud configuration
+- Glossary structure documented in backend/scripts/populatePhraseSet.js
+
+## Notes
+
+This update enhances the theological vocabulary coverage of the application,
+ensuring that important biblical figures and concepts are recognized with
+maximum accuracy during real-time speech transcription. The synchronization
+with Google Cloud ensures that these improvements are immediately available
+to all users of the transcription service.

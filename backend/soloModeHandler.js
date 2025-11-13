@@ -12,6 +12,7 @@ import { GoogleSpeechStream } from './googleSpeechStream.js';
 import WebSocket from 'ws';
 import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
+import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
 import { grammarWorker } from './grammarWorker.js';
 
 export async function handleSoloMode(clientWs) {
@@ -20,6 +21,7 @@ export async function handleSoloMode(clientWs) {
   let speechStream = null;
   let currentSourceLang = 'en';
   let currentTargetLang = 'es';
+  let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
   let legacySessionId = `session_${Date.now()}`;
   
   // MULTI-SESSION OPTIMIZATION: Track this session for fair-share allocation
@@ -114,17 +116,31 @@ export async function handleSoloMode(clientWs) {
           // Keep-alive pong received (frontend confirms connection alive)
           return; // Don't log pong messages
         case 'init':
-          // Update language preferences
+          // Update language preferences and tier
           const prevSourceLang = currentSourceLang;
           const prevTargetLang = currentTargetLang;
           
-          console.log(`[SoloMode] Init received - sourceLang: ${message.sourceLang}, targetLang: ${message.targetLang}`);
+          console.log(`[SoloMode] Init received - sourceLang: ${message.sourceLang}, targetLang: ${message.targetLang}, tier: ${message.tier || 'basic'}`);
           
           if (message.sourceLang) {
             currentSourceLang = message.sourceLang;
           }
           if (message.targetLang) {
             currentTargetLang = message.targetLang;
+          }
+          if (message.tier !== undefined) {
+            const newTier = message.tier === 'premium' || message.tier === true;
+            const tierChanged = newTier !== usePremiumTier;
+            usePremiumTier = newTier;
+            
+            if (tierChanged) {
+              console.log(`[SoloMode] 🔄 TIER SWITCHED: ${usePremiumTier ? 'BASIC → PREMIUM' : 'PREMIUM → BASIC'}`);
+              console.log(`[SoloMode] 📊 New Tier: ${usePremiumTier ? 'PREMIUM (gpt-realtime-mini)' : 'BASIC (gpt-4o-mini Chat API)'}`);
+              console.log(`[SoloMode] ⚡ Expected Latency: ${usePremiumTier ? '150-300ms' : '400-1500ms'}`);
+              console.log(`[SoloMode] 💰 Cost Multiplier: ${usePremiumTier ? '3-4x' : '1x'}`);
+            } else {
+              console.log(`[SoloMode] Tier: ${usePremiumTier ? 'PREMIUM (Realtime API)' : 'BASIC (Chat API)'}`);
+            }
           }
           
           const isTranscription = currentSourceLang === currentTargetLang;
@@ -242,9 +258,15 @@ export async function handleSoloMode(clientWs) {
 
                         // Translate the CORRECTED text (not the original)
                         // This ensures Spanish matches the corrected English
+                        // Route to appropriate worker based on tier
                         let translatedText;
+                        const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
                         try {
-                          translatedText = await finalTranslationWorker.translateFinal(
+                          const finalWorker = usePremiumTier 
+                            ? realtimeFinalTranslationWorker 
+                            : finalTranslationWorker;
+                          console.log(`[SoloMode] 🔀 Using ${workerType} API for final translation (${correctedText.length} chars)`);
+                          translatedText = await finalWorker.translateFinal(
                             correctedText, // Use corrected text for translation
                             currentSourceLang,
                             currentTargetLang,
@@ -261,6 +283,11 @@ export async function handleSoloMode(clientWs) {
                             // The text might be too long - we've already used longest partial
                             console.warn(`[SoloMode] ⚠️ Translation truncated - text may be incomplete:`, translationError.message);
                             translatedText = correctedText; // Fallback to corrected English
+                          } else if (translationError.message && translationError.message.includes('timeout')) {
+                            // Handle timeout errors gracefully
+                            console.error(`[SoloMode] ❌ ${workerType} API timeout for final translation:`, translationError.message);
+                            console.warn(`[SoloMode] ⚠️ Using corrected text as fallback due to timeout`);
+                            translatedText = correctedText; // Fallback to corrected text
                           } else {
                             console.error(`[SoloMode] Translation failed:`, translationError.message);
                             translatedText = `[Translation error: ${translationError.message}]`;
@@ -511,10 +538,16 @@ export async function handleSoloMode(clientWs) {
                         } else {
                           // TRANSLATION MODE: Decouple grammar and translation for lowest latency
                           // Fire both in parallel, but send results independently (grammar only for English)
+                          // Route to appropriate worker based on tier
                           const grammarPromise = currentSourceLang === 'en' 
                             ? grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
                             : Promise.resolve(capturedText); // Skip grammar for non-English
-                          const translationPromise = partialTranslationWorker.translatePartial(
+                          const partialWorker = usePremiumTier 
+                            ? realtimePartialTranslationWorker 
+                            : partialTranslationWorker;
+                          const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                          console.log(`[SoloMode] 🔀 Using ${workerType} API for partial translation (${capturedText.length} chars)`);
+                          const translationPromise = partialWorker.translatePartial(
                             capturedText,
                             currentSourceLang,
                             currentTargetLang,
@@ -539,7 +572,6 @@ export async function handleSoloMode(clientWs) {
                               console.warn(`[SoloMode] ⚠️ Translation matches original (English leak detected): "${translatedText.substring(0, 60)}..."`);
                               return; // Don't send English as translation
                             }
-
                             // CRITICAL: Only update lastPartialTranslation AFTER successful translation
                             lastPartialTranslation = capturedText;
                             
@@ -556,13 +588,16 @@ export async function handleSoloMode(clientWs) {
                               hasCorrection: false // Grammar not ready yet
                             }, true);
                           }).catch(error => {
+                            // Handle translation errors gracefully
                             if (error.name !== 'AbortError') {
                               if (error.message && error.message.includes('truncated')) {
                                 // Translation was truncated - log warning but don't send incomplete translation
-                                // Wait for a longer partial or final to come through
                                 console.warn(`[SoloMode] ⚠️ Partial translation truncated (${capturedText.length} chars) - waiting for longer partial`);
+                              } else if (error.message && error.message.includes('timeout')) {
+                                console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
+                                // Don't send error message to frontend - just skip this translation
                               } else {
-                                console.error(`[SoloMode] ❌ Translation error (${capturedText.length} chars):`, error.message);
+                                console.error(`[SoloMode] ❌ Translation error (${workerType} API, ${capturedText.length} chars):`, error.message);
                               }
                             }
                             // Don't send anything on error - keep last partial translation
@@ -685,14 +720,21 @@ export async function handleSoloMode(clientWs) {
                             }
                           } else {
                             // TRANSLATION MODE: Decouple grammar and translation for lowest latency (grammar only for English)
+                            // Route to appropriate worker based on tier
                             const grammarPromise = currentSourceLang === 'en' 
                               ? grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
                               : Promise.resolve(latestText); // Skip grammar for non-English
-                            const translationPromise = partialTranslationWorker.translatePartial(
+                            const partialWorker = usePremiumTier 
+                              ? realtimePartialTranslationWorker 
+                              : partialTranslationWorker;
+                            const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                            console.log(`[SoloMode] 🔀 Using ${workerType} API for delayed partial translation (${latestText.length} chars)`);
+                            const translationPromise = partialWorker.translatePartial(
                               latestText,
                               currentSourceLang,
                               currentTargetLang,
-                              process.env.OPENAI_API_KEY
+                              process.env.OPENAI_API_KEY,
+                              sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
                             );
 
                             // Send translation IMMEDIATELY when ready (don't wait for grammar)
@@ -720,7 +762,15 @@ export async function handleSoloMode(clientWs) {
                                 hasCorrection: false // Grammar not ready yet
                               }, true);
                             }).catch(error => {
-                              console.error(`[SoloMode] ❌ Delayed translation error (${latestText.length} chars):`, error.message);
+                              // Handle translation errors gracefully
+                              if (error.name !== 'AbortError') {
+                                if (error.message && error.message.includes('timeout')) {
+                                  console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
+                                } else {
+                                  console.error(`[SoloMode] ❌ Delayed translation error (${workerType} API, ${latestText.length} chars):`, error.message);
+                                }
+                              }
+                              // Don't send anything on error
                             });
 
                             // Send grammar correction separately when ready (English only)

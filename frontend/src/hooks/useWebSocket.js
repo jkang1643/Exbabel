@@ -56,7 +56,25 @@ export function useWebSocket(url) {
       
       wsRef.current.onerror = (error) => {
         setConnectionState('error')
-        console.error('[WebSocket] ⚠️ Error:', error)
+        // Extract more details from the error event
+        const errorDetails = {
+          type: error.type,
+          target: error.target,
+          readyState: wsRef.current?.readyState,
+          url: wsRef.current?.url
+        }
+        console.error('[WebSocket] ⚠️ Error:', errorDetails)
+        console.error('[WebSocket] Error event:', error)
+        
+        // Log WebSocket state for debugging
+        if (wsRef.current) {
+          console.error('[WebSocket] WebSocket state:', {
+            readyState: wsRef.current.readyState,
+            url: wsRef.current.url,
+            protocol: wsRef.current.protocol,
+            extensions: wsRef.current.extensions
+          })
+        }
       }
       
       wsRef.current.onmessage = (event) => {

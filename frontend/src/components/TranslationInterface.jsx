@@ -39,6 +39,7 @@ function TranslationInterface({ onBackToHome }) {
   const [showSettings, setShowSettings] = useState(false)
   const [audioEnabled, setAudioEnabled] = useState(true)
   const [latency, setLatency] = useState(0)
+  const [usePremiumTier, setUsePremiumTier] = useState(false) // Tier selection: false = basic, true = premium
   
   // Throttle mechanism for smooth streaming
   const lastUpdateTimeRef = useRef(0)
@@ -806,7 +807,8 @@ function TranslationInterface({ onBackToHome }) {
       sendMessage({
         type: 'init',
         sourceLang,
-        targetLang
+        targetLang,
+        tier: usePremiumTier ? 'premium' : 'basic'
       })
     } else {
       setIsConnected(false)
@@ -814,7 +816,7 @@ function TranslationInterface({ onBackToHome }) {
         console.log('[TranslationInterface] ⚠️ WebSocket state:', connectionState)
       }
     }
-  }, [connectionState, sourceLang, targetLang]) // Remove sendMessage from deps to prevent re-render loop
+  }, [connectionState, sourceLang, targetLang, usePremiumTier]) // Remove sendMessage from deps to prevent re-render loop
 
   const handleStartListening = async () => {
     if (!isConnected) {
@@ -854,7 +856,8 @@ function TranslationInterface({ onBackToHome }) {
       sendMessage({
         type: 'init',
         sourceLang,
-        targetLang
+        targetLang,
+        tier: usePremiumTier ? 'premium' : 'basic'
       })
       
       // Small delay to ensure backend is ready
@@ -1112,6 +1115,58 @@ function TranslationInterface({ onBackToHome }) {
                 </p>
               </div>
             )}
+            
+            {/* Tier Selection */}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Translation Tier
+              </label>
+              <div className="space-y-2">
+                <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                  !usePremiumTier 
+                    ? 'bg-blue-50 border-blue-300' 
+                    : 'bg-white border-gray-300 hover:bg-gray-50'
+                } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <input
+                    type="radio"
+                    name="tier"
+                    value="basic"
+                    checked={!usePremiumTier}
+                    onChange={(e) => setUsePremiumTier(false)}
+                    disabled={isListening}
+                    className="text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <span className="text-sm font-medium text-gray-700">Basic (Chat API)</span>
+                    <p className="text-xs text-gray-500">Standard latency (400-1500ms), lower cost</p>
+                  </div>
+                </label>
+                <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                  usePremiumTier 
+                    ? 'bg-blue-50 border-blue-300' 
+                    : 'bg-white border-gray-300 hover:bg-gray-50'
+                } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <input
+                    type="radio"
+                    name="tier"
+                    value="premium"
+                    checked={usePremiumTier}
+                    onChange={(e) => setUsePremiumTier(true)}
+                    disabled={isListening}
+                    className="text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <span className="text-sm font-medium text-gray-700">Premium (Realtime API)</span>
+                    <p className="text-xs text-gray-500">Ultra-low latency (150-300ms), 3-4x cost</p>
+                  </div>
+                </label>
+              </div>
+              {isListening && (
+                <p className="text-xs text-amber-600 mt-1">
+                  Stop listening to change tier
+                </p>
+              )}
+            </div>
             
             <div className="flex items-center space-x-4">
               <label className="flex items-center space-x-2">

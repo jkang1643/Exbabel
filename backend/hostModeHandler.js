@@ -13,6 +13,7 @@ import WebSocket from 'ws';
 import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
+import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
 import { grammarWorker } from './grammarWorker.js';
 
 export async function handleHostConnection(clientWs, sessionId) {
@@ -30,6 +31,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
   let speechStream = null;
   let currentSourceLang = 'en';
+  let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
 
   // Handle client messages
   clientWs.on('message', async (msg) => {
@@ -41,6 +43,20 @@ export async function handleHostConnection(clientWs, sessionId) {
           if (message.sourceLang) {
             currentSourceLang = message.sourceLang;
             sessionStore.updateSourceLanguage(sessionId, currentSourceLang);
+          }
+          if (message.tier !== undefined) {
+            const newTier = message.tier === 'premium' || message.tier === true;
+            const tierChanged = newTier !== usePremiumTier;
+            usePremiumTier = newTier;
+            
+            if (tierChanged) {
+              console.log(`[HostMode] 🔄 TIER SWITCHED: ${usePremiumTier ? 'BASIC → PREMIUM' : 'PREMIUM → BASIC'}`);
+              console.log(`[HostMode] 📊 New Tier: ${usePremiumTier ? 'PREMIUM (gpt-realtime-mini)' : 'BASIC (gpt-4o-mini Chat API)'}`);
+              console.log(`[HostMode] ⚡ Expected Latency: ${usePremiumTier ? '150-300ms' : '400-1500ms'}`);
+              console.log(`[HostMode] 💰 Cost Multiplier: ${usePremiumTier ? '3-4x' : '1x'}`);
+            } else {
+              console.log(`[HostMode] Tier: ${usePremiumTier ? 'PREMIUM (Realtime API)' : 'BASIC (Chat API)'}`);
+            }
           }
           
           console.log(`[HostMode] Session ${sessionId} initialized with source language: ${currentSourceLang}`);
@@ -208,9 +224,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                         try {
                           console.log(`[HostMode] 🔄 Processing partial (grammar + translation to ${translationTargets.length} language(s))`);
                           // Run grammar correction and translation in parallel
+                          // Route to appropriate worker based on tier
+                          const partialWorker = usePremiumTier 
+                            ? realtimePartialTranslationWorker 
+                            : partialTranslationWorker;
+                          const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                          console.log(`[HostMode] 🔀 Using ${workerType} API for partial translation to ${translationTargets.length} language(s) (${transcriptText.length} chars)`);
                           const [grammarResult, translationResult] = await Promise.allSettled([
                             grammarWorker.correctPartial(transcriptText, process.env.OPENAI_API_KEY),
-                            partialTranslationWorker.translateToMultipleLanguages(
+                            partialWorker.translateToMultipleLanguages(
                               transcriptText,
                               currentSourceLang,
                               translationTargets,
@@ -261,9 +283,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                         pendingPartialTranslation = setTimeout(async () => {
                           try {
                             // Run grammar correction and translation in parallel
+                            // Route to appropriate worker based on tier
+                            const partialWorker = usePremiumTier 
+                              ? realtimePartialTranslationWorker 
+                              : partialTranslationWorker;
+                            const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                            console.log(`[HostMode] 🔀 Using ${workerType} API for delayed partial translation to ${translationTargets.length} language(s) (${transcriptText.length} chars)`);
                             const [grammarResult, translationResult] = await Promise.allSettled([
                               grammarWorker.correctPartial(transcriptText, process.env.OPENAI_API_KEY),
-                              partialTranslationWorker.translateToMultipleLanguages(
+                              partialWorker.translateToMultipleLanguages(
                                 transcriptText,
                                 currentSourceLang,
                                 translationTargets,
@@ -354,9 +382,15 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                 try {
                   // Run grammar correction and translation in parallel for final transcript
+                  // Route to appropriate worker based on tier
+                  const finalWorker = usePremiumTier 
+                    ? realtimeFinalTranslationWorker 
+                    : finalTranslationWorker;
+                  const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                  console.log(`[HostMode] 🔀 Using ${workerType} API for final translation to ${targetLanguages.length} language(s) (${transcriptText.length} chars)`);
                   const [grammarResult, translationResult] = await Promise.allSettled([
                     grammarWorker.correctFinal(transcriptText, process.env.OPENAI_API_KEY),
-                    finalTranslationWorker.translateToMultipleLanguages(
+                    finalWorker.translateToMultipleLanguages(
                       transcriptText,
                       currentSourceLang,
                       targetLanguages,

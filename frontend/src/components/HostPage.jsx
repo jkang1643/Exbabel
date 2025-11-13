@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import QRCode from 'qrcode';
+import { Settings } from 'lucide-react';
 import { useAudioCapture } from '../hooks/useAudioCapture';
 import { Header } from './Header';
 import { ConnectionStatus } from './ConnectionStatus';
@@ -60,6 +61,8 @@ export function HostPage({ onBackToHome }) {
   const [sessionId, setSessionId] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [sourceLang, setSourceLang] = useState('en');
+  const [usePremiumTier, setUsePremiumTier] = useState(false); // Tier selection: false = basic, true = premium
+  const [showSettings, setShowSettings] = useState(false);
   const [connectionState, setConnectionState] = useState('disconnected');
   const [transcript, setTranscript] = useState([]);
   const [currentTranscript, setCurrentTranscript] = useState(''); // Live partial transcription
@@ -153,7 +156,8 @@ export function HostPage({ onBackToHome }) {
       // Send initialization
       ws.send(JSON.stringify({
         type: 'init',
-        sourceLang: sourceLang
+        sourceLang: sourceLang,
+        tier: usePremiumTier ? 'premium' : 'basic'
       }));
     };
     
@@ -306,7 +310,23 @@ export function HostPage({ onBackToHome }) {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'init',
-        sourceLang: lang
+        sourceLang: lang,
+        tier: usePremiumTier ? 'premium' : 'basic'
+      }));
+    }
+  };
+  
+  const handleTierChange = (tier) => {
+    if (isStreaming) {
+      return; // Don't allow tier change while streaming
+    }
+    setUsePremiumTier(tier === 'premium');
+    
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'init',
+        sourceLang: sourceLang,
+        tier: tier
       }));
     }
   };
@@ -355,14 +375,76 @@ export function HostPage({ onBackToHome }) {
           {/* Connection Status */}
           <ConnectionStatus state={connectionState} />
 
-          {/* Language Selection */}
+          {/* Language Selection and Settings */}
           <div className="mb-4 sm:mb-6">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm sm:text-base font-semibold text-gray-700">Configuration</h3>
+              <button
+                onClick={() => setShowSettings(!showSettings)}
+                className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+            </div>
+            
             <LanguageSelector
               label="Speaking Language"
               languages={LANGUAGES}
               selectedLanguage={sourceLang}
               onLanguageChange={handleSourceLangChange}
             />
+            
+            {/* Settings Panel */}
+            {showSettings && (
+              <div className="bg-gray-50 rounded-lg p-3 sm:p-4 mt-4">
+                <h3 className="text-sm sm:text-base font-semibold text-gray-900 mb-3">Translation Tier</h3>
+                <div className="space-y-2">
+                  <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                    !usePremiumTier 
+                      ? 'bg-blue-50 border-blue-300' 
+                      : 'bg-white border-gray-300 hover:bg-gray-50'
+                  } ${isStreaming ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                    <input
+                      type="radio"
+                      name="tier"
+                      value="basic"
+                      checked={!usePremiumTier}
+                      onChange={(e) => handleTierChange('basic')}
+                      disabled={isStreaming}
+                      className="text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-gray-700">Basic (Chat API)</span>
+                      <p className="text-xs text-gray-500">Standard latency (400-1500ms), lower cost</p>
+                    </div>
+                  </label>
+                  <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                    usePremiumTier 
+                      ? 'bg-blue-50 border-blue-300' 
+                      : 'bg-white border-gray-300 hover:bg-gray-50'
+                  } ${isStreaming ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                    <input
+                      type="radio"
+                      name="tier"
+                      value="premium"
+                      checked={usePremiumTier}
+                      onChange={(e) => handleTierChange('premium')}
+                      disabled={isStreaming}
+                      className="text-blue-600 focus:ring-blue-500"
+                    />
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-gray-700">Premium (Realtime API)</span>
+                      <p className="text-xs text-gray-500">Ultra-low latency (150-300ms), 3-4x cost</p>
+                    </div>
+                  </label>
+                </div>
+                {isStreaming && (
+                  <p className="text-xs text-amber-600 mt-2">
+                    Stop broadcasting to change tier
+                  </p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Broadcast Controls */}

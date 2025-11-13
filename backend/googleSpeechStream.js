@@ -253,41 +253,44 @@ export class GoogleSpeechStream {
     this.recognizeStream = this.client
       .streamingRecognize(request)
       .on('error', (error) => {
-        console.error('[GoogleSpeech] Stream error:', error);
-        console.error('[GoogleSpeech] Error code:', error.code, 'Details:', error.details);
-        
-        // Check specifically for PhraseSet errors
-        if (error.message && (
-          error.message.includes('phraseSet') || 
-          error.message.includes('phrase_set') ||
-          error.message.includes('adaptation') ||
-          error.message.includes('PhraseSet')
-        )) {
-          console.error(`[GoogleSpeech] ❌ PHRASESET ERROR: ${error.message}`);
-          console.error(`[GoogleSpeech]    This means Google rejected the PhraseSet reference`);
-        }
-        
-        // Mark as inactive immediately
-        this.isActive = false;
+        // Prevent unhandled error crashes - wrap entire handler in try-catch
+        try {
+          console.error('[GoogleSpeech] Stream error:', error);
+          console.error('[GoogleSpeech] Error code:', error.code, 'Details:', error.details);
+          
+          // Check specifically for PhraseSet errors
+          if (error.message && (
+            error.message.includes('phraseSet') || 
+            error.message.includes('phrase_set') ||
+            error.message.includes('adaptation') ||
+            error.message.includes('PhraseSet')
+          )) {
+            console.error(`[GoogleSpeech] ❌ PHRASESET ERROR: ${error.message}`);
+            console.error(`[GoogleSpeech]    This means Google rejected the PhraseSet reference`);
+          }
+          
+          // Mark as inactive immediately
+          this.isActive = false;
 
-        // Handle common errors
-        if (error.code === 11) {
-          console.log('[GoogleSpeech] Audio timeout (code 11) - restarting stream...');
-          if (!this.isRestarting) {
-            this.restartStream();
-          }
-        } else if (error.code === 2 || (error.details && error.details.includes('408'))) {
-          // Handle 408 Request Timeout (code 2 UNKNOWN with 408 details)
-          console.log('[GoogleSpeech] Request timeout (408) - restarting stream...');
-          if (!this.isRestarting) {
-            // Small delay before restart to allow cleanup
-            setTimeout(() => {
-              if (!this.isRestarting) {
-                this.restartStream();
-              }
-            }, 500);
-          }
-        } else if (error.code === 3) {
+          // Handle common errors
+          if (error.code === 11) {
+            console.log('[GoogleSpeech] Audio timeout (code 11) - restarting stream...');
+            if (!this.isRestarting) {
+              this.restartStream();
+            }
+          } else if (error.code === 2 || (error.details && (error.details.includes('408') || error.details.includes('Request Timeout')))) {
+            // Handle 408 Request Timeout (code 2 UNKNOWN with 408 details)
+            console.log('[GoogleSpeech] Request timeout (408) detected - restarting stream...');
+            console.log('[GoogleSpeech] Error details:', error.details);
+            if (!this.isRestarting) {
+              // Small delay before restart to allow cleanup
+              setTimeout(() => {
+                if (!this.isRestarting) {
+                  this.restartStream();
+                }
+              }, 500);
+            }
+          } else if (error.code === 3) {
           console.error('[GoogleSpeech] Invalid argument error - check audio format');
           console.error('[GoogleSpeech] Full error message:', error.message);
           
@@ -364,6 +367,19 @@ export class GoogleSpeechStream {
             this.errorCallback(error);
           } catch (callbackError) {
             console.error('[GoogleSpeech] Error in error callback:', callbackError);
+          }
+        }
+        } catch (handlerError) {
+          // Catch any errors in the error handler itself to prevent crashes
+          console.error('[GoogleSpeech] ❌ Error in error handler:', handlerError);
+          console.error('[GoogleSpeech] Original error:', error);
+          this.isActive = false;
+          if (!this.isRestarting && this.shouldAutoRestart) {
+            setTimeout(() => {
+              if (!this.isRestarting) {
+                this.restartStream();
+              }
+            }, 1000);
           }
         }
       })
