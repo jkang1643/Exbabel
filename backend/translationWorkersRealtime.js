@@ -23,11 +23,17 @@ import { getLanguageName } from './languageConfig.js';
  * - Target latency: 150-200ms (vs 300-500ms with item creation per partial)
  */
 export class RealtimePartialTranslationWorker {
+  /**
+   * Increase cache size for conversation item cleanup
+   * CRITICAL: Larger cache prevents needing to close/reopen connections
+   * Each translation item creates conversation history - cache reuses translations
+   * between finals and next partial to avoid repeated API calls
+   */
   constructor() {
     this.cache = new Map();
     this.pendingRequests = new Map(); // Track pending requests for cancellation
-    this.MAX_CACHE_SIZE = 200;
-    this.CACHE_TTL = 120000; // 2 minutes cache
+    this.MAX_CACHE_SIZE = 500; // INCREASED from 200 - larger cache = fewer API calls during gaps
+    this.CACHE_TTL = 180000; // 3 minutes cache (increased from 2 min to handle longer finalization gaps)
 
     // Connection pool for WebSocket sessions
     this.connectionPool = new Map(); // key: `${sourceLang}:${targetLang}`, value: WebSocket session
@@ -596,6 +602,32 @@ PARTIAL TEXT RULES:
     const sourceLangName = getLanguageName(sourceLang);
     const targetLangName = getLanguageName(targetLang);
 
+    // CRITICAL: Check cache BEFORE making API call to avoid recreating conversations
+    // This prevents redundant API calls during gaps between finals and next partial
+    let cacheKey;
+    if (text.length > 300) {
+      const prefix = text.substring(0, 150);
+      const suffix = text.substring(Math.max(0, text.length - 100));
+      const length = text.length;
+      cacheKey = `partial:${sourceLang}:${targetLang}:${length}:${prefix}:${suffix}`;
+    } else {
+      cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
+    }
+
+    if (this.cache.has(cacheKey)) {
+      const cached = this.cache.get(cacheKey);
+      if (Date.now() - cached.timestamp < this.CACHE_TTL) {
+        // Validate cache entry is valid (text hasn't shrunk, translation isn't English leak)
+        const isCachedSameAsOriginal = cached.text === text ||
+                                      cached.text.trim() === text.trim() ||
+                                      cached.text.toLowerCase() === text.toLowerCase();
+        if (!isCachedSameAsOriginal) {
+          console.log(`[RealtimePartialWorker] ✅ Cache hit: "${text.substring(0, 40)}..." (${cacheKey.substring(0, 50)}...)`);
+          return Promise.resolve(cached.text);
+        }
+      }
+    }
+
     // Get or create connection
     const connectionKey = `${sourceLang}:${targetLang}`;
     let session;
@@ -722,17 +754,25 @@ PARTIAL TEXT RULES:
         reject(error);
       }
     }).then((translatedText) => {
-      // IMPROVED CACHE KEY: Use hash of full text instead of substring
-      // This prevents cache misses when text grows beyond 150 chars
-      // Use a simple hash for consistency and avoiding very long keys
-      const textHash = text.split('').reduce((hash, char) => {
-        return ((hash << 5) - hash) + char.charCodeAt(0);
-      }, 0).toString(36);
-      const cacheKey = `partial:${sourceLang}:${targetLang}:${textHash}`;
+      // IMPROVED CACHE KEY: Use prefix+suffix like Chat API to catch text extensions
+      // Hash-based keys fail when text grows (different hash = cache miss)
+      // Instead, use prefix+suffix so "The cat" and "The cat sat" both check same cache entry
+      let cacheKey;
+      if (text.length > 300) {
+        // For long text, use prefix+suffix+length to catch extensions
+        const prefix = text.substring(0, 150);
+        const suffix = text.substring(Math.max(0, text.length - 100));
+        const length = text.length;
+        cacheKey = `partial:${sourceLang}:${targetLang}:${length}:${prefix}:${suffix}`;
+      } else {
+        // For short text, use simple prefix key
+        cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
+      }
 
       // Cache the result
       this.cache.set(cacheKey, {
         text: translatedText,
+        originalText: text,
         timestamp: Date.now()
       });
 
@@ -844,8 +884,8 @@ PARTIAL TEXT RULES:
 export class RealtimeFinalTranslationWorker {
   constructor() {
     this.cache = new Map();
-    this.MAX_CACHE_SIZE = 100;
-    this.CACHE_TTL = 600000; // 10 minutes cache
+    this.MAX_CACHE_SIZE = 300; // INCREASED from 100 - larger cache handles long texts better
+    this.CACHE_TTL = 600000; // 10 minutes cache (finals are longer, more likely to repeat)
 
     // Connection pool (shared with partial worker for efficiency)
     this.connectionPool = new Map();
@@ -1276,16 +1316,22 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
 
     console.log(`[RealtimeFinalWorker] 🎯 Translating final: "${text.substring(0, 50)}..." (${sourceLangName} → ${targetLangName})`);
 
-    // IMPROVED CACHE KEY: Use hash of full text instead of substring
-    const textHash = text.split('').reduce((hash, char) => {
-      return ((hash << 5) - hash) + char.charCodeAt(0);
-    }, 0).toString(36);
-    const cacheKey = `final:${sourceLang}:${targetLang}:${textHash}`;
+    // IMPROVED CACHE KEY: Use prefix+suffix like partials to catch text extensions
+    // Hash-based keys fail when text grows (grammar corrected text might be slightly different length)
+    let cacheKey;
+    if (text.length > 300) {
+      const prefix = text.substring(0, 150);
+      const suffix = text.substring(Math.max(0, text.length - 100));
+      const length = text.length;
+      cacheKey = `final:${sourceLang}:${targetLang}:${length}:${prefix}:${suffix}`;
+    } else {
+      cacheKey = `final:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
+    }
 
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey);
       if (Date.now() - cached.timestamp < this.CACHE_TTL) {
-        console.log(`[RealtimeFinalWorker] ✅ Cache hit`);
+        console.log(`[RealtimeFinalWorker] ✅ Cache hit (${text.length} chars)`);
         return cached.text;
       }
     }
