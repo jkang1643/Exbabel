@@ -216,10 +216,7 @@ PARTIAL TEXT RULES:
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 4096, // CRITICAL: Spanish translations need more tokens (longer language)
-            tools: [], // Explicitly disable tools to prevent function calling
-            response_stabilization: {
-              enabled: false // Disable stabilization for maximum deltas (live transcription)
-            }
+            tools: [] // Explicitly disable tools to prevent function calling
           }
         };
         
@@ -948,10 +945,7 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 2000, // SPEED: Reduced from 16000 - most translations are short
-            tools: [], // Explicitly disable tools to prevent function calling
-            response_stabilization: {
-              enabled: false // Disable stabilization for maximum deltas (live transcription)
-            }
+            tools: [] // Explicitly disable tools to prevent function calling
           }
         };
 
