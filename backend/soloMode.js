@@ -15,17 +15,48 @@ const LANGUAGE_NAMES = {
 export async function handleSoloMode(clientWs) {
   console.log("[Solo] Starting solo mode session");
 
-  let geminiWs = null;
   let currentSourceLang = 'en';
   let currentTargetLang = 'es';
   let reconnecting = false;
   let reconnectAttempts = 0;
   const MAX_RECONNECT_ATTEMPTS = 3;
+
+  // Connection pool - maintain connections for each language pair
+  // This allows instant switching without reconnect delays
+  const connectionPool = new Map(); // key: "sourceLang:targetLang", value: { ws, setupComplete }
   let messageQueue = [];
-  
+
+  // Helper to get or create connection for language pair
+  const getOrCreateConnection = async (sourceLang, targetLang) => {
+    const connectionKey = `${sourceLang}:${targetLang}`;
+
+    // Check if we already have an open connection for this language pair
+    if (connectionPool.has(connectionKey)) {
+      const existing = connectionPool.get(connectionKey);
+      if (existing.ws && existing.ws.readyState === WebSocket.OPEN && existing.setupComplete) {
+        console.log(`[Solo] ♻️ Reusing existing connection for ${connectionKey}`);
+        return existing;
+      } else {
+        // Connection exists but is closed/broken, remove it
+        connectionPool.delete(connectionKey);
+      }
+    }
+
+    // Create new connection
+    console.log(`[Solo] 🆕 Creating new connection for ${connectionKey}`);
+    const newConnection = await connectToGemini(sourceLang, targetLang);
+    connectionPool.set(connectionKey, newConnection);
+    return newConnection;
+  };
+
+  // Get current connection
+  const getCurrentConnection = () => {
+    const connectionKey = `${currentSourceLang}:${currentTargetLang}`;
+    return connectionPool.get(connectionKey);
+  };
+
   // State management for multi-turn streaming
   let isStreamingAudio = false;
-  let setupComplete = false;
   let lastAudioTime = null;
   const AUDIO_END_TIMEOUT = 1500; // Reduced from 3000ms
   let audioEndTimer = null;
@@ -34,23 +65,24 @@ export async function handleSoloMode(clientWs) {
   let transcriptBuffer = '';
   let audioGracePeriodTimer = null;
   const GRACE_PERIOD = 200; // Reduced from 500ms
-  
+
   // Intelligent transcript merging
   let previousTranscript = '';
 
   // Send audio stream end
   const sendAudioStreamEnd = () => {
-    if (geminiWs && geminiWs.readyState === WebSocket.OPEN && isStreamingAudio) {
+    const conn = getCurrentConnection();
+    if (conn && conn.ws && conn.ws.readyState === WebSocket.OPEN && isStreamingAudio) {
       console.log('[Solo] Sending audioStreamEnd');
-      
-      geminiWs.send(JSON.stringify({
+
+      conn.ws.send(JSON.stringify({
         realtimeInput: { audioStreamEnd: true }
       }));
-      
+
       isStreamingAudio = false;
       lastAudioTime = null;
       streamStartTime = null;
-      
+
       if (audioEndTimer) {
         clearTimeout(audioEndTimer);
         audioEndTimer = null;
@@ -71,7 +103,7 @@ export async function handleSoloMode(clientWs) {
     if (isStreamingAudio) {
       console.log(`[Solo] Triggering graceful audio end with ${GRACE_PERIOD}ms grace period`);
       isStreamingAudio = false;
-      
+
       audioGracePeriodTimer = setTimeout(() => {
         sendAudioStreamEnd();
       }, GRACE_PERIOD);
@@ -79,21 +111,23 @@ export async function handleSoloMode(clientWs) {
   };
 
   // Connect to Gemini
-  const connectToGemini = () => {
+  const connectToGemini = (sourceLang, targetLang) => {
     return new Promise((resolve, reject) => {
-      console.log("[Solo] Connecting to Gemini...");
-      
+      console.log(`[Solo] Connecting to Gemini for ${sourceLang} → ${targetLang}...`);
+
       const geminiWsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
       const ws = new WebSocket(geminiWsUrl);
-      
+
+      const connectionState = { ws, setupComplete: false, setupResolve: null };
+
       ws.on("open", () => {
-        console.log("[Solo] Connected to Gemini");
+        console.log(`[Solo] Connected to Gemini for ${sourceLang} → ${targetLang}`);
+
+        const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
+        const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
+        const isTranscription = sourceLang === targetLang;
         
-        const sourceLangName = LANGUAGE_NAMES[currentSourceLang] || currentSourceLang;
-        const targetLangName = LANGUAGE_NAMES[currentTargetLang] || currentTargetLang;
-        const isTranscription = currentSourceLang === currentTargetLang;
-        
-        const systemInstructionText = isTranscription ? 
+        const systemInstructionText = isTranscription ?
           `You are a transcription system that converts speech to text. You are NOT part of the conversation - you are an invisible observer who writes down what people say.
 
 CRITICAL RULES:
@@ -136,7 +170,7 @@ EXAMPLES:
 - Input: "Hello, how are you?" → Output: "Hola, ¿cómo estás?" (NOT "I'm fine, thank you")
 
 CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`;
-        
+
         ws.send(JSON.stringify({
           setup: {
             model: "models/gemini-live-2.5-flash-preview",
@@ -144,20 +178,24 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
             systemInstruction: { parts: [{ text: systemInstructionText }] }
           }
         }));
-        
+
         console.log(`[Solo] Sent setup (${sourceLangName} → ${targetLangName})`);
-        resolve(ws);
+
+        // Store resolve callback to call when setup complete
+        connectionState.setupResolve = () => resolve(connectionState);
       });
-      
+
       ws.on("error", (error) => {
-        console.error("[Solo] Gemini connection error:", error.message);
+        console.error(`[Solo] Gemini connection error (${sourceLang} → ${targetLang}):`, error.message);
         reject(error);
       });
     });
   };
 
   // Attach Gemini handlers
-  const attachGeminiHandlers = (ws) => {
+  const attachGeminiHandlers = (connectionState) => {
+    const ws = connectionState.ws;
+
     ws.on("error", (error) => {
       console.error("[Solo] Gemini error:", error.message);
       if (clientWs.readyState === WebSocket.OPEN) {
@@ -174,8 +212,14 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
 
         if (response.setupComplete) {
           console.log("[Solo] Gemini setup complete");
-          setupComplete = true;
-          
+          connectionState.setupComplete = true;
+
+          // Call resolve callback if it exists
+          if (connectionState.setupResolve) {
+            connectionState.setupResolve();
+            connectionState.setupResolve = null;
+          }
+
           if (messageQueue.length > 0) {
             console.log(`[Solo] Processing ${messageQueue.length} queued messages`);
             const queued = [...messageQueue];
@@ -189,7 +233,7 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
 
         if (response.serverContent) {
           const serverContent = response.serverContent;
-          
+
           if (serverContent.modelTurn && serverContent.modelTurn.parts) {
             serverContent.modelTurn.parts.forEach(part => {
               if (part.text) {
@@ -198,12 +242,12 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
               }
             });
           }
-          
+
           if (serverContent.turnComplete) {
             const currentTranscript = transcriptBuffer.trim();
             console.log('[Solo] Turn complete - transcript length:', currentTranscript.length);
             console.log('[Solo] Transcript:', currentTranscript ? `"${currentTranscript}"` : '(EMPTY)');
-            
+
             if (currentTranscript && clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'translation',
@@ -211,12 +255,12 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
                 translatedText: currentTranscript,
                 timestamp: Date.now()
               }));
-              
+
               transcriptBuffer = '';
             } else if (!currentTranscript) {
               console.warn('[Solo] ⚠️ Turn complete but NO TRANSCRIPT - Gemini returned nothing!');
             }
-            
+
             if (audioEndTimer) {
               clearTimeout(audioEndTimer);
               audioEndTimer = null;
@@ -225,11 +269,11 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
               clearTimeout(maxStreamTimer);
               maxStreamTimer = null;
             }
-            
+
             isStreamingAudio = false;
             lastAudioTime = null;
             streamStartTime = null;
-            
+
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'turn_complete',
@@ -245,35 +289,25 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
 
     ws.on("close", async (code, reason) => {
       console.log(`[Solo] Gemini closed. Code: ${code}`);
-      
+
       isStreamingAudio = false;
-      setupComplete = false;
+      connectionState.setupComplete = false;
       transcriptBuffer = '';
-      
+
       if (audioEndTimer) clearTimeout(audioEndTimer);
       if (maxStreamTimer) clearTimeout(maxStreamTimer);
       if (audioGracePeriodTimer) clearTimeout(audioGracePeriodTimer);
-      
-      if (clientWs.readyState === WebSocket.OPEN && !reconnecting) {
-        reconnecting = true;
-        const backoffDelay = Math.min(500 * Math.pow(2, reconnectAttempts), 4000);
-        
-        try {
-          await new Promise(resolve => setTimeout(resolve, backoffDelay));
-          geminiWs = await connectToGemini();
-          attachGeminiHandlers(geminiWs);
-          reconnecting = false;
-          if (code !== 1011) reconnectAttempts = 0;
-        } catch (error) {
-          reconnecting = false;
-          console.error('[Solo] Failed to reconnect:', error);
-        }
+
+      // Remove from connection pool since it's closed
+      const connectionKey = `${currentSourceLang}:${currentTargetLang}`;
+      if (connectionPool.has(connectionKey)) {
+        connectionPool.delete(connectionKey);
       }
     });
   };
 
   // Handle client messages
-  clientWs.on("message", (msg) => {
+  clientWs.on("message", async (msg) => {
     try {
       const message = JSON.parse(msg.toString());
 
@@ -281,18 +315,20 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
         case 'init':
           const prevSourceLang = currentSourceLang;
           const prevTargetLang = currentTargetLang;
-          
+
           if (message.sourceLang) currentSourceLang = message.sourceLang;
           if (message.targetLang) currentTargetLang = message.targetLang;
-          
+
           previousTranscript = '';
-          
+
           const languagesChanged = (prevSourceLang !== currentSourceLang) || (prevTargetLang !== currentTargetLang);
-          if (languagesChanged && geminiWs && geminiWs.readyState === WebSocket.OPEN && setupComplete) {
-            console.log('[Solo] Languages changed, reconnecting...');
-            geminiWs.close();
+          if (languagesChanged) {
+            console.log(`[Solo] 🔄 Languages changed: ${prevSourceLang}→${prevTargetLang} to ${currentSourceLang}→${currentTargetLang}`);
+            console.log('[Solo] 📌 OPTIMIZATION: Connection pool will reuse existing or create new connection on-demand (no disconnect delay)');
+            // NO DISCONNECT - Just switch to the new language pair connection
+            // getOrCreateConnection will handle it when audio arrives
           }
-          
+
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({
               type: 'session_ready',
@@ -302,16 +338,34 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
           break;
 
         case 'audio':
-          if (geminiWs && geminiWs.readyState === WebSocket.OPEN && setupComplete) {
+          // Ensure we have a connection for current language pair
+          let conn = getCurrentConnection();
+          if (!conn || !conn.ws || conn.ws.readyState !== WebSocket.OPEN || !conn.setupComplete) {
+            // Need to create/get a connection
+            try {
+              console.log(`[Solo] ⏳ Getting connection for ${currentSourceLang} → ${currentTargetLang}...`);
+              conn = await getOrCreateConnection(currentSourceLang, currentTargetLang);
+              attachGeminiHandlers(conn);
+              console.log(`[Solo] ✅ Connection ready`);
+            } catch (error) {
+              console.error('[Solo] Failed to get connection:', error);
+              if (!conn.setupComplete && messageQueue.length < 10) {
+                messageQueue.push({ type: 'audio', message });
+              }
+              break;
+            }
+          }
+
+          if (conn && conn.ws && conn.ws.readyState === WebSocket.OPEN && conn.setupComplete) {
             let segmentReason = 'unknown';
             if (message.metadata) {
               const { duration, reason, overlapMs } = message.metadata;
               segmentReason = reason || 'unknown';
               console.log(`[Solo] Audio: ${duration?.toFixed(0) || '?'}ms, reason: ${reason}, overlap: ${overlapMs || 0}ms`);
             }
-            
+
             // Send audio chunk
-            geminiWs.send(JSON.stringify({
+            conn.ws.send(JSON.stringify({
               realtimeInput: {
                 audio: {
                   mimeType: 'audio/pcm;rate=16000',
@@ -319,24 +373,24 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
                 }
               }
             }));
-            
+
             console.log('[Solo] Audio sent, immediately signaling stream end');
-            
+
             // CRITICAL FIX: Send audioStreamEnd immediately after each chunk
             // Gemini doesn't process audio until stream end is signaled
             setTimeout(() => {
-              if (geminiWs && geminiWs.readyState === 1) {
-                geminiWs.send(JSON.stringify({
+              if (conn && conn.ws && conn.ws.readyState === 1) {
+                conn.ws.send(JSON.stringify({
                   realtimeInput: { audioStreamEnd: true }
                 }));
                 console.log('[Solo] Sent audioStreamEnd');
               }
             }, 100); // Small delay to ensure audio is transmitted first
-          } else if (!setupComplete && messageQueue.length < 10) {
+          } else if (!conn?.setupComplete && messageQueue.length < 10) {
             messageQueue.push({ type: 'audio', message });
           }
           break;
-        
+
         case 'audio_end':
           console.log('[Solo] Client signaled audio end');
           if (audioEndTimer) clearTimeout(audioEndTimer);
@@ -353,34 +407,23 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
   // Handle client disconnect
   clientWs.on("close", () => {
     console.log("[Solo] Client disconnected");
-    
+
     if (audioEndTimer) clearTimeout(audioEndTimer);
     if (maxStreamTimer) clearTimeout(maxStreamTimer);
     if (audioGracePeriodTimer) clearTimeout(audioGracePeriodTimer);
-    
-    if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
-      geminiWs.close();
+
+    // Close all pooled connections
+    for (const [key, conn] of connectionPool.entries()) {
+      if (conn && conn.ws && conn.ws.readyState === WebSocket.OPEN) {
+        console.log(`[Solo] Closing pooled connection: ${key}`);
+        conn.ws.close();
+      }
     }
+    connectionPool.clear();
   });
 
-  // Initialize Gemini connection
-  try {
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error('GEMINI_API_KEY not configured');
-    }
-    
-    geminiWs = await connectToGemini();
-    attachGeminiHandlers(geminiWs);
-    
-    console.log('[Solo] Session ready');
-  } catch (error) {
-    console.error('[Solo] Initialization error:', error);
-    if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(JSON.stringify({
-        type: 'error',
-        message: `Failed to initialize: ${error.message}`
-      }));
-    }
-  }
+  // Initialize with default connection on-demand
+  // Connection pool will create connections as needed when audio arrives
+  console.log('[Solo] Session handler initialized - connections will be created on-demand');
 }
 
