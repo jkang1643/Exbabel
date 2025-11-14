@@ -4,7 +4,9 @@
       "Bash(git checkout:*)",
       "Bash(node -c:*)",
       "Bash(node backend/server.js:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(npm run dev:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []

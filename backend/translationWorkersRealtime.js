@@ -46,8 +46,8 @@ export class RealtimePartialTranslationWorker {
     // Kept for potential future conversation management features
     this.sessionConversations = new Map(); // key: connectionKey, value: { itemCount, lastCleanup }
 
-    // Concurrency limits - increased for better throughput
-    this.MAX_CONCURRENT = 8; // Increased from 5 to reduce wait times
+    // Concurrency limits - CRITICAL: Set to 1 for strict serialization (no concurrent responses per connection)
+    this.MAX_CONCURRENT = 1; // MUST be 1 to prevent "conversation_already_has_active_response" errors
     this.MAX_PENDING_REQUESTS = 10; // Prevent memory leaks from piling up requests
 
     // Periodic cleanup to prevent memory leaks
@@ -59,7 +59,7 @@ export class RealtimePartialTranslationWorker {
    */
   _cleanupStalePendingRequests() {
     const now = Date.now();
-    const STALE_THRESHOLD = 15000; // 15 seconds
+    const STALE_THRESHOLD = 5000; // 5 seconds - aggressive cleanup for high-frequency requests
 
     let cleanedCount = 0;
     for (const [requestId, pending] of this.pendingResponses.entries()) {
@@ -214,7 +214,10 @@ PARTIAL TEXT RULES:
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 2000, // SPEED: Reduced - most translations are short
-            tools: [] // Explicitly disable tools to prevent function calling
+            tools: [], // Explicitly disable tools to prevent function calling
+            response_stabilization: {
+              enabled: false // Disable stabilization for maximum deltas (live transcription)
+            }
           }
         };
         
@@ -748,7 +751,7 @@ export class RealtimeFinalTranslationWorker {
     this.connectionSetupPromises = new Map();
     this.requestCounter = 0;
     this.pendingResponses = new Map();
-    this.MAX_CONCURRENT = 8; // Increased from 5 to match partial worker
+    this.MAX_CONCURRENT = 1; // CRITICAL: Must be 1 to prevent "conversation_already_has_active_response" errors
   }
 
   /**
@@ -866,7 +869,10 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 2000, // SPEED: Reduced from 16000 - most translations are short
-            tools: [] // Explicitly disable tools to prevent function calling
+            tools: [], // Explicitly disable tools to prevent function calling
+            response_stabilization: {
+              enabled: false // Disable stabilization for maximum deltas (live transcription)
+            }
           }
         };
 
