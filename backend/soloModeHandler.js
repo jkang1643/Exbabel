@@ -314,6 +314,15 @@ export async function handleSoloMode(clientWs) {
                           hasCorrection: hasCorrection,
                           isTranscriptionOnly: false
                         }, false);
+
+                        // CRITICAL FIX: Reset Realtime API connections after final translation
+                        // This prevents conversation items from accumulating and causing freezes
+                        // The next partial will reconnect with a fresh conversation context
+                        if (usePremiumTier) {
+                          console.log(`[SoloMode] 🔄 Resetting Realtime API connections to prevent context accumulation...`);
+                          realtimePartialTranslationWorker.closeConnectionsForLanguagePair(currentSourceLang, currentTargetLang);
+                          realtimeFinalTranslationWorker.closeConnectionsForLanguagePair(currentSourceLang, currentTargetLang);
+                        }
                       } catch (error) {
                         console.error(`[SoloMode] Final processing error:`, error);
                         // If it's a skip request error, use corrected text (or original if not set)

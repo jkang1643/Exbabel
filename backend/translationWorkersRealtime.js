@@ -66,7 +66,7 @@ export class RealtimePartialTranslationWorker {
    */
   _cleanupStalePendingRequests() {
     const now = Date.now();
-    const STALE_THRESHOLD = 25000; // 25 seconds - slightly longer than timeout for safety
+    const STALE_THRESHOLD = 40000; // 40 seconds - must be >= max timeout (30s for finals) to avoid premature cleanup
 
     let cleanedCount = 0;
     for (const [requestId, pending] of this.pendingResponses.entries()) {
@@ -864,6 +864,26 @@ PARTIAL TEXT RULES:
     this.connectionSetupPromises.clear();
     this.pendingResponses.clear();
   }
+
+  /**
+   * Close connections for a specific language pair to reset context
+   * CRITICAL: Prevents conversation items from accumulating and blocking new translations
+   * Call this after final translations to clear session state
+   */
+  closeConnectionsForLanguagePair(sourceLang, targetLang) {
+    const baseKey = `${sourceLang}:${targetLang}`;
+    console.log(`[RealtimePartialWorker] 🔄 Closing connections for ${baseKey} to reset context...`);
+
+    for (const [key, session] of this.connectionPool.entries()) {
+      if (key.startsWith(baseKey)) {
+        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+          session.ws.close();
+          console.log(`[RealtimePartialWorker] ✅ Closed connection: ${key}`);
+        }
+        this.connectionPool.delete(key);
+      }
+    }
+  }
 }
 
 /**
@@ -1531,6 +1551,26 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
     this.connectionPool.clear();
     this.connectionSetupPromises.clear();
     this.pendingResponses.clear();
+  }
+
+  /**
+   * Close connections for a specific language pair to reset context
+   * CRITICAL: Prevents conversation items from accumulating and blocking new translations
+   * Call this after final translations to clear session state
+   */
+  closeConnectionsForLanguagePair(sourceLang, targetLang) {
+    const baseKey = `${sourceLang}:${targetLang}`;
+    console.log(`[RealtimeFinalWorker] 🔄 Closing connections for ${baseKey} to reset context...`);
+
+    for (const [key, session] of this.connectionPool.entries()) {
+      if (key.startsWith(baseKey)) {
+        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+          session.ws.close();
+          console.log(`[RealtimeFinalWorker] ✅ Closed connection: ${key}`);
+        }
+        this.connectionPool.delete(key);
+      }
+    }
   }
 }
 
