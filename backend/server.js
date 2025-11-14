@@ -391,3 +391,16 @@ if (!process.env.GOOGLE_SPEECH_API_KEY && !process.env.GOOGLE_APPLICATION_CREDEN
   console.warn("[Backend] Set either GOOGLE_SPEECH_API_KEY or GOOGLE_APPLICATION_CREDENTIALS");
 }
 console.log("[Backend] =====================================");
+
+// Global error handlers to prevent crashes
+process.on('uncaughtException', (error) => {
+  console.error('[Backend] 🚨 Uncaught Exception:', error);
+  console.error('[Backend] Stack:', error.stack);
+  // Don't exit - keep server running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Backend] 🚨 Unhandled Rejection at:', promise);
+  console.error('[Backend] Reason:', reason);
+  // Don't exit - keep server running
+});

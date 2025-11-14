@@ -448,24 +448,29 @@ export async function handleSoloMode(clientWs) {
                     return; // Skip translation processing for transcription mode
                   }
                   
-                  // ULTRA-FAST: Start translation immediately on ANY text (even 1 char)
+                  // OPTIMIZED: Throttle updates to prevent overwhelming the API
+                  // Updates every 2 characters for word-by-word feel with stable translations
                   if (transcriptText.length >= 1) {
                     // Update current partial text (used for delayed translations)
                     currentPartialText = transcriptText;
-                    
+
                     const now = Date.now();
                     const timeSinceLastTranslation = now - lastPartialTranslationTime;
-                    
-                    // Ultra-fast growth-based updates: update every 1 character for real-time feel
+
+                    // Balanced approach: Update every 2 characters OR every 150ms
+                    // This provides responsive updates without overwhelming the API
                     const textGrowth = transcriptText.length - lastPartialTranslation.length;
-                    const GROWTH_THRESHOLD = 1; // Update on every single character for maximum responsiveness
-                    const textGrewSignificantly = textGrowth >= GROWTH_THRESHOLD && transcriptText.length > lastPartialTranslation.length;
-                    
-                    // Ultra-fast logic: translate immediately on ANY growth or first translation
+                    const GROWTH_THRESHOLD = 2; // Update every 2 characters (~per word)
+                    const MIN_TIME_MS = 150; // Minimum 150ms between updates (6-7 updates/sec)
+
+                    const textGrewSignificantly = textGrowth >= GROWTH_THRESHOLD;
+                    const enoughTimePassed = timeSinceLastTranslation >= MIN_TIME_MS;
+
+                    // Immediate translation on growth OR time passed
                     const isFirstTranslation = lastPartialTranslation.length === 0;
-                    const shouldTranslateNow = isFirstTranslation || // INSTANT on first text
-                                               textGrewSignificantly; // Text grew by 1+ character - translate immediately
-                    
+                    const shouldTranslateNow = isFirstTranslation ||
+                                               (textGrewSignificantly && enoughTimePassed);
+
                     if (shouldTranslateNow) {
                       // Cancel any pending translation
                       if (pendingPartialTranslation) {
@@ -590,7 +595,14 @@ export async function handleSoloMode(clientWs) {
                           }).catch(error => {
                             // Handle translation errors gracefully
                             if (error.name !== 'AbortError') {
-                              if (error.message && error.message.includes('truncated')) {
+                              if (error.message && error.message.includes('cancelled')) {
+                                // Request was cancelled by a newer request - this is expected, silently skip
+                                console.log(`[SoloMode] ⏭️ Translation cancelled (newer request took priority)`);
+                              } else if (error.englishLeak) {
+                                // Translation matched original (English leak) - silently skip
+                                console.log(`[SoloMode] ⏭️ English leak detected for partial - skipping (${capturedText.length} chars)`);
+                                // Don't send anything - will retry with next partial
+                              } else if (error.message && error.message.includes('truncated')) {
                                 // Translation was truncated - log warning but don't send incomplete translation
                                 console.warn(`[SoloMode] ⚠️ Partial translation truncated (${capturedText.length} chars) - waiting for longer partial`);
                               } else if (error.message && error.message.includes('timeout')) {
@@ -764,7 +776,13 @@ export async function handleSoloMode(clientWs) {
                             }).catch(error => {
                               // Handle translation errors gracefully
                               if (error.name !== 'AbortError') {
-                                if (error.message && error.message.includes('timeout')) {
+                                if (error.message && error.message.includes('cancelled')) {
+                                  // Request was cancelled by a newer request - this is expected, silently skip
+                                  console.log(`[SoloMode] ⏭️ Delayed translation cancelled (newer request took priority)`);
+                                } else if (error.englishLeak) {
+                                  // Translation matched original (English leak) - silently skip
+                                  console.log(`[SoloMode] ⏭️ English leak detected for delayed partial - skipping (${latestText.length} chars)`);
+                                } else if (error.message && error.message.includes('timeout')) {
                                   console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
                                 } else {
                                   console.error(`[SoloMode] ❌ Delayed translation error (${workerType} API, ${latestText.length} chars):`, error.message);
