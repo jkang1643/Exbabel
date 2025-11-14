@@ -241,6 +241,10 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
 
                 // VALIDATION: Detect and filter English leaks during streaming (before turnComplete)
                 // Gemini Live streams tokens, so we see intermediate English words like "Peter" before the final "Pedro"
+                // This is consistent with:
+                // - translationWorkers.js: Checks exact match (isSameAsOriginal)
+                // - translationWorkersRealtime.js: Checks word overlap (>80% = English leak)
+                // - soloMode.js: Filters individual tokens during streaming
                 if (!serverContent.turnComplete && currentSourceLang !== 'en' && currentTargetLang !== 'en') {
                   const partText = part.text.trim();
 
