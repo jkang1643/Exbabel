@@ -238,6 +238,59 @@ CRITICAL: You are a translator, NOT a conversational assistant. Translate only.`
             serverContent.modelTurn.parts.forEach(part => {
               if (part.text) {
                 console.log('[Solo] 📝 Gemini text chunk:', `"${part.text}"`);
+
+                // VALIDATION: Detect and filter English leaks during streaming (before turnComplete)
+                // Gemini Live streams tokens, so we see intermediate English words like "Peter" before the final "Pedro"
+                if (!serverContent.turnComplete && currentSourceLang !== 'en' && currentTargetLang !== 'en') {
+                  const partText = part.text.trim();
+
+                  // Aggressive English leak detection for non-English target languages
+                  // Check for common English patterns that shouldn't appear in translations
+                  const isLikelyEnglishLeak = (text) => {
+                    if (!text || text.length === 0) return false;
+
+                    // Single-character chunks or spaces - likely part of a larger token
+                    if (text.length === 1 && text !== ' ') return false;
+
+                    // All-English words (A-Z only, no accents/diacritics)
+                    const englishOnlyPattern = /^[a-zA-Z]+$/;
+
+                    // Common English words and proper nouns known to cause issues
+                    const commonEnglishWords = new Set([
+                      'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'is', 'are',
+                      'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+                      'will', 'would', 'should', 'could', 'may', 'might', 'must', 'can', 'Peter', 'John',
+                      'Mary', 'Hello', 'Hi', 'Yes', 'No', 'OK', 'James', 'David', 'Michael', 'Robert',
+                      'William', 'Richard', 'Joseph', 'Thomas', 'Christopher', 'Daniel', 'Matthew',
+                      'Anthony', 'Mark', 'Donald', 'Steven', 'Paul', 'Andrew', 'Joshua', 'Kenneth'
+                    ]);
+
+                    // Check if it's a common English word
+                    if (commonEnglishWords.has(text.toLowerCase())) {
+                      return true;
+                    }
+
+                    // Check if it's an English word that matches typical patterns
+                    // (all English letters, no special characters, but not a Spanish/French/etc word)
+                    if (englishOnlyPattern.test(text)) {
+                      // Additional heuristics: Check if it's likely to be a proper noun or common English word
+                      // by checking if it contains common English syllable patterns
+                      const hasEnglishPatterns = /(ing|tion|ed|er|ly|ness|ment|able|ful|less)$/i.test(text);
+                      if (hasEnglishPatterns) return true;
+
+                      // Single uppercase letter followed by lowercase (likely English proper noun)
+                      if (/^[A-Z][a-z]+$/.test(text)) return true;
+                    }
+
+                    return false;
+                  };
+
+                  if (isLikelyEnglishLeak(partText)) {
+                    console.log(`[Solo] 🚫 Filtering English leak from partial: "${partText}"`);
+                    return; // Skip this chunk - it's likely English
+                  }
+                }
+
                 transcriptBuffer += part.text;
               }
             });
