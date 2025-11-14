@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { flushSync } from 'react-dom'
 
 export function useWebSocket(url) {
   const [connectionState, setConnectionState] = useState('connecting')
@@ -86,9 +87,12 @@ export function useWebSocket(url) {
             if (message.type === 'translation' && message.isPartial) {
               console.log(`[WebSocket] 📥 RECEIVED PARTIAL: "${(message.originalText || message.translatedText).substring(0, 30)}..."`)
             }
+            // CRITICAL OPTIMIZATION: Use flushSync to bypass React batching
+            // This ensures EVERY delta is rendered immediately (5-10/sec)
+            // Instead of batching 5-10 deltas into 1-2 renders
             messageHandlersRef.current.forEach(handler => {
               try {
-                handler(message)
+                flushSync(() => handler(message))
               } catch (error) {
                 console.error('Message handler error:', error)
               }

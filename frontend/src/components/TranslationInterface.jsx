@@ -265,17 +265,68 @@ function TranslationInterface({ onBackToHome }) {
     isListeningRef.current = isListening
   }, [isListening])
   
+  // OPTIMIZATION: Utility function to check if translation differs from original
+  // Memoize this to avoid repeated string operations on every delta
+  const isTranslationDifferent = useCallback((translated, original) => {
+    if (!translated || !original) return true;
+    const t = translated.trim();
+    const o = original.trim();
+    return t !== o && t !== o.toLowerCase() && t.toLowerCase() !== o.toLowerCase();
+  }, []);
+
+  // OPTIMIZATION: Utility function to merge corrected text with raw partials
+  // Extract to avoid code duplication between translation and transcription modes
+  const mergeTextWithCorrection = useCallback((newRawText, correctedOverride = null) => {
+    // If we have a corrected override, use it
+    if (correctedOverride && correctedOverride.trim()) {
+      longestCorrectedTextRef.current = correctedOverride;
+      longestCorrectedOriginalRef.current = newRawText;
+      return correctedOverride;
+    }
+
+    // Otherwise, merge with existing correction
+    if (!newRawText || !newRawText.trim()) {
+      return '';
+    }
+
+    const existingCorrected = longestCorrectedTextRef.current;
+    const existingOriginal = longestCorrectedOriginalRef.current;
+
+    // If we have a previous correction, try to merge
+    if (existingCorrected && existingOriginal) {
+      if (newRawText.startsWith(existingOriginal)) {
+        // New text extends previous - merge: corrected + new extension
+        const extension = newRawText.substring(existingOriginal.length);
+        return existingCorrected + extension;
+      } else if (newRawText.length > existingOriginal.length * 1.5) {
+        // New text much longer - reset and use raw
+        longestCorrectedTextRef.current = '';
+        longestCorrectedOriginalRef.current = '';
+        return newRawText;
+      } else if (newRawText.startsWith(existingOriginal.substring(0, Math.min(existingOriginal.length, newRawText.length)))) {
+        // Still related - merge what we can
+        const extension = newRawText.substring(existingOriginal.length);
+        return existingCorrected + extension;
+      } else {
+        // Completely diverged - reset and use raw
+        longestCorrectedTextRef.current = '';
+        longestCorrectedOriginalRef.current = '';
+        return newRawText;
+      }
+    }
+
+    // No existing correction - use raw
+    return newRawText;
+  }, []);
+
   // Define message handler with useCallback to prevent re-creation
   // CRITICAL: Don't include isListening in dependencies - use ref instead to prevent WebSocket reconnection
   const handleWebSocketMessage = useCallback((message) => {
-    console.log('[TranslationInterface] 🔔 MESSAGE HANDLER CALLED:', message.type, message.isPartial ? '(PARTIAL)' : '(FINAL)', `seqId: ${message.seqId}`)
-    
-    // Drop stale messages (out of order)
+    // Drop stale messages (out of order) - minimal logging
     if (message.seqId !== undefined && message.seqId < latestSeqIdRef.current) {
-      console.log(`[TranslationInterface] ⚠️ Dropping stale message seqId=${message.seqId} (latest=${latestSeqIdRef.current})`);
-      return;
+      return; // Silent drop for stale messages
     }
-    
+
     if (message.seqId !== undefined) {
       latestSeqIdRef.current = Math.max(latestSeqIdRef.current, message.seqId);
     }
@@ -286,220 +337,46 @@ function TranslationInterface({ onBackToHome }) {
         break
       case 'translation':
         if (message.isPartial) {
-          // 🔴 LIVE PARTIAL: Run through sentence segmenter + throttle for smooth streaming
-          // CRITICAL: Check message flag first, then fall back to language comparison
-          const isTranscriptionMode = message.isTranscriptionOnly === true || (sourceLang === targetLang && !message.hasTranslation)
-          const isTranslationMode = !isTranscriptionMode
-          const hasTranslation = message.hasTranslation
-          
-          // DEBUG: Log mode detection
-          console.log(`[TranslationInterface] 🔍 Mode detection: isTranscriptionOnly=${message.isTranscriptionOnly}, sourceLang=${sourceLang}, targetLang=${targetLang}, hasTranslation=${hasTranslation}, isTranscriptionMode=${isTranscriptionMode}, isTranslationMode=${isTranslationMode}`)
-          
-          // For translation mode, show both original and translated
-          if (isTranslationMode) {
-            // Always update original immediately (transcription is instant)
-            // Use correctedText if available, otherwise use originalText (raw STT)
-            // This allows live updates: show raw text first, then update with corrected text
-            const correctedText = message.correctedText
-            const originalText = message.originalText || ''
-            
-            // If this is a grammar correction, update our tracking
-            if (message.hasCorrection && correctedText && correctedText.trim()) {
-              longestCorrectedTextRef.current = correctedText;
-              longestCorrectedOriginalRef.current = originalText;
-            }
-            
-            // Determine what to display - merge corrected text with new raw partials
-            let textToDisplay = '';
-            
-            if (correctedText && correctedText.trim()) {
-              // Grammar correction available - use it and update tracking
-              textToDisplay = correctedText;
-              longestCorrectedTextRef.current = correctedText;
-              longestCorrectedOriginalRef.current = originalText;
-            } else if (originalText && originalText.trim()) {
-              // Raw partial - merge with existing corrected text if available
-              const existingCorrected = longestCorrectedTextRef.current;
-              const existingOriginal = longestCorrectedOriginalRef.current;
-              
-              if (existingCorrected && existingOriginal) {
-                // Check if new raw extends beyond what we have corrected
-                if (originalText.startsWith(existingOriginal)) {
-                  // New raw extends corrected text - merge: corrected + new raw extension
-                  const extension = originalText.substring(existingOriginal.length);
-                  textToDisplay = existingCorrected + extension;
-                } else if (originalText.length > existingOriginal.length * 1.5) {
-                  // New text is much longer - likely a reset or new segment, use raw
-                  textToDisplay = originalText;
-                  // Clear corrected tracking since we're using raw
-                  longestCorrectedTextRef.current = '';
-                  longestCorrectedOriginalRef.current = '';
-                } else {
-                  // Text diverged but not much longer - keep corrected if it's still a prefix
-                  if (originalText.startsWith(existingOriginal.substring(0, Math.min(existingOriginal.length, originalText.length)))) {
-                    // Still related - merge what we can
-                    const extension = originalText.substring(existingOriginal.length);
-                    textToDisplay = existingCorrected + extension;
-                  } else {
-                    // Completely diverged - use raw
-                    textToDisplay = originalText;
-                    longestCorrectedTextRef.current = '';
-                    longestCorrectedOriginalRef.current = '';
-                  }
-                }
-              } else {
-                // No existing correction - use raw
-                textToDisplay = originalText;
-              }
-            }
-            
+          // 🔴 LIVE PARTIAL: Optimized handler with utility functions
+          const isTranscriptionMode = message.isTranscriptionOnly === true || (sourceLang === targetLang && !message.hasTranslation);
+          const originalText = message.originalText || '';
+          const translatedText = message.translatedText || '';
+          const correctedText = message.correctedText;
+
+          if (!isTranscriptionMode) {
+            // TRANSLATION MODE: Show both original and translation
+            // Update original text using utility function
+            const textToDisplay = mergeTextWithCorrection(originalText, correctedText);
             if (textToDisplay) {
-              console.log(`[TranslationInterface] 📝 Updating original: hasCorrection=${!!correctedText}, displayLen=${textToDisplay.length}`)
-              console.log(`[TranslationInterface]   Raw: "${originalText.substring(0, 60)}${originalText.length > 60 ? '...' : ''}"`)
-              if (correctedText) {
-                console.log(`[TranslationInterface]   Corrected: "${correctedText.substring(0, 60)}${correctedText.length > 60 ? '...' : ''}"`)
-              }
-              if (longestCorrectedTextRef.current && textToDisplay !== longestCorrectedTextRef.current) {
-                console.log(`[TranslationInterface]   Merged: "${textToDisplay.substring(0, 60)}${textToDisplay.length > 60 ? '...' : ''}"`)
-              }
-              setLivePartialOriginal(textToDisplay)
+              setLivePartialOriginal(textToDisplay);
             }
-            
-            // Update translation (might be delayed due to throttling or streaming)
-            // Show translation when hasTranslation is true OR when translatedText exists
-            const translatedText = message.translatedText
-            const isIncremental = message.isIncremental || false // Streaming incremental update flag
-            
-            if (hasTranslation && translatedText && translatedText.trim()) {
-              // CRITICAL: Only show translation if it's DIFFERENT from original (prevents English glitch)
-              // Check both exact match and trimmed match to catch all cases
-              const isDifferent = translatedText !== originalText && 
-                                  translatedText.trim() !== originalText.trim() &&
-                                  translatedText.toLowerCase() !== originalText.toLowerCase();
-              
-              if (isDifferent) {
-                // REAL-TIME STREAMING FIX: Update immediately on every delta for true real-time streaming
-                // No throttling - let React batch updates naturally for optimal performance
-                flushSync(() => {
-                  setLivePartial(translatedText)
-                })
-                console.log(`[TranslationInterface] ⚡ ${isIncremental ? 'STREAMING' : 'LIVE'} PARTIAL UPDATED (${translatedText.length} chars): "${translatedText.substring(0, 40)}..."`)
-              } else {
-                console.log('[TranslationInterface] ⚠️ Translation equals original, skipping to prevent English glitch', {
-                  translatedLength: translatedText.length,
-                  originalLength: originalText.length,
-                  areEqual: translatedText === originalText
-                });
-              }
-            } else if (translatedText && translatedText.trim()) {
-              // Fallback: Only show if it's definitely different from original
-              const isDifferent = translatedText !== originalText && 
-                                  translatedText.trim() !== originalText.trim() &&
-                                  translatedText.toLowerCase() !== originalText.toLowerCase();
-              
-              if (isDifferent) {
-                // REAL-TIME STREAMING FIX: Update immediately for fallback case too
-                flushSync(() => {
-                  setLivePartial(translatedText)
-                })
-                console.log(`[TranslationInterface] ⚡ FALLBACK LIVE PARTIAL: "${translatedText.substring(0, 40)}..."`)
-              } else {
-                console.log('[TranslationInterface] ⚠️ Fallback translation equals original, skipping');
-              }
-            } else {
-              // No translation yet - keep the last partial translation (don't clear it)
-              // Only clear if it matches original (defensive cleanup for English glitch)
+
+            // Update translation text - only if different from original
+            if (translatedText && translatedText.trim() && isTranslationDifferent(translatedText, originalText)) {
+              flushSync(() => {
+                setLivePartial(translatedText);
+              });
+            } else if (!translatedText || !translatedText.trim()) {
+              // No translation - keep last partial but clear if it matches original
               if (livePartial && livePartial === livePartialOriginal) {
-                console.log('[TranslationInterface] 🧹 CLEANUP: Clearing livePartial that matches original');
-                setLivePartial('')
-              } else {
-                // Keep the last partial translation - don't clear it
-                console.log('[TranslationInterface] ⏳ Waiting for translation, keeping last partial...', { 
-                  hasTranslation, 
-                  hasTranslatedText: !!translatedText, 
-                  originalLength: originalText.length,
-                  lastPartialLength: livePartial.length 
-                });
+                setLivePartial('');
               }
             }
           } else {
-            // Transcription-only mode - just show the text IMMEDIATELY (no throttling)
-            // OPTIMIZATION: For same-language, use correctedText if available, otherwise originalText or translatedText
-            // This allows immediate display of raw text, then update with corrections
-            const correctedText = message.correctedText
-            const originalText = message.originalText || ''
-            const translatedText = message.translatedText || ''
-            
-            // If this is a grammar correction, update our tracking
-            if (message.hasCorrection && correctedText && correctedText.trim()) {
-              longestCorrectedTextRef.current = correctedText;
-              longestCorrectedOriginalRef.current = originalText;
-            }
-            
-            // Determine what to display - merge corrected text with new raw partials
-            let rawText = '';
-            
-            if (correctedText && correctedText.trim()) {
-              // Grammar correction available - use it and update tracking
-              rawText = correctedText;
-              longestCorrectedTextRef.current = correctedText;
-              longestCorrectedOriginalRef.current = originalText;
-            } else if (originalText && originalText.trim()) {
-              // Raw partial - merge with existing corrected text if available
-              const existingCorrected = longestCorrectedTextRef.current;
-              const existingOriginal = longestCorrectedOriginalRef.current;
-              
-              if (existingCorrected && existingOriginal) {
-                // Check if new raw extends beyond what we have corrected
-                if (originalText.startsWith(existingOriginal)) {
-                  // New raw extends corrected text - merge: corrected + new raw extension
-                  const extension = originalText.substring(existingOriginal.length);
-                  rawText = existingCorrected + extension;
-                } else if (originalText.length > existingOriginal.length * 1.5) {
-                  // New text is much longer - likely a reset or new segment, use raw
-                  rawText = originalText;
-                  // Clear corrected tracking since we're using raw
-                  longestCorrectedTextRef.current = '';
-                  longestCorrectedOriginalRef.current = '';
-                } else {
-                  // Text diverged but not much longer - keep corrected if it's still a prefix
-                  if (originalText.startsWith(existingOriginal.substring(0, Math.min(existingOriginal.length, originalText.length)))) {
-                    // Still related - merge what we can
-                    const extension = originalText.substring(existingOriginal.length);
-                    rawText = existingCorrected + extension;
-                  } else {
-                    // Completely diverged - use raw
-                    rawText = originalText;
-                    longestCorrectedTextRef.current = '';
-                    longestCorrectedOriginalRef.current = '';
-                  }
-                }
-              } else {
-                // No existing correction - use raw or translatedText
-                rawText = originalText || translatedText;
-              }
-            } else if (translatedText && translatedText.trim()) {
-              // Fallback to translatedText
-              rawText = translatedText;
-            }
-            
+            // TRANSCRIPTION MODE: Just show the text immediately
+            const rawText = mergeTextWithCorrection(originalText, correctedText) || translatedText;
+
             if (!rawText || !rawText.trim()) {
-              console.log('[TranslationInterface] ⚠️ Transcription mode: No text to display');
-              return;
+              return; // No text to display
             }
-            
-            // Detect lag for transcription mode too
-            detectLag(rawText.length)
-            
-            // Process through segmenter (auto-flushes complete sentences to history)
-            const { liveText } = segmenterRef.current.processPartial(rawText)
-            
-            // CRITICAL: Update immediately without any throttling for transcription mode
-            // This matches the instant display behavior of translation mode's original text
+
+            // Process through segmenter
+            const { liveText } = segmenterRef.current.processPartial(rawText);
+
+            // Update immediately with flushSync
             flushSync(() => {
-              setLivePartial(liveText)
-            })
-            console.log(`[TranslationInterface] ⚡ INSTANT TRANSCRIPTION (no throttle): "${liveText.substring(0, 30)}..." [${liveText.length}chars]`)
+              setLivePartial(liveText);
+            });
           }
         } else {
           // 📝 FINAL: Commit immediately to history (restored simple approach)
@@ -608,7 +485,7 @@ function TranslationInterface({ onBackToHome }) {
       default:
         console.log('[TranslationInterface] ⚠️ Unknown message type:', message.type)
     }
-  }, [commitFinalToHistory, sourceLang, targetLang]) // Removed isListening - use ref instead to prevent WebSocket reconnection
+  }, [commitFinalToHistory, sourceLang, targetLang, isTranslationDifferent, mergeTextWithCorrection, livePartial, livePartialOriginal]) // Include utility functions and live state for comparison
   
   // CRITICAL: Use refs for functions to prevent WebSocket reconnection on every render
   // Note: sendMessageRef already declared above (line 59), so we reuse it

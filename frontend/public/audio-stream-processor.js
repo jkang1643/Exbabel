@@ -11,14 +11,15 @@ class StreamProcessor extends AudioWorkletProcessor {
     super();
     this.sampleRate = 24000; // 24kHz
     
-    // Configuration: Larger chunks (500ms) with more overlap (600ms) to prevent word loss
-    // Larger chunks give Google Speech more context, especially at sentence starts
-    this.CHUNK_MS = 500; // Increased from 300ms for better context
-    this.OVERLAP_MS = 600; // Increased from 500ms for more overlap protection
-    
-    // Pre-buffer: Wait for this much audio before sending first chunk
-    // This ensures first chunk has enough context for accurate recognition
-    this.INITIAL_BUFFER_MS = 400; // Buffer 400ms before first chunk
+    // Configuration: OPTIMIZED for real-time streaming (100ms chunks for 10x/sec frequency)
+    // Smaller chunks ensure Realtime API deltas reach frontend ASAP
+    // Tradeoff: Less context per chunk, but streaming feel is more important
+    this.CHUNK_MS = 100; // Reduced from 500ms to 100ms (5x more frequent)
+    this.OVERLAP_MS = 200; // Reduced from 600ms to 200ms (fast 2x overlap)
+
+    // Pre-buffer: Minimal delay before first chunk
+    // This ensures first response arrives faster (critical for UX)
+    this.INITIAL_BUFFER_MS = 100; // Reduced from 400ms to 100ms (4x faster first chunk!)
     this.INITIAL_BUFFER_SAMPLES = Math.floor(this.sampleRate * this.INITIAL_BUFFER_MS / 1000);
     this.hasSentFirstChunk = false;
     
