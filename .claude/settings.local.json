@@ -1,10 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npm install google-genai)",
-      "Bash(node -e \"const pkg = require(''@google/genai''); console.log(''GoogleGenAI:'', typeof pkg.GoogleGenAI); console.log(''methods:'', Object.getOwnPropertyNames(pkg.GoogleGenAI.prototype || {}));\")",
-      "Bash(node -e \"const { GoogleGenAI } = require(''@google/genai''); const client = new GoogleGenAI({ apiKey: ''test'' }); console.log(''Live methods:'', Object.getOwnPropertyNames(Object.getPrototypeOf(client.live))); console.log(''Live properties:'', Object.getOwnPropertyNames(client.live));\")",
-      "Bash(node -e \"\nconst { GoogleGenAI } = require(''@google/genai'');\nconst client = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || ''test'' });\n\nasync function testReceive() {\n  try {\n    const config = {\n      responseModalities: [''TEXT''],\n      mediaResolution: ''MEDIA_RESOLUTION_MEDIUM''\n    };\n    \n    const session = await client.live.connect({\n      model: ''models/gemini-2.5-flash-native-audio-preview-09-2025'',\n      config: config\n    });\n    \n    console.log(''Session methods with receive:'', Object.getOwnPropertyNames(Object.getPrototypeOf(session)).filter(m => m.includes(''receive'') || m.includes(''listen'') || m.includes(''on'')));\n    console.log(''Session conn methods:'', Object.getOwnPropertyNames(Object.getPrototypeOf(session.conn || {})));\n    \n    if (session.close) await session.close();\n  } catch (error) {\n    console.error(''Error:'', error.message);\n  }\n}\n\ntestReceive();\n\")"
+      "Bash(git checkout:*)"
     ],
     "deny": [],
     "ask": []

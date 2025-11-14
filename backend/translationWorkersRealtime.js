@@ -37,36 +37,53 @@ export class RealtimePartialTranslationWorker {
 
   /**
    * Get or create a WebSocket connection for a language pair
+   * SPEED: Use connection pool (multiple connections per language pair for parallelism)
    */
   async getConnection(sourceLang, targetLang, apiKey) {
     const connectionKey = `${sourceLang}:${targetLang}`;
-    
-    // Return existing connection if available and ready
-    if (this.connectionPool.has(connectionKey)) {
-      const session = this.connectionPool.get(connectionKey);
-      if (session.ws && session.ws.readyState === WebSocket.OPEN && session.setupComplete) {
+
+    // SPEED: Try to find an idle connection (no active response)
+    for (const [key, session] of this.connectionPool.entries()) {
+      if (key.startsWith(connectionKey) &&
+          session.ws &&
+          session.ws.readyState === WebSocket.OPEN &&
+          session.setupComplete &&
+          !session.activeResponseId) { // IDLE - no active response
+        console.log(`[RealtimePartialWorker] ♻️ Reusing idle connection: ${key}`);
         return session;
-      } else {
-        // Connection is dead, remove it
-        this.connectionPool.delete(connectionKey);
       }
     }
-    
-    // Check if setup is already in progress
-    if (this.connectionSetupPromises.has(connectionKey)) {
-      return await this.connectionSetupPromises.get(connectionKey);
+
+    // No idle connection - create a new one (up to MAX_CONCURRENT per language pair)
+    const existingCount = Array.from(this.connectionPool.keys())
+      .filter(k => k.startsWith(connectionKey)).length;
+
+    if (existingCount >= this.MAX_CONCURRENT) {
+      console.log(`[RealtimePartialWorker] ⏸️ Max concurrent (${this.MAX_CONCURRENT}) reached, waiting for idle...`);
+      // Wait a bit and retry to find an idle connection
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return this.getConnection(sourceLang, targetLang, apiKey);
     }
-    
+
+    // Create new connection with unique ID
+    const uniqueKey = `${connectionKey}:${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    console.log(`[RealtimePartialWorker] 🆕 Creating connection: ${uniqueKey} (${existingCount + 1}/${this.MAX_CONCURRENT})`);
+
+    // Check if setup is already in progress for this unique key
+    if (this.connectionSetupPromises.has(uniqueKey)) {
+      return await this.connectionSetupPromises.get(uniqueKey);
+    }
+
     // Create new connection
-    const setupPromise = this._createConnection(connectionKey, sourceLang, targetLang, apiKey);
-    this.connectionSetupPromises.set(connectionKey, setupPromise);
-    
+    const setupPromise = this._createConnection(uniqueKey, sourceLang, targetLang, apiKey);
+    this.connectionSetupPromises.set(uniqueKey, setupPromise);
+
     try {
       const session = await setupPromise;
-      this.connectionPool.set(connectionKey, session);
+      this.connectionPool.set(uniqueKey, session);
       return session;
     } finally {
-      this.connectionSetupPromises.delete(connectionKey);
+      this.connectionSetupPromises.delete(uniqueKey);
     }
   }
 
@@ -96,21 +113,44 @@ export class RealtimePartialTranslationWorker {
         targetLang,
         pendingItems: new Map(), // Track conversation items by itemId
         activeResponseId: null, // Track active response to prevent concurrent responses
-        activeRequestId: null // Track which request has the active response
+        activeRequestId: null, // Track which request has the active response
+        pingInterval: null // Keep-alive interval
       };
       
       ws.on('open', () => {
         console.log(`[RealtimePartialWorker] Connection opened for ${sourceLang} → ${targetLang}`);
         
         // Configure session for text-to-text translation
-        const translationInstructions = `You are a fast real-time translator. Translate text from ${sourceLangName} to ${targetLangName}.
+        const translationInstructions = `You are a translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName}.
 
-RULES FOR PARTIAL/INCOMPLETE TEXT:
+CRITICAL RULES - YOU MUST FOLLOW THESE:
+1. NEVER respond conversationally or answer questions
+2. NEVER add explanations, commentary, or notes
+3. NEVER include phrases like "The translation is..." or "Here's the translation"
+4. ONLY output the direct translation of the input text
+5. Do NOT acknowledge the user or respond to their questions
+6. Do NOT provide additional information or assistance
+7. If the input is a question, translate the question itself - do NOT answer it
+8. If the input is a statement, translate the statement - do NOT respond to it
+9. Output ONLY the translated text in ${targetLangName}, nothing else
+
+EXAMPLES:
+Input: "Can you hear me?"
+Output: "¿Puedes oírme?" (NOT "Yes, I can hear you.")
+
+Input: "Can you do automatic translation in real time?"
+Output: "¿Puedes hacer traducción automática en tiempo real?" (NOT "Yes, I can translate...")
+
+Input: "Testing one, two, three."
+Output: "Probando uno, dos, tres." (NOT "I hear you clearly...")
+
+Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.
+
+PARTIAL TEXT RULES:
 1. Translate the partial text naturally even if sentence is incomplete
 2. Maintain the same tense and context as the partial
 3. Do NOT complete or extend the sentence - only translate what's given
-4. Keep translation concise and natural in ${targetLangName}
-5. No explanations, only the translation`;
+4. Keep translation concise and natural in ${targetLangName}`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -118,7 +158,8 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
             modalities: ['text'], // Text-only, no audio
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 16000
+            max_response_output_tokens: 16000,
+            tools: [] // Explicitly disable tools to prevent function calling
           }
         };
         
@@ -135,6 +176,19 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
               console.log(`[RealtimePartialWorker] Session ready for ${session.connectionKey}`);
               session.setupComplete = true;
               if (event.type === 'session.created') {
+                // Start keep-alive ping to prevent idle disconnects (every 30 seconds)
+                session.pingInterval = setInterval(() => {
+                  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                    // Send a lightweight ping message to keep connection alive
+                    // OpenAI Realtime API doesn't have a built-in ping, so we send an empty event
+                    console.log(`[RealtimePartialWorker] 🏓 Sending keep-alive ping for ${session.connectionKey}`);
+                    try {
+                      session.ws.send(JSON.stringify({ type: 'ping' }));
+                    } catch (error) {
+                      console.error(`[RealtimePartialWorker] Failed to send ping:`, error.message);
+                    }
+                  }
+                }, 30000); // Ping every 30 seconds
                 resolve(session);
               }
               break;
@@ -143,16 +197,20 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
               // Track conversation item and map to pending request
               if (event.item && event.item.id) {
                 console.log(`[RealtimePartialWorker] 📝 Item created: ${event.item.id} for connection ${session.connectionKey}`);
-                
-                // Find the most recent pending request without an itemId that belongs to THIS session
-                // Use connectionKey for comparison since session objects might be different instances
+
+                // FIX: Extract base connection key (e.g., "en:es" from "en:es:1763076910165_oxeo0")
+                const baseConnectionKey = session.connectionKey.split(':').slice(0, 2).join(':');
+
+                // Find the most recent pending request without an itemId that belongs to THIS language pair
                 let matchedRequestId = null;
                 for (const [reqId, pending] of this.pendingResponses.entries()) {
-                  // Match only if: belongs to this session (by connectionKey), doesn't have itemId yet, and item not already tracked
-                  if (pending.connectionKey === session.connectionKey && !pending.itemId && !session.pendingItems.has(event.item.id)) {
+                  // FIX: Match by base connection key (language pair), not exact connection
+                  const pendingBaseKey = pending.connectionKey.split(':').slice(0, 2).join(':');
+                  if (pendingBaseKey === baseConnectionKey && !pending.itemId && !session.pendingItems.has(event.item.id)) {
                     matchedRequestId = reqId;
                     pending.itemId = event.item.id;
-                    console.log(`[RealtimePartialWorker] 🔗 Matched request ${reqId} to item ${event.item.id} (connection: ${pending.connectionKey})`);
+                    pending.session = session; // Update to actual session handling this request
+                    console.log(`[RealtimePartialWorker] 🔗 Matched request ${reqId} to item ${event.item.id} (connection: ${session.connectionKey})`);
                     break;
                   }
                 }
@@ -176,26 +234,25 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                   originalText: originalText, // Store original for validation
                   isComplete: false
                 });
-                
-                // Check if there's already an active response - wait for it to finish
+
+                // API LIMITATION: Only ONE active response allowed per connection
+                // Queue subsequent requests until current response completes
                 if (session.activeResponseId) {
-                  console.warn(`[RealtimePartialWorker] ⚠️ Active response ${session.activeResponseId} in progress, queuing item ${event.item.id}`);
-                  // Store the item and create response after current one finishes
-                  // For now, we'll wait - the response.done handler will clear activeResponseId
-                  return;
+                  console.log(`[RealtimePartialWorker] ⏳ Active response ${session.activeResponseId}, queuing item ${event.item.id}`);
+                  return; // Wait for response.done to process queue
                 }
-                
+
                 // Now create the response since we have the item ID and no active response
                 // Set activeRequestId immediately so deltas can match even if response.created arrives late
                 session.activeRequestId = matchedRequestId;
-                
+
                 const sourceLangName = getLanguageName(session.sourceLang);
                 const targetLangName = getLanguageName(session.targetLang);
                 const createResponseEvent = {
                   type: 'response.create',
                   response: {
                     modalities: ['text'],
-                    instructions: `Translate text from ${sourceLangName} to ${targetLangName}. Translate the partial text naturally even if sentence is incomplete. Maintain the same tense and context. Do NOT complete or extend the sentence - only translate what's given. Keep translation concise and natural in ${targetLangName}. No explanations, only the translation.`
+                    instructions: `You are a translation API. Translate text from ${sourceLangName} to ${targetLangName}. CRITICAL: If input is a question, translate the question - do NOT answer it. If input is a statement, translate the statement - do NOT respond to it. Output ONLY the translated text in ${targetLangName}. No explanations, no conversational responses. Examples: "Can you hear me?" → "¿Puedes oírme?" (NOT "Yes, I can"). "Testing one, two, three" → "Probando uno, dos, tres" (NOT "I hear you"). You are a TRANSLATOR, not an assistant.`
                   }
                 };
                 console.log(`[RealtimePartialWorker] 🚀 Creating response for item ${event.item.id}, linked to request ${matchedRequestId}`);
@@ -288,38 +345,31 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
                     item.isComplete = true;
                     const translatedText = item.text.trim();
                     console.log(`[RealtimePartialWorker] ✅ Response done: "${translatedText.substring(0, 50)}..."`);
-                    
-                    // CRITICAL: Validate that translation is actually different from original
+
+                    // SPEED: Soften validation - warn instead of reject to avoid retries
                     const originalText = pending.originalText || '';
                     if (!translatedText || translatedText.length === 0) {
-                      console.error(`[RealtimePartialWorker] ❌ Translation is empty`);
+                      console.warn(`[RealtimePartialWorker] ⚠️ Empty translation, using original`);
                       if (pending.timeoutId) {
                         clearTimeout(pending.timeoutId);
                       }
-                      pending.reject(new Error('Translation API returned empty result'));
+                      pending.resolve(originalText); // Use original instead of rejecting
                       this.pendingResponses.delete(session.activeRequestId);
                       session.pendingItems.delete(pending.itemId);
                       session.activeRequestId = null;
                       return;
                     }
-                    
-                    // Check if translation matches original (likely API returned original instead of translating)
-                    const isSameAsOriginal = translatedText === originalText || 
+
+                    // Check if translation matches original - WARN but don't reject
+                    const isSameAsOriginal = translatedText === originalText ||
                                            translatedText.trim() === originalText.trim() ||
                                            translatedText.toLowerCase() === originalText.toLowerCase();
-                    
+
                     if (isSameAsOriginal && originalText.length > 0) {
-                      console.error(`[RealtimePartialWorker] ❌ Translation matches original (likely API error): "${translatedText.substring(0, 60)}..."`);
-                      if (pending.timeoutId) {
-                        clearTimeout(pending.timeoutId);
-                      }
-                      pending.reject(new Error('Translation returned same as original - API likely returned original text instead of translating'));
-                      this.pendingResponses.delete(session.activeRequestId);
-                      session.pendingItems.delete(pending.itemId);
-                      session.activeRequestId = null;
-                      return;
+                      console.warn(`[RealtimePartialWorker] ⚠️ Translation matches original (accepting): "${translatedText.substring(0, 60)}..."`);
+                      // Don't reject - continue with the text
                     }
-                    
+
                     // Clear timeout
                     if (pending.timeoutId) {
                       clearTimeout(pending.timeoutId);
@@ -388,6 +438,11 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       ws.on('close', () => {
         console.log(`[RealtimePartialWorker] Connection closed for ${session.connectionKey}`);
         session.setupComplete = false;
+        // Clear keep-alive interval
+        if (session.pingInterval) {
+          clearInterval(session.pingInterval);
+          session.pingInterval = null;
+        }
         this.connectionPool.delete(session.connectionKey);
       });
       
@@ -401,9 +456,10 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
   }
 
   /**
-   * Translate partial text using Realtime API
+   * Translate partial text using Realtime API with STREAMING support
+   * @param {function} onPartialCallback - Called with each delta for real-time updates
    */
-  async translatePartial(text, sourceLang, targetLang, apiKey, sessionId = null) {
+  async translatePartial(text, sourceLang, targetLang, apiKey, sessionId = null, onPartialCallback = null) {
     if (!text || text.length < 1) {
       throw new Error('Text too short to translate');
     }
@@ -412,15 +468,8 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       throw new Error('No API key provided');
     }
 
-    // Check cache
-    const cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
-    if (this.cache.has(cacheKey)) {
-      const cached = this.cache.get(cacheKey);
-      if (Date.now() - cached.timestamp < this.CACHE_TTL) {
-        console.log(`[RealtimePartialWorker] ✅ Cache hit`);
-        return cached.text;
-      }
-    }
+    // SPEED: Skip cache for streaming - we want real-time deltas
+    // Cache will be populated on completion
 
     const sourceLangName = getLanguageName(sourceLang);
     const targetLangName = getLanguageName(targetLang);
@@ -444,7 +493,7 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
       this.pendingResponses.set(requestId, {
         resolve,
         reject,
-        onPartial: null,
+        onPartial: onPartialCallback, // STREAMING: Hook up callback for real-time deltas
         itemId: null, // Will be set when item.created event arrives
         session: session, // Track which session this request belongs to
         connectionKey: connectionKey, // Track connection for debugging
@@ -495,6 +544,9 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
         reject(error);
       }
     }).then((translatedText) => {
+      // FIX: Create cacheKey for storing result
+      const cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
+
       // Cache the result
       this.cache.set(cacheKey, {
         text: translatedText,
@@ -573,6 +625,11 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
   destroy() {
     console.log('[RealtimePartialWorker] Destroying all connections...');
     for (const [key, session] of this.connectionPool.entries()) {
+      // Clear keep-alive interval
+      if (session.pingInterval) {
+        clearInterval(session.pingInterval);
+        session.pingInterval = null;
+      }
       if (session.ws && session.ws.readyState === WebSocket.OPEN) {
         session.ws.close();
       }
@@ -591,42 +648,63 @@ export class RealtimeFinalTranslationWorker {
     this.cache = new Map();
     this.MAX_CACHE_SIZE = 100;
     this.CACHE_TTL = 600000; // 10 minutes cache
-    
+
     // Connection pool (shared with partial worker for efficiency)
     this.connectionPool = new Map();
     this.connectionSetupPromises = new Map();
     this.requestCounter = 0;
     this.pendingResponses = new Map();
+    this.MAX_CONCURRENT = 5; // Allow 5 concurrent connections per language pair
   }
 
   /**
    * Get or create a WebSocket connection for a language pair
+   * SPEED: Use connection pool (multiple connections per language pair for parallelism)
    */
   async getConnection(sourceLang, targetLang, apiKey) {
     const connectionKey = `${sourceLang}:${targetLang}`;
-    
-    if (this.connectionPool.has(connectionKey)) {
-      const session = this.connectionPool.get(connectionKey);
-      if (session.ws && session.ws.readyState === WebSocket.OPEN && session.setupComplete) {
+
+    // SPEED: Try to find an idle connection (no active response)
+    for (const [key, session] of this.connectionPool.entries()) {
+      if (key.startsWith(connectionKey) &&
+          session.ws &&
+          session.ws.readyState === WebSocket.OPEN &&
+          session.setupComplete &&
+          !session.activeResponseId) { // IDLE - no active response
+        console.log(`[RealtimeFinalWorker] ♻️ Reusing idle connection: ${key}`);
         return session;
-      } else {
-        this.connectionPool.delete(connectionKey);
       }
     }
-    
-    if (this.connectionSetupPromises.has(connectionKey)) {
-      return await this.connectionSetupPromises.get(connectionKey);
+
+    // No idle connection - create a new one (up to MAX_CONCURRENT per language pair)
+    const existingCount = Array.from(this.connectionPool.keys())
+      .filter(k => k.startsWith(connectionKey)).length;
+
+    if (existingCount >= this.MAX_CONCURRENT) {
+      console.log(`[RealtimeFinalWorker] ⏸️ Max concurrent (${this.MAX_CONCURRENT}) reached, waiting for idle...`);
+      // Wait a bit and retry to find an idle connection
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return this.getConnection(sourceLang, targetLang, apiKey);
     }
-    
-    const setupPromise = this._createConnection(connectionKey, sourceLang, targetLang, apiKey);
-    this.connectionSetupPromises.set(connectionKey, setupPromise);
-    
+
+    // Create new connection with unique ID
+    const uniqueKey = `${connectionKey}:${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    console.log(`[RealtimeFinalWorker] 🆕 Creating connection: ${uniqueKey} (${existingCount + 1}/${this.MAX_CONCURRENT})`);
+
+    // Check if setup is already in progress for this unique key
+    if (this.connectionSetupPromises.has(uniqueKey)) {
+      return await this.connectionSetupPromises.get(uniqueKey);
+    }
+
+    const setupPromise = this._createConnection(uniqueKey, sourceLang, targetLang, apiKey);
+    this.connectionSetupPromises.set(uniqueKey, setupPromise);
+
     try {
       const session = await setupPromise;
-      this.connectionPool.set(connectionKey, session);
+      this.connectionPool.set(uniqueKey, session);
       return session;
     } finally {
-      this.connectionSetupPromises.delete(connectionKey);
+      this.connectionSetupPromises.delete(uniqueKey);
     }
   }
 
@@ -655,7 +733,8 @@ export class RealtimeFinalTranslationWorker {
         targetLang,
         pendingItems: new Map(),
         activeResponseId: null, // Track active response to prevent concurrent responses
-        activeRequestId: null // Track which request has the active response
+        activeRequestId: null, // Track which request has the active response
+        pingInterval: null // Keep-alive interval
       };
       
       ws.on('open', () => {
@@ -692,11 +771,11 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             modalities: ['text'],
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 16000,
+            max_response_output_tokens: 2000, // SPEED: Reduced from 16000 - most translations are short
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
-        
+
         ws.send(JSON.stringify(sessionConfig));
       });
       
@@ -709,6 +788,17 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             case 'session.updated':
               session.setupComplete = true;
               if (event.type === 'session.created') {
+                // Start keep-alive ping to prevent idle disconnects (every 30 seconds)
+                session.pingInterval = setInterval(() => {
+                  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                    console.log(`[RealtimeFinalWorker] 🏓 Sending keep-alive ping for ${session.connectionKey}`);
+                    try {
+                      session.ws.send(JSON.stringify({ type: 'ping' }));
+                    } catch (error) {
+                      console.error(`[RealtimeFinalWorker] Failed to send ping:`, error.message);
+                    }
+                  }
+                }, 30000); // Ping every 30 seconds
                 resolve(session);
               }
               break;
@@ -717,16 +807,20 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
               // Track conversation item and map to pending request
               if (event.item && event.item.id) {
                 console.log(`[RealtimeFinalWorker] 📝 Item created: ${event.item.id} for connection ${session.connectionKey}`);
-                
-                // Find the most recent pending request without an itemId that belongs to THIS session
-                // Use connectionKey for comparison since session objects might be different instances
+
+                // FIX: Extract base connection key (e.g., "en:es" from "en:es:1763076910165_oxeo0")
+                const baseConnectionKey = session.connectionKey.split(':').slice(0, 2).join(':');
+
+                // Find the most recent pending request without an itemId that belongs to THIS language pair
                 let matchedRequestId = null;
                 for (const [reqId, pending] of this.pendingResponses.entries()) {
-                  // Match only if: belongs to this session (by connectionKey), doesn't have itemId yet, and item not already tracked
-                  if (pending.connectionKey === session.connectionKey && !pending.itemId && !session.pendingItems.has(event.item.id)) {
+                  // FIX: Match by base connection key (language pair), not exact connection
+                  const pendingBaseKey = pending.connectionKey.split(':').slice(0, 2).join(':');
+                  if (pendingBaseKey === baseConnectionKey && !pending.itemId && !session.pendingItems.has(event.item.id)) {
                     matchedRequestId = reqId;
                     pending.itemId = event.item.id;
-                    console.log(`[RealtimeFinalWorker] 🔗 Matched request ${reqId} to item ${event.item.id} (connection: ${pending.connectionKey})`);
+                    pending.session = session; // Update to actual session handling this request
+                    console.log(`[RealtimeFinalWorker] 🔗 Matched request ${reqId} to item ${event.item.id} (connection: ${session.connectionKey})`);
                     break;
                   }
                 }
@@ -750,28 +844,27 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                   originalText: originalText, // Store original for validation
                   isComplete: false
                 });
-                
-                // Check if there's already an active response - wait for it to finish
+
+                // API LIMITATION: Only ONE active response allowed per connection
+                // Queue subsequent requests until current response completes
                 if (session.activeResponseId) {
-                  console.warn(`[RealtimeFinalWorker] ⚠️ Active response ${session.activeResponseId} in progress, queuing item ${event.item.id}`);
-                  // Store the item and create response after current one finishes
-                  // For now, we'll wait - the response.done handler will clear activeResponseId
-                  return;
+                  console.log(`[RealtimeFinalWorker] ⏳ Active response ${session.activeResponseId}, queuing item ${event.item.id}`);
+                  return; // Wait for response.done to process queue
                 }
-                
+
                 // Now create the response since we have the item ID and no active response
                 // Set activeRequestId immediately so deltas can match even if response.created arrives late
                 session.activeRequestId = matchedRequestId;
-                
+
                 const sourceLangName = getLanguageName(session.sourceLang);
                 const targetLangName = getLanguageName(session.targetLang);
-                
+
                 // Use SIMPLE instructions like partial worker - verbosity confuses the API
                 const createResponseEvent = {
                   type: 'response.create',
                   response: {
                     modalities: ['text'],
-                    instructions: `Translate text from ${sourceLangName} to ${targetLangName}. Only provide the direct translation - no explanations, no commentary, no responses to questions. Translate questions as questions, statements as statements. Output only the translated text in ${targetLangName}.`
+                    instructions: `You are a translation API. Translate text from ${sourceLangName} to ${targetLangName}. CRITICAL: If input is a question, translate the question - do NOT answer it. If input is a statement, translate the statement - do NOT respond to it. Output ONLY the translated text in ${targetLangName}. No explanations, no conversational responses. Examples: "Can you do automatic translation?" → "¿Puedes hacer traducción automática?" (NOT "Yes, I can"). "Testing one, two, three" → "Probando uno, dos, tres" (NOT "I hear you"). You are a TRANSLATOR, not an assistant.`
                   }
                 };
                 console.log(`[RealtimeFinalWorker] 🚀 Creating response for item ${event.item.id}, linked to request ${matchedRequestId}`);
@@ -798,8 +891,10 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                 } else {
                   // Fallback: try to find the most recent incomplete request
                   let fallbackRequest = null;
+                  const baseConnectionKey = session.connectionKey.split(':').slice(0, 2).join(':');
                   for (const [reqId, pending] of this.pendingResponses.entries()) {
-                    if (pending.connectionKey === session.connectionKey && pending.itemId) {
+                    const pendingBaseKey = pending.connectionKey.split(':').slice(0, 2).join(':');
+                    if (pendingBaseKey === baseConnectionKey && pending.itemId) {
                       const item = session.pendingItems.get(pending.itemId);
                       if (item && !item.isComplete) {
                         fallbackRequest = { reqId, pending, item };
@@ -828,8 +923,10 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                 // If activeRequestId is already set, that means we're handling a concurrent response
                 // In that case, find the NEXT incomplete request
                 if (!session.activeRequestId) {
+                  const baseConnectionKey = session.connectionKey.split(':').slice(0, 2).join(':');
                   for (const [reqId, pending] of this.pendingResponses.entries()) {
-                    if (pending.connectionKey === session.connectionKey && pending.itemId) {
+                    const pendingBaseKey = pending.connectionKey.split(':').slice(0, 2).join(':');
+                    if (pendingBaseKey === baseConnectionKey && pending.itemId) {
                       const item = session.pendingItems.get(pending.itemId);
                       if (item && !item.isComplete) {
                         session.activeRequestId = reqId;
@@ -862,38 +959,31 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                     item.isComplete = true;
                     const translatedText = item.text.trim();
                     console.log(`[RealtimeFinalWorker] ✅ Response done: "${translatedText.substring(0, 50)}..."`);
-                    
-                    // CRITICAL: Validate that translation is actually different from original
+
+                    // SPEED: Soften validation - warn instead of reject to avoid retries
                     const originalText = pending.originalText || '';
                     if (!translatedText || translatedText.length === 0) {
-                      console.error(`[RealtimeFinalWorker] ❌ Translation is empty`);
+                      console.warn(`[RealtimeFinalWorker] ⚠️ Empty translation, using original`);
                       if (pending.timeoutId) {
                         clearTimeout(pending.timeoutId);
                       }
-                      pending.reject(new Error('Translation API returned empty result'));
+                      pending.resolve(originalText); // Use original instead of rejecting
                       this.pendingResponses.delete(session.activeRequestId);
                       session.pendingItems.delete(pending.itemId);
                       session.activeRequestId = null;
                       return;
                     }
-                    
-                    // Check if translation matches original (likely API returned original instead of translating)
-                    const isSameAsOriginal = translatedText === originalText || 
+
+                    // Check if translation matches original - WARN but don't reject
+                    const isSameAsOriginal = translatedText === originalText ||
                                            translatedText.trim() === originalText.trim() ||
                                            translatedText.toLowerCase() === originalText.toLowerCase();
-                    
+
                     if (isSameAsOriginal && originalText.length > 0) {
-                      console.error(`[RealtimeFinalWorker] ❌ Translation matches original (likely API error): "${translatedText.substring(0, 60)}..."`);
-                      if (pending.timeoutId) {
-                        clearTimeout(pending.timeoutId);
-                      }
-                      pending.reject(new Error('Translation returned same as original - API likely returned original text instead of translating'));
-                      this.pendingResponses.delete(session.activeRequestId);
-                      session.pendingItems.delete(pending.itemId);
-                      session.activeRequestId = null;
-                      return;
+                      console.warn(`[RealtimeFinalWorker] ⚠️ Translation matches original (accepting): "${translatedText.substring(0, 60)}..."`);
+                      // Don't reject - continue with the text
                     }
-                    
+
                     // Clear timeout
                     if (pending.timeoutId) {
                       clearTimeout(pending.timeoutId);
@@ -952,6 +1042,11 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
       ws.on('close', () => {
         console.log(`[RealtimeFinalWorker] Connection closed for ${session.connectionKey}`);
         session.setupComplete = false;
+        // Clear keep-alive interval
+        if (session.pingInterval) {
+          clearInterval(session.pingInterval);
+          session.pingInterval = null;
+        }
         this.connectionPool.delete(session.connectionKey);
       });
       
@@ -1126,6 +1221,11 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
   destroy() {
     console.log('[RealtimeFinalWorker] Destroying all connections...');
     for (const [key, session] of this.connectionPool.entries()) {
+      // Clear keep-alive interval
+      if (session.pingInterval) {
+        clearInterval(session.pingInterval);
+        session.pingInterval = null;
+      }
       if (session.ws && session.ws.readyState === WebSocket.OPEN) {
         session.ws.close();
       }

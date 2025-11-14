@@ -40,75 +40,16 @@ function TranslationInterface({ onBackToHome }) {
   const [audioEnabled, setAudioEnabled] = useState(true)
   const [latency, setLatency] = useState(0)
   const [usePremiumTier, setUsePremiumTier] = useState(false) // Tier selection: false = basic, true = premium
-  
-  // Throttle mechanism for smooth streaming
-  const lastUpdateTimeRef = useRef(0)
-  const pendingTextRef = useRef(null)
-  const throttleTimerRef = useRef(null)
-  
-  // Lag detection and catch-up mode
-  const messageTimestampsRef = useRef([]) // Track message arrival times
-  const catchUpModeRef = useRef(false) // Flag for catch-up mode
-  const lastTextLengthRef = useRef(0) // Track text length to detect rapid growth
-  
+
   // Track longest grammar-corrected text to merge with new raw partials
   const longestCorrectedTextRef = useRef('')
   const longestCorrectedOriginalRef = useRef('')
-  
+
   // Sentence segmenter for smart text management
   const segmenterRef = useRef(null)
   const sendMessageRef = useRef(null)
   const handleStopListeningRef = useRef(null)
-  
-  // Function to detect lag and activate catch-up mode
-  const detectLag = useCallback((currentTextLength) => {
-    const now = Date.now()
-    messageTimestampsRef.current.push(now)
-    
-    // Keep only last 10 timestamps (last ~1-2 seconds)
-    if (messageTimestampsRef.current.length > 10) {
-      messageTimestampsRef.current.shift()
-    }
-    
-    // Detect rapid text growth (indicates backlog)
-    const textGrowth = currentTextLength - lastTextLengthRef.current
-    lastTextLengthRef.current = currentTextLength
-    
-    // Check if messages are arriving faster than we can process
-    if (messageTimestampsRef.current.length >= 5) {
-      const timeSpan = messageTimestampsRef.current[messageTimestampsRef.current.length - 1] - messageTimestampsRef.current[0]
-      const messagesPerSecond = (messageTimestampsRef.current.length / timeSpan) * 1000
-      
-      // If receiving > 5 messages/second OR text growing > 100 chars per update, we're lagging
-      const isLagging = messagesPerSecond > 5 || textGrowth > 100 || currentTextLength > 1500
-      
-      if (isLagging && !catchUpModeRef.current) {
-        console.log('[TranslationInterface] 🚀 CATCH-UP MODE ACTIVATED (lag detected)')
-        catchUpModeRef.current = true
-        
-        // Temporarily reduce segmenter thresholds for faster flushing
-        if (segmenterRef.current) {
-          segmenterRef.current.maxSentences = 3 // Reduced from 10
-          segmenterRef.current.maxChars = 800   // Reduced from 2000
-          segmenterRef.current.maxTimeMs = 3000 // Reduced from 15000
-        }
-      } else if (!isLagging && catchUpModeRef.current && currentTextLength < 500) {
-        // Deactivate catch-up mode when caught up
-        console.log('[TranslationInterface] ✅ CATCH-UP MODE DEACTIVATED (caught up)')
-        catchUpModeRef.current = false
-        
-        // Restore normal thresholds
-        if (segmenterRef.current) {
-          segmenterRef.current.maxSentences = 10
-          segmenterRef.current.maxChars = 2000
-          segmenterRef.current.maxTimeMs = 15000
-        }
-      }
-    }
-    
-    return catchUpModeRef.current
-  }, [])
-  
+
   if (!segmenterRef.current) {
     segmenterRef.current = new SentenceSegmenter({
       maxSentences: 10,     // Increased to allow more sentences in live view (prevents premature flushing)
@@ -437,54 +378,12 @@ function TranslationInterface({ onBackToHome }) {
                                   translatedText.toLowerCase() !== originalText.toLowerCase();
               
               if (isDifferent) {
-                const now = Date.now()
-                
-                // For incremental streaming updates, use even more aggressive throttling
-                // Streaming tokens arrive rapidly, so we can update more frequently
-                pendingTextRef.current = translatedText
-                const timeSinceLastUpdate = now - lastUpdateTimeRef.current
-                
-                // Adaptive throttle: Streaming updates need very frequent updates for smooth feel
-                // For longer text (>300 chars), reduce throttle to 20ms for streaming
-                // In catch-up mode, reduce throttling significantly
-                const isCatchingUp = detectLag(translatedText.length)
-                const baseThrottleMs = isIncremental 
-                  ? (translatedText.length > 300 ? 20 : 30) // Streaming: faster updates
-                  : (translatedText.length > 300 ? 30 : 50); // Non-streaming: normal updates
-                const throttleMs = isCatchingUp ? Math.max(5, baseThrottleMs / 3) : baseThrottleMs // Much faster in catch-up mode
-                
-                if (timeSinceLastUpdate >= throttleMs) {
-                  lastUpdateTimeRef.current = now
-                  flushSync(() => {
-                    setLivePartial(translatedText)
-                  })
-                  console.log(`[TranslationInterface] ⚡ ${isIncremental ? 'STREAMING' : 'LIVE'} PARTIAL UPDATED (${translatedText.length} chars): "${translatedText.substring(0, 40)}..."`)
-                } else {
-                  if (throttleTimerRef.current) {
-                    clearTimeout(throttleTimerRef.current)
-                  }
-                  
-                throttleTimerRef.current = setTimeout(() => {
-                  const latestText = pendingTextRef.current
-                  // CRITICAL: Always update if we have text, even if it matches original briefly
-                  // This ensures the last translation update always shows
-                  if (latestText !== null && latestText.trim()) {
-                    // Check if different from original (but don't skip if it's the last update)
-                    const isDifferent = latestText !== originalText && 
-                                        latestText.trim() !== originalText.trim();
-                    
-                    // For long text, always update even if same - might be final translation
-                    const isLongText = latestText.length > 300;
-                    if (isDifferent || isLongText) {
-                      lastUpdateTimeRef.current = Date.now()
-                      flushSync(() => {
-                        setLivePartial(latestText)
-                      })
-                      console.log(`[TranslationInterface] ⏱️ THROTTLED ${isIncremental ? 'STREAMING' : 'LIVE'} PARTIAL (${latestText.length} chars): "${latestText.substring(0, 40)}..."`)
-                    }
-                  }
-                }, throttleMs)
-                }
+                // REAL-TIME STREAMING FIX: Update immediately on every delta for true real-time streaming
+                // No throttling - let React batch updates naturally for optimal performance
+                flushSync(() => {
+                  setLivePartial(translatedText)
+                })
+                console.log(`[TranslationInterface] ⚡ ${isIncremental ? 'STREAMING' : 'LIVE'} PARTIAL UPDATED (${translatedText.length} chars): "${translatedText.substring(0, 40)}..."`)
               } else {
                 console.log('[TranslationInterface] ⚠️ Translation equals original, skipping to prevent English glitch', {
                   translatedLength: translatedText.length,
@@ -499,42 +398,11 @@ function TranslationInterface({ onBackToHome }) {
                                   translatedText.toLowerCase() !== originalText.toLowerCase();
               
               if (isDifferent) {
-                // Fallback: If translatedText exists and is different, show it even without hasTranslation flag
-                const now = Date.now()
-                pendingTextRef.current = translatedText
-                const timeSinceLastUpdate = now - lastUpdateTimeRef.current
-                
-                // Detect lag for fallback updates too
-                const isCatchingUp = detectLag(translatedText.length)
-                const fallbackThrottleMs = isCatchingUp ? 10 : 50 // Faster in catch-up mode
-                
-                if (timeSinceLastUpdate >= fallbackThrottleMs) {
-                  lastUpdateTimeRef.current = now
-                  flushSync(() => {
-                    setLivePartial(translatedText)
-                  })
-                  console.log(`[TranslationInterface] ⚡ FALLBACK LIVE PARTIAL: "${translatedText.substring(0, 40)}..."`)
-                } else {
-                  if (throttleTimerRef.current) {
-                    clearTimeout(throttleTimerRef.current)
-                  }
-                  throttleTimerRef.current = setTimeout(() => {
-                    const latestText = pendingTextRef.current
-                    // CRITICAL: Always update if we have text - ensure last translation shows
-                    if (latestText !== null && latestText.trim()) {
-                      const isDifferent = latestText !== originalText && 
-                                          latestText.trim() !== originalText.trim();
-                      const isLongText = latestText.length > 300;
-                      if (isDifferent || isLongText) {
-                        lastUpdateTimeRef.current = Date.now()
-                        flushSync(() => {
-                          setLivePartial(latestText)
-                        })
-                        console.log(`[TranslationInterface] ⏱️ FALLBACK THROTTLED: "${latestText.substring(0, 40)}..."`)
-                      }
-                    }
-                  }, fallbackThrottleMs)
-                }
+                // REAL-TIME STREAMING FIX: Update immediately for fallback case too
+                flushSync(() => {
+                  setLivePartial(translatedText)
+                })
+                console.log(`[TranslationInterface] ⚡ FALLBACK LIVE PARTIAL: "${translatedText.substring(0, 40)}..."`)
               } else {
                 console.log('[TranslationInterface] ⚠️ Fallback translation equals original, skipping');
               }

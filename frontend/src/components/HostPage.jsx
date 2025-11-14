@@ -73,12 +73,7 @@ export function HostPage({ onBackToHome }) {
 
   const wsRef = useRef(null);
   const { startRecording, stopRecording, isRecording, audioLevel } = useAudioCapture();
-  
-  // Throttling refs for smooth partial updates (20fps max)
-  const lastUpdateTimeRef = useRef(0);
-  const pendingTextRef = useRef(null);
-  const throttleTimerRef = useRef(null);
-  
+
   // Sentence segmenter for smart text management
   const segmenterRef = useRef(null);
   if (!segmenterRef.current) {
@@ -193,42 +188,18 @@ export function HostPage({ onBackToHome }) {
             break;
           
           case 'translation':
-            // ✨ REAL-TIME STREAMING: Sentence segmented + throttled display
+            // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
             if (message.isPartial) {
               const rawText = message.originalText || message.translatedText;
-              const now = Date.now();
-              
+
               // Process through segmenter (auto-flushes complete sentences)
               const { liveText } = segmenterRef.current.processPartial(rawText);
-              
-              // Store the segmented text
-              pendingTextRef.current = liveText;
-              
-              // THROTTLE: Update max 20 times per second (50ms intervals)
-              const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
-              
-              if (timeSinceLastUpdate >= 50) {
-                // Immediate update with forced sync render
-                lastUpdateTimeRef.current = now;
-                flushSync(() => {
-                  setCurrentTranscript(liveText);
-                });
-              } else {
-                // Schedule delayed update
-                if (throttleTimerRef.current) {
-                  clearTimeout(throttleTimerRef.current);
-                }
-                
-                throttleTimerRef.current = setTimeout(() => {
-                  const latestText = pendingTextRef.current;
-                  if (latestText !== null) {
-                    lastUpdateTimeRef.current = Date.now();
-                    flushSync(() => {
-                      setCurrentTranscript(latestText);
-                    });
-                  }
-                }, 50);
-              }
+
+              // REAL-TIME STREAMING FIX: Update immediately on every delta for true real-time streaming
+              // No throttling - let React batch updates naturally for optimal performance
+              flushSync(() => {
+                setCurrentTranscript(liveText);
+              });
             } else {
               // Final transcript - process through segmenter (deduplicated)
               const finalText = message.originalText || message.translatedText;
