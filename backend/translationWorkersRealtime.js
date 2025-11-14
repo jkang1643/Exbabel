@@ -215,7 +215,7 @@ PARTIAL TEXT RULES:
             modalities: ['text'], // Text-only, no audio
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 2000, // SPEED: Reduced - most translations are short
+            max_response_output_tokens: 4096, // CRITICAL: Spanish translations need more tokens (longer language)
             tools: [], // Explicitly disable tools to prevent function calling
             response_stabilization: {
               enabled: false // Disable stabilization for maximum deltas (live transcription)
@@ -701,15 +701,16 @@ PARTIAL TEXT RULES:
 
         console.log(`[RealtimePartialWorker] ⚡ Translating partial: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
 
-        // Set timeout for request
+        // Set timeout for request - CRITICAL: Realtime API can take 10-20s for long Spanish text
+        const PARTIAL_TIMEOUT_MS = 25000; // Increased from 10s to 25s (realistic for API latency)
         const timeoutId = setTimeout(() => {
           if (this.pendingResponses.has(requestId)) {
             const pending = this.pendingResponses.get(requestId);
-            console.error(`[RealtimePartialWorker] ⏱️ Translation timeout after 10s for request ${requestId}`);
+            console.error(`[RealtimePartialWorker] ⏱️ Translation timeout after ${PARTIAL_TIMEOUT_MS/1000}s for request ${requestId}`);
             this.pendingResponses.delete(requestId);
-            reject(new Error('Translation timeout - realtime API did not respond'));
+            reject(new Error(`Translation timeout - realtime API did not respond after ${PARTIAL_TIMEOUT_MS/1000}s`));
           }
-        }, 10000);
+        }, PARTIAL_TIMEOUT_MS);
 
         // Store timeout ID
         const pending = this.pendingResponses.get(requestId);
@@ -1339,12 +1340,12 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
         const timeoutId = setTimeout(() => {
           if (this.pendingResponses.has(requestId)) {
             const pending = this.pendingResponses.get(requestId);
-            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 20s for request ${requestId}`);
+            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 30s for request ${requestId}`);
             console.error(`[RealtimeFinalWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
             this.pendingResponses.delete(requestId);
             reject(new Error('Translation timeout - realtime API did not respond'));
           }
-        }, 20000); // 20 second timeout for finals
+        }, 30000); // 30 second timeout for finals (increased from 20s)
 
         // Store timeout ID
         const pending = this.pendingResponses.get(requestId);

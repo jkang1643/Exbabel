@@ -6,7 +6,9 @@
       "Bash(node backend/server.js:*)",
       "Bash(pkill:*)",
       "Bash(npm run dev:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(git commit:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
