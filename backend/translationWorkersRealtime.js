@@ -23,17 +23,11 @@ import { getLanguageName } from './languageConfig.js';
  * - Target latency: 150-200ms (vs 300-500ms with item creation per partial)
  */
 export class RealtimePartialTranslationWorker {
-  /**
-   * Increase cache size for conversation item cleanup
-   * CRITICAL: Larger cache prevents needing to close/reopen connections
-   * Each translation item creates conversation history - cache reuses translations
-   * between finals and next partial to avoid repeated API calls
-   */
   constructor() {
     this.cache = new Map();
     this.pendingRequests = new Map(); // Track pending requests for cancellation
-    this.MAX_CACHE_SIZE = 500; // INCREASED from 200 - larger cache = fewer API calls during gaps
-    this.CACHE_TTL = 180000; // 3 minutes cache (increased from 2 min to handle longer finalization gaps)
+    this.MAX_CACHE_SIZE = 200;
+    this.CACHE_TTL = 120000; // 2 minutes cache
 
     // Connection pool for WebSocket sessions
     this.connectionPool = new Map(); // key: `${sourceLang}:${targetLang}`, value: WebSocket session
@@ -54,9 +48,9 @@ export class RealtimePartialTranslationWorker {
 
     // Concurrency limits - CRITICAL: Increased to handle rapid transcription updates
     // MAX_CONCURRENT = 1 caused timeouts with frequent transcription requests
-    // Increased to 2 to allow parallel response processing per connection
-    this.MAX_CONCURRENT = 2; // INCREASED from 1 to handle rapid partial updates
-    this.MAX_PENDING_REQUESTS = 20; // Increased from 10 to handle transcription bursts
+    // Increased to 5 (like Chat API) to allow parallel response processing per connection
+    this.MAX_CONCURRENT = 5; // INCREASED to 5 like Chat API (was 2, which still serializes)
+    this.MAX_PENDING_REQUESTS = 30; // Increased to handle concurrent translations
 
     // Periodic cleanup to prevent memory leaks
     setInterval(() => this._cleanupStalePendingRequests(), 5000); // Every 5 seconds
@@ -67,7 +61,7 @@ export class RealtimePartialTranslationWorker {
    */
   _cleanupStalePendingRequests() {
     const now = Date.now();
-    const STALE_THRESHOLD = 40000; // 40 seconds - must be >= max timeout (30s for finals) to avoid premature cleanup
+    const STALE_THRESHOLD = 25000; // 25 seconds - slightly longer than timeout for safety
 
     let cleanedCount = 0;
     for (const [requestId, pending] of this.pendingResponses.entries()) {
@@ -602,32 +596,6 @@ PARTIAL TEXT RULES:
     const sourceLangName = getLanguageName(sourceLang);
     const targetLangName = getLanguageName(targetLang);
 
-    // CRITICAL: Check cache BEFORE making API call to avoid recreating conversations
-    // This prevents redundant API calls during gaps between finals and next partial
-    let cacheKey;
-    if (text.length > 300) {
-      const prefix = text.substring(0, 150);
-      const suffix = text.substring(Math.max(0, text.length - 100));
-      const length = text.length;
-      cacheKey = `partial:${sourceLang}:${targetLang}:${length}:${prefix}:${suffix}`;
-    } else {
-      cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
-    }
-
-    if (this.cache.has(cacheKey)) {
-      const cached = this.cache.get(cacheKey);
-      if (Date.now() - cached.timestamp < this.CACHE_TTL) {
-        // Validate cache entry is valid (text hasn't shrunk, translation isn't English leak)
-        const isCachedSameAsOriginal = cached.text === text ||
-                                      cached.text.trim() === text.trim() ||
-                                      cached.text.toLowerCase() === text.toLowerCase();
-        if (!isCachedSameAsOriginal) {
-          console.log(`[RealtimePartialWorker] ✅ Cache hit: "${text.substring(0, 40)}..." (${cacheKey.substring(0, 50)}...)`);
-          return Promise.resolve(cached.text);
-        }
-      }
-    }
-
     // Get or create connection
     const connectionKey = `${sourceLang}:${targetLang}`;
     let session;
@@ -733,8 +701,8 @@ PARTIAL TEXT RULES:
 
         console.log(`[RealtimePartialWorker] ⚡ Translating partial: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
 
-        // Set timeout for request - CRITICAL: Realtime API can take 10-20s for long Spanish text
-        const PARTIAL_TIMEOUT_MS = 25000; // Increased from 10s to 25s (realistic for API latency)
+        // Set timeout for request - CRITICAL: Realtime API can take 5-10s for Spanish text
+        const PARTIAL_TIMEOUT_MS = 15000; // 15 seconds (reasonable for API latency, not 25s)
         const timeoutId = setTimeout(() => {
           if (this.pendingResponses.has(requestId)) {
             const pending = this.pendingResponses.get(requestId);
@@ -754,25 +722,15 @@ PARTIAL TEXT RULES:
         reject(error);
       }
     }).then((translatedText) => {
-      // IMPROVED CACHE KEY: Use prefix+suffix like Chat API to catch text extensions
-      // Hash-based keys fail when text grows (different hash = cache miss)
-      // Instead, use prefix+suffix so "The cat" and "The cat sat" both check same cache entry
-      let cacheKey;
-      if (text.length > 300) {
-        // For long text, use prefix+suffix+length to catch extensions
-        const prefix = text.substring(0, 150);
-        const suffix = text.substring(Math.max(0, text.length - 100));
-        const length = text.length;
-        cacheKey = `partial:${sourceLang}:${targetLang}:${length}:${prefix}:${suffix}`;
-      } else {
-        // For short text, use simple prefix key
-        cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
-      }
+      // Cache with simple hash key - no fancy prefix+suffix
+      const textHash = text.split('').reduce((hash, char) => {
+        return ((hash << 5) - hash) + char.charCodeAt(0);
+      }, 0).toString(36);
+      const cacheKey = `partial:${sourceLang}:${targetLang}:${textHash}`;
 
       // Cache the result
       this.cache.set(cacheKey, {
         text: translatedText,
-        originalText: text,
         timestamp: Date.now()
       });
 
@@ -856,26 +814,6 @@ PARTIAL TEXT RULES:
     this.connectionSetupPromises.clear();
     this.pendingResponses.clear();
   }
-
-  /**
-   * Close connections for a specific language pair to reset context
-   * CRITICAL: Prevents conversation items from accumulating and blocking new translations
-   * Call this after final translations to clear session state
-   */
-  closeConnectionsForLanguagePair(sourceLang, targetLang) {
-    const baseKey = `${sourceLang}:${targetLang}`;
-    console.log(`[RealtimePartialWorker] 🔄 Closing connections for ${baseKey} to reset context...`);
-
-    for (const [key, session] of this.connectionPool.entries()) {
-      if (key.startsWith(baseKey)) {
-        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-          session.ws.close();
-          console.log(`[RealtimePartialWorker] ✅ Closed connection: ${key}`);
-        }
-        this.connectionPool.delete(key);
-      }
-    }
-  }
 }
 
 /**
@@ -884,8 +822,8 @@ PARTIAL TEXT RULES:
 export class RealtimeFinalTranslationWorker {
   constructor() {
     this.cache = new Map();
-    this.MAX_CACHE_SIZE = 300; // INCREASED from 100 - larger cache handles long texts better
-    this.CACHE_TTL = 600000; // 10 minutes cache (finals are longer, more likely to repeat)
+    this.MAX_CACHE_SIZE = 100;
+    this.CACHE_TTL = 600000; // 10 minutes cache
 
     // Connection pool (shared with partial worker for efficiency)
     this.connectionPool = new Map();
@@ -1316,22 +1254,16 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
 
     console.log(`[RealtimeFinalWorker] 🎯 Translating final: "${text.substring(0, 50)}..." (${sourceLangName} → ${targetLangName})`);
 
-    // IMPROVED CACHE KEY: Use prefix+suffix like partials to catch text extensions
-    // Hash-based keys fail when text grows (grammar corrected text might be slightly different length)
-    let cacheKey;
-    if (text.length > 300) {
-      const prefix = text.substring(0, 150);
-      const suffix = text.substring(Math.max(0, text.length - 100));
-      const length = text.length;
-      cacheKey = `final:${sourceLang}:${targetLang}:${length}:${prefix}:${suffix}`;
-    } else {
-      cacheKey = `final:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
-    }
+    // Simple cache key with hash
+    const textHash = text.split('').reduce((hash, char) => {
+      return ((hash << 5) - hash) + char.charCodeAt(0);
+    }, 0).toString(36);
+    const cacheKey = `final:${sourceLang}:${targetLang}:${textHash}`;
 
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey);
       if (Date.now() - cached.timestamp < this.CACHE_TTL) {
-        console.log(`[RealtimeFinalWorker] ✅ Cache hit (${text.length} chars)`);
+        console.log(`[RealtimeFinalWorker] ✅ Cache hit`);
         return cached.text;
       }
     }
@@ -1406,12 +1338,12 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
         const timeoutId = setTimeout(() => {
           if (this.pendingResponses.has(requestId)) {
             const pending = this.pendingResponses.get(requestId);
-            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 30s for request ${requestId}`);
+            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 20s for request ${requestId}`);
             console.error(`[RealtimeFinalWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
             this.pendingResponses.delete(requestId);
             reject(new Error('Translation timeout - realtime API did not respond'));
           }
-        }, 30000); // 30 second timeout for finals (increased from 20s)
+        }, 20000); // 20 second timeout for finals (not 30s)
 
         // Store timeout ID
         const pending = this.pendingResponses.get(requestId);
@@ -1504,26 +1436,6 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
     this.connectionPool.clear();
     this.connectionSetupPromises.clear();
     this.pendingResponses.clear();
-  }
-
-  /**
-   * Close connections for a specific language pair to reset context
-   * CRITICAL: Prevents conversation items from accumulating and blocking new translations
-   * Call this after final translations to clear session state
-   */
-  closeConnectionsForLanguagePair(sourceLang, targetLang) {
-    const baseKey = `${sourceLang}:${targetLang}`;
-    console.log(`[RealtimeFinalWorker] 🔄 Closing connections for ${baseKey} to reset context...`);
-
-    for (const [key, session] of this.connectionPool.entries()) {
-      if (key.startsWith(baseKey)) {
-        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-          session.ws.close();
-          console.log(`[RealtimeFinalWorker] ✅ Closed connection: ${key}`);
-        }
-        this.connectionPool.delete(key);
-      }
-    }
   }
 }
 
