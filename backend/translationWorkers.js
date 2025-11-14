@@ -694,8 +694,13 @@ export class FinalTranslationWorker {
       return text;
     }
 
-    const cacheKey = `final:${sourceLang}:${targetLang}:${text.substring(0, 200)}`;
-    
+    // IMPROVED CACHE KEY: Use hash of full text instead of substring
+    // This prevents cache misses when text grows beyond 200 chars
+    const textHash = text.split('').reduce((hash, char) => {
+      return ((hash << 5) - hash) + char.charCodeAt(0);
+    }, 0).toString(36);
+    const cacheKey = `final:${sourceLang}:${targetLang}:${textHash}`;
+
     // Check cache
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey);
@@ -722,7 +727,7 @@ export class FinalTranslationWorker {
     console.log(`[FinalWorker] 🎯 High-quality translating final: "${text.substring(0, 50)}..." (${sourceLangName} → ${targetLangName})`);
 
     try {
-      // Use GPT-4o for high-quality final translations
+      // Use GPT-4o-mini for final translations
       const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -759,13 +764,13 @@ Output: Only the translated text in ${targetLangName}.`
       });
 
       const result = await response.json();
-      
+
       if (!result.choices || result.choices.length === 0) {
         throw new Error('No translation result from OpenAI');
       }
 
       const translatedText = result.choices[0].message.content.trim() || text;
-      
+
       // CRITICAL: Check if response was truncated
       const finishReason = result.choices[0].finish_reason;
       if (finishReason === 'length') {

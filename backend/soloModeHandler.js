@@ -598,6 +598,19 @@ export async function handleSoloMode(clientWs) {
                               if (error.message && error.message.includes('cancelled')) {
                                 // Request was cancelled by a newer request - this is expected, silently skip
                                 console.log(`[SoloMode] ⏭️ Translation cancelled (newer request took priority)`);
+                              } else if (error.conversational) {
+                                // Model returned conversational response instead of translation - use original
+                                console.warn(`[SoloMode] ⚠️ Model returned conversational response instead of translation - using original text`);
+                                // Send original text as fallback
+                                sendWithSequence({
+                                  type: 'translation',
+                                  originalText: capturedText,
+                                  translatedText: capturedText,
+                                  timestamp: Date.now(),
+                                  isTranscriptionOnly: false,
+                                  hasTranslation: true,
+                                  hasCorrection: false
+                                }, true);
                               } else if (error.englishLeak) {
                                 // Translation matched original (English leak) - silently skip
                                 console.log(`[SoloMode] ⏭️ English leak detected for partial - skipping (${capturedText.length} chars)`);
@@ -832,20 +845,21 @@ export async function handleSoloMode(clientWs) {
                   // CRITICAL: For long text, wait proportionally longer before processing final
                   // Google Speech may send final signal but still have partials for the last few words in flight
                   // Very long text (>300 chars) needs more time for all partials to arrive
-                  const BASE_WAIT_MS = 300;
+                  // EXTENDED: Account for translation latency (150-300ms for Realtime Mini) + partial arrival time
+                  const BASE_WAIT_MS = 500; // Increased from 300ms to account for API latency
                   const LONG_TEXT_THRESHOLD = 200;
                   const VERY_LONG_TEXT_THRESHOLD = 300;
-                  const CHAR_DELAY_MS = 2; // 2ms per character for very long text
-                  
+                  const CHAR_DELAY_MS = 3; // Increased from 2ms to 3ms per character for very long text
+
                   let WAIT_FOR_PARTIALS_MS;
                   if (transcriptText.length > VERY_LONG_TEXT_THRESHOLD) {
-                    // Very long text: base wait + proportional delay (up to 1500ms max)
-                    WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (transcriptText.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
+                    // Very long text: base wait + proportional delay (up to 2500ms max, increased from 1500ms)
+                    WAIT_FOR_PARTIALS_MS = Math.min(2500, BASE_WAIT_MS + (transcriptText.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
                   } else if (transcriptText.length > LONG_TEXT_THRESHOLD) {
-                    // Long text: fixed longer wait
-                    WAIT_FOR_PARTIALS_MS = 800;
+                    // Long text: fixed longer wait (increased from 800ms to 1200ms)
+                    WAIT_FOR_PARTIALS_MS = 1200;
                   } else {
-                    // Short text: base wait
+                    // Short text: base wait (increased from 300ms to 500ms)
                     WAIT_FOR_PARTIALS_MS = BASE_WAIT_MS;
                   }
                   
@@ -906,8 +920,10 @@ export async function handleSoloMode(clientWs) {
                       // Reset for next segment AFTER processing
                       const textToProcess = finalTextToUse;
                       const waitTime = Date.now() - pendingFinalization.timestamp;
-                      latestPartialText = '';
-                      longestPartialText = '';
+                      // DON'T reset partial tracking yet - next line's partials may arrive before we finish processing this one
+                      // They will be reset when the NEXT final signal arrives (avoiding race condition)
+                      // latestPartialText = '';
+                      // longestPartialText = '';
                       pendingFinalization = null;
                       
                       console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);

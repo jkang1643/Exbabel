@@ -46,9 +46,11 @@ export class RealtimePartialTranslationWorker {
     // Kept for potential future conversation management features
     this.sessionConversations = new Map(); // key: connectionKey, value: { itemCount, lastCleanup }
 
-    // Concurrency limits - CRITICAL: Set to 1 for strict serialization (no concurrent responses per connection)
-    this.MAX_CONCURRENT = 1; // MUST be 1 to prevent "conversation_already_has_active_response" errors
-    this.MAX_PENDING_REQUESTS = 10; // Prevent memory leaks from piling up requests
+    // Concurrency limits - CRITICAL: Increased to handle rapid transcription updates
+    // MAX_CONCURRENT = 1 caused timeouts with frequent transcription requests
+    // Increased to 2 to allow parallel response processing per connection
+    this.MAX_CONCURRENT = 2; // INCREASED from 1 to handle rapid partial updates
+    this.MAX_PENDING_REQUESTS = 20; // Increased from 10 to handle transcription bursts
 
     // Periodic cleanup to prevent memory leaks
     setInterval(() => this._cleanupStalePendingRequests(), 5000); // Every 5 seconds
@@ -59,7 +61,7 @@ export class RealtimePartialTranslationWorker {
    */
   _cleanupStalePendingRequests() {
     const now = Date.now();
-    const STALE_THRESHOLD = 5000; // 5 seconds - aggressive cleanup for high-frequency requests
+    const STALE_THRESHOLD = 15000; // 15 seconds - increased from 5s to allow time for API responses
 
     let cleanedCount = 0;
     for (const [requestId, pending] of this.pendingResponses.entries()) {
@@ -286,7 +288,8 @@ PARTIAL TEXT RULES:
                   requestId: matchedRequestId,
                   text: '',
                   originalText: originalText, // Store original for validation
-                  isComplete: false
+                  isComplete: false,
+                  createdAt: Date.now() // CRITICAL: Track creation time for cleanup
                 });
 
                 // API LIMITATION: Only ONE active response allowed per connection
@@ -419,8 +422,54 @@ PARTIAL TEXT RULES:
                     }
 
                     // CRITICAL: Validate translation is different from original (prevent English leak)
-                    // SMART CHECK: Only reject if text is mostly English words
-                    // Allow some English words in Spanish (proper nouns, technical terms)
+                    // SMART CHECK: Detect conversational responses like "I'm sorry but I can't assist..."
+                    const conversationalPatterns = [
+                      /^i\s+(am|'m)\s+(sorry|apologize|afraid)/i,
+                      /^i\s+(cannot|can't|don't|cannot)\s+/i,
+                      /^i\s+can\s+help/i,
+                      /^let\s+me\s+help/i,
+                      /^i\s+would\s+be\s+happy/i,
+                      /^i\s+can\s+assist/i,
+                      /^how\s+can\s+i\s+help/i,
+                      /^here\s+to\s+(help|assist)/i,
+                      /^respectful\s+and\s+meaningful/i,
+                      /^i\s+appreciate/i
+                    ];
+
+                    const lowerTranslation = translatedText.toLowerCase().trim();
+                    const isConversational = conversationalPatterns.some(pattern => pattern.test(lowerTranslation));
+
+                    if (isConversational) {
+                      console.error(`[RealtimePartialWorker] ❌ CONVERSATIONAL RESPONSE DETECTED (not a translation): "${translatedText.substring(0, 80)}..."`);
+                      console.error(`[RealtimePartialWorker] Original text was: "${originalText.substring(0, 80)}..."`);
+
+                      // Clear timeout
+                      if (pending.timeoutId) {
+                        clearTimeout(pending.timeoutId);
+                      }
+
+                      // Reject with specific error so caller knows to use original
+                      const error = new Error('Model returned conversational response instead of translation');
+                      error.conversational = true;
+                      pending.reject(error);
+                      this.pendingResponses.delete(session.activeRequestId);
+                      session.pendingItems.delete(pending.itemId);
+                      session.activeRequestId = null;
+                      return;
+                    }
+
+                    // SPEED: Soften validation - warn instead of reject to avoid retries
+                    if (!translatedText || translatedText.length === 0) {
+                      console.warn(`[RealtimePartialWorker] ⚠️ Empty translation, using original`);
+                      if (pending.timeoutId) {
+                        clearTimeout(pending.timeoutId);
+                      }
+                      pending.resolve(originalText); // Use original instead of rejecting
+                      this.pendingResponses.delete(session.activeRequestId);
+                      session.pendingItems.delete(pending.itemId);
+                      session.activeRequestId = null;
+                      return;
+                    }
 
                     // Check for obvious English leak - exact match or >80% word overlap
                     const translationWords = translatedText.toLowerCase().split(/\s+/).filter(w => w.length > 2);
@@ -608,6 +657,31 @@ PARTIAL TEXT RULES:
           }
         }
 
+        // CRITICAL FIX: Clean up orphaned items from previous requests
+        // This prevents "conversation already has active response" errors
+        // Keep items map small to prevent memory leaks
+        // Aggressive threshold: trigger cleanup at 3 items to prevent accumulation
+        // With MAX_CONCURRENT=2, items should never exceed 5-10 in normal operation
+        const MAX_ITEMS = 3;
+        if (session.pendingItems.size > MAX_ITEMS) {
+          console.log(`[RealtimePartialWorker] 🧹 Cleaning up old items (${session.pendingItems.size} → ${MAX_ITEMS})`);
+          let cleaned = 0;
+          const now = Date.now();
+          for (const [itemId, item] of session.pendingItems.entries()) {
+            // Only delete if item is complete and old enough (use createdAt, not itemId which is a string)
+            const itemAge = now - (item.createdAt || 0);
+            if (item.isComplete && itemAge > 5000) {
+              console.log(`[RealtimePartialWorker] Deleting old item ${itemId} (age: ${itemAge}ms)`);
+              session.pendingItems.delete(itemId);
+              cleaned++;
+              if (session.pendingItems.size <= MAX_ITEMS) break;
+            }
+          }
+          if (cleaned > 0) {
+            console.log(`[RealtimePartialWorker] 🧹 Cleaned up ${cleaned} items`);
+          }
+        }
+
         // Create conversation item with new text
         const createItemEvent = {
           type: 'conversation.item.create',
@@ -647,7 +721,13 @@ PARTIAL TEXT RULES:
         reject(error);
       }
     }).then((translatedText) => {
-      const cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
+      // IMPROVED CACHE KEY: Use hash of full text instead of substring
+      // This prevents cache misses when text grows beyond 150 chars
+      // Use a simple hash for consistency and avoiding very long keys
+      const textHash = text.split('').reduce((hash, char) => {
+        return ((hash << 5) - hash) + char.charCodeAt(0);
+      }, 0).toString(36);
+      const cacheKey = `partial:${sourceLang}:${targetLang}:${textHash}`;
 
       // Cache the result
       this.cache.set(cacheKey, {
@@ -933,7 +1013,8 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                   requestId: matchedRequestId,
                   text: '',
                   originalText: originalText, // Store original for validation
-                  isComplete: false
+                  isComplete: false,
+                  createdAt: Date.now() // CRITICAL: Track creation time for cleanup
                 });
 
                 // API LIMITATION: Only ONE active response allowed per connection
@@ -1165,16 +1246,6 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
       return text;
     }
 
-    const cacheKey = `final:${sourceLang}:${targetLang}:${text.substring(0, 200)}`;
-    
-    if (this.cache.has(cacheKey)) {
-      const cached = this.cache.get(cacheKey);
-      if (Date.now() - cached.timestamp < this.CACHE_TTL) {
-        console.log(`[RealtimeFinalWorker] ✅ Cache hit`);
-        return cached.text;
-      }
-    }
-
     if (!apiKey) {
       throw new Error('No API key provided');
     }
@@ -1183,6 +1254,20 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
     const targetLangName = getLanguageName(targetLang);
 
     console.log(`[RealtimeFinalWorker] 🎯 Translating final: "${text.substring(0, 50)}..." (${sourceLangName} → ${targetLangName})`);
+
+    // IMPROVED CACHE KEY: Use hash of full text instead of substring
+    const textHash = text.split('').reduce((hash, char) => {
+      return ((hash << 5) - hash) + char.charCodeAt(0);
+    }, 0).toString(36);
+    const cacheKey = `final:${sourceLang}:${targetLang}:${textHash}`;
+
+    if (this.cache.has(cacheKey)) {
+      const cached = this.cache.get(cacheKey);
+      if (Date.now() - cached.timestamp < this.CACHE_TTL) {
+        console.log(`[RealtimeFinalWorker] ✅ Cache hit`);
+        return cached.text;
+      }
+    }
 
     // Get or create connection
     const connectionKey = `${sourceLang}:${targetLang}`;
@@ -1197,13 +1282,38 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
     const requestId = `req_${Date.now()}_${++this.requestCounter}`;
 
     return new Promise((resolve, reject) => {
+      // CRITICAL FIX: Clean up orphaned items from previous requests
+      // This prevents "conversation already has active response" errors
+      // Aggressive threshold: trigger cleanup at 3 items to prevent accumulation
+      // With MAX_CONCURRENT=1, items should never exceed 5-10 in normal operation
+      const MAX_ITEMS = 3;
+      if (session.pendingItems.size > MAX_ITEMS) {
+        console.log(`[RealtimeFinalWorker] 🧹 Cleaning up old items (${session.pendingItems.size} → ${MAX_ITEMS})`);
+        let cleaned = 0;
+        const now = Date.now();
+        for (const [itemId, item] of session.pendingItems.entries()) {
+          // Only delete if item is complete and old enough
+          const itemAge = now - (item.createdAt || 0);
+          if (item.isComplete && itemAge > 5000) {
+            console.log(`[RealtimeFinalWorker] Deleting old item ${itemId} (age: ${itemAge}ms)`);
+            session.pendingItems.delete(itemId);
+            cleaned++;
+            if (session.pendingItems.size <= MAX_ITEMS) break;
+          }
+        }
+        if (cleaned > 0) {
+          console.log(`[RealtimeFinalWorker] 🧹 Cleaned up ${cleaned} items`);
+        }
+      }
+
       // Store pending response (itemId will be set when item.created arrives)
       this.pendingResponses.set(requestId, {
         resolve,
         reject,
         itemId: null, // Will be set when item.created event arrives
         session: session, // Track which session this request belongs to
-        connectionKey: connectionKey // Track connection for debugging
+        connectionKey: connectionKey, // Track connection for debugging
+        originalText: text // Store original for validation
       });
 
       const createItemEvent = {
@@ -1235,7 +1345,7 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             reject(new Error('Translation timeout - realtime API did not respond'));
           }
         }, 20000); // 20 second timeout for finals
-        
+
         // Store timeout ID
         const pending = this.pendingResponses.get(requestId);
         if (pending) {
