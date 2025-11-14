@@ -888,6 +888,13 @@ export async function handleSoloMode(clientWs) {
                   // Schedule final processing after a delay to catch any remaining partials
                   // If pendingFinalization exists and was extended, we'll reschedule it below
                   if (!pendingFinalization || transcriptText.length <= pendingFinalization.text.length) {
+                    // CRITICAL: Reset partial tracking when starting a new final
+                    // Prevents accumulation from previous sentence
+                    latestPartialText = '';
+                    longestPartialText = '';
+                    latestPartialTime = 0;
+                    longestPartialTime = 0;
+
                     pendingFinalization = {
                       seqId: null,
                       text: transcriptText,
@@ -920,10 +927,10 @@ export async function handleSoloMode(clientWs) {
                       // Reset for next segment AFTER processing
                       const textToProcess = finalTextToUse;
                       const waitTime = Date.now() - pendingFinalization.timestamp;
-                      // DON'T reset partial tracking yet - next line's partials may arrive before we finish processing this one
-                      // They will be reset when the NEXT final signal arrives (avoiding race condition)
-                      // latestPartialText = '';
-                      // longestPartialText = '';
+                      // CRITICAL FIX: Reset partial tracking AFTER final is scheduled for processing
+                      // This prevents accumulation of old partials from previous sentences
+                      latestPartialText = '';
+                      longestPartialText = '';
                       pendingFinalization = null;
                       
                       console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
