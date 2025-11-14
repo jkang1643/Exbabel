@@ -588,10 +588,10 @@ export class GoogleSpeechStream {
     // Google Speech processes chunks in order, so clear oldest pending chunks
     // Clear multiple timeouts since partial results come frequently and might clear multiple chunks
     const chunksToClear = Math.min(
-      isFinal ? 3 : 1, // Final results might correspond to multiple chunks, partials usually 1
+      isFinal ? this.pendingChunks.length : 1, // FINAL: clear ALL chunks to prevent spurious partials. Partial: clear 1
       this.pendingChunks.length
     );
-    
+
     for (let i = 0; i < chunksToClear && this.pendingChunks.length > 0; i++) {
       const oldestChunk = this.pendingChunks.shift();
       this.clearChunkTimeout(oldestChunk.chunkId);
@@ -600,7 +600,18 @@ export class GoogleSpeechStream {
 
     if (isFinal) {
       // Final result - high confidence
+      // CRITICAL: Clear ALL remaining chunks to prevent them from generating spurious partials
       console.log(`[GoogleSpeech] ✅ FINAL (${data.results.length} result(s)): "${combinedTranscript}"`);
+
+      // Aggressively clear all remaining pending chunks
+      if (this.pendingChunks.length > 0) {
+        console.log(`[GoogleSpeech] 🧹 Clearing ${this.pendingChunks.length} remaining pending chunks after FINAL`);
+        for (const chunk of this.pendingChunks) {
+          this.clearChunkTimeout(chunk.chunkId);
+        }
+        this.pendingChunks = [];
+      }
+
       if (this.resultCallback) {
         this.resultCallback(combinedTranscript, false); // isPartial = false
       }
