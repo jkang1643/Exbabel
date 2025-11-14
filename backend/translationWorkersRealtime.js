@@ -216,6 +216,7 @@ PARTIAL TEXT RULES:
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 4096, // CRITICAL: Spanish translations need more tokens (longer language)
+            response_stabilization: 'none', // CRITICAL: Disable stabilization to prevent response delays
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -519,6 +520,17 @@ PARTIAL TEXT RULES:
               
             case 'response.done':
               console.log(`[RealtimePartialWorker] ✅ Response done: ${session.activeResponseId}`);
+
+              // CRITICAL: Clean up all pending requests associated with this active response
+              // This prevents accumulation of orphaned pending requests
+              if (session.activeRequestId) {
+                const requestId = session.activeRequestId;
+                if (this.pendingResponses.has(requestId)) {
+                  console.log(`[RealtimePartialWorker] 🧹 Cleanup from response.done: ${requestId}`);
+                  this.pendingResponses.delete(requestId);
+                }
+              }
+
               session.activeResponseId = null; // Clear active response, allow new ones
               session.activeRequestId = null; // Clear active request tracking
               break;
@@ -607,6 +619,19 @@ PARTIAL TEXT RULES:
     const requestId = `req_${Date.now()}_${++this.requestCounter}`;
 
     return new Promise(async (resolve, reject) => {
+      // CRITICAL: Clean up any orphaned pending requests from same connection BEFORE adding new one
+      // This prevents accumulation of unmatchable requests
+      const baseConnectionKey = connectionKey.split(':').slice(0, 2).join(':');
+      for (const [key, value] of this.pendingResponses.entries()) {
+        const pendingBaseKey = value.connectionKey.split(':').slice(0, 2).join(':');
+        if (pendingBaseKey === baseConnectionKey && !value.itemId && Date.now() - (value._createdAt || 0) > 1000) {
+          // This request has been pending for >1s without getting an itemId - it's orphaned
+          console.log(`[RealtimePartialWorker] 🧹 Cleaning orphaned pending request before new one: ${key}`);
+          value.reject(new Error('Replaced by newer request'));
+          this.pendingResponses.delete(key);
+        }
+      }
+
       // Store pending response
       this.pendingResponses.set(requestId, {
         resolve,
@@ -615,7 +640,8 @@ PARTIAL TEXT RULES:
         itemId: null, // Will be set when item.created arrives
         session: session,
         connectionKey: connectionKey,
-        originalText: text
+        originalText: text,
+        _createdAt: Date.now() // Track creation time for orphan detection
       });
 
       try {
@@ -945,6 +971,7 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 2000, // SPEED: Reduced from 16000 - most translations are short
+            response_stabilization: 'none', // CRITICAL: Disable stabilization to prevent response delays
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -1108,6 +1135,17 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
               
             case 'response.done':
               console.log(`[RealtimeFinalWorker] ✅ Response done: ${session.activeResponseId}`);
+
+              // CRITICAL: Clean up all pending requests associated with this active response
+              // This prevents accumulation of orphaned pending requests
+              if (session.activeRequestId) {
+                const requestId = session.activeRequestId;
+                if (this.pendingResponses.has(requestId)) {
+                  console.log(`[RealtimeFinalWorker] 🧹 Cleanup from response.done: ${requestId}`);
+                  this.pendingResponses.delete(requestId);
+                }
+              }
+
               session.activeResponseId = null; // Clear active response, allow new ones
               session.activeRequestId = null; // Clear active request tracking
               break;
@@ -1299,6 +1337,19 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
         }
       }
 
+      // CRITICAL: Clean up any orphaned pending requests from same connection BEFORE adding new one
+      // This prevents accumulation of unmatchable requests
+      const baseConnectionKey = connectionKey.split(':').slice(0, 2).join(':');
+      for (const [key, value] of this.pendingResponses.entries()) {
+        const pendingBaseKey = value.connectionKey.split(':').slice(0, 2).join(':');
+        if (pendingBaseKey === baseConnectionKey && !value.itemId && Date.now() - (value._createdAt || 0) > 1000) {
+          // This request has been pending for >1s without getting an itemId - it's orphaned
+          console.log(`[RealtimeFinalWorker] 🧹 Cleaning orphaned pending request before new one: ${key}`);
+          value.reject(new Error('Replaced by newer request'));
+          this.pendingResponses.delete(key);
+        }
+      }
+
       // Store pending response (itemId will be set when item.created arrives)
       this.pendingResponses.set(requestId, {
         resolve,
@@ -1306,7 +1357,8 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
         itemId: null, // Will be set when item.created event arrives
         session: session, // Track which session this request belongs to
         connectionKey: connectionKey, // Track connection for debugging
-        originalText: text // Store original for validation
+        originalText: text, // Store original for validation
+        _createdAt: Date.now() // Track creation time for orphan detection
       });
 
       const createItemEvent = {
