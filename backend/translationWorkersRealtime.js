@@ -260,10 +260,13 @@ PARTIAL TEXT RULES:
                   console.log(`[RealtimePartialWorker] 💾 Stored persistent itemId ${event.item.id} for ${baseConnectionKey}`);
                 }
 
-                // Find the most recent pending request without an itemId that belongs to THIS language pair
+                // CRITICAL FIX: Find the most recent pending request without an itemId that belongs to THIS language pair
+                // IMPORTANT: Only match on base connection key (language pair), never on full unique connection key
+                // This allows pending requests from old connections to be matched to new connections
+                // Previous bug: strict connection key matching prevented cross-connection matching
                 let matchedRequestId = null;
                 for (const [reqId, pending] of this.pendingResponses.entries()) {
-                  // Match by base connection key (language pair), not exact connection
+                  // CRITICAL: Match ONLY by base connection key (language pair), ignore unique connection suffixes
                   const pendingBaseKey = pending.connectionKey.split(':').slice(0, 2).join(':');
                   if (pendingBaseKey === baseConnectionKey && !pending.itemId && !session.pendingItems.has(event.item.id)) {
                     matchedRequestId = reqId;
@@ -275,9 +278,14 @@ PARTIAL TEXT RULES:
                 }
 
                 if (!matchedRequestId) {
+                  // CRITICAL: Log with full details for debugging
+                  const pendingByLang = Array.from(this.pendingResponses.entries())
+                    .filter(([_, p]) => p.connectionKey.split(':').slice(0, 2).join(':') === baseConnectionKey)
+                    .map(([id, p]) => `${id}(itemId: ${p.itemId || 'none'})`)
+                    .join(', ');
                   console.warn(`[RealtimePartialWorker] ⚠️ No pending request found for item ${event.item.id}`);
-                  console.warn(`[RealtimePartialWorker] Available pending requests: ${Array.from(this.pendingResponses.keys()).join(', ')}`);
-                  console.warn(`[RealtimePartialWorker] Pending requests for this connection: ${Array.from(this.pendingResponses.entries()).filter(([_, p]) => p.connectionKey === session.connectionKey).map(([id, _]) => id).join(', ')}`);
+                  console.warn(`[RealtimePartialWorker] Pending for ${baseConnectionKey}: ${pendingByLang || '(none)'}`);
+                  console.warn(`[RealtimePartialWorker] Total pending: ${this.pendingResponses.size}`);
                   // Don't create response if no match - item will be orphaned
                   return;
                 }
@@ -1086,10 +1094,13 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                 // FIX: Extract base connection key (e.g., "en:es" from "en:es:1763076910165_oxeo0")
                 const baseConnectionKey = session.connectionKey.split(':').slice(0, 2).join(':');
 
-                // Find the most recent pending request without an itemId that belongs to THIS language pair
+                // CRITICAL FIX: Find the most recent pending request without an itemId that belongs to THIS language pair
+                // IMPORTANT: Only match on base connection key (language pair), never on full unique connection key
+                // This allows pending requests from old connections to be matched to new connections
+                // Previous bug: strict connection key matching prevented cross-connection matching
                 let matchedRequestId = null;
                 for (const [reqId, pending] of this.pendingResponses.entries()) {
-                  // FIX: Match by base connection key (language pair), not exact connection
+                  // CRITICAL: Match ONLY by base connection key (language pair), ignore unique connection suffixes
                   const pendingBaseKey = pending.connectionKey.split(':').slice(0, 2).join(':');
                   if (pendingBaseKey === baseConnectionKey && !pending.itemId && !session.pendingItems.has(event.item.id)) {
                     matchedRequestId = reqId;
@@ -1099,11 +1110,16 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                     break;
                   }
                 }
-                
+
                 if (!matchedRequestId) {
+                  // CRITICAL: Log with full details for debugging
+                  const pendingByLang = Array.from(this.pendingResponses.entries())
+                    .filter(([_, p]) => p.connectionKey.split(':').slice(0, 2).join(':') === baseConnectionKey)
+                    .map(([id, p]) => `${id}(itemId: ${p.itemId || 'none'})`)
+                    .join(', ');
                   console.warn(`[RealtimeFinalWorker] ⚠️ No pending request found for item ${event.item.id}`);
-                  console.warn(`[RealtimeFinalWorker] Available pending requests: ${Array.from(this.pendingResponses.keys()).join(', ')}`);
-                  console.warn(`[RealtimeFinalWorker] Pending requests for this connection: ${Array.from(this.pendingResponses.entries()).filter(([_, p]) => p.connectionKey === session.connectionKey).map(([id, _]) => id).join(', ')}`);
+                  console.warn(`[RealtimeFinalWorker] Pending for ${baseConnectionKey}: ${pendingByLang || '(none)'}`);
+                  console.warn(`[RealtimeFinalWorker] Total pending: ${this.pendingResponses.size}`);
                   // Don't create response if no match - item will be orphaned
                   return;
                 }
