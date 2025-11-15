@@ -519,14 +519,21 @@ PARTIAL TEXT RULES:
                       }
                     }
 
-                    // CRITICAL: DO NOT resolve here - response.done will handle it
-                    // The Realtime API may send deltas AFTER response.text.done
-                    // We need to keep activeRequestId set to collect them
+                    // SIMPLE APPROACH: Resolve immediately when text is done
+                    // This matches Chat API behavior - no need to wait for response.done
+                    if (pending.timeoutId) {
+                      clearTimeout(pending.timeoutId);
+                    }
+
                     if (pending.onPartial) {
                       pending.onPartial(translatedText, true);
                     }
-                    // Mark as text complete but keep activeRequestId active for additional deltas
-                    item.isComplete = true;
+
+                    // Resolve the request - we have the complete text
+                    pending.resolve(translatedText);
+                    this.pendingResponses.delete(session.activeRequestId);
+                    session.pendingItems.delete(pending.itemId);
+                    session.activeRequestId = null;
                   }
                 } else {
                   console.warn(`[RealtimePartialWorker] ⚠️ Response done but active request not found`);
@@ -539,41 +546,9 @@ PARTIAL TEXT RULES:
             case 'response.done':
               console.log(`[RealtimePartialWorker] ✅ Response done: ${session.activeResponseId}`);
 
-              // CRITICAL: Use response → request mapping to find the correct request to clean up
-              // This handles concurrent responses correctly
-              let requestIdToCleanup = null;
-
+              // Clean up the response mapping (request should already be resolved by response.text.done)
               if (session.activeResponseId) {
-                // First try to get it from the mapping
-                requestIdToCleanup = this.responseToRequestMap.get(session.activeResponseId);
-                // Clean up the mapping entry
                 this.responseToRequestMap.delete(session.activeResponseId);
-              }
-
-              // Fallback to activeRequestId if mapping lookup fails
-              if (!requestIdToCleanup && session.activeRequestId) {
-                requestIdToCleanup = session.activeRequestId;
-              }
-
-              // Resolve and clean up the request if found
-              if (requestIdToCleanup && this.pendingResponses.has(requestIdToCleanup)) {
-                const pending = this.pendingResponses.get(requestIdToCleanup);
-                console.log(`[RealtimePartialWorker] 🧹 Cleanup from response.done: ${requestIdToCleanup}`);
-
-                // CRITICAL: Resolve the request with final text if not already resolved
-                if (pending && !pending.resolved) {
-                  const item = session.pendingItems.get(pending.itemId);
-                  if (item) {
-                    const finalText = item.text.trim();
-                    if (pending.timeoutId) {
-                      clearTimeout(pending.timeoutId);
-                    }
-                    pending.resolve(finalText);
-                    pending.resolved = true;
-                  }
-                }
-
-                this.pendingResponses.delete(requestIdToCleanup);
               }
 
               session.activeResponseId = null; // Clear active response, allow new ones
@@ -1268,41 +1243,9 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
             case 'response.done':
               console.log(`[RealtimeFinalWorker] ✅ Response done: ${session.activeResponseId}`);
 
-              // CRITICAL: Use response → request mapping to find the correct request to clean up
-              // This handles concurrent responses correctly
-              let requestIdToCleanup = null;
-
+              // Clean up the response mapping (request should already be resolved by response.text.done)
               if (session.activeResponseId) {
-                // First try to get it from the mapping
-                requestIdToCleanup = this.responseToRequestMap.get(session.activeResponseId);
-                // Clean up the mapping entry
                 this.responseToRequestMap.delete(session.activeResponseId);
-              }
-
-              // Fallback to activeRequestId if mapping lookup fails
-              if (!requestIdToCleanup && session.activeRequestId) {
-                requestIdToCleanup = session.activeRequestId;
-              }
-
-              // Resolve and clean up the request if found
-              if (requestIdToCleanup && this.pendingResponses.has(requestIdToCleanup)) {
-                const pending = this.pendingResponses.get(requestIdToCleanup);
-                console.log(`[RealtimeFinalWorker] 🧹 Cleanup from response.done: ${requestIdToCleanup}`);
-
-                // CRITICAL: Resolve the request with final text if not already resolved
-                if (pending && !pending.resolved) {
-                  const item = session.pendingItems.get(pending.itemId);
-                  if (item) {
-                    const finalText = item.text.trim();
-                    if (pending.timeoutId) {
-                      clearTimeout(pending.timeoutId);
-                    }
-                    pending.resolve(finalText);
-                    pending.resolved = true;
-                  }
-                }
-
-                this.pendingResponses.delete(requestIdToCleanup);
               }
 
               session.activeResponseId = null; // Clear active response, allow new ones
@@ -1389,11 +1332,17 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
                       clearTimeout(pending.timeoutId);
                     }
 
-                    // CRITICAL: DO NOT resolve here - response.done will handle it
-                    // The Realtime API may send deltas AFTER response.text.done
-                    // We need to keep activeRequestId set to collect them
-                    // Mark as text complete but keep activeRequestId active for additional deltas
-                    item.isComplete = true;
+                    // SIMPLE APPROACH: Resolve immediately when text is done
+                    // This matches Chat API behavior - no need to wait for response.done
+                    if (pending.onPartial) {
+                      // Finals don't have streaming callbacks, but keep this for consistency
+                    }
+
+                    // Resolve the request - we have the complete text
+                    pending.resolve(translatedText);
+                    this.pendingResponses.delete(session.activeRequestId);
+                    session.pendingItems.delete(pending.itemId);
+                    session.activeRequestId = null;
                   }
                 } else {
                   console.warn(`[RealtimeFinalWorker] ⚠️ Response done but active request not found`);

@@ -8,7 +8,8 @@
       "Bash(npm run dev:*)",
       "Bash(curl:*)",
       "Bash(git commit:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(to expand\" - exact description of what happens when deltas arrive with no active request.\n\nFix: Do NOT resolve in response.text.done. Keep activeRequestId active to continue \ncollecting deltas. Let response.done (the final event) handle the resolution.\n\nThis allows all deltas to be collected before the request is resolved, preventing\nthe freeze where text stops expanding.\n\nApplied to both RealtimePartialTranslationWorker and RealtimeFinalTranslationWorker.\n\n🤖 Generated with Claude Code\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
     ],
     "deny": [],
     "ask": []
