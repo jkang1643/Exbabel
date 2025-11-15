@@ -44,13 +44,13 @@ export class RealtimePartialTranslationWorker {
 
     // CRITICAL: NO PERSISTENT CONVERSATION CONTEXT (matching 4o mini pipeline)
     // Conversation context causes performance degradation over time
-    // Solution: Close connections immediately after use, don't reuse
-    // This forces each translation to start with fresh context (like REST API calls)
-    this.CONNECTION_REUSE_ENABLED = false; // Disable connection reuse to prevent context accumulation
+    // Solution: TRUNCATE conversation items after each response to keep context window small
+    // This allows connection reuse WITHOUT accumulating context
+    this.CONNECTION_REUSE_ENABLED = false; // Close connections after translation to start fresh
 
-    // Persistent conversation tracking - DISABLED
-    // With no conversation reuse, this is no longer needed
-    this.sessionConversations = new Map(); // Kept for reference, not used
+    // Persistent conversation tracking - Track itemIds for truncation
+    // Each connection keeps ONE input/output pair - we truncate after each response
+    this.sessionConversations = new Map(); // key: baseConnectionKey, value: { inputItemId, outputItemId, lastUsed }
 
     // Concurrency limits - CRITICAL: Increased to handle rapid transcription updates
     // MAX_CONCURRENT = 1 caused timeouts with frequent transcription requests
@@ -177,46 +177,17 @@ export class RealtimePartialTranslationWorker {
         pendingItems: new Map(), // Track conversation items by itemId
         activeResponseId: null, // Track active response to prevent concurrent responses
         activeRequestId: null, // Track which request has the active response
-        pingInterval: null // Keep-alive interval
+        pingInterval: null, // Keep-alive interval
+        lastInputItemId: null, // Store last input item ID to REUSE with truncate instead of creating new items
+        lastOutputItemId: null // Store last output item ID
       };
       
       ws.on('open', () => {
         console.log(`[RealtimePartialWorker] Connection opened for ${sourceLang} → ${targetLang}`);
         
         // Configure session for text-to-text translation
-        const translationInstructions = `You are a LITERAL translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName} WORD-FOR-WORD.
-
-CRITICAL RULES - YOU MUST FOLLOW THESE WITHOUT EXCEPTION:
-1. TRANSLATE LITERALLY - preserve the exact meaning and structure of the input
-2. NEVER rewrite, rephrase, or correct the input text
-3. NEVER interpret, infer, or add your own understanding
-4. NEVER respond conversationally or answer questions
-5. NEVER add explanations, commentary, or notes
-6. NEVER include phrases like "The translation is..." or "Here's the translation"
-7. ONLY output the direct word-for-word translation of the input text
-8. Do NOT acknowledge the user or respond to their questions
-9. Do NOT provide additional information or assistance
-10. Output ONLY the translated text in ${targetLangName}, nothing else
-11. PRESERVE ERRORS AND MISTAKES IN THE INPUT - if input has grammatical errors, translate them as-is
-
-LITERAL TRANSLATION EXAMPLES (preserve exact wording):
-Input: "hello with everything here"
-Output: "hola con todo aquí" (NOT "say hello with everything" or "Ama con todo" - LITERAL ONLY)
-
-Input: "when she was asked"
-Output: "cuando ella fue preguntada" (NOT "When she was asked to..." - LITERAL ONLY, stop at the end of the input)
-
-Input: "Can you hear me?"
-Output: "¿Puedes oírme?" (literal translation of the question)
-
-CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY what is given.
-
-PARTIAL TEXT RULES:
-1. Translate the partial text literally, exactly as given
-2. Maintain the same tense and structure as the partial
-3. Do NOT complete or extend the sentence - only translate what's given
-4. Do NOT interpret or infer meaning
-5. Keep translation word-for-word and natural in ${targetLangName}`;
+        // Use SHORT instructions like Chat API - verbose instructions waste token budget
+        const translationInstructions = `Translate from ${sourceLangName} to ${targetLangName}. Translate literally, word-for-word. Do not complete, rephrase, or extend. Output ONLY the translation.`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -224,7 +195,7 @@ PARTIAL TEXT RULES:
             modalities: ['text'], // Text-only, no audio
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 4096, // Maximum allowed by API
+            max_response_output_tokens: 1000, // Reduced from 4096 to preserve token budget - partials don't need that much
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -252,6 +223,12 @@ PARTIAL TEXT RULES:
               // Track conversation item and map to pending request
               if (event.item && event.item.id) {
                 console.log(`[RealtimePartialWorker] 📝 Item created: ${event.item.id} for connection ${session.connectionKey}`);
+
+                if (event.item.role === 'user') {
+                  session.lastInputItemId = event.item.id;
+                } else if (event.item.role === 'assistant') {
+                  session.lastOutputItemId = event.item.id;
+                }
 
                 // Extract base connection key (e.g., "en:es" from "en:es:1763076910165_oxeo0")
                 const baseConnectionKey = session.connectionKey.split(':').slice(0, 2).join(':');
@@ -534,6 +511,25 @@ PARTIAL TEXT RULES:
                     this.pendingResponses.delete(session.activeRequestId);
                     session.pendingItems.delete(pending.itemId);
                     session.activeRequestId = null;
+
+                    // CRITICAL: Close connection immediately after each partial to prevent context accumulation
+                    // This is THE FIX for the 2-line limitation - context window fills up with accumulated items
+                    // By closing immediately, next partial gets a fresh connection with empty conversation
+                    console.log(`[RealtimePartialWorker] 🔌 Closing connection after partial to prevent context accumulation`);
+                    try {
+                      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                        session.ws.close();
+                      }
+                    } catch (err) {
+                      console.warn(`[RealtimePartialWorker] Error closing connection: ${err.message}`);
+                    }
+                    // Remove from pool immediately
+                    for (const [key, sess] of this.connectionPool.entries()) {
+                      if (sess === session) {
+                        this.connectionPool.delete(key);
+                        break;
+                      }
+                    }
                   }
                 } else {
                   console.warn(`[RealtimePartialWorker] ⚠️ Response done but active request not found`);
@@ -582,13 +578,20 @@ PARTIAL TEXT RULES:
 
             case 'error':
               console.error(`[RealtimePartialWorker] Error for ${session.connectionKey}:`, event.error);
+              const errorInfo = event.error || {};
+              const realtimeError = new Error(errorInfo.message || 'Realtime API error');
+              if (errorInfo.code) {
+                realtimeError.code = errorInfo.code;
+              }
+              const isActiveResponseConflict = errorInfo.code === 'conversation_already_has_active_response';
+
               // Find and reject pending response by item_id
               if (event.item_id) {
                 const item = session.pendingItems.get(event.item_id);
                 if (item && item.requestId) {
                   const pendingResponse = this.pendingResponses.get(item.requestId);
                   if (pendingResponse) {
-                    pendingResponse.reject(new Error(event.error.message || 'Realtime API error'));
+                    pendingResponse.reject(realtimeError);
                     this.pendingResponses.delete(item.requestId);
                   }
                   session.pendingItems.delete(event.item_id);
@@ -596,13 +599,25 @@ PARTIAL TEXT RULES:
                   // If no requestId mapped, find by searching pending responses
                   for (const [reqId, pending] of this.pendingResponses.entries()) {
                     if (pending.itemId === event.item_id) {
-                      pending.reject(new Error(event.error.message || 'Realtime API error'));
+                      pending.reject(realtimeError);
                       this.pendingResponses.delete(reqId);
                       break;
                     }
                   }
                   session.pendingItems.delete(event.item_id);
                 }
+              } else if (isActiveResponseConflict) {
+                // When the server reports active response conflicts without item reference, reject everything on this session
+                for (const [reqId, pending] of this.pendingResponses.entries()) {
+                  if (pending.session === session) {
+                    pending.reject(realtimeError);
+                    this.pendingResponses.delete(reqId);
+                  }
+                }
+              }
+
+              if (isActiveResponseConflict) {
+                this._resetSession(session, 'server reported active response in progress');
               }
               break;
           }
@@ -631,6 +646,47 @@ PARTIAL TEXT RULES:
         }
       }, 10000);
     });
+  }
+
+  /**
+   * Forcefully reset a realtime session (close socket, clear state, reject pending requests).
+   * Use when the server reports an unrecoverable error (e.g., active response conflicts).
+   */
+  _resetSession(session, reason = 'session reset') {
+    if (!session) {
+      return;
+    }
+
+    console.warn(`[RealtimePartialWorker] 🔁 Resetting session ${session.connectionKey}: ${reason}`);
+
+    try {
+      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+        session.ws.close();
+      }
+    } catch (error) {
+      console.warn(`[RealtimePartialWorker] ⚠️ Error closing session ${session.connectionKey}: ${error.message}`);
+    }
+
+    session.setupComplete = false;
+    session.activeResponseId = null;
+    session.activeRequestId = null;
+    session.pendingItems.clear();
+
+    // Remove from connection pool
+    for (const [key, pooledSession] of this.connectionPool.entries()) {
+      if (pooledSession === session) {
+        this.connectionPool.delete(key);
+        break;
+      }
+    }
+
+    // Reject pending requests that were tied to this session
+    for (const [requestId, pending] of this.pendingResponses.entries()) {
+      if (pending.session === session) {
+        pending.reject(new Error(`Realtime session reset: ${reason}`));
+        this.pendingResponses.delete(requestId);
+      }
+    }
   }
 
   /**
@@ -677,8 +733,7 @@ PARTIAL TEXT RULES:
         }
       }
 
-      // Store pending response
-      this.pendingResponses.set(requestId, {
+      const pendingRecord = {
         resolve,
         reject,
         onPartial: onPartialCallback,
@@ -687,7 +742,10 @@ PARTIAL TEXT RULES:
         connectionKey: connectionKey,
         originalText: text,
         _createdAt: Date.now() // Track creation time for orphan detection
-      });
+      };
+
+      // Store pending response
+      this.pendingResponses.set(requestId, pendingRecord);
 
       try {
         // CRITICAL: Cancel active response and WAIT for response.done event
@@ -711,17 +769,24 @@ PARTIAL TEXT RULES:
           const cancelEvent = { type: 'response.cancel' };
           session.ws.send(JSON.stringify(cancelEvent));
 
-          // Wait for response.done (max 100ms)
-          await Promise.race([
-            cancelPromise,
-            new Promise(resolve => setTimeout(resolve, 100))
+          // Wait for response.done (max 300ms). If it never arrives, recycle the session.
+          const CANCEL_TIMEOUT_MS = 300;
+          const cancelCompleted = await Promise.race([
+            cancelPromise.then(() => true),
+            new Promise(resolve => setTimeout(() => resolve(false), CANCEL_TIMEOUT_MS))
           ]);
 
-          // Force clear if still set after timeout
-          if (session.activeResponseId === activeId) {
-            console.warn(`[RealtimePartialWorker] ⚠️ Force clearing activeResponseId after 100ms`);
-            session.activeResponseId = null;
-            session.activeRequestId = null;
+          if (!cancelCompleted || session.activeResponseId === activeId) {
+            console.warn(`[RealtimePartialWorker] ⚠️ Cancel timeout after ${CANCEL_TIMEOUT_MS}ms for ${session.connectionKey} (response ${activeId})`);
+            // Remove pending entry temporarily so reset doesn't reject this new request
+            const pendingCopy = pendingRecord;
+            this.pendingResponses.delete(requestId);
+            this._resetSession(session, 'cancel timeout (partial)');
+            // Acquire a fresh session
+            session = await this.getConnection(sourceLang, targetLang, apiKey);
+            // Update the stored pending record to use the new session
+            pendingCopy.session = session;
+            this.pendingResponses.set(requestId, pendingCopy);
           }
         }
 
@@ -750,24 +815,58 @@ PARTIAL TEXT RULES:
           }
         }
 
-        // Create conversation item with new text
-        const createItemEvent = {
-          type: 'conversation.item.create',
-          item: {
-            type: 'message',
-            role: 'user',
-            content: [
-              {
-                type: 'input_text',
-                text: text
-              }
-            ]
-          }
-        };
+        // CRITICAL FIX FOR CONTEXT WINDOW: Reuse conversation item with truncate instead of creating new ones
+        // This prevents conversation from accumulating items that fill up the context window
+        // After first item, we update (truncate) the existing item instead of creating new ones
+        let event;
 
-        session.ws.send(JSON.stringify(createItemEvent));
+        if (session.lastInputItemId) {
+          // Reuse previous item - truncate and update it with new text
+          console.log(`[RealtimePartialWorker] ♻️ Reusing item ${session.lastInputItemId} with truncate (preventing context accumulation)`);
+          event = {
+            type: 'conversation.item.truncate',
+            item_id: session.lastInputItemId,
+            content_index: 0,
+            audio_end_ms: null // Reset audio timestamp
+          };
 
-        console.log(`[RealtimePartialWorker] ⚡ Translating partial: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
+          // Send truncate first to reset the item
+          session.ws.send(JSON.stringify(event));
+
+          // Then create a new message to update with the new text
+          const updateItemEvent = {
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: text
+                }
+              ]
+            }
+          };
+          session.ws.send(JSON.stringify(updateItemEvent));
+          console.log(`[RealtimePartialWorker] ⚡ Translating partial (reused conversation): "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
+        } else {
+          // First request - create the initial item
+          const createItemEvent = {
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: text
+                }
+              ]
+            }
+          };
+          session.ws.send(JSON.stringify(createItemEvent));
+          console.log(`[RealtimePartialWorker] ⚡ Translating partial (first item): "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
+        }
 
         // Set timeout for request - CRITICAL: Realtime API can take 5-10s for Spanish text
         const PARTIAL_TIMEOUT_MS = 15000; // 15 seconds (reasonable for API latency, not 25s)
@@ -1031,32 +1130,8 @@ export class RealtimeFinalTranslationWorker {
       ws.on('open', () => {
         console.log(`[RealtimeFinalWorker] Connection opened for ${sourceLang} → ${targetLang}`);
         
-        const translationInstructions = `You are a LITERAL translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName} WORD-FOR-WORD.
-
-CRITICAL RULES - YOU MUST FOLLOW THESE WITHOUT EXCEPTION:
-1. TRANSLATE LITERALLY - preserve the exact meaning and structure of the input
-2. NEVER rewrite, rephrase, or correct the input text
-3. NEVER interpret, infer, or add your own understanding
-4. NEVER respond conversationally or answer questions
-5. NEVER add explanations, commentary, or notes
-6. NEVER include phrases like "The translation is..." or "Here's the translation"
-7. ONLY output the direct word-for-word translation of the input text
-8. Do NOT acknowledge the user or respond to their questions
-9. Do NOT provide additional information or assistance
-10. Output ONLY the translated text in ${targetLangName}, nothing else
-11. PRESERVE ERRORS AND MISTAKES IN THE INPUT - if input has grammatical errors, translate them as-is
-
-LITERAL TRANSLATION EXAMPLES (preserve exact wording):
-Input: "hello with everything here"
-Output: "hola con todo aquí" (NOT "say hello with everything" or any rewrite - LITERAL ONLY)
-
-Input: "when she was asked"
-Output: "cuando ella fue preguntada" (NOT "When she was asked to..." - LITERAL ONLY, stop at the end)
-
-Input: "Can you hear me?"
-Output: "¿Puedes oírme?" (literal translation of the question)
-
-CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY what is given.`;
+        // Use SHORT instructions like Chat API - verbose instructions waste token budget
+        const translationInstructions = `Translate from ${sourceLangName} to ${targetLangName}. Translate literally, word-for-word. Do not complete, rephrase, or extend. Output ONLY the translation.`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -1064,7 +1139,7 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
             modalities: ['text'],
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 4096, // Maximum allowed by API
+            max_response_output_tokens: 2000, // Increased for finals, but still reasonable
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -1343,6 +1418,24 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
                     this.pendingResponses.delete(session.activeRequestId);
                     session.pendingItems.delete(pending.itemId);
                     session.activeRequestId = null;
+
+                    // CRITICAL: Close connection immediately after final to prevent context accumulation
+                    // This ensures next translation gets a fresh connection with empty conversation
+                    console.log(`[RealtimeFinalWorker] 🔌 Closing connection after final to prevent context accumulation`);
+                    try {
+                      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                        session.ws.close();
+                      }
+                    } catch (err) {
+                      console.warn(`[RealtimeFinalWorker] Error closing connection: ${err.message}`);
+                    }
+                    // Remove from pool immediately
+                    for (const [key, sess] of this.connectionPool.entries()) {
+                      if (sess === session) {
+                        this.connectionPool.delete(key);
+                        break;
+                      }
+                    }
                   }
                 } else {
                   console.warn(`[RealtimeFinalWorker] ⚠️ Response done but active request not found`);

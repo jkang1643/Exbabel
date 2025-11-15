@@ -190,6 +190,54 @@ export async function handleSoloMode(clientWs) {
               let latestPartialTime = 0; // Timestamp of latest partial
               let longestPartialText = ''; // Track the longest partial seen in current segment
               let longestPartialTime = 0; // Timestamp of longest partial
+
+              // Persist grammar corrections so we can reapply them to extending partials
+              const grammarCorrectionCache = new Map();
+              const MAX_GRAMMAR_CACHE_ENTRIES = 20;
+              const MIN_GRAMMAR_CACHE_LENGTH = 5;
+              const MAX_LENGTH_MULTIPLIER = 3; // Prevent runaway replacements
+
+              const rememberGrammarCorrection = (originalText, correctedText) => {
+                if (!originalText || !correctedText) return;
+                if (originalText === correctedText) return;
+                if (originalText.length < MIN_GRAMMAR_CACHE_LENGTH) return;
+                const lengthRatio = correctedText.length / originalText.length;
+                if (lengthRatio > MAX_LENGTH_MULTIPLIER) {
+                  // Skip caching corrections that balloon in size - usually hallucinations
+                  return;
+                }
+                grammarCorrectionCache.set(originalText, {
+                  original: originalText,
+                  corrected: correctedText,
+                  timestamp: Date.now()
+                });
+                while (grammarCorrectionCache.size > MAX_GRAMMAR_CACHE_ENTRIES) {
+                  const oldestKey = grammarCorrectionCache.keys().next().value;
+                  if (!oldestKey) break;
+                  grammarCorrectionCache.delete(oldestKey);
+                }
+              };
+
+              const applyCachedCorrections = (text) => {
+                if (!text || grammarCorrectionCache.size === 0) {
+                  return text;
+                }
+                let updated = text;
+                const cacheEntries = Array.from(grammarCorrectionCache.values())
+                  .sort((a, b) => b.original.length - a.original.length);
+                for (const { original, corrected } of cacheEntries) {
+                  if (!original || original === corrected) continue;
+                  if (updated === original) {
+                    updated = corrected;
+                    break;
+                  }
+                  if (updated.startsWith(original)) {
+                    updated = corrected + updated.substring(original.length);
+                    break; // Apply only the most specific correction
+                  }
+                }
+                return updated;
+              };
               
               // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
               
@@ -247,6 +295,7 @@ export async function handleSoloMode(clientWs) {
                         if (currentSourceLang === 'en') {
                           try {
                             correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                            rememberGrammarCorrection(textToProcess, correctedText);
                           } catch (grammarError) {
                             console.warn(`[SoloMode] Grammar correction failed, using original text:`, grammarError.message);
                             correctedText = textToProcess; // Fallback to original on error
@@ -314,15 +363,6 @@ export async function handleSoloMode(clientWs) {
                           hasCorrection: hasCorrection,
                           isTranscriptionOnly: false
                         }, false);
-
-                        // CRITICAL FIX: Reset Realtime API connections after final translation
-                        // This prevents conversation items from accumulating and causing freezes
-                        // The next partial will reconnect with a fresh conversation context
-                        if (usePremiumTier) {
-                          console.log(`[SoloMode] 🔄 Resetting Realtime API connections to prevent context accumulation...`);
-                          realtimePartialTranslationWorker.closeConnectionsForLanguagePair(currentSourceLang, currentTargetLang);
-                          realtimeFinalTranslationWorker.closeConnectionsForLanguagePair(currentSourceLang, currentTargetLang);
-                        }
                       } catch (error) {
                         console.error(`[SoloMode] Final processing error:`, error);
                         // If it's a skip request error, use corrected text (or original if not set)
@@ -352,6 +392,7 @@ export async function handleSoloMode(clientWs) {
                 if (isPartial) {
                   // Track latest partial for correction race condition prevention
                   latestPartialTextForCorrection = transcriptText;
+                  const translationSeedText = applyCachedCorrections(transcriptText);
                   
                   // Track latest partial
                   if (!latestPartialText || transcriptText.length > latestPartialText.length) {
@@ -421,24 +462,26 @@ export async function handleSoloMode(clientWs) {
                   if (isTranscriptionOnly && transcriptText.length >= 1) {
                     // For transcription mode, the initial send above is enough
                     // Just start grammar correction asynchronously (English only, don't wait for it)
-                    const capturedText = transcriptText;
+                    const rawCapturedText = transcriptText;
                     if (currentSourceLang === 'en') {
-                      grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                      grammarWorker.correctPartial(rawCapturedText, process.env.OPENAI_API_KEY)
                         .then(correctedText => {
                           // Check if still relevant
-                          if (latestPartialTextForCorrection !== capturedText) {
-                            if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
-                              console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                          if (latestPartialTextForCorrection !== rawCapturedText) {
+                            if (latestPartialTextForCorrection.length < rawCapturedText.length * 0.5) {
+                              console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${rawCapturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
                               return;
                             }
                           }
+                          
+                          rememberGrammarCorrection(rawCapturedText, correctedText);
                           
                           console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
                           
                           // Send grammar update separately
                           sendWithSequence({
                             type: 'translation',
-                            originalText: capturedText,
+                            originalText: rawCapturedText,
                             correctedText: correctedText,
                             translatedText: correctedText,
                             timestamp: Date.now(),
@@ -450,7 +493,7 @@ export async function handleSoloMode(clientWs) {
                         })
                         .catch(error => {
                           if (error.name !== 'AbortError') {
-                            console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                            console.error(`[SoloMode] ❌ Grammar error (${rawCapturedText.length} chars):`, error.message);
                           }
                         });
                     }
@@ -494,7 +537,9 @@ export async function handleSoloMode(clientWs) {
                       
                       try {
                         console.log(`[SoloMode] 🔄 Processing partial (${transcriptText.length} chars): "${transcriptText.substring(0, 40)}..."`);
-                        const capturedText = transcriptText; // Capture the text we're processing
+                        const rawCapturedText = transcriptText;
+                        const capturedText = rawCapturedText;
+                        const translationReadyText = translationSeedText;
                         
                         // OPTIMIZATION: For same-language (transcription mode), send immediately without API calls
                         const isTranscriptionMode = currentSourceLang === currentTargetLang;
@@ -508,7 +553,7 @@ export async function handleSoloMode(clientWs) {
                           // Send transcription immediately - same speed as translation mode
                           sendWithSequence({
                             type: 'translation',
-                            originalText: capturedText,
+                            originalText: rawCapturedText,
                             translatedText: capturedText,
                             timestamp: Date.now(),
                             isTranscriptionOnly: true,
@@ -518,22 +563,23 @@ export async function handleSoloMode(clientWs) {
                           
                           // Start grammar correction asynchronously (English only, don't wait for it)
                           if (currentSourceLang === 'en') {
-                            grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
+                            grammarWorker.correctPartial(rawCapturedText, process.env.OPENAI_API_KEY)
                               .then(correctedText => {
                                 // Check if still relevant
-                                if (latestPartialTextForCorrection !== capturedText) {
-                                  if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
-                                    console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                                if (latestPartialTextForCorrection !== rawCapturedText) {
+                                  if (latestPartialTextForCorrection.length < rawCapturedText.length * 0.5) {
+                                    console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${rawCapturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
                                     return;
                                   }
                                 }
+                                rememberGrammarCorrection(rawCapturedText, correctedText);
                                 
                                 console.log(`[SoloMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
                                 
                                 // Send grammar update separately
                                 sendWithSequence({
                                   type: 'translation',
-                                  originalText: capturedText,
+                                  originalText: rawCapturedText,
                                   correctedText: correctedText,
                                   translatedText: correctedText,
                                   timestamp: Date.now(),
@@ -545,7 +591,7 @@ export async function handleSoloMode(clientWs) {
                               })
                               .catch(error => {
                                 if (error.name !== 'AbortError') {
-                                  console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                                  console.error(`[SoloMode] ❌ Grammar error (${rawCapturedText.length} chars):`, error.message);
                                 }
                               });
                           }
@@ -554,15 +600,15 @@ export async function handleSoloMode(clientWs) {
                           // Fire both in parallel, but send results independently (grammar only for English)
                           // Route to appropriate worker based on tier
                           const grammarPromise = currentSourceLang === 'en' 
-                            ? grammarWorker.correctPartial(capturedText, process.env.OPENAI_API_KEY)
-                            : Promise.resolve(capturedText); // Skip grammar for non-English
+                            ? grammarWorker.correctPartial(rawCapturedText, process.env.OPENAI_API_KEY)
+                            : Promise.resolve(rawCapturedText); // Skip grammar for non-English
                           const partialWorker = usePremiumTier 
                             ? realtimePartialTranslationWorker 
                             : partialTranslationWorker;
                           const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
                           console.log(`[SoloMode] 🔀 Using ${workerType} API for partial translation (${capturedText.length} chars)`);
                           const translationPromise = partialWorker.translatePartial(
-                            capturedText,
+                            translationReadyText,
                             currentSourceLang,
                             currentTargetLang,
                             process.env.OPENAI_API_KEY,
@@ -578,9 +624,9 @@ export async function handleSoloMode(clientWs) {
                             }
 
                             // CRITICAL: Validate that translation is different from original (prevent English leak)
-                            const isSameAsOriginal = translatedText === capturedText || 
-                                                     translatedText.trim() === capturedText.trim() ||
-                                                     translatedText.toLowerCase() === capturedText.toLowerCase();
+                            const isSameAsOriginal = translatedText === translationReadyText || 
+                                                     translatedText.trim() === translationReadyText.trim() ||
+                                                     translatedText.toLowerCase() === translationReadyText.toLowerCase();
                             
                             if (isSameAsOriginal) {
                               console.warn(`[SoloMode] ⚠️ Translation matches original (English leak detected): "${translatedText.substring(0, 60)}..."`);
@@ -594,7 +640,7 @@ export async function handleSoloMode(clientWs) {
                             // Send translation result immediately - sequence IDs handle ordering
                             sendWithSequence({
                               type: 'translation',
-                              originalText: capturedText,
+                              originalText: rawCapturedText,
                               translatedText: translatedText,
                               timestamp: Date.now(),
                               isTranscriptionOnly: false,
@@ -622,16 +668,16 @@ export async function handleSoloMode(clientWs) {
                                 }, true);
                               } else if (error.englishLeak) {
                                 // Translation matched original (English leak) - silently skip
-                                console.log(`[SoloMode] ⏭️ English leak detected for partial - skipping (${capturedText.length} chars)`);
+                                console.log(`[SoloMode] ⏭️ English leak detected for partial - skipping (${rawCapturedText.length} chars)`);
                                 // Don't send anything - will retry with next partial
                               } else if (error.message && error.message.includes('truncated')) {
                                 // Translation was truncated - log warning but don't send incomplete translation
-                                console.warn(`[SoloMode] ⚠️ Partial translation truncated (${capturedText.length} chars) - waiting for longer partial`);
+                                console.warn(`[SoloMode] ⚠️ Partial translation truncated (${rawCapturedText.length} chars) - waiting for longer partial`);
                               } else if (error.message && error.message.includes('timeout')) {
                                 console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
                                 // Don't send error message to frontend - just skip this translation
                               } else {
-                                console.error(`[SoloMode] ❌ Translation error (${workerType} API, ${capturedText.length} chars):`, error.message);
+                                console.error(`[SoloMode] ❌ Translation error (${workerType} API, ${rawCapturedText.length} chars):`, error.message);
                               }
                             }
                             // Don't send anything on error - keep last partial translation
@@ -640,22 +686,20 @@ export async function handleSoloMode(clientWs) {
                           // Send grammar correction separately when ready (English only)
                           if (currentSourceLang === 'en') {
                             grammarPromise.then(correctedText => {
-                              // Check if still relevant (more lenient check - only skip if text shrunk significantly)
-                              if (latestPartialTextForCorrection !== capturedText) {
-                                // Only skip if new text is significantly shorter (text was reset)
-                                if (latestPartialTextForCorrection.length < capturedText.length * 0.5) {
-                                  console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${capturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                              const latestRaw = latestPartialTextForCorrection;
+                              if (latestRaw !== rawCapturedText) {
+                                if (latestRaw.length < rawCapturedText.length * 0.5) {
+                                  console.log(`[SoloMode] ⏭️ Skipping outdated grammar (text reset: ${rawCapturedText.length} → ${latestRaw.length} chars)`);
                                   return;
                                 }
-                                // Otherwise send it - extending text is fine, grammar still applies to the beginning
                               }
 
+                              rememberGrammarCorrection(rawCapturedText, correctedText);
                               console.log(`[SoloMode] ✅ GRAMMAR (IMMEDIATE): "${correctedText.substring(0, 40)}..."`);
                               
-                              // Send grammar update separately
                               sendWithSequence({
                                 type: 'translation',
-                                originalText: capturedText,
+                                originalText: rawCapturedText,
                                 correctedText: correctedText,
                                 timestamp: Date.now(),
                                 isTranscriptionOnly: false,
@@ -663,9 +707,8 @@ export async function handleSoloMode(clientWs) {
                                 updateType: 'grammar' // Flag for grammar-only update
                               }, true);
                             }).catch(error => {
-                              // Grammar errors are non-critical, just log
                               if (error.name !== 'AbortError') {
-                                console.error(`[SoloMode] ❌ Grammar error (${capturedText.length} chars):`, error.message);
+                                console.error(`[SoloMode] ❌ Grammar error (${rawCapturedText.length} chars):`, error.message);
                               }
                             });
                           }
@@ -897,9 +940,14 @@ export async function handleSoloMode(clientWs) {
                   // Schedule final processing after a delay to catch any remaining partials
                   // If pendingFinalization exists and was extended, we'll reschedule it below
                   if (!pendingFinalization || transcriptText.length <= pendingFinalization.text.length) {
-                    // CRITICAL FIX: Do NOT reset partial tracking here—next line's partials often arrive
-                    // before we finish processing this final. Resets now would drop the first words
-                    // of the next sentence. We reset AFTER the final is processed (see below).
+                    if (!usePremiumTier) {
+                      // BASIC (GPT-4o mini) pipeline still needs immediate window reset
+                      latestPartialText = '';
+                      longestPartialText = '';
+                      latestPartialTime = 0;
+                      longestPartialTime = 0;
+                    }
+                    // PREMIUM (Realtime Mini) delays reset until final processing completes
                     pendingFinalization = {
                       seqId: null,
                       text: transcriptText,

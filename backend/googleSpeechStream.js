@@ -77,6 +77,9 @@ export class GoogleSpeechStream {
     this.chunkTimeouts = new Map(); // chunkId -> { timeout handle, sendTimestamp }
     this.CHUNK_TIMEOUT_MS = 7000; // 7 seconds (5s + 2s buffer for processing)
     this.chunkIdCounter = 0;
+    this.chunkTimeoutTimestamps = [];
+    this.CHUNK_TIMEOUT_RESET_THRESHOLD = 6; // If 6+ timeouts happen within a short window, treat stream as stuck
+    this.CHUNK_TIMEOUT_WINDOW_MS = 2500; // 2.5s window for timeout burst detection
     
     // Track pending chunks in send order for better timeout clearing
     this.pendingChunks = []; // Array of { chunkId, sendTimestamp }
@@ -756,11 +759,12 @@ export class GoogleSpeechStream {
       // Remove from timeout tracking and pending chunks
       this.chunkTimeouts.delete(chunkId);
       this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
+      this.chunkRetryMap.delete(chunkId);
       
-      // Queue for retry
-      const retryInfo = this.chunkRetryMap.get(chunkId);
-      const attempts = retryInfo ? retryInfo.attempts : 0;
-      this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
+      this.recordChunkTimeout();
+      if (this.shouldForceRestartAfterTimeoutBurst()) {
+        this.handleChunkTimeoutBurst();
+      }
     }, this.CHUNK_TIMEOUT_MS);
     
     this.chunkTimeouts.set(chunkId, { timeout: timeoutHandle, sendTimestamp });
@@ -778,6 +782,46 @@ export class GoogleSpeechStream {
     
     // Also remove from pending chunks
     this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
+  }
+
+  recordChunkTimeout() {
+    const now = Date.now();
+    this.chunkTimeoutTimestamps.push(now);
+    this.chunkTimeoutTimestamps = this.chunkTimeoutTimestamps.filter(ts => now - ts <= this.CHUNK_TIMEOUT_WINDOW_MS);
+  }
+
+  shouldForceRestartAfterTimeoutBurst() {
+    return this.chunkTimeoutTimestamps.length >= this.CHUNK_TIMEOUT_RESET_THRESHOLD;
+  }
+
+  handleChunkTimeoutBurst() {
+    console.error(`[GoogleSpeech] ❌ ${this.chunkTimeoutTimestamps.length} chunk timeouts in ${this.CHUNK_TIMEOUT_WINDOW_MS}ms - forcing stream restart to prevent transcript freeze`);
+    this.resetAudioPipelinesDueToTimeout();
+    this.chunkTimeoutTimestamps = [];
+    if (!this.isRestarting) {
+      this.restartStream();
+    }
+  }
+
+  resetAudioPipelinesDueToTimeout() {
+    this.clearAllChunkTimeouts();
+    for (const retryInfo of this.chunkRetryMap.values()) {
+      if (retryInfo.retryTimer) {
+        clearTimeout(retryInfo.retryTimer);
+      }
+    }
+    this.chunkRetryMap.clear();
+    this.jitterBuffer = [];
+    this.audioQueue = [];
+    this.isSending = false;
+    this.pendingChunks = [];
+  }
+
+  clearAllChunkTimeouts() {
+    for (const { timeout } of this.chunkTimeouts.values()) {
+      clearTimeout(timeout);
+    }
+    this.chunkTimeouts.clear();
   }
 
   /**
