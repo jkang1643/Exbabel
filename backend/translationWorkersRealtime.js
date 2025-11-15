@@ -14,6 +14,29 @@ import WebSocket from 'ws';
 import { getLanguageName } from './languageConfig.js';
 
 /**
+ * TEMP: Silence all RealtimePartialWorker console output (log/warn/error)
+ * so other subsystems can be debugged without noise. Toggle the flag below
+ * to re-enable detailed logging when needed.
+ */
+const REALTIME_PARTIAL_LOGS_ENABLED = false;
+
+const shouldSuppressRealtimePartialLog = (args) => {
+  if (REALTIME_PARTIAL_LOGS_ENABLED) return false;
+  const firstArg = args?.[0];
+  return typeof firstArg === 'string' && firstArg.startsWith('[RealtimePartialWorker]');
+};
+
+['log', 'warn', 'error'].forEach((method) => {
+  const originalMethod = console[method].bind(console);
+  console[method] = (...args) => {
+    if (shouldSuppressRealtimePartialLog(args)) {
+      return;
+    }
+    originalMethod(...args);
+  };
+});
+
+/**
  * Realtime Partial Translation Worker - Optimized for speed and low latency
  *
  * SUB-200MS ARCHITECTURE:
@@ -178,8 +201,7 @@ export class RealtimePartialTranslationWorker {
         activeResponseId: null, // Track active response to prevent concurrent responses
         activeRequestId: null, // Track which request has the active response
         pingInterval: null, // Keep-alive interval
-        lastInputItemId: null, // Store last input item ID to REUSE with truncate instead of creating new items
-        lastOutputItemId: null // Store last output item ID
+        onResponseDone: null // Callback for when response.done is received (used for cancel waiting)
       };
       
       ws.on('open', () => {
@@ -224,21 +246,8 @@ export class RealtimePartialTranslationWorker {
               if (event.item && event.item.id) {
                 console.log(`[RealtimePartialWorker] 📝 Item created: ${event.item.id} for connection ${session.connectionKey}`);
 
-                if (event.item.role === 'user') {
-                  session.lastInputItemId = event.item.id;
-                } else if (event.item.role === 'assistant') {
-                  session.lastOutputItemId = event.item.id;
-                }
-
                 // Extract base connection key (e.g., "en:es" from "en:es:1763076910165_oxeo0")
                 const baseConnectionKey = session.connectionKey.split(':').slice(0, 2).join(':');
-
-                // SUB-200MS OPTIMIZATION: Store itemId in persistent conversation for reuse
-                const conversation = this.sessionConversations.get(baseConnectionKey);
-                if (conversation && !conversation.itemId) {
-                  conversation.itemId = event.item.id;
-                  console.log(`[RealtimePartialWorker] 💾 Stored persistent itemId ${event.item.id} for ${baseConnectionKey}`);
-                }
 
                 // CRITICAL FIX: Find the most recent pending request without an itemId that belongs to THIS language pair
                 // IMPORTANT: Only match on base connection key (language pair), never on full unique connection key
@@ -547,6 +556,16 @@ export class RealtimePartialTranslationWorker {
                 this.responseToRequestMap.delete(session.activeResponseId);
               }
 
+              // CRITICAL FIX: Call onResponseDone callback if it exists (for cancel waiting)
+              const responseIdBeforeClear = session.activeResponseId;
+              if (responseIdBeforeClear && session.onResponseDone) {
+                try {
+                  session.onResponseDone(responseIdBeforeClear);
+                } catch (error) {
+                  console.warn(`[RealtimePartialWorker] ⚠️ Error in onResponseDone callback: ${error.message}`);
+                }
+              }
+
               session.activeResponseId = null; // Clear active response, allow new ones
               session.activeRequestId = null; // Clear active request tracking
 
@@ -651,6 +670,9 @@ export class RealtimePartialTranslationWorker {
   /**
    * Forcefully reset a realtime session (close socket, clear state, reject pending requests).
    * Use when the server reports an unrecoverable error (e.g., active response conflicts).
+   *
+   * IMPORTANT: Only reject requests that belong to THIS specific session.
+   * Don't use language pair matching - that rejects too many requests.
    */
   _resetSession(session, reason = 'session reset') {
     if (!session) {
@@ -680,12 +702,29 @@ export class RealtimePartialTranslationWorker {
       }
     }
 
-    // Reject pending requests that were tied to this session
+    // CRITICAL FIX: Only reject pending requests DIRECTLY tied to THIS session
+    // Do NOT use language pair matching - that kills too many requests
+    // Only reject requests where pending.session === session (exact match)
+    const requestsToReject = [];
+
     for (const [requestId, pending] of this.pendingResponses.entries()) {
+      // Only reject if this request is directly tied to the failing session
       if (pending.session === session) {
-        pending.reject(new Error(`Realtime session reset: ${reason}`));
-        this.pendingResponses.delete(requestId);
+        requestsToReject.push({ requestId, pending });
       }
+    }
+
+    // Reject only the matched requests
+    for (const { requestId, pending } of requestsToReject) {
+      console.warn(`[RealtimePartialWorker] 🧹 Rejecting pending request ${requestId} due to session reset: ${reason}`);
+      if (pending.reject) {
+        pending.reject(new Error(`Realtime session reset: ${reason}`));
+      }
+      this.pendingResponses.delete(requestId);
+    }
+
+    if (requestsToReject.length > 0) {
+      console.log(`[RealtimePartialWorker] 🧹 Cleaned up ${requestsToReject.length} pending requests from session reset`);
     }
   }
 
@@ -753,31 +792,41 @@ export class RealtimePartialTranslationWorker {
           const activeId = session.activeResponseId;
           console.log(`[RealtimePartialWorker] 🚫 Cancelling active response ${activeId}`);
 
-          // Create promise that resolves when response.done arrives
+          // Create promise that ACTUALLY waits for response.done event
+          // Track when THIS response specifically completes
           const cancelPromise = new Promise((resolve) => {
-            const checkDone = () => {
-              if (!session.activeResponseId || session.activeResponseId !== activeId) {
+            const originalResponseDone = session.onResponseDone;
+            session.onResponseDone = (responderId) => {
+              if (responderId === activeId) {
+                console.log(`[RealtimePartialWorker] ✅ Cancelled response ${activeId} completed`);
+                // Restore original handler
+                session.onResponseDone = originalResponseDone;
                 resolve();
-              } else {
-                setTimeout(checkDone, 5); // Check every 5ms
+              }
+              // Call original handler if it exists
+              if (originalResponseDone) {
+                originalResponseDone(responderId);
               }
             };
-            checkDone();
           });
 
           // Send cancel event
           const cancelEvent = { type: 'response.cancel' };
           session.ws.send(JSON.stringify(cancelEvent));
 
-          // Wait for response.done (max 300ms). If it never arrives, recycle the session.
-          const CANCEL_TIMEOUT_MS = 300;
+          // Wait for response.done with longer timeout (1 second - API may take time)
+          const CANCEL_TIMEOUT_MS = 1000;
           const cancelCompleted = await Promise.race([
-            cancelPromise.then(() => true),
+            cancelPromise,
             new Promise(resolve => setTimeout(() => resolve(false), CANCEL_TIMEOUT_MS))
           ]);
 
           if (!cancelCompleted || session.activeResponseId === activeId) {
             console.warn(`[RealtimePartialWorker] ⚠️ Cancel timeout after ${CANCEL_TIMEOUT_MS}ms for ${session.connectionKey} (response ${activeId})`);
+            console.warn(`[RealtimePartialWorker] ⚠️ Forcing session reset due to stuck response`);
+            // Force clear the stuck response
+            session.activeResponseId = null;
+            session.activeRequestId = null;
             // Remove pending entry temporarily so reset doesn't reject this new request
             const pendingCopy = pendingRecord;
             this.pendingResponses.delete(requestId);
@@ -815,67 +864,54 @@ export class RealtimePartialTranslationWorker {
           }
         }
 
-        // CRITICAL FIX FOR CONTEXT WINDOW: Reuse conversation item with truncate instead of creating new ones
-        // This prevents conversation from accumulating items that fill up the context window
-        // After first item, we update (truncate) the existing item instead of creating new ones
-        let event;
+        // Create a new conversation item for this translation
+        // Since we close connections after each response, we always start fresh
+        const createItemEvent = {
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: text
+              }
+            ]
+          }
+        };
+        session.ws.send(JSON.stringify(createItemEvent));
+        console.log(`[RealtimePartialWorker] ⚡ Translating partial: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
 
-        if (session.lastInputItemId) {
-          // Reuse previous item - truncate and update it with new text
-          console.log(`[RealtimePartialWorker] ♻️ Reusing item ${session.lastInputItemId} with truncate (preventing context accumulation)`);
-          event = {
-            type: 'conversation.item.truncate',
-            item_id: session.lastInputItemId,
-            content_index: 0,
-            audio_end_ms: null // Reset audio timestamp
-          };
-
-          // Send truncate first to reset the item
-          session.ws.send(JSON.stringify(event));
-
-          // Then create a new message to update with the new text
-          const updateItemEvent = {
-            type: 'conversation.item.create',
-            item: {
-              type: 'message',
-              role: 'user',
-              content: [
-                {
-                  type: 'input_text',
-                  text: text
-                }
-              ]
-            }
-          };
-          session.ws.send(JSON.stringify(updateItemEvent));
-          console.log(`[RealtimePartialWorker] ⚡ Translating partial (reused conversation): "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
-        } else {
-          // First request - create the initial item
-          const createItemEvent = {
-            type: 'conversation.item.create',
-            item: {
-              type: 'message',
-              role: 'user',
-              content: [
-                {
-                  type: 'input_text',
-                  text: text
-                }
-              ]
-            }
-          };
-          session.ws.send(JSON.stringify(createItemEvent));
-          console.log(`[RealtimePartialWorker] ⚡ Translating partial (first item): "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
-        }
-
-        // Set timeout for request - CRITICAL: Realtime API can take 5-10s for Spanish text
-        const PARTIAL_TIMEOUT_MS = 15000; // 15 seconds (reasonable for API latency, not 25s)
+        // Set timeout for request - CRITICAL: Realtime API can take 10-20s for Spanish text
+        // Increased from 15s to 30s to allow for slower API responses and network delays
+        const PARTIAL_TIMEOUT_MS = 30000; // 30 seconds (allows for slow API + network delays)
         const timeoutId = setTimeout(() => {
           if (this.pendingResponses.has(requestId)) {
             const pending = this.pendingResponses.get(requestId);
+            const item = pending.itemId ? session.pendingItems.get(pending.itemId) : null;
+            const receivedSoFar = item ? item.text : '';
+
             console.error(`[RealtimePartialWorker] ⏱️ Translation timeout after ${PARTIAL_TIMEOUT_MS/1000}s for request ${requestId}`);
-            this.pendingResponses.delete(requestId);
-            reject(new Error(`Translation timeout - realtime API did not respond after ${PARTIAL_TIMEOUT_MS/1000}s`));
+            console.error(`[RealtimePartialWorker] ⚠️ Received so far: "${receivedSoFar.substring(0, 100)}..."`);
+
+            // CRITICAL: Fallback - use what we've received so far if we have anything
+            if (receivedSoFar && receivedSoFar.length > 0) {
+              console.warn(`[RealtimePartialWorker] 📦 Using partial result (${receivedSoFar.length} chars) due to timeout`);
+              if (pending.resolve) {
+                pending.resolve(receivedSoFar.trim());
+              }
+              this.pendingResponses.delete(requestId);
+              if (pending.itemId && session.pendingItems.has(pending.itemId)) {
+                session.pendingItems.delete(pending.itemId);
+              }
+              session.activeRequestId = null;
+            } else {
+              // No partial received - reject with timeout error
+              this.pendingResponses.delete(requestId);
+              if (pending.reject) {
+                pending.reject(new Error(`Translation timeout - realtime API did not respond after ${PARTIAL_TIMEOUT_MS/1000}s`));
+              }
+            }
           }
         }, PARTIAL_TIMEOUT_MS);
 
@@ -1114,7 +1150,7 @@ export class RealtimeFinalTranslationWorker {
           'OpenAI-Beta': 'realtime=v1'
         }
       });
-      
+
       const session = {
         connectionKey,
         ws,
@@ -1124,7 +1160,8 @@ export class RealtimeFinalTranslationWorker {
         pendingItems: new Map(),
         activeResponseId: null, // Track active response to prevent concurrent responses
         activeRequestId: null, // Track which request has the active response
-        pingInterval: null // Keep-alive interval
+        pingInterval: null, // Keep-alive interval
+        onResponseDone: null // Callback for when response.done is received (used for cancel waiting)
       };
       
       ws.on('open', () => {
@@ -1321,6 +1358,16 @@ export class RealtimeFinalTranslationWorker {
               // Clean up the response mapping (request should already be resolved by response.text.done)
               if (session.activeResponseId) {
                 this.responseToRequestMap.delete(session.activeResponseId);
+              }
+
+              // CRITICAL FIX: Call onResponseDone callback if it exists (for cancel waiting)
+              const finalResponseIdBeforeClear = session.activeResponseId;
+              if (finalResponseIdBeforeClear && session.onResponseDone) {
+                try {
+                  session.onResponseDone(finalResponseIdBeforeClear);
+                } catch (error) {
+                  console.warn(`[RealtimeFinalWorker] ⚠️ Error in onResponseDone callback: ${error.message}`);
+                }
               }
 
               session.activeResponseId = null; // Clear active response, allow new ones
@@ -1611,12 +1658,14 @@ export class RealtimeFinalTranslationWorker {
         const timeoutId = setTimeout(() => {
           if (this.pendingResponses.has(requestId)) {
             const pending = this.pendingResponses.get(requestId);
-            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 20s for request ${requestId}`);
+            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 30s for request ${requestId}`);
             console.error(`[RealtimeFinalWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
             this.pendingResponses.delete(requestId);
-            reject(new Error('Translation timeout - realtime API did not respond'));
+            if (pending && pending.reject) {
+              pending.reject(new Error('Translation timeout - realtime API did not respond'));
+            }
           }
-        }, 20000); // 20 second timeout for finals (not 30s)
+        }, 30000); // 30 second timeout for finals (increased from 20s)
 
         // Store timeout ID
         const pending = this.pendingResponses.get(requestId);

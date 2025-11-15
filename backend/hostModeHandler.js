@@ -104,7 +104,7 @@ export async function handleHostConnection(clientWs, sessionId) {
               // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
               
               // Set up result callback - handles both partials and finals
-              speechStream.onResult(async (transcriptText, isPartial) => {
+              speechStream.onResult(async (transcriptText, isPartial, meta = {}) => {
                 if (isPartial) {
                   // Track latest partial
                   if (!latestPartialText || transcriptText.length > latestPartialText.length) {
@@ -340,7 +340,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
                 
                 // Final transcript - send to host and translate for listeners
-                console.log(`[HostMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
+                const isForcedFinal = meta?.forced === true;
+                console.log(`[HostMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."${isForcedFinal ? ' [FORCED]' : ''}`);
                 
                 // SIMPLE FIX: Use longest partial if it's longer (within last 5 seconds)
                 const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
@@ -368,7 +369,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                     targetLang: currentSourceLang,
                     timestamp: Date.now(),
                     sequenceId: Date.now(),
-                    isPartial: false
+                    isPartial: false,
+                    forceFinal: isForcedFinal
                   }));
                 }
                 
@@ -427,7 +429,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       sequenceId: Date.now(),
                       isPartial: false,
                       hasTranslation: hasTranslationForLang,
-                      hasCorrection: grammarResult.status === 'fulfilled'
+                      hasCorrection: grammarResult.status === 'fulfilled',
+                      forceFinal: isForcedFinal
                     }, targetLang);
                   }
                 } catch (error) {

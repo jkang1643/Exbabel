@@ -227,55 +227,68 @@ export class SentenceSegmenter {
    * Process final text (when speaker pauses)
    * Moves ONLY NEW text to history (deduplicates already-flushed content)
    */
-  processFinal(finalText) {
+  processFinal(finalText, options = {}) {
+    const isForced = options.isForced === true;
     let textToFlush = finalText;
     
     console.log(`[Segmenter] 📝 Processing final: "${finalText.substring(0, 50)}..." (flushedText length: ${this.flushedText?.length || 0})`);
     
-    // Deduplicate: If we already flushed part of this text, only flush the new part
-    if (this.flushedText && finalText.includes(this.flushedText)) {
-      textToFlush = finalText.replace(this.flushedText, '').trim();
-      console.log(`[Segmenter] ✅ FINAL: Deduplicating (${this.flushedText.length} chars already flushed)`);
-    }
-    
-    // Also check for substring overlaps (Google Speech can send overlapping finals)
-    if (this.flushedText && !finalText.includes(this.flushedText) && textToFlush === finalText) {
-      // Check if finalText overlaps with end of flushedText
-      const overlap = this.findOverlap(this.flushedText, finalText);
-      if (overlap > 0) {
-        textToFlush = finalText.substring(overlap).trim();
-        console.log(`[Segmenter] ✂️ FINAL: Found ${overlap} char overlap, keeping delta: "${textToFlush.substring(0, 40)}..."`);
+    if (!isForced) {
+      // Deduplicate: If we already flushed part of this text, only flush the new part
+      if (this.flushedText && finalText.includes(this.flushedText)) {
+        textToFlush = finalText.replace(this.flushedText, '').trim();
+        console.log(`[Segmenter] ✅ FINAL: Deduplicating (${this.flushedText.length} chars already flushed)`);
       }
-    }
-    
-    // If textToFlush is empty after deduplication, check if finalText is substantially different
-    // If so, use the full finalText to ensure history appears
-    if (!textToFlush || textToFlush.length < 10) {
-      if (finalText.length > 10 && (!this.flushedText || !this.flushedText.includes(finalText))) {
-        console.log(`[Segmenter] ⚠️ After dedup, text too short (${textToFlush?.length || 0} chars). Using full finalText as fallback.`);
-        textToFlush = finalText;
+      
+      // Also check for substring overlaps (Google Speech can send overlapping finals)
+      if (this.flushedText && !finalText.includes(this.flushedText) && textToFlush === finalText) {
+        // Check if finalText overlaps with end of flushedText
+        const overlap = this.findOverlap(this.flushedText, finalText);
+        if (overlap > 0) {
+          textToFlush = finalText.substring(overlap).trim();
+          console.log(`[Segmenter] ✂️ FINAL: Found ${overlap} char overlap, keeping delta: "${textToFlush.substring(0, 40)}..."`);
+        }
       }
+      
+      // If textToFlush is empty after deduplication, check if finalText is substantially different
+      // If so, use the full finalText to ensure history appears
+      if (!textToFlush || textToFlush.length < 10) {
+        if (finalText.length > 10 && (!this.flushedText || !this.flushedText.includes(finalText))) {
+          console.log(`[Segmenter] ⚠️ After dedup, text too short (${textToFlush?.length || 0} chars). Using full finalText as fallback.`);
+          textToFlush = finalText;
+        }
+      }
+    } else {
+      // For forced finals, don't attempt deduplication—use the raw text so we don't lose words
+      textToFlush = finalText.trim();
+      console.log('[Segmenter] ⚠️ Forced final detected - skipping deduplication memory update');
     }
     
     const sentences = this.detectSentences(textToFlush);
     
-    // Filter out sentences we've already seen
-    const newSentences = sentences.filter(s => {
-      const trimmed = s.trim();
-      // Only include if not already in flushedText OR if flushedText is empty (first final)
-      return trimmed.length > 0 && (!this.flushedText || !this.flushedText.includes(trimmed));
-    });
-    
-    // Update flushedText with new content (DON'T reset it - Google sends multiple finals!)
-    if (newSentences.length > 0) {
-      this.flushedText += ' ' + newSentences.join(' ');
-      this.flushedText = this.flushedText.trim();
-    } else if (textToFlush && textToFlush.length > 10) {
-      // FALLBACK: If no new sentences detected but we have substantial text, add it as a single sentence
-      console.log(`[Segmenter] ⚠️ No sentences detected but text substantial (${textToFlush.length} chars). Adding as single entry.`);
-      newSentences.push(textToFlush);
-      this.flushedText += ' ' + textToFlush;
-      this.flushedText = this.flushedText.trim();
+    let newSentences;
+    if (isForced) {
+      // For forced finals, treat the whole text as new content and avoid updating flushedText memory
+      newSentences = sentences.length > 0 ? sentences : (textToFlush ? [textToFlush] : []);
+    } else {
+      // Filter out sentences we've already seen
+      newSentences = sentences.filter(s => {
+        const trimmed = s.trim();
+        // Only include if not already in flushedText OR if flushedText is empty (first final)
+        return trimmed.length > 0 && (!this.flushedText || !this.flushedText.includes(trimmed));
+      });
+      
+      // Update flushedText with new content (DON'T reset it - Google sends multiple finals!)
+      if (newSentences.length > 0) {
+        this.flushedText += ' ' + newSentences.join(' ');
+        this.flushedText = this.flushedText.trim();
+      } else if (textToFlush && textToFlush.length > 10) {
+        // FALLBACK: If no new sentences detected but we have substantial text, add it as a single sentence
+        console.log(`[Segmenter] ⚠️ No sentences detected but text substantial (${textToFlush.length} chars). Adding as single entry.`);
+        newSentences.push(textToFlush);
+        this.flushedText += ' ' + textToFlush;
+        this.flushedText = this.flushedText.trim();
+      }
     }
     
     // Reset live text but KEEP flushedText for deduplication

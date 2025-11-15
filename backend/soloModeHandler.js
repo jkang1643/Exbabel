@@ -39,10 +39,14 @@ export async function handleSoloMode(clientWs) {
   const FINALIZATION_CONFIRMATION_WINDOW = 300; // 300ms confirmation window
   const MIN_SILENCE_MS = 600; // Minimum 600ms silence before finalization (optimized for natural speech pauses)
   const DEFAULT_LOOKAHEAD_MS = 200; // Default 200ms lookahead
+  const FORCED_FINAL_MAX_WAIT_MS = 2000; // Time to wait for continuation before committing forced final
+  const TRANSLATION_RESTART_COOLDOWN_MS = 400; // Pause realtime translations briefly after stream restart
   
   // Last audio timestamp for silence detection
   let lastAudioTimestamp = null;
   let silenceStartTime = null;
+  let forcedFinalBuffer = null; // { text, timeout }
+  let realtimeTranslationCooldownUntil = 0;
   
   // Helper: Calculate RTT from client timestamp
   const measureRTT = (clientTimestamp) => {
@@ -238,6 +242,25 @@ export async function handleSoloMode(clientWs) {
                 }
                 return updated;
               };
+          
+          const mergeWithOverlap = (previousText = '', currentText = '') => {
+            const prev = (previousText || '').trim();
+            const curr = (currentText || '').trim();
+            if (!prev) return curr;
+            if (!curr) return prev;
+            if (curr.startsWith(prev)) {
+              return curr;
+            }
+            const maxOverlap = Math.min(prev.length, curr.length, 200);
+            for (let overlap = maxOverlap; overlap >= 20; overlap--) {
+              const prevSuffix = prev.slice(-overlap);
+              const currPrefix = curr.slice(0, overlap);
+              if (prevSuffix === currPrefix) {
+                return (prev + curr.slice(overlap)).trim();
+              }
+            }
+            return `${prev} ${curr}`.replace(/\s+/g, ' ').trim();
+          };
               
               // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
               
@@ -245,7 +268,7 @@ export async function handleSoloMode(clientWs) {
               const THROTTLE_MS = 0; // No throttle - instant translation on every character
               
               // Helper function to process final text (defined here so it can access closure variables)
-              const processFinalText = (textToProcess) => {
+              const processFinalText = (textToProcess, options = {}) => {
                 (async () => {
                   try {
                     if (isTranscriptionOnly) {
@@ -260,7 +283,8 @@ export async function handleSoloMode(clientWs) {
                             translatedText: correctedText, // Use corrected text as the display text
                             timestamp: Date.now(),
                             hasCorrection: true,
-                            isTranscriptionOnly: true
+                            isTranscriptionOnly: true,
+                            forceFinal: !!options.forceFinal
                           }, false);
                         } catch (error) {
                           console.error('[SoloMode] Grammar correction error:', error);
@@ -271,7 +295,8 @@ export async function handleSoloMode(clientWs) {
                             translatedText: textToProcess,
                             timestamp: Date.now(),
                             hasCorrection: false,
-                            isTranscriptionOnly: true
+                            isTranscriptionOnly: true,
+                            forceFinal: !!options.forceFinal
                           }, false);
                         }
                       } else {
@@ -283,7 +308,8 @@ export async function handleSoloMode(clientWs) {
                           translatedText: textToProcess,
                           timestamp: Date.now(),
                           hasCorrection: false,
-                          isTranscriptionOnly: true
+                          isTranscriptionOnly: true,
+                          forceFinal: !!options.forceFinal
                         }, false);
                       }
                     } else {
@@ -361,7 +387,8 @@ export async function handleSoloMode(clientWs) {
                           timestamp: Date.now(),
                           hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
                           hasCorrection: hasCorrection,
-                          isTranscriptionOnly: false
+                          isTranscriptionOnly: false,
+                          forceFinal: !!options.forceFinal
                         }, false);
                       } catch (error) {
                         console.error(`[SoloMode] Final processing error:`, error);
@@ -375,7 +402,8 @@ export async function handleSoloMode(clientWs) {
                           timestamp: Date.now(),
                           hasTranslation: error.skipRequest, // True if skipped (we have text), false if real error
                           hasCorrection: false,
-                          isTranscriptionOnly: false
+                          isTranscriptionOnly: false,
+                          forceFinal: !!options.forceFinal
                         }, false);
                       }
                     }
@@ -386,10 +414,16 @@ export async function handleSoloMode(clientWs) {
               };
               
               // Set up result callback - handles both partials and finals
-              speechStream.onResult(async (transcriptText, isPartial) => {
+              speechStream.onResult(async (transcriptText, isPartial, meta = {}) => {
                 if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
                 
                 if (isPartial) {
+                  if (forcedFinalBuffer) {
+                    console.log('[SoloMode] 🔁 New partial arrived - merging buffered forced final and clearing timer');
+                    clearTimeout(forcedFinalBuffer.timeout);
+                    transcriptText = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
+                    forcedFinalBuffer = null;
+                  }
                   // Track latest partial for correction race condition prevention
                   latestPartialTextForCorrection = transcriptText;
                   const translationSeedText = applyCachedCorrections(transcriptText);
@@ -606,82 +640,88 @@ export async function handleSoloMode(clientWs) {
                             ? realtimePartialTranslationWorker 
                             : partialTranslationWorker;
                           const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
-                          console.log(`[SoloMode] 🔀 Using ${workerType} API for partial translation (${capturedText.length} chars)`);
-                          const translationPromise = partialWorker.translatePartial(
-                            translationReadyText,
-                            currentSourceLang,
-                            currentTargetLang,
-                            process.env.OPENAI_API_KEY,
-                            sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
-                          );
+                          const underRestartCooldown = usePremiumTier && Date.now() < realtimeTranslationCooldownUntil;
+                          
+                          if (underRestartCooldown) {
+                            console.log(`[SoloMode] ⏸️ Skipping REALTIME translation - restart cooldown active (${realtimeTranslationCooldownUntil - Date.now()}ms remaining)`);
+                          } else {
+                            console.log(`[SoloMode] 🔀 Using ${workerType} API for partial translation (${capturedText.length} chars)`);
+                            const translationPromise = partialWorker.translatePartial(
+                              translationReadyText,
+                              currentSourceLang,
+                              currentTargetLang,
+                              process.env.OPENAI_API_KEY,
+                              sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
+                            );
 
-                          // Send translation IMMEDIATELY when ready (don't wait for grammar)
-                          translationPromise.then(translatedText => {
-                            // Validate translation result
-                            if (!translatedText || translatedText.trim().length === 0) {
-                              console.warn(`[SoloMode] ⚠️ Translation returned empty for ${capturedText.length} char text`);
-                              return;
-                            }
-
-                            // CRITICAL: Validate that translation is different from original (prevent English leak)
-                            const isSameAsOriginal = translatedText === translationReadyText || 
-                                                     translatedText.trim() === translationReadyText.trim() ||
-                                                     translatedText.toLowerCase() === translationReadyText.toLowerCase();
-                            
-                            if (isSameAsOriginal) {
-                              console.warn(`[SoloMode] ⚠️ Translation matches original (English leak detected): "${translatedText.substring(0, 60)}..."`);
-                              return; // Don't send English as translation
-                            }
-                            // CRITICAL: Only update lastPartialTranslation AFTER successful translation
-                            lastPartialTranslation = capturedText;
-                            
-                            console.log(`[SoloMode] ✅ TRANSLATION (IMMEDIATE): "${translatedText.substring(0, 40)}..."`);
-                            
-                            // Send translation result immediately - sequence IDs handle ordering
-                            sendWithSequence({
-                              type: 'translation',
-                              originalText: rawCapturedText,
-                              translatedText: translatedText,
-                              timestamp: Date.now(),
-                              isTranscriptionOnly: false,
-                              hasTranslation: true,
-                              hasCorrection: false // Grammar not ready yet
-                            }, true);
-                          }).catch(error => {
-                            // Handle translation errors gracefully
-                            if (error.name !== 'AbortError') {
-                              if (error.message && error.message.includes('cancelled')) {
-                                // Request was cancelled by a newer request - this is expected, silently skip
-                                console.log(`[SoloMode] ⏭️ Translation cancelled (newer request took priority)`);
-                              } else if (error.conversational) {
-                                // Model returned conversational response instead of translation - use original
-                                console.warn(`[SoloMode] ⚠️ Model returned conversational response instead of translation - using original text`);
-                                // Send original text as fallback
-                                sendWithSequence({
-                                  type: 'translation',
-                                  originalText: capturedText,
-                                  translatedText: capturedText,
-                                  timestamp: Date.now(),
-                                  isTranscriptionOnly: false,
-                                  hasTranslation: true,
-                                  hasCorrection: false
-                                }, true);
-                              } else if (error.englishLeak) {
-                                // Translation matched original (English leak) - silently skip
-                                console.log(`[SoloMode] ⏭️ English leak detected for partial - skipping (${rawCapturedText.length} chars)`);
-                                // Don't send anything - will retry with next partial
-                              } else if (error.message && error.message.includes('truncated')) {
-                                // Translation was truncated - log warning but don't send incomplete translation
-                                console.warn(`[SoloMode] ⚠️ Partial translation truncated (${rawCapturedText.length} chars) - waiting for longer partial`);
-                              } else if (error.message && error.message.includes('timeout')) {
-                                console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
-                                // Don't send error message to frontend - just skip this translation
-                              } else {
-                                console.error(`[SoloMode] ❌ Translation error (${workerType} API, ${rawCapturedText.length} chars):`, error.message);
+                            // Send translation IMMEDIATELY when ready (don't wait for grammar)
+                            translationPromise.then(translatedText => {
+                              // Validate translation result
+                              if (!translatedText || translatedText.trim().length === 0) {
+                                console.warn(`[SoloMode] ⚠️ Translation returned empty for ${capturedText.length} char text`);
+                                return;
                               }
-                            }
-                            // Don't send anything on error - keep last partial translation
-                          });
+
+                              // CRITICAL: Validate that translation is different from original (prevent English leak)
+                              const isSameAsOriginal = translatedText === translationReadyText || 
+                                                       translatedText.trim() === translationReadyText.trim() ||
+                                                       translatedText.toLowerCase() === translationReadyText.toLowerCase();
+                              
+                              if (isSameAsOriginal) {
+                                console.warn(`[SoloMode] ⚠️ Translation matches original (English leak detected): "${translatedText.substring(0, 60)}..."`);
+                                return; // Don't send English as translation
+                              }
+                              // CRITICAL: Only update lastPartialTranslation AFTER successful translation
+                              lastPartialTranslation = capturedText;
+                              
+                              console.log(`[SoloMode] ✅ TRANSLATION (IMMEDIATE): "${translatedText.substring(0, 40)}..."`);
+                              
+                              // Send translation result immediately - sequence IDs handle ordering
+                              sendWithSequence({
+                                type: 'translation',
+                                originalText: rawCapturedText,
+                                translatedText: translatedText,
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasTranslation: true,
+                                hasCorrection: false // Grammar not ready yet
+                              }, true);
+                            }).catch(error => {
+                              // Handle translation errors gracefully
+                              if (error.name !== 'AbortError') {
+                                if (error.message && error.message.includes('cancelled')) {
+                                  // Request was cancelled by a newer request - this is expected, silently skip
+                                  console.log(`[SoloMode] ⏭️ Translation cancelled (newer request took priority)`);
+                                } else if (error.conversational) {
+                                  // Model returned conversational response instead of translation - use original
+                                  console.warn(`[SoloMode] ⚠️ Model returned conversational response instead of translation - using original text`);
+                                  // Send original text as fallback
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: capturedText,
+                                    translatedText: capturedText,
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: false,
+                                    hasTranslation: true,
+                                    hasCorrection: false
+                                  }, true);
+                                } else if (error.englishLeak) {
+                                  // Translation matched original (English leak) - silently skip
+                                  console.log(`[SoloMode] ⏭️ English leak detected for partial - skipping (${rawCapturedText.length} chars)`);
+                                  // Don't send anything - will retry with next partial
+                                } else if (error.message && error.message.includes('truncated')) {
+                                  // Translation was truncated - log warning but don't send incomplete translation
+                                  console.warn(`[SoloMode] ⚠️ Partial translation truncated (${rawCapturedText.length} chars) - waiting for longer partial`);
+                                } else if (error.message && error.message.includes('timeout')) {
+                                  console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
+                                  // Don't send error message to frontend - just skip this translation
+                                } else {
+                                  console.error(`[SoloMode] ❌ Translation error (${workerType} API, ${rawCapturedText.length} chars):`, error.message);
+                                }
+                              }
+                              // Don't send anything on error - keep last partial translation
+                            });
+                          }
 
                           // Send grammar correction separately when ready (English only)
                           if (currentSourceLang === 'en') {
@@ -806,55 +846,60 @@ export async function handleSoloMode(clientWs) {
                               : partialTranslationWorker;
                             const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
                             console.log(`[SoloMode] 🔀 Using ${workerType} API for delayed partial translation (${latestText.length} chars)`);
-                            const translationPromise = partialWorker.translatePartial(
-                              latestText,
-                              currentSourceLang,
-                              currentTargetLang,
-                              process.env.OPENAI_API_KEY,
-                              sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
-                            );
+                            const underRestartCooldown = usePremiumTier && Date.now() < realtimeTranslationCooldownUntil;
+                            if (underRestartCooldown) {
+                              console.log(`[SoloMode] ⏸️ Skipping REALTIME translation (delayed) - restart cooldown active (${realtimeTranslationCooldownUntil - Date.now()}ms remaining)`);
+                            } else {
+                              const translationPromise = partialWorker.translatePartial(
+                                latestText,
+                                currentSourceLang,
+                                currentTargetLang,
+                                process.env.OPENAI_API_KEY,
+                                sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
+                              );
 
-                            // Send translation IMMEDIATELY when ready (don't wait for grammar)
-                            translationPromise.then(translatedText => {
-                              // Validate translation result
-                              if (!translatedText || translatedText.trim().length === 0) {
-                                console.warn(`[SoloMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
-                                return;
-                              }
-
-                              // CRITICAL: Update tracking and send translation
-                              lastPartialTranslation = latestText;
-                              lastPartialTranslationTime = Date.now();
-                              
-                              console.log(`[SoloMode] ✅ TRANSLATION (DELAYED): "${translatedText.substring(0, 40)}..."`);
-                              
-                              // Send immediately - sequence IDs handle ordering
-                              sendWithSequence({
-                                type: 'translation',
-                                originalText: latestText,
-                                translatedText: translatedText,
-                                timestamp: Date.now(),
-                                isTranscriptionOnly: false,
-                                hasTranslation: true,
-                                hasCorrection: false // Grammar not ready yet
-                              }, true);
-                            }).catch(error => {
-                              // Handle translation errors gracefully
-                              if (error.name !== 'AbortError') {
-                                if (error.message && error.message.includes('cancelled')) {
-                                  // Request was cancelled by a newer request - this is expected, silently skip
-                                  console.log(`[SoloMode] ⏭️ Delayed translation cancelled (newer request took priority)`);
-                                } else if (error.englishLeak) {
-                                  // Translation matched original (English leak) - silently skip
-                                  console.log(`[SoloMode] ⏭️ English leak detected for delayed partial - skipping (${latestText.length} chars)`);
-                                } else if (error.message && error.message.includes('timeout')) {
-                                  console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
-                                } else {
-                                  console.error(`[SoloMode] ❌ Delayed translation error (${workerType} API, ${latestText.length} chars):`, error.message);
+                              // Send translation IMMEDIATELY when ready (don't wait for grammar)
+                              translationPromise.then(translatedText => {
+                                // Validate translation result
+                                if (!translatedText || translatedText.trim().length === 0) {
+                                  console.warn(`[SoloMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
+                                  return;
                                 }
-                              }
-                              // Don't send anything on error
-                            });
+
+                                // CRITICAL: Update tracking and send translation
+                                lastPartialTranslation = latestText;
+                                lastPartialTranslationTime = Date.now();
+                                
+                                console.log(`[SoloMode] ✅ TRANSLATION (DELAYED): "${translatedText.substring(0, 40)}..."`);
+                                
+                                // Send immediately - sequence IDs handle ordering
+                                sendWithSequence({
+                                  type: 'translation',
+                                  originalText: latestText,
+                                  translatedText: translatedText,
+                                  timestamp: Date.now(),
+                                  isTranscriptionOnly: false,
+                                  hasTranslation: true,
+                                  hasCorrection: false // Grammar not ready yet
+                                }, true);
+                              }).catch(error => {
+                                // Handle translation errors gracefully
+                                if (error.name !== 'AbortError') {
+                                  if (error.message && error.message.includes('cancelled')) {
+                                    // Request was cancelled by a newer request - this is expected, silently skip
+                                    console.log(`[SoloMode] ⏭️ Delayed translation cancelled (newer request took priority)`);
+                                  } else if (error.englishLeak) {
+                                    // Translation matched original (English leak) - silently skip
+                                    console.log(`[SoloMode] ⏭️ English leak detected for delayed partial - skipping (${latestText.length} chars)`);
+                                  } else if (error.message && error.message.includes('timeout')) {
+                                    console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
+                                  } else {
+                                    console.error(`[SoloMode] ❌ Delayed translation error (${workerType} API, ${latestText.length} chars):`, error.message);
+                                  }
+                                }
+                                // Don't send anything on error
+                              });
+                            }
 
                             // Send grammar correction separately when ready (English only)
                             if (currentSourceLang === 'en') {
@@ -891,8 +936,61 @@ export async function handleSoloMode(clientWs) {
                     }
                   }
                 } else {
+                  const isForcedFinal = meta?.forced === true;
                   // Final transcript from Google Speech
                   console.log(`[SoloMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
+                  
+                  if (isForcedFinal) {
+                    console.warn(`[SoloMode] ⚠️ Forced FINAL due to stream restart (${transcriptText.length} chars)`);
+                    realtimeTranslationCooldownUntil = Date.now() + TRANSLATION_RESTART_COOLDOWN_MS;
+                    
+                    if (forcedFinalBuffer && forcedFinalBuffer.timeout) {
+                      clearTimeout(forcedFinalBuffer.timeout);
+                      forcedFinalBuffer = null;
+                    }
+                    
+                    // Use the longest partial if it captured more text
+                    const timeSinceLongestForced = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                    if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongestForced < 5000) {
+                      const missingWords = longestPartialText.substring(transcriptText.length).trim();
+                      console.log(`[SoloMode] ⚠️ Forced FINAL using LONGEST partial (${transcriptText.length} → ${longestPartialText.length} chars)`);
+                      console.log(`[SoloMode] 📊 Recovered (forced): "${missingWords}"`);
+                      transcriptText = longestPartialText;
+                    }
+                    
+                    const endsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
+                    if (endsWithPunctuation) {
+                      console.log('[SoloMode] ✅ Forced final already complete - committing immediately');
+                      processFinalText(transcriptText, { forceFinal: true });
+                    } else {
+                      console.log('[SoloMode] ⏳ Buffering forced final until continuation arrives or timeout elapses');
+                      const bufferedText = transcriptText;
+                      forcedFinalBuffer = {
+                        text: transcriptText,
+                        timestamp: Date.now(),
+                        timeout: setTimeout(() => {
+                          console.warn('[SoloMode] ⏰ Forced final buffer timeout - committing buffered text');
+                          processFinalText(bufferedText, { forceFinal: true });
+                          forcedFinalBuffer = null;
+                        }, FORCED_FINAL_MAX_WAIT_MS)
+                      };
+                    }
+                    
+                    // Cancel pending finalization timers (if any) since we're handling it now
+                    if (pendingFinalization && pendingFinalization.timeout) {
+                      clearTimeout(pendingFinalization.timeout);
+                    }
+                    pendingFinalization = null;
+                    
+                    return;
+                  }
+                  
+                  if (forcedFinalBuffer) {
+                    console.log('[SoloMode] 🔁 Merging buffered forced final with new FINAL transcript');
+                    clearTimeout(forcedFinalBuffer.timeout);
+                    transcriptText = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
+                    forcedFinalBuffer = null;
+                  }
                   
                   // CRITICAL: For long text, wait proportionally longer before processing final
                   // Google Speech may send final signal but still have partials for the last few words in flight

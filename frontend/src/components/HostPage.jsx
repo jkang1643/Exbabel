@@ -203,7 +203,7 @@ export function HostPage({ onBackToHome }) {
             } else {
               // Final transcript - process through segmenter (deduplicated)
               const finalText = message.originalText || message.translatedText;
-              const { flushedSentences } = segmenterRef.current.processFinal(finalText);
+              const { flushedSentences } = segmenterRef.current.processFinal(finalText, { isForced: message.forceFinal === true });
               
               // Add deduplicated sentences to history
               if (flushedSentences.length > 0) {

@@ -83,6 +83,10 @@ export class GoogleSpeechStream {
     
     // Track pending chunks in send order for better timeout clearing
     this.pendingChunks = []; // Array of { chunkId, sendTimestamp }
+
+    // Track the latest partial transcript so we can force-commit it if the
+    // stream restarts before a FINAL result arrives.
+    this.lastPartialTranscript = '';
   }
 
   /**
@@ -618,12 +622,18 @@ export class GoogleSpeechStream {
       if (this.resultCallback) {
         this.resultCallback(combinedTranscript, false); // isPartial = false
       }
+
+      // Clear cached partial since we emitted a real final
+      this.lastPartialTranscript = '';
     } else {
       // Interim result - partial transcription
       // console.log(`[GoogleSpeech] 🔵 PARTIAL (stability: ${stability.toFixed(2)}): "${combinedTranscript}"`);
       if (this.resultCallback) {
         this.resultCallback(combinedTranscript, true); // isPartial = true
       }
+
+      // Cache the latest partial so we can force-commit if the stream restarts
+      this.lastPartialTranscript = combinedTranscript;
     }
   }
 
@@ -796,6 +806,20 @@ export class GoogleSpeechStream {
 
   handleChunkTimeoutBurst() {
     console.error(`[GoogleSpeech] ❌ ${this.chunkTimeoutTimestamps.length} chunk timeouts in ${this.CHUNK_TIMEOUT_WINDOW_MS}ms - forcing stream restart to prevent transcript freeze`);
+
+    // If Google never emitted a FINAL for the most recent partial, force-emit it
+    if (this.lastPartialTranscript && this.lastPartialTranscript.trim().length > 0) {
+      console.warn(`[GoogleSpeech] ⚠️ Forcing FINAL of latest partial before restart (${this.lastPartialTranscript.length} chars)`);
+      if (this.resultCallback) {
+        try {
+          this.resultCallback(this.lastPartialTranscript, false, { forced: true });
+        } catch (err) {
+          console.error('[GoogleSpeech] ⚠️ Error forcing final transcript before restart:', err.message);
+        }
+      }
+      this.lastPartialTranscript = '';
+    }
+
     this.resetAudioPipelinesDueToTimeout();
     this.chunkTimeoutTimestamps = [];
     if (!this.isRestarting) {

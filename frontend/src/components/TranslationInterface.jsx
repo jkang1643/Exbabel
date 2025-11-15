@@ -164,7 +164,7 @@ function TranslationInterface({ onBackToHome }) {
       }
       
       // Process through segmenter to flush ONLY NEW text (deduplicated)
-      const { flushedSentences } = segmenterRef.current.processFinal(finalData.text)
+      const { flushedSentences } = segmenterRef.current.processFinal(finalData.text, { isForced: finalData.forceFinal })
       
       console.log(`[TranslationInterface] 📊 Segmenter returned ${flushedSentences.length} sentences:`, flushedSentences);
       
@@ -277,46 +277,41 @@ function TranslationInterface({ onBackToHome }) {
   // OPTIMIZATION: Utility function to merge corrected text with raw partials
   // Extract to avoid code duplication between translation and transcription modes
   const mergeTextWithCorrection = useCallback((newRawText, correctedOverride = null) => {
-    // If we have a corrected override, use it
-    if (correctedOverride && correctedOverride.trim()) {
-      longestCorrectedTextRef.current = correctedOverride;
-      longestCorrectedOriginalRef.current = newRawText;
-      return correctedOverride;
+    const trimmedRaw = (newRawText || '').trim();
+    if (!trimmedRaw) {
+      return '';
     }
 
-    // Otherwise, merge with existing correction
-    if (!newRawText || !newRawText.trim()) {
-      return '';
+    // If we have a corrected override, prefer it and update refs to keep alignment
+    if (correctedOverride && correctedOverride.trim()) {
+      longestCorrectedTextRef.current = correctedOverride;
+      longestCorrectedOriginalRef.current = trimmedRaw;
+      return correctedOverride;
     }
 
     const existingCorrected = longestCorrectedTextRef.current;
     const existingOriginal = longestCorrectedOriginalRef.current;
 
-    // If we have a previous correction, try to merge
     if (existingCorrected && existingOriginal) {
-      if (newRawText.startsWith(existingOriginal)) {
-        // New text extends previous - merge: corrected + new extension
-        const extension = newRawText.substring(existingOriginal.length);
-        return existingCorrected + extension;
-      } else if (newRawText.length > existingOriginal.length * 1.5) {
-        // New text much longer - reset and use raw
-        longestCorrectedTextRef.current = '';
-        longestCorrectedOriginalRef.current = '';
-        return newRawText;
-      } else if (newRawText.startsWith(existingOriginal.substring(0, Math.min(existingOriginal.length, newRawText.length)))) {
-        // Still related - merge what we can
-        const extension = newRawText.substring(existingOriginal.length);
-        return existingCorrected + extension;
-      } else {
-        // Completely diverged - reset and use raw
-        longestCorrectedTextRef.current = '';
-        longestCorrectedOriginalRef.current = '';
-        return newRawText;
+      if (trimmedRaw.startsWith(existingOriginal)) {
+        const extension = trimmedRaw.substring(existingOriginal.length);
+        const merged = existingCorrected + extension;
+        longestCorrectedTextRef.current = merged;
+        longestCorrectedOriginalRef.current = trimmedRaw;
+        return merged;
+      } else if (trimmedRaw.startsWith(existingOriginal.substring(0, Math.min(existingOriginal.length, trimmedRaw.length)))) {
+        const extension = trimmedRaw.substring(existingOriginal.length);
+        const merged = existingCorrected + extension;
+        longestCorrectedTextRef.current = merged;
+        longestCorrectedOriginalRef.current = trimmedRaw;
+        return merged;
       }
     }
 
-    // No existing correction - use raw
-    return newRawText;
+    // No existing correction or unable to merge - treat as fresh text
+    longestCorrectedTextRef.current = trimmedRaw;
+    longestCorrectedOriginalRef.current = trimmedRaw;
+    return trimmedRaw;
   }, []);
 
   // Define message handler with useCallback to prevent re-creation
@@ -380,9 +375,13 @@ function TranslationInterface({ onBackToHome }) {
           }
         } else {
           // 📝 FINAL: Commit immediately to history (restored simple approach)
-          const finalText = message.translatedText
+          const finalText = message.translatedText || message.correctedText || message.originalText || ''
           const finalSeqId = message.seqId
+          const isForcedFinal = message.forceFinal === true
           console.log(`[TranslationInterface] 📝 FINAL received seqId=${finalSeqId}: "${finalText.substring(0, 50)}..."`)
+          if (isForcedFinal) {
+            console.warn('[TranslationInterface] ⚠️ Forced FINAL received from backend (may be incomplete)')
+          }
           
           // Cancel any pending final timeout (in case we had one)
           if (pendingFinalRef.current && pendingFinalRef.current.timeout) {
@@ -408,7 +407,8 @@ function TranslationInterface({ onBackToHome }) {
             original: originalTextForHistory,  // Only set if translation mode, empty string for transcription mode
             timestamp: message.timestamp || Date.now(),
             serverTimestamp: message.serverTimestamp,
-            seqId: finalSeqId
+            seqId: finalSeqId,
+            forceFinal: isForcedFinal
           };
           
           // Call commit function immediately
@@ -417,7 +417,7 @@ function TranslationInterface({ onBackToHome }) {
           } else {
             console.error('[TranslationInterface] ❌ commitFinalToHistoryRef.current is null, using fallback');
             // FALLBACK: Direct commit if ref isn't ready
-            const { flushedSentences } = segmenterRef.current.processFinal(finalText);
+            const { flushedSentences } = segmenterRef.current.processFinal(finalText, { isForced: finalData.forceFinal });
             if (flushedSentences.length > 0 || finalText.length > 10) {
               const textToAdd = flushedSentences.length > 0 ? flushedSentences.join(' ').trim() : finalText;
               if (textToAdd) {
