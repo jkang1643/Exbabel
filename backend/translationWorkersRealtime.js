@@ -224,7 +224,7 @@ PARTIAL TEXT RULES:
             modalities: ['text'], // Text-only, no audio
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 4096, // CRITICAL: Spanish translations need more tokens (longer language)
+            // NOTE: Omitting max_response_output_tokens to use API default (maximum token window)
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -1074,7 +1074,7 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
             modalities: ['text'],
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 4096, // Match partial worker to prevent truncation of long Spanish translations
+            // NOTE: Omitting max_response_output_tokens to use API default (maximum token window)
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
