@@ -252,7 +252,7 @@ export async function handleSoloMode(clientWs) {
               return curr;
             }
             const maxOverlap = Math.min(prev.length, curr.length, 200);
-            for (let overlap = maxOverlap; overlap >= 20; overlap--) {
+            for (let overlap = maxOverlap; overlap >= 5; overlap--) {
               const prevSuffix = prev.slice(-overlap);
               const currPrefix = curr.slice(0, overlap);
               if (prevSuffix === currPrefix) {
@@ -419,9 +419,10 @@ export async function handleSoloMode(clientWs) {
                 
                 if (isPartial) {
                   if (forcedFinalBuffer) {
-                    console.log('[SoloMode] 🔁 New partial arrived - merging buffered forced final and clearing timer');
+                    console.log('[SoloMode] 🔁 New partial arrived - committing merged forced final before continuing');
                     clearTimeout(forcedFinalBuffer.timeout);
-                    transcriptText = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
+                    const mergedFinal = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
+                    processFinalText(mergedFinal, { forceFinal: true });
                     forcedFinalBuffer = null;
                   }
                   // Track latest partial for correction race condition prevention
@@ -991,7 +992,6 @@ export async function handleSoloMode(clientWs) {
                     transcriptText = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
                     forcedFinalBuffer = null;
                   }
-                  
                   // CRITICAL: For long text, wait proportionally longer before processing final
                   // Google Speech may send final signal but still have partials for the last few words in flight
                   // Very long text (>300 chars) needs more time for all partials to arrive
