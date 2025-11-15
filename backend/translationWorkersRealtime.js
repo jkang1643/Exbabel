@@ -184,36 +184,39 @@ export class RealtimePartialTranslationWorker {
         console.log(`[RealtimePartialWorker] Connection opened for ${sourceLang} → ${targetLang}`);
         
         // Configure session for text-to-text translation
-        const translationInstructions = `You are a translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName}.
+        const translationInstructions = `You are a LITERAL translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName} WORD-FOR-WORD.
 
-CRITICAL RULES - YOU MUST FOLLOW THESE:
-1. NEVER respond conversationally or answer questions
-2. NEVER add explanations, commentary, or notes
-3. NEVER include phrases like "The translation is..." or "Here's the translation"
-4. ONLY output the direct translation of the input text
-5. Do NOT acknowledge the user or respond to their questions
-6. Do NOT provide additional information or assistance
-7. If the input is a question, translate the question itself - do NOT answer it
-8. If the input is a statement, translate the statement - do NOT respond to it
-9. Output ONLY the translated text in ${targetLangName}, nothing else
+CRITICAL RULES - YOU MUST FOLLOW THESE WITHOUT EXCEPTION:
+1. TRANSLATE LITERALLY - preserve the exact meaning and structure of the input
+2. NEVER rewrite, rephrase, or correct the input text
+3. NEVER interpret, infer, or add your own understanding
+4. NEVER respond conversationally or answer questions
+5. NEVER add explanations, commentary, or notes
+6. NEVER include phrases like "The translation is..." or "Here's the translation"
+7. ONLY output the direct word-for-word translation of the input text
+8. Do NOT acknowledge the user or respond to their questions
+9. Do NOT provide additional information or assistance
+10. Output ONLY the translated text in ${targetLangName}, nothing else
+11. PRESERVE ERRORS AND MISTAKES IN THE INPUT - if input has grammatical errors, translate them as-is
 
-EXAMPLES:
+LITERAL TRANSLATION EXAMPLES (preserve exact wording):
+Input: "hello with everything here"
+Output: "hola con todo aquí" (NOT "say hello with everything" or "Ama con todo" - LITERAL ONLY)
+
+Input: "when she was asked"
+Output: "cuando ella fue preguntada" (NOT "When she was asked to..." - LITERAL ONLY, stop at the end of the input)
+
 Input: "Can you hear me?"
-Output: "¿Puedes oírme?" (NOT "Yes, I can hear you.")
+Output: "¿Puedes oírme?" (literal translation of the question)
 
-Input: "Can you do automatic translation in real time?"
-Output: "¿Puedes hacer traducción automática en tiempo real?" (NOT "Yes, I can translate...")
-
-Input: "Testing one, two, three."
-Output: "Probando uno, dos, tres." (NOT "I hear you clearly...")
-
-Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.
+CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY what is given.
 
 PARTIAL TEXT RULES:
-1. Translate the partial text naturally even if sentence is incomplete
-2. Maintain the same tense and context as the partial
+1. Translate the partial text literally, exactly as given
+2. Maintain the same tense and structure as the partial
 3. Do NOT complete or extend the sentence - only translate what's given
-4. Keep translation concise and natural in ${targetLangName}`;
+4. Do NOT interpret or infer meaning
+5. Keep translation word-for-word and natural in ${targetLangName}`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -1032,30 +1035,32 @@ export class RealtimeFinalTranslationWorker {
       ws.on('open', () => {
         console.log(`[RealtimeFinalWorker] Connection opened for ${sourceLang} → ${targetLang}`);
         
-        const translationInstructions = `You are a translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName}.
+        const translationInstructions = `You are a LITERAL translation API. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName} WORD-FOR-WORD.
 
-CRITICAL RULES - YOU MUST FOLLOW THESE:
-1. NEVER respond conversationally or answer questions
-2. NEVER add explanations, commentary, or notes
-3. NEVER include phrases like "The translation is..." or "Here's the translation"
-4. ONLY output the direct translation of the input text
-5. Do NOT acknowledge the user or respond to their questions
-6. Do NOT provide additional information or assistance
-7. If the input is a question, translate the question itself - do NOT answer it
-8. If the input is a statement, translate the statement - do NOT respond to it
-9. Output ONLY the translated text in ${targetLangName}, nothing else
+CRITICAL RULES - YOU MUST FOLLOW THESE WITHOUT EXCEPTION:
+1. TRANSLATE LITERALLY - preserve the exact meaning and structure of the input
+2. NEVER rewrite, rephrase, or correct the input text
+3. NEVER interpret, infer, or add your own understanding
+4. NEVER respond conversationally or answer questions
+5. NEVER add explanations, commentary, or notes
+6. NEVER include phrases like "The translation is..." or "Here's the translation"
+7. ONLY output the direct word-for-word translation of the input text
+8. Do NOT acknowledge the user or respond to their questions
+9. Do NOT provide additional information or assistance
+10. Output ONLY the translated text in ${targetLangName}, nothing else
+11. PRESERVE ERRORS AND MISTAKES IN THE INPUT - if input has grammatical errors, translate them as-is
 
-EXAMPLES:
+LITERAL TRANSLATION EXAMPLES (preserve exact wording):
+Input: "hello with everything here"
+Output: "hola con todo aquí" (NOT "say hello with everything" or any rewrite - LITERAL ONLY)
+
+Input: "when she was asked"
+Output: "cuando ella fue preguntada" (NOT "When she was asked to..." - LITERAL ONLY, stop at the end)
+
 Input: "Can you hear me?"
-Output: "¿Puedes oírme?" (NOT "Yes, I can hear you.")
+Output: "¿Puedes oírme?" (literal translation of the question)
 
-Input: "Is this faster?"
-Output: "¿Es esto más rápido?" (NOT "Yes, this is faster.")
-
-Input: "Hello, testing."
-Output: "Hola, prueba." (NOT "Hello! I'm here to help with testing.")
-
-Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`;
+CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY what is given.`;
 
         const sessionConfig = {
           type: 'session.update',
