@@ -36,6 +36,7 @@ export class RealtimePartialTranslationWorker {
     // Request tracking
     this.requestCounter = 0;
     this.pendingResponses = new Map(); // Track pending responses by requestId
+    this.responseToRequestMap = new Map(); // Track response ID → request ID mapping for cleanup
 
     // CRITICAL: Request serialization per connection to prevent concurrent API errors
     // This ensures only ONE request is being processed at a time per connection
@@ -221,7 +222,6 @@ PARTIAL TEXT RULES:
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 4096, // CRITICAL: Spanish translations need more tokens (longer language)
-            response_stabilization: 'none', // CRITICAL: Disable stabilization to prevent response delays
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -338,6 +338,8 @@ PARTIAL TEXT RULES:
                       const item = session.pendingItems.get(pending.itemId);
                       if (item && !item.isComplete) {
                         session.activeRequestId = reqId;
+                        // CRITICAL: Track response → request mapping for cleanup
+                        this.responseToRequestMap.set(partialResponseId, reqId);
                         console.log(`[RealtimePartialWorker] 🔗 Active response ${partialResponseId} linked to request ${reqId}`);
                         break;
                       }
@@ -345,6 +347,10 @@ PARTIAL TEXT RULES:
                   }
                 } else {
                   console.log(`[RealtimePartialWorker] ⚠️ Response created but activeRequestId already set to ${session.activeRequestId}`);
+                  // Still track the response even if activeRequestId is set (for concurrent responses)
+                  if (session.activeRequestId) {
+                    this.responseToRequestMap.set(partialResponseId, session.activeRequestId);
+                  }
                 }
               }
               break;
@@ -526,14 +532,26 @@ PARTIAL TEXT RULES:
             case 'response.done':
               console.log(`[RealtimePartialWorker] ✅ Response done: ${session.activeResponseId}`);
 
-              // CRITICAL: Clean up all pending requests associated with this active response
-              // This prevents accumulation of orphaned pending requests
-              if (session.activeRequestId) {
-                const requestId = session.activeRequestId;
-                if (this.pendingResponses.has(requestId)) {
-                  console.log(`[RealtimePartialWorker] 🧹 Cleanup from response.done: ${requestId}`);
-                  this.pendingResponses.delete(requestId);
-                }
+              // CRITICAL: Use response → request mapping to find the correct request to clean up
+              // This handles concurrent responses correctly
+              let requestIdToCleanup = null;
+
+              if (session.activeResponseId) {
+                // First try to get it from the mapping
+                requestIdToCleanup = this.responseToRequestMap.get(session.activeResponseId);
+                // Clean up the mapping entry
+                this.responseToRequestMap.delete(session.activeResponseId);
+              }
+
+              // Fallback to activeRequestId if mapping lookup fails
+              if (!requestIdToCleanup && session.activeRequestId) {
+                requestIdToCleanup = session.activeRequestId;
+              }
+
+              // Clean up the request if found
+              if (requestIdToCleanup && this.pendingResponses.has(requestIdToCleanup)) {
+                console.log(`[RealtimePartialWorker] 🧹 Cleanup from response.done: ${requestIdToCleanup}`);
+                this.pendingResponses.delete(requestIdToCleanup);
               }
 
               session.activeResponseId = null; // Clear active response, allow new ones
@@ -867,20 +885,40 @@ PARTIAL TEXT RULES:
   /**
    * Close connections for a specific language pair to reset context
    * CRITICAL: Prevents conversation items from accumulating and blocking new translations
+   * MODIFIED: Only close connections with NO pending requests to avoid dropping requests
    * Call this after final translations to clear session state
    */
   closeConnectionsForLanguagePair(sourceLang, targetLang) {
     const baseKey = `${sourceLang}:${targetLang}`;
     console.log(`[RealtimePartialWorker] 🔄 Closing connections for ${baseKey} to reset context...`);
 
+    let closedCount = 0;
     for (const [key, session] of this.connectionPool.entries()) {
       if (key.startsWith(baseKey)) {
-        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-          session.ws.close();
-          console.log(`[RealtimePartialWorker] ✅ Closed connection: ${key}`);
+        // CRITICAL: Only close if there are NO pending requests on this connection
+        // This prevents dropping requests that are still in flight
+        let hasPendingRequests = false;
+        for (const [requestId, pending] of this.pendingResponses.entries()) {
+          if (pending.connectionKey === key || pending.connectionKey.startsWith(baseKey)) {
+            hasPendingRequests = true;
+            break;
+          }
         }
-        this.connectionPool.delete(key);
+
+        if (!hasPendingRequests) {
+          if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+            session.ws.close();
+            console.log(`[RealtimePartialWorker] ✅ Closed idle connection: ${key}`);
+          }
+          this.connectionPool.delete(key);
+          closedCount++;
+        } else {
+          console.log(`[RealtimePartialWorker] ⏭️ Skipping close for ${key} - has pending requests`);
+        }
       }
+    }
+    if (closedCount === 0) {
+      console.log(`[RealtimePartialWorker] ℹ️ No idle connections to close for ${baseKey}`);
     }
   }
 }
@@ -899,6 +937,7 @@ export class RealtimeFinalTranslationWorker {
     this.connectionSetupPromises = new Map();
     this.requestCounter = 0;
     this.pendingResponses = new Map();
+    this.responseToRequestMap = new Map(); // Track response ID → request ID mapping for cleanup
     this.MAX_CONCURRENT = 1; // CRITICAL: Must be 1 to prevent "conversation_already_has_active_response" errors
   }
 
@@ -1017,7 +1056,6 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
             max_response_output_tokens: 2000, // SPEED: Reduced from 16000 - most translations are short
-            response_stabilization: 'none', // CRITICAL: Disable stabilization to prevent response delays
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -1168,6 +1206,8 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                       const item = session.pendingItems.get(pending.itemId);
                       if (item && !item.isComplete) {
                         session.activeRequestId = reqId;
+                        // CRITICAL: Track response → request mapping for cleanup
+                        this.responseToRequestMap.set(finalResponseId, reqId);
                         console.log(`[RealtimeFinalWorker] 🔗 Active response ${finalResponseId} linked to request ${reqId}`);
                         break;
                       }
@@ -1175,6 +1215,10 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
                   }
                 } else {
                   console.log(`[RealtimeFinalWorker] ⚠️ Response created but activeRequestId already set to ${session.activeRequestId}`);
+                  // Still track the response even if activeRequestId is set (for concurrent responses)
+                  if (session.activeRequestId) {
+                    this.responseToRequestMap.set(finalResponseId, session.activeRequestId);
+                  }
                 }
               }
               break;
@@ -1182,14 +1226,26 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
             case 'response.done':
               console.log(`[RealtimeFinalWorker] ✅ Response done: ${session.activeResponseId}`);
 
-              // CRITICAL: Clean up all pending requests associated with this active response
-              // This prevents accumulation of orphaned pending requests
-              if (session.activeRequestId) {
-                const requestId = session.activeRequestId;
-                if (this.pendingResponses.has(requestId)) {
-                  console.log(`[RealtimeFinalWorker] 🧹 Cleanup from response.done: ${requestId}`);
-                  this.pendingResponses.delete(requestId);
-                }
+              // CRITICAL: Use response → request mapping to find the correct request to clean up
+              // This handles concurrent responses correctly
+              let requestIdToCleanup = null;
+
+              if (session.activeResponseId) {
+                // First try to get it from the mapping
+                requestIdToCleanup = this.responseToRequestMap.get(session.activeResponseId);
+                // Clean up the mapping entry
+                this.responseToRequestMap.delete(session.activeResponseId);
+              }
+
+              // Fallback to activeRequestId if mapping lookup fails
+              if (!requestIdToCleanup && session.activeRequestId) {
+                requestIdToCleanup = session.activeRequestId;
+              }
+
+              // Clean up the request if found
+              if (requestIdToCleanup && this.pendingResponses.has(requestIdToCleanup)) {
+                console.log(`[RealtimeFinalWorker] 🧹 Cleanup from response.done: ${requestIdToCleanup}`);
+                this.pendingResponses.delete(requestIdToCleanup);
               }
 
               session.activeResponseId = null; // Clear active response, allow new ones
@@ -1554,20 +1610,40 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
   /**
    * Close connections for a specific language pair to reset context
    * CRITICAL: Prevents conversation items from accumulating and blocking new translations
+   * MODIFIED: Only close connections with NO pending requests to avoid dropping requests
    * Call this after final translations to clear session state
    */
   closeConnectionsForLanguagePair(sourceLang, targetLang) {
     const baseKey = `${sourceLang}:${targetLang}`;
     console.log(`[RealtimeFinalWorker] 🔄 Closing connections for ${baseKey} to reset context...`);
 
+    let closedCount = 0;
     for (const [key, session] of this.connectionPool.entries()) {
       if (key.startsWith(baseKey)) {
-        if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-          session.ws.close();
-          console.log(`[RealtimeFinalWorker] ✅ Closed connection: ${key}`);
+        // CRITICAL: Only close if there are NO pending requests on this connection
+        // This prevents dropping requests that are still in flight
+        let hasPendingRequests = false;
+        for (const [requestId, pending] of this.pendingResponses.entries()) {
+          if (pending.connectionKey === key || pending.connectionKey.startsWith(baseKey)) {
+            hasPendingRequests = true;
+            break;
+          }
         }
-        this.connectionPool.delete(key);
+
+        if (!hasPendingRequests) {
+          if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+            session.ws.close();
+            console.log(`[RealtimeFinalWorker] ✅ Closed idle connection: ${key}`);
+          }
+          this.connectionPool.delete(key);
+          closedCount++;
+        } else {
+          console.log(`[RealtimeFinalWorker] ⏭️ Skipping close for ${key} - has pending requests`);
+        }
       }
+    }
+    if (closedCount === 0) {
+      console.log(`[RealtimeFinalWorker] ℹ️ No idle connections to close for ${baseKey}`);
     }
   }
 }
