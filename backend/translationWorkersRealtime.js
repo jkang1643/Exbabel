@@ -41,10 +41,15 @@ export class RealtimePartialTranslationWorker {
     // This ensures only ONE request is being processed at a time per connection
     this.connectionLocks = new Map(); // key: connectionKey, value: Promise (current request)
 
-    // Persistent conversation tracking - NOT USED for sub-200ms optimization
-    // The real optimization is rapid response cancellation + connection reuse
-    // Kept for potential future conversation management features
-    this.sessionConversations = new Map(); // key: connectionKey, value: { itemCount, lastCleanup }
+    // CRITICAL: NO PERSISTENT CONVERSATION CONTEXT (matching 4o mini pipeline)
+    // Conversation context causes performance degradation over time
+    // Solution: Close connections immediately after use, don't reuse
+    // This forces each translation to start with fresh context (like REST API calls)
+    this.CONNECTION_REUSE_ENABLED = false; // Disable connection reuse to prevent context accumulation
+
+    // Persistent conversation tracking - DISABLED
+    // With no conversation reuse, this is no longer needed
+    this.sessionConversations = new Map(); // Kept for reference, not used
 
     // Concurrency limits - CRITICAL: Increased to handle rapid transcription updates
     // MAX_CONCURRENT = 1 caused timeouts with frequent transcription requests
@@ -533,6 +538,27 @@ PARTIAL TEXT RULES:
 
               session.activeResponseId = null; // Clear active response, allow new ones
               session.activeRequestId = null; // Clear active request tracking
+
+              // CRITICAL: Close connection after response to prevent conversation context accumulation
+              // This matches the 4o mini pipeline behavior (no persistent context)
+              // Each new translation gets a fresh connection, preventing performance degradation
+              if (!this.CONNECTION_REUSE_ENABLED) {
+                console.log(`[RealtimePartialWorker] 🔌 Closing connection ${session.connectionKey} (no context reuse)`);
+                try {
+                  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                    session.ws.close();
+                  }
+                } catch (err) {
+                  console.warn(`[RealtimePartialWorker] Error closing connection: ${err.message}`);
+                }
+                // Remove from pool so a new connection will be created next request
+                for (const [key, sess] of this.connectionPool.entries()) {
+                  if (sess === session) {
+                    this.connectionPool.delete(key);
+                    break;
+                  }
+                }
+              }
               break;
               
             case 'error':
@@ -1149,6 +1175,27 @@ Remember: You are a TRANSLATOR, not a conversational assistant. Translate only.`
 
               session.activeResponseId = null; // Clear active response, allow new ones
               session.activeRequestId = null; // Clear active request tracking
+
+              // CRITICAL: Close connection after response to prevent conversation context accumulation
+              // This matches the 4o mini pipeline behavior (no persistent context)
+              // Each new translation gets a fresh connection, preventing performance degradation
+              if (!this.CONNECTION_REUSE_ENABLED) {
+                console.log(`[RealtimeFinalWorker] 🔌 Closing connection ${session.connectionKey} (no context reuse)`);
+                try {
+                  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                    session.ws.close();
+                  }
+                } catch (err) {
+                  console.warn(`[RealtimeFinalWorker] Error closing connection: ${err.message}`);
+                }
+                // Remove from pool so a new connection will be created next request
+                for (const [key, sess] of this.connectionPool.entries()) {
+                  if (sess === session) {
+                    this.connectionPool.delete(key);
+                    break;
+                  }
+                }
+              }
               break;
               
             case 'response.text.done':
