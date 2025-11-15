@@ -224,7 +224,7 @@ PARTIAL TEXT RULES:
             modalities: ['text'], // Text-only, no audio
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            // NOTE: Omitting max_response_output_tokens to use API default (maximum token window)
+            max_response_output_tokens: 16384, // Use maximum allowed by API
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -1078,7 +1078,7 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
             modalities: ['text'],
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            // NOTE: Omitting max_response_output_tokens to use API default (maximum token window)
+            max_response_output_tokens: 16384, // Use maximum allowed by API
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
