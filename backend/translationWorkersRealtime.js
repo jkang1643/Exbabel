@@ -224,7 +224,7 @@ PARTIAL TEXT RULES:
             modalities: ['text'], // Text-only, no audio
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 16384, // Use maximum allowed by API
+            max_response_output_tokens: 4096, // Maximum allowed by API
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -555,9 +555,24 @@ PARTIAL TEXT RULES:
                 requestIdToCleanup = session.activeRequestId;
               }
 
-              // Clean up the request if found
+              // Resolve and clean up the request if found
               if (requestIdToCleanup && this.pendingResponses.has(requestIdToCleanup)) {
+                const pending = this.pendingResponses.get(requestIdToCleanup);
                 console.log(`[RealtimePartialWorker] 🧹 Cleanup from response.done: ${requestIdToCleanup}`);
+
+                // CRITICAL: Resolve the request with final text if not already resolved
+                if (pending && !pending.resolved) {
+                  const item = session.pendingItems.get(pending.itemId);
+                  if (item) {
+                    const finalText = item.text.trim();
+                    if (pending.timeoutId) {
+                      clearTimeout(pending.timeoutId);
+                    }
+                    pending.resolve(finalText);
+                    pending.resolved = true;
+                  }
+                }
+
                 this.pendingResponses.delete(requestIdToCleanup);
               }
 
@@ -1074,7 +1089,7 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
             modalities: ['text'],
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 16384, // Use maximum allowed by API
+            max_response_output_tokens: 4096, // Maximum allowed by API
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
@@ -1269,9 +1284,24 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
                 requestIdToCleanup = session.activeRequestId;
               }
 
-              // Clean up the request if found
+              // Resolve and clean up the request if found
               if (requestIdToCleanup && this.pendingResponses.has(requestIdToCleanup)) {
+                const pending = this.pendingResponses.get(requestIdToCleanup);
                 console.log(`[RealtimeFinalWorker] 🧹 Cleanup from response.done: ${requestIdToCleanup}`);
+
+                // CRITICAL: Resolve the request with final text if not already resolved
+                if (pending && !pending.resolved) {
+                  const item = session.pendingItems.get(pending.itemId);
+                  if (item) {
+                    const finalText = item.text.trim();
+                    if (pending.timeoutId) {
+                      clearTimeout(pending.timeoutId);
+                    }
+                    pending.resolve(finalText);
+                    pending.resolved = true;
+                  }
+                }
+
                 this.pendingResponses.delete(requestIdToCleanup);
               }
 
