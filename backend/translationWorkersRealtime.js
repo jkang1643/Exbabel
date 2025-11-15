@@ -519,18 +519,14 @@ PARTIAL TEXT RULES:
                       }
                     }
 
-                    // Clear timeout
-                    if (pending.timeoutId) {
-                      clearTimeout(pending.timeoutId);
-                    }
-                    
+                    // CRITICAL: DO NOT resolve here - response.done will handle it
+                    // The Realtime API may send deltas AFTER response.text.done
+                    // We need to keep activeRequestId set to collect them
                     if (pending.onPartial) {
                       pending.onPartial(translatedText, true);
                     }
-                    pending.resolve(translatedText);
-                    this.pendingResponses.delete(session.activeRequestId);
-                    session.pendingItems.delete(pending.itemId);
-                    session.activeRequestId = null;
+                    // Mark as text complete but keep activeRequestId active for additional deltas
+                    item.isComplete = true;
                   }
                 } else {
                   console.warn(`[RealtimePartialWorker] ⚠️ Response done but active request not found`);
@@ -1362,11 +1358,12 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
                     if (pending.timeoutId) {
                       clearTimeout(pending.timeoutId);
                     }
-                    
-                    pending.resolve(translatedText);
-                    this.pendingResponses.delete(session.activeRequestId);
-                    session.pendingItems.delete(pending.itemId);
-                    session.activeRequestId = null;
+
+                    // CRITICAL: DO NOT resolve here - response.done will handle it
+                    // The Realtime API may send deltas AFTER response.text.done
+                    // We need to keep activeRequestId set to collect them
+                    // Mark as text complete but keep activeRequestId active for additional deltas
+                    item.isComplete = true;
                   }
                 } else {
                   console.warn(`[RealtimeFinalWorker] ⚠️ Response done but active request not found`);
