@@ -571,25 +571,29 @@ PARTIAL TEXT RULES:
               // CRITICAL: Close connection after response to prevent conversation context accumulation
               // This matches the 4o mini pipeline behavior (no persistent context)
               // Each new translation gets a fresh connection, preventing performance degradation
+              // NOTE: Close connection ASYNCHRONOUSLY to prevent blocking the response handler
               if (!this.CONNECTION_REUSE_ENABLED) {
-                console.log(`[RealtimePartialWorker] 🔌 Closing connection ${session.connectionKey} (no context reuse)`);
-                try {
-                  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-                    session.ws.close();
+                // Close connection in background (don't block the response handler)
+                setImmediate(() => {
+                  console.log(`[RealtimePartialWorker] 🔌 Closing connection ${session.connectionKey} (no context reuse)`);
+                  try {
+                    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                      session.ws.close();
+                    }
+                  } catch (err) {
+                    console.warn(`[RealtimePartialWorker] Error closing connection: ${err.message}`);
                   }
-                } catch (err) {
-                  console.warn(`[RealtimePartialWorker] Error closing connection: ${err.message}`);
-                }
-                // Remove from pool so a new connection will be created next request
-                for (const [key, sess] of this.connectionPool.entries()) {
-                  if (sess === session) {
-                    this.connectionPool.delete(key);
-                    break;
+                  // Remove from pool so a new connection will be created next request
+                  for (const [key, sess] of this.connectionPool.entries()) {
+                    if (sess === session) {
+                      this.connectionPool.delete(key);
+                      break;
+                    }
                   }
-                }
+                });
               }
               break;
-              
+
             case 'error':
               console.error(`[RealtimePartialWorker] Error for ${session.connectionKey}:`, event.error);
               // Find and reject pending response by item_id
@@ -1281,22 +1285,26 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
               // CRITICAL: Close connection after response to prevent conversation context accumulation
               // This matches the 4o mini pipeline behavior (no persistent context)
               // Each new translation gets a fresh connection, preventing performance degradation
+              // NOTE: Close connection ASYNCHRONOUSLY to prevent blocking the response handler
               if (!this.CONNECTION_REUSE_ENABLED) {
-                console.log(`[RealtimeFinalWorker] 🔌 Closing connection ${session.connectionKey} (no context reuse)`);
-                try {
-                  if (session.ws && session.ws.readyState === WebSocket.OPEN) {
-                    session.ws.close();
+                // Close connection in background (don't block the response handler)
+                setImmediate(() => {
+                  console.log(`[RealtimeFinalWorker] 🔌 Closing connection ${session.connectionKey} (no context reuse)`);
+                  try {
+                    if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                      session.ws.close();
+                    }
+                  } catch (err) {
+                    console.warn(`[RealtimeFinalWorker] Error closing connection: ${err.message}`);
                   }
-                } catch (err) {
-                  console.warn(`[RealtimeFinalWorker] Error closing connection: ${err.message}`);
-                }
-                // Remove from pool so a new connection will be created next request
-                for (const [key, sess] of this.connectionPool.entries()) {
-                  if (sess === session) {
-                    this.connectionPool.delete(key);
-                    break;
+                  // Remove from pool so a new connection will be created next request
+                  for (const [key, sess] of this.connectionPool.entries()) {
+                    if (sess === session) {
+                      this.connectionPool.delete(key);
+                      break;
+                    }
                   }
-                }
+                });
               }
               break;
               
