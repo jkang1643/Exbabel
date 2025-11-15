@@ -1074,7 +1074,7 @@ CRITICAL: Do NOT complete, extend, or interpret sentences. Translate EXACTLY wha
             modalities: ['text'],
             instructions: translationInstructions,
             temperature: 0.6, // Minimum temperature for realtime API (must be >= 0.6)
-            max_response_output_tokens: 2000, // SPEED: Reduced from 16000 - most translations are short
+            max_response_output_tokens: 4096, // Match partial worker to prevent truncation of long Spanish translations
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
