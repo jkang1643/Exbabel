@@ -950,6 +950,12 @@ export class RealtimeFinalTranslationWorker {
     this.pendingResponses = new Map();
     this.responseToRequestMap = new Map(); // Track response ID → request ID mapping for cleanup
     this.MAX_CONCURRENT = 1; // CRITICAL: Must be 1 to prevent "conversation_already_has_active_response" errors
+
+    // CRITICAL: NO PERSISTENT CONVERSATION CONTEXT (matching 4o mini pipeline)
+    // Conversation context causes performance degradation over time
+    // Solution: Close connections immediately after use, don't reuse
+    // This forces each translation to start with fresh context (like REST API calls)
+    this.CONNECTION_REUSE_ENABLED = false; // Disable connection reuse to prevent context accumulation
   }
 
   /**
