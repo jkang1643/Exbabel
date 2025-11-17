@@ -104,8 +104,220 @@ export async function handleHostConnection(clientWs, sessionId) {
               let lastFinalTime = 0; // Timestamp of last final
               let partialTrackingResetTimeout = null; // Timeout to reset partial tracking after final
               
+              // PENDING FINAL TRACKING: Track finals that are waiting to be processed
+              // This allows partials to extend them before we commit
+              let pendingFinal = null; // {text, timeout, timestamp, isForced, startTime}
+              let pendingFinalTimeout = null;
+              
+              // RECENTLY FINALIZED WINDOW: Keep 2-3 previous lines editable for backpatching
+              // This allows late-arriving tokens to be merged into previous segments
+              const recentlyFinalized = []; // Array of {text, timestamp, sequenceId}
+              const RECENTLY_FINALIZED_WINDOW = 1500; // 1.5 seconds - keep lines editable
+              const MAX_RECENT_FINALS = 3; // Keep last 3 finalized segments
+              
               // GRACE PERIOD: Keep tracking partials for 3 seconds after a final to catch continuation words
               const PARTIAL_TRACKING_GRACE_PERIOD = 3000; // 3 seconds (increased to catch slower continuations)
+              
+              // FINAL COMMIT DELAY: Wait before processing finals to allow extending partials
+              // Google Speech finalizes based on stability, not sentence completion
+              // This delay gives partials time to arrive and extend the final
+              // VAD Pause Finalization: 0ms (already stable)
+              // Forced Commit: 600-900ms (captures trailing words)
+              const FINAL_COMMIT_DELAY_NATURAL = 0; // Natural finalization (VAD pause) - already stable
+              const FINAL_COMMIT_DELAY_FORCED = 750; // Forced commit - needs buffer to catch trailing words
+              
+              // Helper function to tokenize text for overlap matching
+              const tokenize = (text) => {
+                return text.trim().toLowerCase().split(/\s+/).filter(t => t.length > 0);
+              };
+              
+              // Helper function to calculate token overlap similarity
+              const calculateTokenOverlap = (tokens1, tokens2, minOverlap = 2) => {
+                if (!tokens1 || !tokens2 || tokens1.length === 0 || tokens2.length === 0) return 0;
+                
+                // Check if tokens2 starts with end of tokens1
+                const maxCheck = Math.min(tokens1.length, tokens2.length, 6); // Check up to 6 tokens
+                for (let i = maxCheck; i >= minOverlap; i--) {
+                  const endTokens1 = tokens1.slice(-i);
+                  const startTokens2 = tokens2.slice(0, i);
+                  
+                  // Exact match
+                  if (endTokens1.join(' ') === startTokens2.join(' ')) {
+                    return i / Math.max(tokens1.length, tokens2.length); // Normalized similarity
+                  }
+                  
+                  // Fuzzy match - check if most tokens match
+                  let matches = 0;
+                  for (let j = 0; j < i; j++) {
+                    if (endTokens1[j] === startTokens2[j] || 
+                        endTokens1[j].includes(startTokens2[j]) || 
+                        startTokens2[j].includes(endTokens1[j])) {
+                      matches++;
+                    }
+                  }
+                  if (matches >= i * 0.7) { // 70% match threshold
+                    return matches / Math.max(tokens1.length, tokens2.length);
+                  }
+                }
+                
+                return 0;
+              };
+              
+              // Helper function to merge tokens with overlap
+              const mergeTokens = (text1, text2) => {
+                const tokens1 = tokenize(text1);
+                const tokens2 = tokenize(text2);
+                
+                if (tokens1.length === 0) return text2;
+                if (tokens2.length === 0) return text1;
+                
+                // Find overlap
+                const maxCheck = Math.min(tokens1.length, tokens2.length, 6);
+                for (let i = maxCheck; i >= 2; i--) {
+                  const endTokens1 = tokens1.slice(-i);
+                  const startTokens2 = tokens2.slice(0, i);
+                  
+                  if (endTokens1.join(' ') === startTokens2.join(' ')) {
+                    // Exact overlap - merge
+                    const merged = [...tokens1, ...tokens2.slice(i)];
+                    return merged.join(' ');
+                  }
+                  
+                  // Fuzzy match
+                  let matches = 0;
+                  for (let j = 0; j < i; j++) {
+                    if (endTokens1[j] === startTokens2[j] || 
+                        endTokens1[j].includes(startTokens2[j]) || 
+                        startTokens2[j].includes(endTokens1[j])) {
+                      matches++;
+                    }
+                  }
+                  if (matches >= i * 0.7) {
+                    // Merge with overlap
+                    const merged = [...tokens1, ...tokens2.slice(i)];
+                    return merged.join(' ');
+                  }
+                }
+                
+                // No overlap found - concatenate
+                return text1.trim() + ' ' + text2.trim();
+              };
+              
+              // Clean up old recently finalized entries
+              const cleanupRecentlyFinalized = () => {
+                const now = Date.now();
+                while (recentlyFinalized.length > 0) {
+                  const oldest = recentlyFinalized[0];
+                  if (now - oldest.timestamp > RECENTLY_FINALIZED_WINDOW) {
+                    recentlyFinalized.shift();
+                  } else {
+                    break;
+                  }
+                }
+                // Also limit by count
+                while (recentlyFinalized.length > MAX_RECENT_FINALS) {
+                  recentlyFinalized.shift();
+                }
+              };
+              
+              // Function to commit a pending final (after delay)
+              const commitPendingFinal = async () => {
+                if (!pendingFinal) return;
+                
+                let finalTextToProcess = pendingFinal.text;
+                const isForcedFinal = pendingFinal.isForced;
+                
+                // Last chance: Check if longest partial extends the pending final
+                const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                if (longestPartialText && longestPartialText.length > finalTextToProcess.length && timeSinceLongest < 2000) {
+                  const longestTrimmed = longestPartialText.trim();
+                  const finalTrimmed = finalTextToProcess.trim();
+                  
+                  if (longestTrimmed.startsWith(finalTrimmed) || longestTrimmed.includes(finalTrimmed)) {
+                    console.log(`[HostMode] ⚠️ Using LONGEST partial for pending final (${finalTextToProcess.length} → ${longestPartialText.length} chars)`);
+                    finalTextToProcess = longestPartialText;
+                  }
+                }
+                
+                // Update last final tracking (for continuation detection in grace period)
+                lastFinalText = finalTextToProcess;
+                lastFinalTime = Date.now();
+                
+                // Add to recently finalized window for backpatching
+                const sequenceId = Date.now();
+                recentlyFinalized.push({
+                  text: finalTextToProcess,
+                  timestamp: Date.now(),
+                  sequenceId: sequenceId
+                });
+                cleanupRecentlyFinalized();
+                
+                // Reset current partial tracking (new segment starting)
+                latestPartialText = '';
+                longestPartialText = '';
+                latestPartialTime = 0;
+                longestPartialTime = 0;
+                
+                // Clear pending final
+                const finalToProcess = finalTextToProcess;
+                pendingFinal = null;
+                pendingFinalTimeout = null;
+                
+                // Cancel any existing reset timeout
+                if (partialTrackingResetTimeout) {
+                  clearTimeout(partialTrackingResetTimeout);
+                  partialTrackingResetTimeout = null;
+                }
+                
+                // Schedule delayed reset of final tracking (allows grace period for continuations)
+                partialTrackingResetTimeout = setTimeout(() => {
+                  lastFinalText = '';
+                  lastFinalTime = 0;
+                  partialTrackingResetTimeout = null;
+                  console.log(`[HostMode] 🧹 Reset final tracking after grace period`);
+                }, PARTIAL_TRACKING_GRACE_PERIOD);
+                
+                // Process final using extracted function
+                await processFinalTranscript(finalToProcess, isForcedFinal);
+              };
+              
+              // Function to backpatch a recently finalized segment
+              const backpatchRecentlyFinalized = async (partialText) => {
+                cleanupRecentlyFinalized();
+                
+                const partialTokens = tokenize(partialText);
+                if (partialTokens.length === 0) return false;
+                
+                // Check recently finalized segments (newest first)
+                for (let i = recentlyFinalized.length - 1; i >= 0; i--) {
+                  const recentFinal = recentlyFinalized[i];
+                  const finalTokens = tokenize(recentFinal.text);
+                  
+                  // Calculate overlap similarity
+                  const similarity = calculateTokenOverlap(finalTokens, partialTokens);
+                  
+                  if (similarity > 0.45) { // 45% similarity threshold
+                    // This partial belongs to the recent final - merge it
+                    const mergedText = mergeTokens(recentFinal.text, partialText);
+                    console.log(`[HostMode] 🔙 BACKPATCHING: Merging into recent final:`);
+                    console.log(`[HostMode]   Recent: "${recentFinal.text.substring(0, 60)}..."`);
+                    console.log(`[HostMode]   Partial: "${partialText.substring(0, 60)}..."`);
+                    console.log(`[HostMode]   Merged: "${mergedText.substring(0, 80)}..."`);
+                    console.log(`[HostMode]   Similarity: ${(similarity * 100).toFixed(1)}%`);
+                    
+                    // Update the recent final
+                    recentFinal.text = mergedText;
+                    recentFinal.timestamp = Date.now(); // Update timestamp to keep it in window longer
+                    
+                    // Send updated final to all listeners
+                    await processFinalTranscript(mergedText, false);
+                    
+                    return true; // Successfully backpatched
+                  }
+                }
+                
+                return false; // No backpatch match found
+              };
               
               // Extract final processing into separate async function to avoid blocking
               const processFinalTranscript = async (finalText, isForcedFinal = false) => {
@@ -193,8 +405,102 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Set up result callback - handles both partials and finals
               speechStream.onResult(async (transcriptText, isPartial, meta = {}) => {
                 if (isPartial) {
-                  // CRITICAL FIX: Lightweight check for continuation after final (non-blocking)
-                  // This runs synchronously but quickly, then processes continuation asynchronously
+                  // PRIORITY 1: Check if this partial extends a PENDING final (before it's committed)
+                  // This is the most important check - we can update the pending final before it's sent
+                  if (pendingFinal && pendingFinal.text) {
+                    const pendingTrimmed = pendingFinal.text.trim();
+                    const partialTrimmed = transcriptText.trim();
+                    
+                    // Check if partial extends the pending final (using token-based matching)
+                    const pendingTokens = tokenize(pendingFinal.text);
+                    const partialTokens = tokenize(transcriptText);
+                    
+                    // Check if partial extends pending final (starts with it or has overlap)
+                    const similarity = calculateTokenOverlap(pendingTokens, partialTokens);
+                    if (similarity > 0.3 || partialTrimmed.startsWith(pendingTrimmed)) {
+                      // Partial extends pending final - merge using token-based merging
+                      const mergedText = mergeTokens(pendingFinal.text, transcriptText);
+                      
+                      if (mergedText.length > pendingFinal.text.length) {
+                        console.log(`[HostMode] 🔄 Partial extends PENDING final (token merge) - updating:`);
+                        console.log(`[HostMode]   Pending: "${pendingFinal.text.substring(0, 60)}..."`);
+                        console.log(`[HostMode]   Partial: "${transcriptText.substring(0, 60)}..."`);
+                        console.log(`[HostMode]   Merged: "${mergedText.substring(0, 80)}..."`);
+                        
+                        // Update pending final
+                        pendingFinal.text = mergedText;
+                        pendingFinal.timestamp = Date.now();
+                        
+                        // Also update longest partial tracking (in case there are even longer partials)
+                        if (!longestPartialText || mergedText.length > longestPartialText.length) {
+                          longestPartialText = mergedText;
+                          longestPartialTime = Date.now();
+                        }
+                        
+                        // Reset the commit timeout (give more time for further extensions)
+                        // Use the delay appropriate for the final type
+                        const delay = pendingFinal.isForced ? FINAL_COMMIT_DELAY_FORCED : FINAL_COMMIT_DELAY_NATURAL;
+                        if (pendingFinalTimeout) {
+                          clearTimeout(pendingFinalTimeout);
+                        }
+                        pendingFinalTimeout = setTimeout(() => {
+                          commitPendingFinal();
+                        }, delay);
+                        
+                        // Don't process as partial - it's extending a pending final
+                        return;
+                      }
+                    }
+                    // Check if partial contains pending final (more complete version) using token matching
+                    else {
+                      const similarity = calculateTokenOverlap(partialTokens, pendingTokens);
+                      if (similarity > 0.3 && partialTrimmed.length > pendingTrimmed.length + 10) {
+                        // Partial contains a more complete version - use token merge
+                        const mergedText = mergeTokens(pendingFinal.text, transcriptText);
+                        
+                        if (mergedText.length > pendingFinal.text.length || transcriptText.length > pendingFinal.text.length) {
+                          const bestText = transcriptText.length > mergedText.length ? transcriptText : mergedText;
+                          console.log(`[HostMode] 🔄 Partial contains PENDING final (more complete) - replacing:`);
+                          console.log(`[HostMode]   Pending: "${pendingFinal.text.substring(0, 60)}..."`);
+                          console.log(`[HostMode]   More complete: "${bestText.substring(0, 80)}..."`);
+                          console.log(`[HostMode]   Similarity: ${(similarity * 100).toFixed(1)}%`);
+                          
+                          // Update pending final with more complete version
+                          pendingFinal.text = bestText;
+                          pendingFinal.timestamp = Date.now();
+                          
+                          // Also update longest partial tracking
+                          if (!longestPartialText || bestText.length > longestPartialText.length) {
+                            longestPartialText = bestText;
+                            longestPartialTime = Date.now();
+                          }
+                          
+                          // Reset the commit timeout (use appropriate delay)
+                          const delay = pendingFinal.isForced ? FINAL_COMMIT_DELAY_FORCED : FINAL_COMMIT_DELAY_NATURAL;
+                          if (pendingFinalTimeout) {
+                            clearTimeout(pendingFinalTimeout);
+                          }
+                          pendingFinalTimeout = setTimeout(() => {
+                            commitPendingFinal();
+                          }, delay);
+                          
+                          // Don't process as partial
+                          return;
+                        }
+                      }
+                    }
+                  }
+                  
+                  // PRIORITY 2: Check if this partial should be backpatched to a recently finalized segment
+                  // This catches late-arriving tokens that belong to previous lines
+                  const wasBackpatched = await backpatchRecentlyFinalized(transcriptText);
+                  if (wasBackpatched) {
+                    // Successfully backpatched - don't process as new partial
+                    return;
+                  }
+                  
+                  // PRIORITY 3: Check if this partial extends a RECENT final (already committed, but in grace period)
+                  // This allows us to send an updated final if we catch missing words
                   const timeSinceLastFinal = lastFinalTime ? (Date.now() - lastFinalTime) : Infinity;
                   if (lastFinalText && timeSinceLastFinal < PARTIAL_TRACKING_GRACE_PERIOD) {
                     // Quick string comparison - lightweight check
@@ -598,46 +904,47 @@ export async function handleHostConnection(clientWs, sessionId) {
                   return;
                 }
                 
-                // Final transcript - send to host and translate for listeners
+                // Final transcript - delay processing to allow partials to extend it
                 const isForcedFinal = meta?.forced === true;
                 console.log(`[HostMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."${isForcedFinal ? ' [FORCED]' : ''}`);
                 
-                // SIMPLE FIX: Use longest partial if it's longer (within last 5 seconds)
+                // Use longest partial if it's longer (best version we have so far)
                 const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                let bestFinalText = transcriptText;
                 
-                if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 5000) {
-                  const missingWords = longestPartialText.substring(transcriptText.length).trim();
-                  console.log(`[HostMode] ⚠️ Using LONGEST partial (${transcriptText.length} → ${longestPartialText.length} chars)`);
-                  console.log(`[HostMode] 📊 Recovered: "${missingWords}"`);
-                  transcriptText = longestPartialText;
+                if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 2000) {
+                  const longestTrimmed = longestPartialText.trim();
+                  const finalTrimmed = transcriptText.trim();
+                  
+                  if (longestTrimmed.startsWith(finalTrimmed) || longestTrimmed.includes(finalTrimmed)) {
+                    const missingWords = longestPartialText.substring(transcriptText.length).trim();
+                    console.log(`[HostMode] ⚠️ Using LONGEST partial for final (${transcriptText.length} → ${longestPartialText.length} chars)`);
+                    console.log(`[HostMode] 📊 Recovered: "${missingWords}"`);
+                    bestFinalText = longestPartialText;
+                  }
                 }
                 
-                // Update last final tracking (for continuation detection in grace period)
-                lastFinalText = transcriptText;
-                lastFinalTime = Date.now();
-                
-                // Reset current partial tracking immediately (new segment starting)
-                latestPartialText = '';
-                longestPartialText = '';
-                latestPartialTime = 0;
-                longestPartialTime = 0;
-                
-                // Cancel any existing reset timeout
-                if (partialTrackingResetTimeout) {
-                  clearTimeout(partialTrackingResetTimeout);
-                  partialTrackingResetTimeout = null;
+                // Cancel any existing pending final timeout
+                if (pendingFinalTimeout) {
+                  clearTimeout(pendingFinalTimeout);
+                  console.log(`[HostMode] ⏸️ Cancelled previous pending final, new final received`);
                 }
                 
-                // Schedule delayed reset of final tracking (allows grace period for continuations)
-                partialTrackingResetTimeout = setTimeout(() => {
-                  lastFinalText = '';
-                  lastFinalTime = 0;
-                  partialTrackingResetTimeout = null;
-                  console.log(`[HostMode] 🧹 Reset final tracking after grace period`);
-                }, PARTIAL_TRACKING_GRACE_PERIOD);
+                // Store as pending final (will be committed after delay)
+                pendingFinal = {
+                  text: bestFinalText,
+                  timestamp: Date.now(),
+                  isForced: isForcedFinal,
+                  startTime: Date.now()
+                };
                 
-                // Process final using extracted function
-                await processFinalTranscript(transcriptText, isForcedFinal);
+                // Schedule commit after delay (allows partials to extend it)
+                // Use appropriate delay: 0ms for natural (VAD pause), 750ms for forced
+                const commitDelay = isForcedFinal ? FINAL_COMMIT_DELAY_FORCED : FINAL_COMMIT_DELAY_NATURAL;
+                console.log(`[HostMode] ⏳ Scheduling final commit after ${commitDelay}ms delay (${isForcedFinal ? 'FORCED' : 'NATURAL'} - to catch extending partials)`);
+                pendingFinalTimeout = setTimeout(() => {
+                  commitPendingFinal();
+                }, commitDelay);
               });
               
               console.log('[HostMode] ✅ Google Speech stream initialized and ready');
