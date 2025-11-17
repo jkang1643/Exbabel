@@ -252,15 +252,31 @@ export async function handleSoloMode(clientWs) {
             if (curr.startsWith(prev)) {
               return curr;
             }
+            // CRITICAL: Prevent cross-segment merging
+            // If current text is significantly longer and doesn't start with previous, it's likely a different segment
+            // Only merge if there's a clear overlap AND the texts are similar in structure
+            if (curr.length > prev.length * 1.5) {
+              // Current is much longer - check if it contains the previous text in a way that suggests same segment
+              const prevWords = prev.split(/\s+/).filter(w => w.length > 3); // Words longer than 3 chars
+              const currWords = curr.split(/\s+/).filter(w => w.length > 3);
+              // If current doesn't share significant words with previous, don't merge
+              const sharedWords = prevWords.filter(w => currWords.includes(w));
+              if (sharedWords.length < Math.min(2, prevWords.length * 0.3)) {
+                // Not enough shared words - likely different segment
+                return null; // Don't merge
+              }
+            }
             const maxOverlap = Math.min(prev.length, curr.length, 200);
-            for (let overlap = maxOverlap; overlap >= 5; overlap--) {
+            // Require larger overlap (at least 10 chars) to prevent false matches
+            for (let overlap = maxOverlap; overlap >= 10; overlap--) {
               const prevSuffix = prev.slice(-overlap);
               const currPrefix = curr.slice(0, overlap);
               if (prevSuffix === currPrefix) {
                 return (prev + curr.slice(overlap)).trim();
               }
             }
-            return `${prev} ${curr}`.replace(/\s+/g, ' ').trim();
+            // No significant overlap found - don't merge (return null to indicate failure)
+            return null;
           };
           
           // Helper: Check if text ends with a complete word (not mid-word)
@@ -533,7 +549,7 @@ export async function handleSoloMode(clientWs) {
                           } else {
                             // Try overlap merge - might have missing words in middle
                             const merged = mergeWithOverlap(finalTrimmed, longestTrimmed);
-                            if (merged.length > finalTrimmed.length + 5 && merged.length > longestTrimmed.length * 0.7) {
+                            if (merged && merged.length > finalTrimmed.length + 5 && merged.length > longestTrimmed.length * 0.7) {
                               console.log(`[SoloMode] ⚠️ Merged via overlap after continuation wait: "${merged}"`);
                               finalTextToUse = merged;
                             }
@@ -549,7 +565,7 @@ export async function handleSoloMode(clientWs) {
                           } else {
                             // Try overlap merge
                             const merged = mergeWithOverlap(finalTrimmed, latestTrimmed);
-                            if (merged.length > finalTrimmed.length + 5 && merged.length > latestTrimmed.length * 0.7) {
+                            if (merged && merged.length > finalTrimmed.length + 5 && merged.length > latestTrimmed.length * 0.7) {
                               console.log(`[SoloMode] ⚠️ Merged via overlap after continuation wait: "${merged}"`);
                               finalTextToUse = merged;
                             }
@@ -630,9 +646,9 @@ export async function handleSoloMode(clientWs) {
                         processFinalText(textToProcess);
                       }, remainingWait);
                     } else if (!extendsFinal && timeSinceFinal > 600) {
-                      // New segment detected - wait briefly to catch any final partials, then commit
-                      // CRITICAL: Wait 500ms to catch any partials that might extend the final before committing
-                      console.log(`[SoloMode] 🔀 New segment detected during finalization (${timeSinceFinal}ms since final) - waiting 500ms for final partials`);
+                      // New segment detected - wait briefly to catch final partials, then commit
+                      // CRITICAL: Only use partials that DIRECTLY extend the final (start with it) to prevent mixing segments
+                      console.log(`[SoloMode] 🔀 New segment detected during finalization (${timeSinceFinal}ms since final) - waiting 800ms for final partials`);
                       console.log(`[SoloMode] 📊 Pending final: "${pendingFinalization.text.substring(0, 100)}..."`);
                       console.log(`[SoloMode] 📊 Longest partial: "${longestPartialText?.substring(0, 100) || 'none'}..."`);
                       
@@ -642,86 +658,40 @@ export async function handleSoloMode(clientWs) {
                       const savedLongestPartial = longestPartialText;
                       const savedLatestPartial = latestPartialText;
                       
-                      // Wait 500ms to catch any final partials that might extend the final
+                      // Wait 800ms to catch any final partials that might extend the final
                       pendingFinalization.timeout = setTimeout(() => {
-                        // Use longest available partial if it extends the final
+                        // Use longest available partial ONLY if it DIRECTLY extends the final (starts with it)
+                        // This prevents mixing segments and inaccurate text
                         let textToProcess = pendingFinalization.text;
                         const finalTrimmed = pendingFinalization.text.trim();
                         
-                        // Check saved partials first (from before new segment)
+                        // Check saved partials first - ONLY if they start with the final
                         if (savedLongestPartial && savedLongestPartial.length > pendingFinalization.text.length) {
                           const savedLongestTrimmed = savedLongestPartial.trim();
-                          // CRITICAL: Only use if it DIRECTLY extends (starts with final), not overlap merge
-                          // This prevents duplication when partial already contains the final
                           if (savedLongestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[SoloMode] ⚠️ Using SAVED LONGEST partial (${pendingFinalization.text.length} → ${savedLongestPartial.length} chars)`);
                             textToProcess = savedLongestPartial;
-                          } else {
-                            // Try overlap merge only if partial doesn't already start with the final (prevents duplication)
-                            // Check if partial already contains the full final at the start - if so, skip merge
-                            const partialStartsWithFinal = savedLongestTrimmed.length >= finalTrimmed.length && 
-                                                           savedLongestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed;
-                            if (!partialStartsWithFinal) {
-                              const merged = mergeWithOverlap(finalTrimmed, savedLongestTrimmed);
-                              if (merged.length > finalTrimmed.length + 10 && merged.length > savedLongestTrimmed.length * 0.8) {
-                                console.log(`[SoloMode] ⚠️ Using SAVED LONGEST partial via overlap (${pendingFinalization.text.length} → ${merged.length} chars)`);
-                                textToProcess = merged;
-                              }
-                            }
                           }
                         } else if (savedLatestPartial && savedLatestPartial.length > pendingFinalization.text.length) {
                           const savedLatestTrimmed = savedLatestPartial.trim();
                           if (savedLatestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[SoloMode] ⚠️ Using SAVED LATEST partial (${pendingFinalization.text.length} → ${savedLatestPartial.length} chars)`);
                             textToProcess = savedLatestPartial;
-                          } else {
-                            // Try overlap merge only if partial doesn't already start with the final
-                            const partialStartsWithFinal = savedLatestTrimmed.length >= finalTrimmed.length && 
-                                                           savedLatestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed;
-                            if (!partialStartsWithFinal) {
-                              const merged = mergeWithOverlap(finalTrimmed, savedLatestTrimmed);
-                              if (merged.length > finalTrimmed.length + 10 && merged.length > savedLatestTrimmed.length * 0.8) {
-                                console.log(`[SoloMode] ⚠️ Using SAVED LATEST partial via overlap (${pendingFinalization.text.length} → ${merged.length} chars)`);
-                                textToProcess = merged;
-                              }
-                            }
                           }
                         }
                         
-                        // Also check current partials (in case they still extend the final)
+                        // Also check current partials - ONLY if they start with the final
                         if (longestPartialText && longestPartialText.length > textToProcess.length) {
                           const longestTrimmed = longestPartialText.trim();
                           if (longestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[SoloMode] ⚠️ Using CURRENT LONGEST partial (${textToProcess.length} → ${longestPartialText.length} chars)`);
                             textToProcess = longestPartialText;
-                          } else {
-                            // Try overlap merge only if partial doesn't already start with the final
-                            const partialStartsWithFinal = longestTrimmed.length >= finalTrimmed.length && 
-                                                           longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed;
-                            if (!partialStartsWithFinal) {
-                              const merged = mergeWithOverlap(finalTrimmed, longestTrimmed);
-                              if (merged.length > textToProcess.length + 10 && merged.length > longestTrimmed.length * 0.8) {
-                                console.log(`[SoloMode] ⚠️ Using CURRENT LONGEST partial via overlap (${textToProcess.length} → ${merged.length} chars)`);
-                                textToProcess = merged;
-                              }
-                            }
                           }
                         } else if (latestPartialText && latestPartialText.length > textToProcess.length) {
                           const latestTrimmed = latestPartialText.trim();
                           if (latestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[SoloMode] ⚠️ Using CURRENT LATEST partial (${textToProcess.length} → ${latestPartialText.length} chars)`);
                             textToProcess = latestPartialText;
-                          } else {
-                            // Try overlap merge only if partial doesn't already start with the final
-                            const partialStartsWithFinal = latestTrimmed.length >= finalTrimmed.length && 
-                                                           latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed;
-                            if (!partialStartsWithFinal) {
-                              const merged = mergeWithOverlap(finalTrimmed, latestTrimmed);
-                              if (merged.length > textToProcess.length + 10 && merged.length > latestTrimmed.length * 0.8) {
-                                console.log(`[SoloMode] ⚠️ Using CURRENT LATEST partial via overlap (${textToProcess.length} → ${merged.length} chars)`);
-                                textToProcess = merged;
-                              }
-                            }
                           }
                         }
                         
@@ -731,9 +701,9 @@ export async function handleSoloMode(clientWs) {
                         latestPartialTime = 0;
                         longestPartialTime = 0;
                         pendingFinalization = null;
-                        console.log(`[SoloMode] ✅ FINAL (new segment detected - committing after brief wait): "${textToProcess.substring(0, 100)}..."`);
+                        console.log(`[SoloMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
                         processFinalText(textToProcess);
-                      }, 500); // Wait 500ms to catch any final partials
+                      }, 800); // Wait 800ms to catch final partials
                       // Continue processing the new partial as a new segment
                     } else {
                       // Partials are still arriving - update tracking but don't extend timeout
@@ -1320,7 +1290,7 @@ export async function handleSoloMode(clientWs) {
                     } else {
                       // Partial doesn't start with final - check for overlap (Google might have missed words)
                       const merged = mergeWithOverlap(finalTrimmed, longestTrimmed);
-                      if (merged.length > finalTrimmed.length + 5 && merged.length > longestTrimmed.length * 0.7) {
+                      if (merged && merged.length > finalTrimmed.length + 5 && merged.length > longestTrimmed.length * 0.7) {
                         // Significant overlap and merged text is longer - likely same segment with missing words
                         console.log(`[SoloMode] ⚠️ FINAL merged with LONGEST partial via overlap (${transcriptText.length} → ${merged.length} chars)`);
                         console.log(`[SoloMode] 📊 Recovered via overlap: "${merged.substring(finalTrimmed.length)}"`);
@@ -1345,7 +1315,7 @@ export async function handleSoloMode(clientWs) {
                     } else {
                       // Partial doesn't start with final - check for overlap (Google might have missed words)
                       const merged = mergeWithOverlap(finalTrimmed, latestTrimmed);
-                      if (merged.length > finalTrimmed.length + 5 && merged.length > latestTrimmed.length * 0.7) {
+                      if (merged && merged.length > finalTrimmed.length + 5 && merged.length > latestTrimmed.length * 0.7) {
                         // Significant overlap and merged text is longer - likely same segment with missing words
                         console.log(`[SoloMode] ⚠️ FINAL merged with LATEST partial via overlap (${transcriptText.length} → ${merged.length} chars)`);
                         console.log(`[SoloMode] 📊 Recovered via overlap: "${merged.substring(finalTrimmed.length)}"`);
@@ -1427,7 +1397,7 @@ export async function handleSoloMode(clientWs) {
                         } else {
                           // Check for overlap - Google might have missed words in the middle
                           const overlap = mergeWithOverlap(finalTrimmed, longestTrimmed);
-                          if (overlap.length > finalTrimmed.length && overlap.length > longestTrimmed.length * 0.8) {
+                          if (overlap && overlap.length > finalTrimmed.length && overlap.length > longestTrimmed.length * 0.8) {
                             // Significant overlap suggests same segment with missing words
                             console.log(`[SoloMode] ⚠️ Using LONGEST partial with overlap (${pendingFinalization.text.length} → ${overlap.length} chars)`);
                             console.log(`[SoloMode] 📊 Recovered via overlap: "${overlap.substring(finalTrimmed.length)}"`);
@@ -1449,7 +1419,7 @@ export async function handleSoloMode(clientWs) {
                         } else {
                           // Check for overlap - Google might have missed words in the middle
                           const overlap = mergeWithOverlap(finalTrimmed, latestTrimmed);
-                          if (overlap.length > finalTrimmed.length && overlap.length > latestTrimmed.length * 0.8) {
+                          if (overlap && overlap.length > finalTrimmed.length && overlap.length > latestTrimmed.length * 0.8) {
                             // Significant overlap suggests same segment with missing words
                             console.log(`[SoloMode] ⚠️ Using LATEST partial with overlap (${pendingFinalization.text.length} → ${overlap.length} chars)`);
                             console.log(`[SoloMode] 📊 Recovered via overlap: "${overlap.substring(finalTrimmed.length)}"`);
