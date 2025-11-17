@@ -36,7 +36,7 @@ export async function handleSoloMode(clientWs) {
   
   // Finalization state tracking
   let pendingFinalization = null; // { seqId, text, timestamp, timeout, maxWaitTimestamp }
-  const MAX_FINALIZATION_WAIT_MS = 8000; // Maximum 8 seconds - safety net for long sentences (allows up to 6s sentence wait + buffer)
+  const MAX_FINALIZATION_WAIT_MS = 12000; // Maximum 12 seconds - safety net for long sentences (increased to prevent mid-sentence cutoffs)
   const FINALIZATION_CONFIRMATION_WINDOW = 300; // 300ms confirmation window
   const MIN_SILENCE_MS = 600; // Minimum 600ms silence before finalization (optimized for natural speech pauses)
   const DEFAULT_LOOKAHEAD_MS = 200; // Default 200ms lookahead
@@ -252,13 +252,20 @@ export async function handleSoloMode(clientWs) {
             if (curr.startsWith(prev)) {
               return curr;
             }
+            // CRITICAL: More lenient matching - check if current text starts with previous (case-insensitive, ignoring extra spaces)
+            const prevNormalized = prev.replace(/\s+/g, ' ').toLowerCase();
+            const currNormalized = curr.replace(/\s+/g, ' ').toLowerCase();
+            if (currNormalized.startsWith(prevNormalized)) {
+              // Current extends previous (with normalization) - use current
+              return curr;
+            }
             // CRITICAL: Prevent cross-segment merging
             // If current text is significantly longer and doesn't start with previous, it's likely a different segment
             // Only merge if there's a clear overlap AND the texts are similar in structure
             if (curr.length > prev.length * 1.5) {
               // Current is much longer - check if it contains the previous text in a way that suggests same segment
-              const prevWords = prev.split(/\s+/).filter(w => w.length > 3); // Words longer than 3 chars
-              const currWords = curr.split(/\s+/).filter(w => w.length > 3);
+              const prevWords = prev.split(/\s+/).filter(w => w.length > 2); // Words longer than 2 chars (more lenient)
+              const currWords = curr.split(/\s+/).filter(w => w.length > 2);
               // If current doesn't share significant words with previous, don't merge
               const sharedWords = prevWords.filter(w => currWords.includes(w));
               if (sharedWords.length < Math.min(2, prevWords.length * 0.3)) {
@@ -267,11 +274,25 @@ export async function handleSoloMode(clientWs) {
               }
             }
             const maxOverlap = Math.min(prev.length, curr.length, 200);
-            // Require overlap (at least 5 chars) to prevent false matches but catch small missing words
-            for (let overlap = maxOverlap; overlap >= 5; overlap--) {
-              const prevSuffix = prev.slice(-overlap);
-              const currPrefix = curr.slice(0, overlap);
+            // More lenient: Require overlap (at least 3 chars) to catch more cases, including short words
+            // Also try case-insensitive matching
+            for (let overlap = maxOverlap; overlap >= 3; overlap--) {
+              const prevSuffix = prev.slice(-overlap).toLowerCase();
+              const currPrefix = curr.slice(0, overlap).toLowerCase();
+              // Try exact match first
+              if (prev.slice(-overlap) === curr.slice(0, overlap)) {
+                return (prev + curr.slice(overlap)).trim();
+              }
+              // Try case-insensitive match
               if (prevSuffix === currPrefix) {
+                // Case-insensitive match - use original case from current text
+                return (prev + curr.slice(overlap)).trim();
+              }
+              // Try normalized (ignore extra spaces)
+              const prevSuffixNorm = prev.slice(-overlap).replace(/\s+/g, ' ').toLowerCase();
+              const currPrefixNorm = curr.slice(0, overlap).replace(/\s+/g, ' ').toLowerCase();
+              if (prevSuffixNorm === currPrefixNorm && overlap >= 5) {
+                // Normalized match - merge them
                 return (prev + curr.slice(overlap)).trim();
               }
             }
@@ -1281,7 +1302,7 @@ export async function handleSoloMode(clientWs) {
                   if (!finalEndsWithCompleteSentence) {
                     // FINAL doesn't end with complete sentence - wait MUCH longer for continuation
                     // This allows long sentences to complete naturally before finalizing
-                    const SENTENCE_WAIT_MS = Math.max(3000, Math.min(6000, transcriptText.length * 15)); // 3-6 seconds based on length
+                    const SENTENCE_WAIT_MS = Math.max(4000, Math.min(8000, transcriptText.length * 20)); // 4-8 seconds based on length (increased)
                     WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, SENTENCE_WAIT_MS);
                     console.log(`[SoloMode] ⚠️ FINAL doesn't end with complete sentence - extending wait to ${WAIT_FOR_PARTIALS_MS}ms to catch sentence completion`);
                     console.log(`[SoloMode] 📝 Current text: "${transcriptText.substring(Math.max(0, transcriptText.length - 60))}"`);
@@ -1316,8 +1337,15 @@ export async function handleSoloMode(clientWs) {
                   // Always check partials even if FINAL appears complete - partials may have more complete text
                   if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 10000) {
                     const longestTrimmed = longestPartialText.trim();
-                    if (longestTrimmed.startsWith(finalTrimmed) || 
-                        (finalTrimmed.length > 10 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
+                    // More lenient matching: check if partial extends final (case-insensitive, normalized)
+                    const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                    const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                    const extendsFinal = longestNormalized.startsWith(finalNormalized) || 
+                        (finalTrimmed.length > 5 && longestNormalized.substring(0, finalNormalized.length) === finalNormalized) ||
+                        longestTrimmed.startsWith(finalTrimmed) ||
+                        (finalTrimmed.length > 5 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
+                    
+                    if (extendsFinal) {
                       const missingWords = longestPartialText.substring(transcriptText.length).trim();
                       // If final ends mid-word, prefer partials that end with complete word
                       const partialEndsCompleteWord = endsWithCompleteWord(longestTrimmed);
@@ -1342,8 +1370,15 @@ export async function handleSoloMode(clientWs) {
                   } else if (latestPartialText && latestPartialText.length > transcriptText.length && timeSinceLatest < 5000) {
                     // Fallback to latest partial if longest is too old
                     const latestTrimmed = latestPartialText.trim();
-                    if (latestTrimmed.startsWith(finalTrimmed) || 
-                        (finalTrimmed.length > 10 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
+                    // More lenient matching: check if partial extends final (case-insensitive, normalized)
+                    const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                    const latestNormalized = latestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                    const extendsFinal = latestNormalized.startsWith(finalNormalized) || 
+                        (finalTrimmed.length > 5 && latestNormalized.substring(0, finalNormalized.length) === finalNormalized) ||
+                        latestTrimmed.startsWith(finalTrimmed) ||
+                        (finalTrimmed.length > 5 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
+                    
+                    if (extendsFinal) {
                       const missingWords = latestPartialText.substring(transcriptText.length).trim();
                       // If final ends mid-word, prefer partials that end with complete word
                       const partialEndsCompleteWord = endsWithCompleteWord(latestTrimmed);
@@ -1425,9 +1460,15 @@ export async function handleSoloMode(clientWs) {
                       
                       if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
                         const longestTrimmed = longestPartialText.trim();
-                        // Verify it actually extends the final (starts with it or has significant overlap)
-                        if (longestTrimmed.startsWith(finalTrimmed) || 
-                            (finalTrimmed.length > 10 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
+                        // More lenient matching: check if partial extends final (case-insensitive, normalized)
+                        const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const extendsFinal = longestNormalized.startsWith(finalNormalized) || 
+                            (finalTrimmed.length > 5 && longestNormalized.substring(0, finalNormalized.length) === finalNormalized) ||
+                            longestTrimmed.startsWith(finalTrimmed) ||
+                            (finalTrimmed.length > 5 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
+                        
+                        if (extendsFinal) {
                           const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
                           console.log(`[SoloMode] ⚠️ Using LONGEST partial (${pendingFinalization.text.length} → ${longestPartialText.length} chars)`);
                           console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
@@ -1448,9 +1489,15 @@ export async function handleSoloMode(clientWs) {
                       } else if (latestPartialText && latestPartialText.length > pendingFinalization.text.length && timeSinceLatest < 5000) {
                         // Fallback to latest partial if longest is too old
                         const latestTrimmed = latestPartialText.trim();
-                        // Verify it actually extends the final
-                        if (latestTrimmed.startsWith(finalTrimmed) || 
-                            (finalTrimmed.length > 10 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
+                        // More lenient matching: check if partial extends final (case-insensitive, normalized)
+                        const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const latestNormalized = latestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const extendsFinal = latestNormalized.startsWith(finalNormalized) || 
+                            (finalTrimmed.length > 5 && latestNormalized.substring(0, finalNormalized.length) === finalNormalized) ||
+                            latestTrimmed.startsWith(finalTrimmed) ||
+                            (finalTrimmed.length > 5 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
+                        
+                        if (extendsFinal) {
                           const missingWords = latestPartialText.substring(pendingFinalization.text.length).trim();
                           console.log(`[SoloMode] ⚠️ Using LATEST partial (${pendingFinalization.text.length} → ${latestPartialText.length} chars)`);
                           console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
@@ -1479,7 +1526,8 @@ export async function handleSoloMode(clientWs) {
                         // Sentence is incomplete but we haven't hit max wait yet - wait a bit more
                         // CRITICAL: Update pendingFinalization.text with the latest finalTextToUse (may include partials)
                         pendingFinalization.text = finalTextToUse;
-                        const remainingWait = Math.min(2000, MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait);
+                        // More aggressive wait: up to 4 seconds per reschedule, but don't exceed max wait
+                        const remainingWait = Math.min(4000, MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait);
                         console.log(`[SoloMode] ⏳ Sentence incomplete - waiting ${remainingWait}ms more (${timeSinceMaxWait}ms / ${MAX_FINALIZATION_WAIT_MS}ms)`);
                         // Reschedule the timeout to check again after remaining wait
                         pendingFinalization.timeout = setTimeout(() => {
@@ -1492,8 +1540,15 @@ export async function handleSoloMode(clientWs) {
                           // Check for longer partials again
                           if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest2 < 10000) {
                             const longestTrimmed2 = longestPartialText.trim();
-                            if (longestTrimmed2.startsWith(finalTrimmed2) || 
-                                (finalTrimmed2.length > 10 && longestTrimmed2.substring(0, finalTrimmed2.length) === finalTrimmed2)) {
+                            // More lenient matching
+                            const finalNormalized2 = finalTrimmed2.replace(/\s+/g, ' ').toLowerCase();
+                            const longestNormalized2 = longestTrimmed2.replace(/\s+/g, ' ').toLowerCase();
+                            const extendsFinal2 = longestNormalized2.startsWith(finalNormalized2) || 
+                                (finalTrimmed2.length > 5 && longestNormalized2.substring(0, finalNormalized2.length) === finalNormalized2) ||
+                                longestTrimmed2.startsWith(finalTrimmed2) ||
+                                (finalTrimmed2.length > 5 && longestTrimmed2.substring(0, finalTrimmed2.length) === finalTrimmed2);
+                            
+                            if (extendsFinal2) {
                               const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
                               console.log(`[SoloMode] ⚠️ Reschedule: Using LONGEST partial (${pendingFinalization.text.length} → ${longestPartialText.length} chars)`);
                               console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
@@ -1508,8 +1563,15 @@ export async function handleSoloMode(clientWs) {
                             }
                           } else if (latestPartialText && latestPartialText.length > pendingFinalization.text.length && timeSinceLatest2 < 5000) {
                             const latestTrimmed2 = latestPartialText.trim();
-                            if (latestTrimmed2.startsWith(finalTrimmed2) || 
-                                (finalTrimmed2.length > 10 && latestTrimmed2.substring(0, finalTrimmed2.length) === finalTrimmed2)) {
+                            // More lenient matching
+                            const finalNormalized2 = finalTrimmed2.replace(/\s+/g, ' ').toLowerCase();
+                            const latestNormalized2 = latestTrimmed2.replace(/\s+/g, ' ').toLowerCase();
+                            const extendsFinal2 = latestNormalized2.startsWith(finalNormalized2) || 
+                                (finalTrimmed2.length > 5 && latestNormalized2.substring(0, finalNormalized2.length) === finalNormalized2) ||
+                                latestTrimmed2.startsWith(finalTrimmed2) ||
+                                (finalTrimmed2.length > 5 && latestTrimmed2.substring(0, finalTrimmed2.length) === finalTrimmed2);
+                            
+                            if (extendsFinal2) {
                               const missingWords = latestPartialText.substring(pendingFinalization.text.length).trim();
                               console.log(`[SoloMode] ⚠️ Reschedule: Using LATEST partial (${pendingFinalization.text.length} → ${latestPartialText.length} chars)`);
                               console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
