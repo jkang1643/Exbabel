@@ -1048,13 +1048,31 @@ export class GoogleSpeechStream {
 
   /**
    * Force commit current audio (simulate pause)
+   * CRITICAL: Do NOT restart stream - this causes loss of audio in flight
+   * 
+   * Google Speech will NATURALLY send FINALs when it detects:
+   * - Natural pauses in speech
+   * - Sentence boundaries  
+   * - VAD (Voice Activity Detection) silence
+   * - End of utterances
+   * 
+   * These FINALs will still:
+   * - Be processed by processFinalText()
+   * - Be sent to frontend
+   * - Be committed to history via commitFinalToHistoryRef
+   * 
+   * Restarting the stream was cutting off audio that's still being processed,
+   * causing words to be lost between artificial line breaks. By NOT restarting,
+   * Google Speech continues processing all audio and sends FINALs naturally.
    */
   async forceCommit() {
-    console.log('[GoogleSpeech] Force commit requested - restarting stream');
-    // Restart stream to force finalization
-    if (!this.isRestarting) {
-      await this.restartStream();
-    }
+    console.log('[GoogleSpeech] Force commit requested - NOT restarting stream to preserve audio in flight');
+    console.log('[GoogleSpeech] ✅ Google Speech will still send FINALs naturally when it detects pauses/boundaries');
+    console.log('[GoogleSpeech] ✅ All FINALs will still be processed and committed to history');
+    // DO NOT restart stream - this causes loss of words between artificial line breaks
+    // Google Speech will naturally finalize when it detects a pause or completes processing
+    // If we restart here, we lose audio that's still being processed
+    return;
   }
 
   /**
