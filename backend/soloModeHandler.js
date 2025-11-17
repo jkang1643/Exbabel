@@ -195,6 +195,11 @@ export async function handleSoloMode(clientWs) {
               let latestPartialTime = 0; // Timestamp of latest partial
               let longestPartialText = ''; // Track the longest partial seen in current segment
               let longestPartialTime = 0; // Timestamp of longest partial
+              
+              // CRITICAL: Track last sent FINAL to merge consecutive continuations
+              let lastSentFinalText = ''; // Last FINAL text that was sent to client
+              let lastSentFinalTime = 0; // Timestamp when last FINAL was sent
+              const FINAL_CONTINUATION_WINDOW_MS = 3000; // 3 seconds - if new FINAL arrives within this window and continues last, merge them
 
               // Persist grammar corrections so we can reapply them to extending partials
               const grammarCorrectionCache = new Map();
@@ -329,6 +334,73 @@ export async function handleSoloMode(clientWs) {
               // Ultra-low throttle for real-time feel - updates every 1-2 chars
               const THROTTLE_MS = 0; // No throttle - instant translation on every character
               
+              // Helper function to check for partials that extend a just-sent FINAL
+              // This should ALWAYS be called after a FINAL is sent to catch any partials that arrived
+              const checkForExtendingPartialsAfterFinal = (sentFinalText) => {
+                if (!sentFinalText) return;
+                
+                const sentFinalTrimmed = sentFinalText.trim();
+                const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                
+                // Check if any partials extend the just-sent FINAL
+                let foundExtension = false;
+                
+                if (longestPartialText && longestPartialText.length > sentFinalTrimmed.length && timeSinceLongest < 5000) {
+                  const longestTrimmed = longestPartialText.trim();
+                  const sentNormalized = sentFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const extendsFinal = longestNormalized.startsWith(sentNormalized) || 
+                      (sentFinalTrimmed.length > 5 && longestNormalized.substring(0, sentNormalized.length) === sentNormalized) ||
+                      longestTrimmed.startsWith(sentFinalTrimmed) ||
+                      (sentFinalTrimmed.length > 5 && longestTrimmed.substring(0, sentFinalTrimmed.length) === sentFinalTrimmed);
+                  
+                  if (extendsFinal) {
+                    const missingWords = longestPartialText.substring(sentFinalTrimmed.length).trim();
+                    console.log(`[SoloMode] ⚠️ Partial extends just-sent FINAL - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                    foundExtension = true;
+                  } else {
+                    // Check for overlap
+                    const merged = mergeWithOverlap(sentFinalTrimmed, longestTrimmed);
+                    if (merged && merged.length > sentFinalTrimmed.length + 3) {
+                      const missingWords = merged.substring(sentFinalTrimmed.length).trim();
+                      console.log(`[SoloMode] ⚠️ Partial extends just-sent FINAL via overlap - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                      foundExtension = true;
+                    }
+                  }
+                } else if (latestPartialText && latestPartialText.length > sentFinalTrimmed.length && timeSinceLatest < 5000) {
+                  const latestTrimmed = latestPartialText.trim();
+                  const sentNormalized = sentFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const latestNormalized = latestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const extendsFinal = latestNormalized.startsWith(sentNormalized) || 
+                      (sentFinalTrimmed.length > 5 && latestNormalized.substring(0, sentNormalized.length) === sentNormalized) ||
+                      latestTrimmed.startsWith(sentFinalTrimmed) ||
+                      (sentFinalTrimmed.length > 5 && latestTrimmed.substring(0, sentFinalTrimmed.length) === sentFinalTrimmed);
+                  
+                  if (extendsFinal) {
+                    const missingWords = latestPartialText.substring(sentFinalTrimmed.length).trim();
+                    console.log(`[SoloMode] ⚠️ Partial extends just-sent FINAL - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                    foundExtension = true;
+                  } else {
+                    // Check for overlap
+                    const merged = mergeWithOverlap(sentFinalTrimmed, latestTrimmed);
+                    if (merged && merged.length > sentFinalTrimmed.length + 3) {
+                      const missingWords = merged.substring(sentFinalTrimmed.length).trim();
+                      console.log(`[SoloMode] ⚠️ Partial extends just-sent FINAL via overlap - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                      foundExtension = true;
+                    }
+                  }
+                }
+                
+                if (!foundExtension) {
+                  // Still log that we checked (for debugging)
+                  const finalEndsWithCompleteSentence = endsWithCompleteSentence(sentFinalTrimmed);
+                  if (!finalEndsWithCompleteSentence) {
+                    console.log(`[SoloMode] ✓ Checked for extending partials after FINAL (none found): "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}"`);
+                  }
+                }
+              };
+              
               // Helper function to process final text (defined here so it can access closure variables)
               const processFinalText = (textToProcess, options = {}) => {
                 (async () => {
@@ -348,6 +420,13 @@ export async function handleSoloMode(clientWs) {
                             isTranscriptionOnly: true,
                             forceFinal: !!options.forceFinal
                           }, false);
+                          
+                          // CRITICAL: Update last sent FINAL tracking after sending
+                          lastSentFinalText = textToProcess;
+                          lastSentFinalTime = Date.now();
+                          
+                          // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
+                          checkForExtendingPartialsAfterFinal(textToProcess);
                         } catch (error) {
                           console.error('[SoloMode] Grammar correction error:', error);
                           sendWithSequence({
@@ -373,6 +452,13 @@ export async function handleSoloMode(clientWs) {
                           isTranscriptionOnly: true,
                           forceFinal: !!options.forceFinal
                         }, false);
+                        
+                        // CRITICAL: Update last sent FINAL tracking after sending
+                        lastSentFinalText = textToProcess;
+                        lastSentFinalTime = Date.now();
+                        
+                        // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
+                        checkForExtendingPartialsAfterFinal(textToProcess);
                       }
                     } else {
                       // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
@@ -452,6 +538,13 @@ export async function handleSoloMode(clientWs) {
                           isTranscriptionOnly: false,
                           forceFinal: !!options.forceFinal
                         }, false);
+                        
+                        // CRITICAL: Update last sent FINAL tracking after sending
+                        lastSentFinalText = textToProcess;
+                        lastSentFinalTime = Date.now();
+                        
+                        // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
+                        checkForExtendingPartialsAfterFinal(textToProcess);
                       } catch (error) {
                         console.error(`[SoloMode] Final processing error:`, error);
                         // If it's a skip request error, use corrected text (or original if not set)
@@ -467,6 +560,15 @@ export async function handleSoloMode(clientWs) {
                           isTranscriptionOnly: false,
                           forceFinal: !!options.forceFinal
                         }, false);
+                        
+                        // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
+                        if (error.skipRequest || finalText !== `[Translation error: ${error.message}]`) {
+                          lastSentFinalText = textToProcess;
+                          lastSentFinalTime = Date.now();
+                          
+                          // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
+                          checkForExtendingPartialsAfterFinal(textToProcess);
+                        }
                       }
                     }
                   } catch (error) {
@@ -1272,6 +1374,42 @@ export async function handleSoloMode(clientWs) {
                     transcriptText = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
                     forcedFinalBuffer = null;
                   }
+                  
+                  // CRITICAL: Check if this FINAL is a continuation of the last sent FINAL
+                  // This prevents splitting sentences like "Where two or three" / "Are gathered together"
+                  if (lastSentFinalText && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
+                    const lastSentTrimmed = lastSentFinalText.trim();
+                    const newFinalTrimmed = transcriptText.trim();
+                    
+                    // Check if new FINAL continues the last sent FINAL
+                    // Case 1: New FINAL starts with last sent FINAL (exact match)
+                    // Case 2: New FINAL has overlap with last sent FINAL (merge needed)
+                    // Case 3: New FINAL is completely new (different segment)
+                    
+                    const lastNormalized = lastSentTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                    const newNormalized = newFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                    
+                    // Check if new FINAL extends last sent FINAL
+                    if (newNormalized.startsWith(lastNormalized) && newFinalTrimmed.length > lastSentTrimmed.length) {
+                      // New FINAL extends last sent - this is a continuation
+                      const continuation = newFinalTrimmed.substring(lastSentTrimmed.length).trim();
+                      console.log(`[SoloMode] 🔗 New FINAL continues last sent FINAL: "${lastSentTrimmed.substring(Math.max(0, lastSentTrimmed.length - 40))}" + "${continuation.substring(0, 40)}..."`);
+                      console.log(`[SoloMode] 📦 Merging consecutive FINALs: "${lastSentTrimmed}" + "${continuation}"`);
+                      // Merge them - the new FINAL contains the continuation
+                      transcriptText = newFinalTrimmed; // Use the full new FINAL (it already contains the continuation)
+                    } else {
+                      // Check for overlap - last FINAL might end mid-sentence and new FINAL continues it
+                      const merged = mergeWithOverlap(lastSentTrimmed, newFinalTrimmed);
+                      if (merged && merged.length > lastSentTrimmed.length + 3) {
+                        // Overlap detected - merge them
+                        const continuation = merged.substring(lastSentTrimmed.length).trim();
+                        console.log(`[SoloMode] 🔗 New FINAL continues last sent FINAL via overlap: "${lastSentTrimmed.substring(Math.max(0, lastSentTrimmed.length - 40))}" + "${continuation.substring(0, 40)}..."`);
+                        console.log(`[SoloMode] 📦 Merging consecutive FINALs via overlap: "${lastSentTrimmed}" + "${continuation}"`);
+                        transcriptText = merged;
+                      }
+                    }
+                  }
+                  
                   // CRITICAL: For long text, wait proportionally longer before processing final
                   // Google Speech may send final signal but still have partials for the last few words in flight
                   // Very long text (>300 chars) needs more time for all partials to arrive
