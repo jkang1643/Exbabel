@@ -617,7 +617,7 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
   /**
    * Translate to multiple languages (for partials)
    */
-  async translateToMultipleLanguages(text, sourceLang, targetLangs, apiKey) {
+  async translateToMultipleLanguages(text, sourceLang, targetLangs, apiKey, sessionId = null) {
     if (!text || targetLangs.length === 0) {
       return {};
     }
@@ -802,9 +802,14 @@ Output: Only the translated text in ${targetLangName}.`
   /**
    * Translate to multiple languages (for finals)
    */
-  async translateToMultipleLanguages(text, sourceLang, targetLangs, apiKey) {
+  async translateToMultipleLanguages(text, sourceLang, targetLangs, apiKey, sessionId = null) {
     if (!text || targetLangs.length === 0) {
       return {};
+    }
+
+    // Validate sessionId is defined (should be passed from caller)
+    if (sessionId === undefined) {
+      console.warn(`[FinalWorker] ⚠️ WARNING: sessionId is undefined in translateToMultipleLanguages - this may cause issues`);
     }
 
     const translations = {};
@@ -824,10 +829,13 @@ Output: Only the translated text in ${targetLangName}.`
     // Translate to each target language in parallel
     const translationPromises = langsToTranslate.map(async (targetLang) => {
       try {
-        const translated = await this.translateFinal(text, sourceLang, targetLang, apiKey, sessionId);
+        // Ensure sessionId is passed correctly (use null if undefined to avoid errors)
+        const safeSessionId = sessionId !== undefined ? sessionId : null;
+        const translated = await this.translateFinal(text, sourceLang, targetLang, apiKey, safeSessionId);
         return { lang: targetLang, text: translated };
       } catch (error) {
         console.error(`[FinalWorker] Failed to translate to ${targetLang}:`, error.message);
+        console.error(`[FinalWorker] Error stack:`, error.stack);
         return { lang: targetLang, text: `[Translation error: ${targetLang}]` };
       }
     });

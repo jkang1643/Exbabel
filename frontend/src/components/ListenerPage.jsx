@@ -207,17 +207,33 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               }
             } else {
               // Final translation - add to history directly (no segmenter needed for finals)
-              const finalText = message.translatedText;
+              // CRITICAL: Only use translatedText if hasTranslation is true - never fallback to English
+              const finalText = message.hasTranslation ? (message.translatedText || undefined) : undefined;
               const originalText = message.originalText || '';
               
-              console.log('[ListenerPage] 📝 Final received:', finalText.substring(0, 50));
+              // Skip if no translation and not transcription mode
+              const isTranscriptionMode = targetLang === message.sourceLang;
+              if (!finalText && !isTranscriptionMode) {
+                console.warn('[ListenerPage] ⚠️ Final received without translation, skipping (not transcription mode)');
+                return;
+              }
+              
+              // Use translatedText if available, otherwise use correctedText/originalText for transcription mode
+              const textToDisplay = finalText || (isTranscriptionMode ? (message.correctedText || originalText) : undefined);
+              
+              if (!textToDisplay) {
+                console.warn('[ListenerPage] ⚠️ Final received with no displayable text, skipping');
+                return;
+              }
+              
+              console.log('[ListenerPage] 📝 Final received:', textToDisplay.substring(0, 50), `(hasTranslation: ${message.hasTranslation})`);
               
               // Deduplicate: Check if this exact text was already added recently
               setTranslations(prev => {
                 // Check last 3 entries for duplicates
                 const recentEntries = prev.slice(-3);
                 const isDuplicate = recentEntries.some(entry => 
-                  entry.translated === finalText || 
+                  entry.translated === textToDisplay || 
                   (entry.original === originalText && originalText.length > 0)
                 );
                 
@@ -228,7 +244,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 
                 return [...prev, {
                   original: originalText,
-                  translated: finalText,
+                  translated: textToDisplay,
                   timestamp: message.timestamp || Date.now()
                 }].slice(-50);
               });
