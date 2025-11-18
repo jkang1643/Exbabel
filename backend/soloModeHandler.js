@@ -1442,21 +1442,69 @@ export async function handleSoloMode(clientWs) {
                     latestPartialTime = 0;
                     
                     const endsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
-                    if (endsWithPunctuation) {
-                      console.log('[SoloMode] ✅ Forced final already complete - committing immediately');
-                      processFinalText(transcriptText, { forceFinal: true });
-                    } else {
-                      console.log('[SoloMode] ⏳ Buffering forced final until continuation arrives or timeout elapses');
+
+                    // ALWAYS capture and inject recovery audio for ALL forced finals (for testing)
+                    // This ensures we can verify audio recovery is working
+                    console.log('[SoloMode] ⏳ Buffering forced final until continuation arrives or timeout elapses');
+
+                    try {
+                      console.log(`[SoloMode] 📝 Forced final text: "${transcriptText.substring(0, 80)}..." (${transcriptText.length} chars, ends with punctuation: ${endsWithPunctuation})`);
+
+                      // CRITICAL: Capture audio buffer BEFORE stream restart to recover missing words
+                      const recoveryAudio = speechStream.getRecentAudio(750); // Last 750ms of audio
+                      console.log(`[SoloMode] 🎵 Captured recovery audio: ${recoveryAudio.length} bytes (${Math.round((recoveryAudio.length / 48000) * 1000)}ms estimated)`);
+
                       const bufferedText = transcriptText;
                       forcedFinalBuffer = {
                         text: transcriptText,
                         timestamp: Date.now(),
+                        recoveryAudio: recoveryAudio, // Store audio for recovery
+                        recoveryAudioInjected: false,
                         timeout: setTimeout(() => {
-                          console.warn('[SoloMode] ⏰ Forced final buffer timeout - committing buffered text');
-                          processFinalText(bufferedText, { forceFinal: true });
+                          console.warn('[SoloMode] ⏰ Forced final buffer timeout - checking for extensions before commit');
+
+                          // CRITICAL: Check if longestPartialText has extended the buffered text during wait period
+                          let finalTextToCommit = bufferedText;
+                          if (longestPartialText && longestPartialText.length > bufferedText.length) {
+                            const bufferedTrimmed = bufferedText.trim();
+                            const longestTrimmed = longestPartialText.trim();
+
+                            // Check if longest partial extends the buffered text
+                            if (longestTrimmed.startsWith(bufferedTrimmed) ||
+                                (bufferedTrimmed.length > 10 && longestTrimmed.substring(0, bufferedTrimmed.length) === bufferedTrimmed)) {
+                              const recoveredWords = longestPartialText.substring(bufferedText.length).trim();
+                              console.log(`[SoloMode] ⚠️ Forced final extended during buffer period (${bufferedText.length} → ${longestPartialText.length} chars)`);
+                              console.log(`[SoloMode] 📊 Recovered from buffer: "${recoveredWords}"`);
+                              finalTextToCommit = longestPartialText;
+                            }
+                          }
+
+                          processFinalText(finalTextToCommit, { forceFinal: true });
                           forcedFinalBuffer = null;
                         }, FORCED_FINAL_MAX_WAIT_MS)
                       };
+
+                      // CRITICAL: Re-inject recovery audio after stream restarts
+                      // Wait 500ms for stream to restart, then inject the captured audio
+                      setTimeout(async () => {
+                        try {
+                          if (forcedFinalBuffer && !forcedFinalBuffer.recoveryAudioInjected && recoveryAudio.length > 0) {
+                            console.log(`[SoloMode] 🔄 Re-injecting ${recoveryAudio.length} bytes of recovery audio to new stream`);
+                            forcedFinalBuffer.recoveryAudioInjected = true;
+
+                            await speechStream.processAudio(recoveryAudio, {
+                              isRecovery: true,
+                              recoverySource: 'forced_final_buffer'
+                            });
+                            console.log(`[SoloMode] ✅ Recovery audio injected successfully`);
+                          }
+                        } catch (error) {
+                          console.error(`[SoloMode] ❌ Failed to inject recovery audio:`, error.message);
+                        }
+                      }, 500);
+                    } catch (error) {
+                      console.error(`[SoloMode] ❌ Error in forced final audio recovery setup:`, error);
+                      console.error(`[SoloMode] ❌ Stack:`, error.stack);
                     }
                     
                     // Cancel pending finalization timers (if any) since we're handling it now
