@@ -112,8 +112,8 @@ export async function handleHostConnection(clientWs, sessionId) {
               // RECENTLY FINALIZED WINDOW: Keep 2-3 previous lines editable for backpatching
               // This allows late-arriving tokens to be merged into previous segments
               const recentlyFinalized = []; // Array of {text, timestamp, sequenceId}
-              const RECENTLY_FINALIZED_WINDOW = 1500; // 1.5 seconds - keep lines editable
-              const MAX_RECENT_FINALS = 3; // Keep last 3 finalized segments
+              const RECENTLY_FINALIZED_WINDOW = 2500; // 2.5 seconds - increased to catch more late-arriving words
+              const MAX_RECENT_FINALS = 4; // Keep last 4 finalized segments (increased from 3)
               
               // GRACE PERIOD: Keep tracking partials for 3 seconds after a final to catch continuation words
               const PARTIAL_TRACKING_GRACE_PERIOD = 3000; // 3 seconds (increased to catch slower continuations)
@@ -122,45 +122,84 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Google Speech finalizes based on stability, not sentence completion
               // This delay gives partials time to arrive and extend the final
               // VAD Pause Finalization: 0ms (already stable)
-              // Forced Commit: 600-900ms (captures trailing words)
+              // Forced Commit: 3500ms (covers 7-8 words at average speaking rate of 2.5 words/sec)
+              // Average speaking rate: ~150 words/min = 2.5 words/sec
+              // To cover 7-8 words: 8 words / 2.5 words/sec = 3.2 seconds → 3500ms for safety margin
               const FINAL_COMMIT_DELAY_NATURAL = 0; // Natural finalization (VAD pause) - already stable
-              const FINAL_COMMIT_DELAY_FORCED = 750; // Forced commit - needs buffer to catch trailing words
+              const FINAL_COMMIT_DELAY_FORCED = 3500; // Forced commit - 3500ms to cover 7-8 words between force commits
               
               // Helper function to tokenize text for overlap matching
               const tokenize = (text) => {
                 return text.trim().toLowerCase().split(/\s+/).filter(t => t.length > 0);
               };
               
-              // Helper function to calculate token overlap similarity
-              const calculateTokenOverlap = (tokens1, tokens2, minOverlap = 2) => {
-                if (!tokens1 || !tokens2 || tokens1.length === 0 || tokens2.length === 0) return 0;
+              // Helper function to check if two words are related (stem matching)
+              const wordsAreRelated = (word1, word2) => {
+                if (word1 === word2) return true;
+                if (word1.includes(word2) || word2.includes(word1)) return true;
                 
-                // Check if tokens2 starts with end of tokens1
+                // Check for common word variations (sit/sitting, go/going, etc.)
+                const shorter = word1.length < word2.length ? word1 : word2;
+                const longer = word1.length >= word2.length ? word1 : word2;
+                
+                // Check if longer word starts with shorter (stem match)
+                if (longer.startsWith(shorter) && shorter.length >= 3) {
+                  const remaining = longer.substring(shorter.length);
+                  // Common suffixes: ing, ed, er, s, es
+                  if (['ing', 'ed', 'er', 's', 'es', 'ly'].includes(remaining)) {
+                    return true;
+                  }
+                }
+                
+                return false;
+              };
+              
+              // Helper function to calculate token overlap similarity
+              // Returns: {similarity: 0-1, overlapTokens: number, overlapType: 'exact'|'fuzzy'|'none'}
+              const calculateTokenOverlap = (tokens1, tokens2, minOverlap = 2) => {
+                if (!tokens1 || !tokens2 || tokens1.length === 0 || tokens2.length === 0) {
+                  return {similarity: 0, overlapTokens: 0, overlapType: 'none'};
+                }
+                
+                // Check if tokens2 starts with end of tokens1 (most common case)
                 const maxCheck = Math.min(tokens1.length, tokens2.length, 6); // Check up to 6 tokens
                 for (let i = maxCheck; i >= minOverlap; i--) {
                   const endTokens1 = tokens1.slice(-i);
                   const startTokens2 = tokens2.slice(0, i);
                   
-                  // Exact match
+                  // Exact match (most reliable)
                   if (endTokens1.join(' ') === startTokens2.join(' ')) {
-                    return i / Math.max(tokens1.length, tokens2.length); // Normalized similarity
+                    const similarity = i / Math.max(tokens1.length, tokens2.length);
+                    return {similarity, overlapTokens: i, overlapType: 'exact'};
                   }
                   
-                  // Fuzzy match - check if most tokens match
-                  let matches = 0;
+                  // Fuzzy match - require higher threshold for accuracy
+                  let exactMatches = 0;
+                  let partialMatches = 0;
                   for (let j = 0; j < i; j++) {
-                    if (endTokens1[j] === startTokens2[j] || 
-                        endTokens1[j].includes(startTokens2[j]) || 
-                        startTokens2[j].includes(endTokens1[j])) {
-                      matches++;
+                    if (endTokens1[j] === startTokens2[j]) {
+                      exactMatches++;
+                    } else if (wordsAreRelated(endTokens1[j], startTokens2[j])) {
+                      // Words are related (stem match, includes, etc.)
+                      partialMatches++;
+                    } else if (endTokens1[j].includes(startTokens2[j]) || startTokens2[j].includes(endTokens1[j])) {
+                      // Only count as partial if words are similar length (avoid false matches)
+                      const lenDiff = Math.abs(endTokens1[j].length - startTokens2[j].length);
+                      if (lenDiff <= 2) { // Words must be similar length
+                        partialMatches++;
+                      }
                     }
                   }
-                  if (matches >= i * 0.7) { // 70% match threshold
-                    return matches / Math.max(tokens1.length, tokens2.length);
+                  
+                  // Require at least 80% exact matches OR 90% combined (exact + partial)
+                  const totalMatches = exactMatches + partialMatches;
+                  if (exactMatches >= i * 0.8 || totalMatches >= i * 0.9) {
+                    const similarity = totalMatches / Math.max(tokens1.length, tokens2.length);
+                    return {similarity, overlapTokens: i, overlapType: 'fuzzy'};
                   }
                 }
                 
-                return 0;
+                return {similarity: 0, overlapTokens: 0, overlapType: 'none'};
               };
               
               // Helper function to merge tokens with overlap
@@ -171,36 +210,36 @@ export async function handleHostConnection(clientWs, sessionId) {
                 if (tokens1.length === 0) return text2;
                 if (tokens2.length === 0) return text1;
                 
-                // Find overlap
-                const maxCheck = Math.min(tokens1.length, tokens2.length, 6);
-                for (let i = maxCheck; i >= 2; i--) {
-                  const endTokens1 = tokens1.slice(-i);
-                  const startTokens2 = tokens2.slice(0, i);
-                  
-                  if (endTokens1.join(' ') === startTokens2.join(' ')) {
-                    // Exact overlap - merge
-                    const merged = [...tokens1, ...tokens2.slice(i)];
-                    return merged.join(' ');
-                  }
-                  
-                  // Fuzzy match
-                  let matches = 0;
-                  for (let j = 0; j < i; j++) {
-                    if (endTokens1[j] === startTokens2[j] || 
-                        endTokens1[j].includes(startTokens2[j]) || 
-                        startTokens2[j].includes(endTokens1[j])) {
-                      matches++;
-                    }
-                  }
-                  if (matches >= i * 0.7) {
-                    // Merge with overlap
-                    const merged = [...tokens1, ...tokens2.slice(i)];
-                    return merged.join(' ');
-                  }
+                // Use overlap calculation to find best merge point
+                const overlap = calculateTokenOverlap(tokens1, tokens2);
+                
+                if (overlap.overlapType !== 'none' && overlap.overlapTokens >= 2) {
+                  // Found overlap - merge at overlap point
+                  const merged = [...tokens1, ...tokens2.slice(overlap.overlapTokens)];
+                  return merged.join(' ');
                 }
                 
-                // No overlap found - concatenate
-                return text1.trim() + ' ' + text2.trim();
+                // No overlap found - check if text2 contains text1 (more complete version)
+                const text1Lower = text1.trim().toLowerCase();
+                const text2Lower = text2.trim().toLowerCase();
+                if (text2Lower.includes(text1Lower) && text2.length > text1.length) {
+                  // text2 is a more complete version - use it
+                  return text2;
+                }
+                
+                // No overlap - concatenate (but be conservative)
+                // Only concatenate if they seem related (check for common words)
+                const text1Words = new Set(tokens1);
+                const text2Words = new Set(tokens2);
+                const commonWords = [...text1Words].filter(w => text2Words.has(w));
+                if (commonWords.length >= 2) {
+                  // Has common words - likely related, concatenate
+                  return text1.trim() + ' ' + text2.trim();
+                }
+                
+                // No clear relationship - return text2 if longer, else text1
+                // This prevents incorrect merges
+                return text2.length > text1.length ? text2 : text1;
               };
               
               // Clean up old recently finalized entries
@@ -227,15 +266,69 @@ export async function handleHostConnection(clientWs, sessionId) {
                 let finalTextToProcess = pendingFinal.text;
                 const isForcedFinal = pendingFinal.isForced;
                 
-                // Last chance: Check if longest partial extends the pending final
-                const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
-                if (longestPartialText && longestPartialText.length > finalTextToProcess.length && timeSinceLongest < 2000) {
-                  const longestTrimmed = longestPartialText.trim();
-                  const finalTrimmed = finalTextToProcess.trim();
+                // LAST CHANCE: Aggressively check for any partials that extend the pending final
+                const now = Date.now();
+                const timeSinceLongest = longestPartialTime ? (now - longestPartialTime) : Infinity;
+                const timeSinceLatest = latestPartialTime ? (now - latestPartialTime) : Infinity;
+                
+                // Check longest partial (most complete version we've seen)
+                // Extended window to 5000ms to catch partials that arrive after the delay (covers 7-8 words + buffer)
+                if (longestPartialText && longestPartialText.length > finalTextToProcess.length && timeSinceLongest < 5000) {
+                  const longestTrimmed = longestPartialText.trim().toLowerCase();
+                  const finalTrimmed = finalTextToProcess.trim().toLowerCase();
                   
+                  // Check if longest extends or contains the final
                   if (longestTrimmed.startsWith(finalTrimmed) || longestTrimmed.includes(finalTrimmed)) {
-                    console.log(`[HostMode] ⚠️ Using LONGEST partial for pending final (${finalTextToProcess.length} → ${longestPartialText.length} chars)`);
+                    const missingWords = longestPartialText.substring(finalTextToProcess.length).trim();
+                    console.log(`[HostMode] ⚠️ LAST CHANCE: Using LONGEST partial (${finalTextToProcess.length} → ${longestPartialText.length} chars)`);
+                    console.log(`[HostMode] 📊 Recovered: "${missingWords}"`);
                     finalTextToProcess = longestPartialText;
+                  } else {
+                    // Try token-based merge
+                    const overlap = calculateTokenOverlap(tokenize(finalTextToProcess), tokenize(longestPartialText));
+                    if (overlap.overlapType !== 'none' && overlap.overlapTokens >= 2) {
+                      const merged = mergeTokens(finalTextToProcess, longestPartialText);
+                      if (merged.length > finalTextToProcess.length) {
+                        console.log(`[HostMode] ⚠️ LAST CHANCE: Merged with LONGEST partial (${finalTextToProcess.length} → ${merged.length} chars)`);
+                        finalTextToProcess = merged;
+                      }
+                    }
+                  }
+                }
+                
+                // Also check latest partial (might be even more recent)
+                // Extended window to 5000ms to match longest partial window (covers 7-8 words + buffer)
+                if (latestPartialText && timeSinceLatest < 5000) {
+                  const latestTrimmed = latestPartialText.trim().toLowerCase();
+                  const finalTrimmed = finalTextToProcess.trim().toLowerCase();
+                  const latestTokens = tokenize(latestPartialText);
+                  const continuationWords = ['and', 'then', 'so', 'but', 'or', 'nor', 'yet', 'while', 'when'];
+                  const startsWithContinuation = latestTokens.length > 0 && continuationWords.includes(latestTokens[0]);
+                  
+                  // Check if latest extends final OR starts with continuation word
+                  if (latestPartialText.length > finalTextToProcess.length) {
+                    if (latestTrimmed.startsWith(finalTrimmed) || latestTrimmed.includes(finalTrimmed)) {
+                      const missingWords = latestPartialText.substring(finalTextToProcess.length).trim();
+                      console.log(`[HostMode] ⚠️ LAST CHANCE: Using LATEST partial (${finalTextToProcess.length} → ${latestPartialText.length} chars)`);
+                      console.log(`[HostMode] 📊 Recovered: "${missingWords}"`);
+                      finalTextToProcess = latestPartialText;
+                    } else if (startsWithContinuation) {
+                      // Latest starts with continuation word - merge it
+                      const merged = mergeTokens(finalTextToProcess, latestPartialText);
+                      if (merged.length > finalTextToProcess.length) {
+                        console.log(`[HostMode] ⚠️ LAST CHANCE: Merging continuation word partial "${latestTokens[0]}"`);
+                        console.log(`[HostMode] 📊 Recovered: "${latestPartialText}"`);
+                        finalTextToProcess = merged;
+                      }
+                    }
+                  } else if (startsWithContinuation) {
+                    // Even if shorter, if it starts with continuation word, merge it
+                    const merged = mergeTokens(finalTextToProcess, latestPartialText);
+                    if (merged.length > finalTextToProcess.length) {
+                      console.log(`[HostMode] ⚠️ LAST CHANCE: Merging continuation word partial "${latestTokens[0]}"`);
+                      console.log(`[HostMode] 📊 Recovered: "${latestPartialText}"`);
+                      finalTextToProcess = merged;
+                    }
                   }
                 }
                 
@@ -288,31 +381,97 @@ export async function handleHostConnection(clientWs, sessionId) {
                 const partialTokens = tokenize(partialText);
                 if (partialTokens.length === 0) return false;
                 
+                const partialLower = partialText.trim().toLowerCase();
+                const continuationWords = ['and', 'then', 'so', 'but', 'or', 'nor', 'yet', 'while', 'when', 
+                                          'where', 'as', 'if', 'because', 'since', 'although', 'though',
+                                          'after', 'before', 'during', 'until'];
+                const startsWithContinuation = partialTokens.length > 0 && continuationWords.includes(partialTokens[0]);
+                
                 // Check recently finalized segments (newest first)
                 for (let i = recentlyFinalized.length - 1; i >= 0; i--) {
                   const recentFinal = recentlyFinalized[i];
                   const finalTokens = tokenize(recentFinal.text);
+                  const finalLower = recentFinal.text.trim().toLowerCase();
                   
-                  // Calculate overlap similarity
-                  const similarity = calculateTokenOverlap(finalTokens, partialTokens);
-                  
-                  if (similarity > 0.45) { // 45% similarity threshold
-                    // This partial belongs to the recent final - merge it
+                  // PRIORITY CHECK: Partial starts with continuation word - very likely belongs to recent final
+                  if (startsWithContinuation) {
+                    // Merge continuation word partial with recent final
                     const mergedText = mergeTokens(recentFinal.text, partialText);
-                    console.log(`[HostMode] 🔙 BACKPATCHING: Merging into recent final:`);
+                    
+                    if (mergedText.length > recentFinal.text.length) {
+                      console.log(`[HostMode] 🔙 BACKPATCHING: Partial starts with continuation word "${partialTokens[0]}" - merging:`);
+                      console.log(`[HostMode]   Recent: "${recentFinal.text.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   Partial: "${partialText.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   Merged: "${mergedText.substring(0, 80)}..."`);
+                      
+                      // Update the recent final
+                      recentFinal.text = mergedText;
+                      recentFinal.timestamp = Date.now();
+                      
+                      // Send updated final to all listeners
+                      await processFinalTranscript(mergedText, false);
+                      
+                      return true;
+                    }
+                  }
+                  
+                  // STRICT CHECK 1: Partial must contain the final (most reliable)
+                  if (partialLower.includes(finalLower) && partialText.length > recentFinal.text.length) {
+                    // Partial is a more complete version - use it
+                    console.log(`[HostMode] 🔙 BACKPATCHING: Partial contains final (more complete):`);
                     console.log(`[HostMode]   Recent: "${recentFinal.text.substring(0, 60)}..."`);
                     console.log(`[HostMode]   Partial: "${partialText.substring(0, 60)}..."`);
-                    console.log(`[HostMode]   Merged: "${mergedText.substring(0, 80)}..."`);
-                    console.log(`[HostMode]   Similarity: ${(similarity * 100).toFixed(1)}%`);
                     
                     // Update the recent final
-                    recentFinal.text = mergedText;
-                    recentFinal.timestamp = Date.now(); // Update timestamp to keep it in window longer
+                    recentFinal.text = partialText;
+                    recentFinal.timestamp = Date.now();
                     
                     // Send updated final to all listeners
-                    await processFinalTranscript(mergedText, false);
+                    await processFinalTranscript(partialText, false);
                     
-                    return true; // Successfully backpatched
+                    return true;
+                  }
+                  
+                  // STRICT CHECK 2: Calculate overlap similarity (balanced - not too strict)
+                  const overlap = calculateTokenOverlap(finalTokens, partialTokens);
+                  
+                  // Require overlap but be more lenient for backpatching (words can arrive late)
+                  if (overlap.overlapType !== 'none' && 
+                      overlap.overlapTokens >= 2 && // At least 2 tokens overlap (reduced from 3)
+                      overlap.similarity > 0.35) { // 35% similarity threshold (reduced from 50% to catch more)
+                    
+                    // Additional validation: partial should extend the final
+                    // Check if partial starts with end of final OR contains final OR continues with related words
+                    const finalEnd = finalTokens.slice(-overlap.overlapTokens).join(' ');
+                    const partialStart = partialTokens.slice(0, overlap.overlapTokens).join(' ');
+                    
+                    // Check for related word continuation (e.g., "sit" -> "sitting")
+                    const finalLastWord = finalTokens[finalTokens.length - 1];
+                    const partialFirstWord = partialTokens[0];
+                    const continuesWithRelatedWord = wordsAreRelated(finalLastWord, partialFirstWord);
+                    
+                    if (partialStart === finalEnd || partialLower.includes(finalLower) || continuesWithRelatedWord) {
+                      // This partial belongs to the recent final - merge it
+                      const mergedText = mergeTokens(recentFinal.text, partialText);
+                      
+                      // Validate merge makes sense (merged should be longer)
+                      if (mergedText.length > recentFinal.text.length) {
+                        console.log(`[HostMode] 🔙 BACKPATCHING: Merging into recent final:`);
+                        console.log(`[HostMode]   Recent: "${recentFinal.text.substring(0, 60)}..."`);
+                        console.log(`[HostMode]   Partial: "${partialText.substring(0, 60)}..."`);
+                        console.log(`[HostMode]   Merged: "${mergedText.substring(0, 80)}..."`);
+                        console.log(`[HostMode]   Similarity: ${(overlap.similarity * 100).toFixed(1)}%, Overlap: ${overlap.overlapTokens} tokens, Type: ${overlap.overlapType}`);
+                        
+                        // Update the recent final
+                        recentFinal.text = mergedText;
+                        recentFinal.timestamp = Date.now();
+                        
+                        // Send updated final to all listeners
+                        await processFinalTranscript(mergedText, false);
+                        
+                        return true;
+                      }
+                    }
                   }
                 }
                 
@@ -415,30 +574,28 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const pendingTokens = tokenize(pendingFinal.text);
                     const partialTokens = tokenize(transcriptText);
                     
-                    // Check if partial extends pending final (starts with it or has overlap)
-                    const similarity = calculateTokenOverlap(pendingTokens, partialTokens);
-                    if (similarity > 0.3 || partialTrimmed.startsWith(pendingTrimmed)) {
-                      // Partial extends pending final - merge using token-based merging
-                      const mergedText = mergeTokens(pendingFinal.text, transcriptText);
-                      
-                      if (mergedText.length > pendingFinal.text.length) {
-                        console.log(`[HostMode] 🔄 Partial extends PENDING final (token merge) - updating:`);
+                    // STRICT CHECK 1: Partial starts with pending final (most reliable)
+                    if (partialTrimmed.startsWith(pendingTrimmed) && partialTrimmed.length > pendingTrimmed.length) {
+                      // Partial clearly extends pending final - merge
+                      const continuationText = partialTrimmed.substring(pendingTrimmed.length).trim();
+                      if (continuationText) {
+                        const mergedText = pendingFinal.text + ' ' + continuationText;
+                        console.log(`[HostMode] 🔄 Partial extends PENDING final (starts with) - updating:`);
                         console.log(`[HostMode]   Pending: "${pendingFinal.text.substring(0, 60)}..."`);
-                        console.log(`[HostMode]   Partial: "${transcriptText.substring(0, 60)}..."`);
+                        console.log(`[HostMode]   Extension: "${continuationText.substring(0, 40)}"`);
                         console.log(`[HostMode]   Merged: "${mergedText.substring(0, 80)}..."`);
                         
                         // Update pending final
                         pendingFinal.text = mergedText;
                         pendingFinal.timestamp = Date.now();
                         
-                        // Also update longest partial tracking (in case there are even longer partials)
+                        // Also update longest partial tracking
                         if (!longestPartialText || mergedText.length > longestPartialText.length) {
                           longestPartialText = mergedText;
                           longestPartialTime = Date.now();
                         }
                         
-                        // Reset the commit timeout (give more time for further extensions)
-                        // Use the delay appropriate for the final type
+                        // Reset the commit timeout
                         const delay = pendingFinal.isForced ? FINAL_COMMIT_DELAY_FORCED : FINAL_COMMIT_DELAY_NATURAL;
                         if (pendingFinalTimeout) {
                           clearTimeout(pendingFinalTimeout);
@@ -447,35 +604,75 @@ export async function handleHostConnection(clientWs, sessionId) {
                           commitPendingFinal();
                         }, delay);
                         
-                        // Don't process as partial - it's extending a pending final
                         return;
                       }
                     }
-                    // Check if partial contains pending final (more complete version) using token matching
-                    else {
-                      const similarity = calculateTokenOverlap(partialTokens, pendingTokens);
-                      if (similarity > 0.3 && partialTrimmed.length > pendingTrimmed.length + 10) {
-                        // Partial contains a more complete version - use token merge
+                    
+                    // STRICT CHECK 2: Partial contains pending final (more complete version)
+                    const partialLower = partialTrimmed.toLowerCase();
+                    const pendingLower = pendingTrimmed.toLowerCase();
+                    // Reduced threshold from 10 to 3 chars to catch shorter word additions at end of phrases
+                    if (partialLower.includes(pendingLower) && partialTrimmed.length > pendingTrimmed.length + 3) {
+                      // Partial is a more complete version - use it directly
+                      console.log(`[HostMode] 🔄 Partial contains PENDING final (more complete) - replacing:`);
+                      console.log(`[HostMode]   Pending: "${pendingFinal.text.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   More complete: "${transcriptText.substring(0, 80)}..."`);
+                      
+                      // Update pending final with more complete version
+                      pendingFinal.text = transcriptText;
+                      pendingFinal.timestamp = Date.now();
+                      
+                      // Also update longest partial tracking
+                      if (!longestPartialText || transcriptText.length > longestPartialText.length) {
+                        longestPartialText = transcriptText;
+                        longestPartialTime = Date.now();
+                      }
+                      
+                      // Reset the commit timeout
+                      const delay = pendingFinal.isForced ? FINAL_COMMIT_DELAY_FORCED : FINAL_COMMIT_DELAY_NATURAL;
+                      if (pendingFinalTimeout) {
+                        clearTimeout(pendingFinalTimeout);
+                      }
+                      pendingFinalTimeout = setTimeout(() => {
+                        commitPendingFinal();
+                      }, delay);
+                      
+                      return;
+                    }
+                    
+                    // STRICT CHECK 3: Token overlap (more lenient to catch end-of-phrase words)
+                    const overlap = calculateTokenOverlap(pendingTokens, partialTokens);
+                    if (overlap.overlapType !== 'none' && 
+                        overlap.overlapTokens >= 2 && 
+                        overlap.similarity > 0.25 && // 25% threshold (lowered from 40% to catch more end-of-phrase extensions)
+                        partialTrimmed.length > pendingTrimmed.length) {
+                      
+                      // Validate: partial should start with end of pending
+                      const pendingEnd = pendingTokens.slice(-overlap.overlapTokens).join(' ');
+                      const partialStart = partialTokens.slice(0, overlap.overlapTokens).join(' ');
+                      
+                      if (partialStart === pendingEnd || partialLower.includes(pendingLower)) {
+                        // Partial extends pending final - merge using token-based merging
                         const mergedText = mergeTokens(pendingFinal.text, transcriptText);
                         
-                        if (mergedText.length > pendingFinal.text.length || transcriptText.length > pendingFinal.text.length) {
-                          const bestText = transcriptText.length > mergedText.length ? transcriptText : mergedText;
-                          console.log(`[HostMode] 🔄 Partial contains PENDING final (more complete) - replacing:`);
+                        if (mergedText.length > pendingFinal.text.length) {
+                          console.log(`[HostMode] 🔄 Partial extends PENDING final (token overlap) - updating:`);
                           console.log(`[HostMode]   Pending: "${pendingFinal.text.substring(0, 60)}..."`);
-                          console.log(`[HostMode]   More complete: "${bestText.substring(0, 80)}..."`);
-                          console.log(`[HostMode]   Similarity: ${(similarity * 100).toFixed(1)}%`);
+                          console.log(`[HostMode]   Partial: "${transcriptText.substring(0, 60)}..."`);
+                          console.log(`[HostMode]   Merged: "${mergedText.substring(0, 80)}..."`);
+                          console.log(`[HostMode]   Overlap: ${overlap.overlapTokens} tokens, Similarity: ${(overlap.similarity * 100).toFixed(1)}%`);
                           
-                          // Update pending final with more complete version
-                          pendingFinal.text = bestText;
+                          // Update pending final
+                          pendingFinal.text = mergedText;
                           pendingFinal.timestamp = Date.now();
                           
                           // Also update longest partial tracking
-                          if (!longestPartialText || bestText.length > longestPartialText.length) {
-                            longestPartialText = bestText;
+                          if (!longestPartialText || mergedText.length > longestPartialText.length) {
+                            longestPartialText = mergedText;
                             longestPartialTime = Date.now();
                           }
                           
-                          // Reset the commit timeout (use appropriate delay)
+                          // Reset the commit timeout
                           const delay = pendingFinal.isForced ? FINAL_COMMIT_DELAY_FORCED : FINAL_COMMIT_DELAY_NATURAL;
                           if (pendingFinalTimeout) {
                             clearTimeout(pendingFinalTimeout);
@@ -484,7 +681,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                             commitPendingFinal();
                           }, delay);
                           
-                          // Don't process as partial
                           return;
                         }
                       }
@@ -682,10 +878,35 @@ export async function handleHostConnection(clientWs, sessionId) {
                   
                   // CRITICAL FIX: Track the LONGEST partial we've seen
                   // This prevents word loss when finals come before all words are captured
+                  // ALWAYS update if longer, even if pending final exists (might extend it)
                   if (!longestPartialText || transcriptText.length > longestPartialText.length) {
                     longestPartialText = transcriptText;
                     longestPartialTime = Date.now();
                     console.log(`[HostMode] 📏 New longest partial: ${longestPartialText.length} chars`);
+                    
+                    // If we have a pending final, check if this partial extends it (even if it didn't match earlier checks)
+                    if (pendingFinal && pendingFinal.text) {
+                      const pendingTrimmed = pendingFinal.text.trim().toLowerCase();
+                      const partialTrimmed = transcriptText.trim().toLowerCase();
+                      
+                      // Quick check: if partial contains pending or extends it, update pending final
+                      if (partialTrimmed.includes(pendingTrimmed) && partialTrimmed.length > pendingTrimmed.length + 3) {
+                        console.log(`[HostMode] 🔄 Longest partial extends pending final - updating pending:`);
+                        console.log(`[HostMode]   Pending: "${pendingFinal.text.substring(0, 60)}..."`);
+                        console.log(`[HostMode]   Extended: "${transcriptText.substring(0, 80)}..."`);
+                        pendingFinal.text = transcriptText;
+                        pendingFinal.timestamp = Date.now();
+                        
+                        // Reset commit timeout to give more time
+                        const delay = pendingFinal.isForced ? FINAL_COMMIT_DELAY_FORCED : FINAL_COMMIT_DELAY_NATURAL;
+                        if (pendingFinalTimeout) {
+                          clearTimeout(pendingFinalTimeout);
+                        }
+                        pendingFinalTimeout = setTimeout(() => {
+                          commitPendingFinal();
+                        }, delay);
+                      }
+                    }
                   }
                   
                   // Send live partial transcript to the HOST first
@@ -917,9 +1138,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                   const finalTrimmed = transcriptText.trim();
                   
                   if (longestTrimmed.startsWith(finalTrimmed) || longestTrimmed.includes(finalTrimmed)) {
-                    const missingWords = longestPartialText.substring(transcriptText.length).trim();
+                  const missingWords = longestPartialText.substring(transcriptText.length).trim();
                     console.log(`[HostMode] ⚠️ Using LONGEST partial for final (${transcriptText.length} → ${longestPartialText.length} chars)`);
-                    console.log(`[HostMode] 📊 Recovered: "${missingWords}"`);
+                  console.log(`[HostMode] 📊 Recovered: "${missingWords}"`);
                     bestFinalText = longestPartialText;
                   }
                 }
@@ -933,7 +1154,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // Store as pending final (will be committed after delay)
                 pendingFinal = {
                   text: bestFinalText,
-                  timestamp: Date.now(),
+                    timestamp: Date.now(),
                   isForced: isForcedFinal,
                   startTime: Date.now()
                 };
