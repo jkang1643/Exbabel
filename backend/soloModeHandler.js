@@ -201,26 +201,6 @@ export async function handleSoloMode(clientWs) {
               let lastSentFinalTime = 0; // Timestamp when last FINAL was sent
               const FINAL_CONTINUATION_WINDOW_MS = 3000; // 3 seconds - if new FINAL arrives within this window and continues last, merge them
               
-              // RECENTLY FINALIZED WINDOW: Keep previous lines editable for backpatching (Delayed Final Reconciliation System)
-              const recentlyFinalized = []; // Array of {text, timestamp, sequenceId, isForced}
-              const RECENTLY_FINALIZED_WINDOW = 2500; // 2.5 seconds
-              const RECENTLY_FINALIZED_WINDOW_FORCED = 5000; // 5 seconds for force-committed segments
-              const MAX_RECENT_FINALS = 4; // Keep last 4 finalized segments
-              
-              // Helper function to cleanup old entries from recentlyFinalized
-              const cleanupRecentlyFinalized = () => {
-                const now = Date.now();
-                recentlyFinalized.forEach((entry, index) => {
-                  const window = entry.isForced ? RECENTLY_FINALIZED_WINDOW_FORCED : RECENTLY_FINALIZED_WINDOW;
-                  if (now - entry.timestamp > window) {
-                    recentlyFinalized.splice(index, 1);
-                  }
-                });
-                // Also limit by count
-                if (recentlyFinalized.length > MAX_RECENT_FINALS) {
-                  recentlyFinalized.shift(); // Remove oldest
-                }
-              };
               
               // Helper function to tokenize text for overlap matching
               const tokenize = (text) => {
@@ -620,20 +600,6 @@ export async function handleSoloMode(clientWs) {
                         lastSentFinalText = textToProcess;
                         lastSentFinalTime = Date.now();
                         
-                        // Add to recently finalized window for backpatching (Delayed Final Reconciliation System)
-                        const isForcedFinal = !!options.forceFinal;
-                        const sequenceId = Date.now();
-                        const segmentToAdd = {
-                          text: textToProcess,
-                          timestamp: Date.now(),
-                          sequenceId: sequenceId,
-                          isForced: isForcedFinal
-                        };
-                        recentlyFinalized.push(segmentToAdd);
-                        console.log(`[SoloMode] 📦 Added to recentlyFinalized: "${textToProcess.substring(0, 60)}..." (isForced: ${isForcedFinal})`);
-                        cleanupRecentlyFinalized();
-                        console.log(`[SoloMode] 📦 After cleanup: ${recentlyFinalized.length} segments in window`);
-                        
                         // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
                         checkForExtendingPartialsAfterFinal(textToProcess);
                       } catch (error) {
@@ -676,109 +642,6 @@ export async function handleSoloMode(clientWs) {
                 console.log(`[SoloMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (meta: ${JSON.stringify(meta)})`);
                 
                 if (isPartial) {
-                  // PRIORITY 0: ALWAYS check if this partial should backpatch to a force-committed segment
-                  // This catches partials that arrive in the gap between force commits (MOST IMPORTANT CASE)
-                  cleanupRecentlyFinalized();
-                  
-                  console.log(`[SoloMode] 🔍 PRIORITY 0 CHECK: Partial "${transcriptText.substring(0, 60)}..." - checking ${recentlyFinalized.length} recently finalized segments`);
-                  
-                  // Check if any recently finalized segment was force-committed
-                  let foundForceCommitted = false;
-                  for (let i = recentlyFinalized.length - 1; i >= 0; i--) {
-                    const recentFinal = recentlyFinalized[i];
-                    const isForced = recentFinal.isForced || false;
-                    const age = Date.now() - recentFinal.timestamp;
-                    console.log(`[SoloMode]   Checking segment ${i}: "${recentFinal.text.substring(0, 60)}..." (isForced: ${isForced}, age: ${age}ms)`);
-                    
-                    if (isForced) {
-                      foundForceCommitted = true;
-                      console.log(`[SoloMode]   ✅ Found FORCE-COMMITTED segment - evaluating merge...`);
-                      const recentTokens = tokenize(recentFinal.text);
-                      const partialTokens = tokenize(transcriptText);
-                      const recentTrimmed = recentFinal.text.trim().toLowerCase();
-                      const partialTrimmed = transcriptText.trim().toLowerCase();
-                      
-                      // Check for continuation words
-                      const continuationWords = ['and', 'then', 'so', 'but', 'or', 'nor', 'yet', 'while', 'when', 
-                                                'where', 'as', 'if', 'because', 'since', 'although', 'though',
-                                                'after', 'before', 'during', 'until', 'unplug', 'engage', 'rather'];
-                      const startsWithContinuation = partialTokens.length > 0 && continuationWords.includes(partialTokens[0].toLowerCase());
-                      
-                      // Check if partial extends the force-committed segment
-                      const overlap = calculateTokenOverlap(recentTokens, partialTokens);
-                      const hasOverlap = overlap.overlapType !== 'none' && overlap.overlapTokens >= 1;
-                      const partialContainsRecent = partialTrimmed.includes(recentTrimmed) && partialTrimmed.length > recentTrimmed.length;
-                      const partialStartsWithRecent = partialTrimmed.startsWith(recentTrimmed) && partialTrimmed.length > recentTrimmed.length;
-                      const recentEndsWithPeriod = recentFinal.text.trim().endsWith('.');
-                      
-                      // Very aggressive: merge if:
-                      // 1. Partial starts with continuation word OR
-                      // 2. Has ANY overlap OR
-                      // 3. Partial contains/starts with recent OR
-                      // 4. Recent doesn't end with period (incomplete sentence)
-                      console.log(`[SoloMode]   Evaluation: startsWithContinuation=${startsWithContinuation}, hasOverlap=${hasOverlap} (overlapTokens=${overlap.overlapTokens}), partialContainsRecent=${partialContainsRecent}, partialStartsWithRecent=${partialStartsWithRecent}, recentEndsWithPeriod=${recentEndsWithPeriod}`);
-                      
-                      if (startsWithContinuation || hasOverlap || partialContainsRecent || partialStartsWithRecent || !recentEndsWithPeriod) {
-                        console.log(`[SoloMode]   ✅ Merge condition met! Attempting merge...`);
-                        let mergedText;
-                        
-                        // If partial starts with recent, just append the continuation
-                        if (partialStartsWithRecent) {
-                          const continuationText = transcriptText.substring(recentFinal.text.length).trim();
-                          mergedText = recentFinal.text + ' ' + continuationText;
-                        } else {
-                          // Use token-based merge
-                          mergedText = mergeTokens(recentFinal.text, transcriptText);
-                        }
-                        
-                        if (mergedText.length > recentFinal.text.length) {
-                          console.log(`[SoloMode] 🔙 SEAMLESS BACKPATCH: Partial extends FORCE-COMMITTED segment (gap between commits):`);
-                          console.log(`[SoloMode]   Force-committed: "${recentFinal.text.substring(0, 60)}..."`);
-                          console.log(`[SoloMode]   Partial: "${transcriptText.substring(0, 60)}..."`);
-                          console.log(`[SoloMode]   Merged: "${mergedText.substring(0, 80)}..."`);
-                          console.log(`[SoloMode]   Reason: ${startsWithContinuation ? 'continuation word' : hasOverlap ? 'overlap' : partialContainsRecent ? 'contains' : 'no period'}`);
-                          
-                          // CRITICAL: Check if we just sent a final for this segment recently
-                          // Only send backpatch update if:
-                          // 1. Enough time has passed (2+ seconds) OR
-                          // 2. Significant new content added (10+ words or 50+ chars)
-                          const timeSinceLastSent = lastSentFinalTime ? (Date.now() - lastSentFinalTime) : Infinity;
-                          const newContent = mergedText.substring(recentFinal.text.length).trim();
-                          const newWordCount = newContent.split(/\s+/).filter(w => w.length > 0).length;
-                          const significantExtension = newWordCount >= 5 || newContent.length >= 30;
-                          const enoughTimePassed = timeSinceLastSent >= 2000;
-                          
-                          // Update the force-committed segment in memory
-                          recentFinal.text = mergedText;
-                          recentFinal.timestamp = Date.now();
-                          
-                          if (!enoughTimePassed && !significantExtension) {
-                            // Too recent and not significant - don't send new final to avoid duplicate history entries
-                            // The extended text will be included in the next natural final
-                            console.log(`[SoloMode]   ⏭️ Skipping backpatch send - too recent (${timeSinceLastSent}ms ago, +${newWordCount} words), will be included in next final`);
-                            // Update lastSentFinalText to reflect the extension (in memory only)
-                            lastSentFinalText = mergedText;
-                            lastSentFinalTime = Date.now();
-                          } else {
-                            // Send updated final - significant extension or enough time has passed
-                            console.log(`[SoloMode]   ✅ Sending backpatch update (${timeSinceLastSent}ms since last send, +${newWordCount} words, ${significantExtension ? 'significant' : 'time passed'})`);
-                            await processFinalText(mergedText, { forceFinal: false });
-                          }
-                          
-                          // Don't process as new partial - it's been backpatched
-                          return;
-                        } else {
-                          console.log(`[SoloMode]   ⚠️ Merge resulted in same or shorter length (${recentFinal.text.length} → ${mergedText.length} chars) - skipping`);
-                        }
-                      } else {
-                        console.log(`[SoloMode]   ❌ Merge conditions not met - skipping`);
-                      }
-                    }
-                  }
-                  
-                  if (!foundForceCommitted) {
-                    console.log(`[SoloMode]   ⚠️ No force-committed segments found in ${recentlyFinalized.length} recent segments`);
-                  }
                   if (forcedFinalBuffer) {
                     // CRITICAL: Check if this partial extends the forced final or is a new segment
                     const forcedText = forcedFinalBuffer.text.trim();
@@ -2021,10 +1884,18 @@ export async function handleSoloMode(clientWs) {
           break;
         
         case 'force_commit':
-          // Frontend requests to force-commit current turn (simulated pause)
+          // Frontend requests to force-commit current turn using 2-buffer system
           console.log('[SoloMode] 🔄 Force commit requested by frontend');
           if (speechStream) {
-            await speechStream.forceCommit();
+            try {
+              await speechStream.forceCommit();
+              console.log('[SoloMode] ✅ Force commit completed - all buffered audio flushed and final received');
+            } catch (error) {
+              console.error('[SoloMode] ❌ Force commit error:', error);
+              // Don't throw - allow normal flow to continue
+            }
+          } else {
+            console.warn('[SoloMode] ⚠️ Force commit requested but speech stream not initialized');
           }
           break;
           
