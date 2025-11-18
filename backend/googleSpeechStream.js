@@ -20,6 +20,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { TRANSCRIPTION_LANGUAGES, getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
+import AudioBufferManager from './audioBufferManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +43,25 @@ export class GoogleSpeechStream {
     this.lastAudioTime = null;
     this.useEnhancedModel = true; // Track if we should use enhanced model (fallback to default if not supported)
     this.hasTriedEnhancedModel = false; // Track if we've already tried enhanced model for this language
+
+    // AUDIO BUFFER MANAGER: Captures EVERY audio chunk for recovery operations
+    // This rolling buffer maintains the last 1500ms of audio for text extension window
+    this.audioBufferManager = new AudioBufferManager({
+      bufferDurationMs: 1500,  // 1.5 second rolling window
+      flushDurationMs: 600,     // Flush last 600ms on natural finals
+      maxChunks: 200,           // Safety limit
+      enableMetrics: true,
+      logger: console
+    });
+
+    // Listen to audio buffer events for monitoring
+    this.audioBufferManager.on('chunk_added', (data) => {
+      // Optional: emit events for external monitoring
+    });
+
+    this.audioBufferManager.on('flush', (data) => {
+      console.log(`[GoogleSpeech] 🎵 Audio buffer flushed: ${data.chunks} chunks, ${data.bytes} bytes`);
+    });
 
     // Google Speech has a 305 second (5 min) streaming limit
     // We'll restart the stream every 4 minutes to be safe
@@ -704,6 +724,15 @@ export class GoogleSpeechStream {
       // Convert base64 to Buffer
       const audioBuffer = Buffer.from(audioData, 'base64');
 
+      // ⭐ CRITICAL: Add audio chunk to rolling buffer BEFORE sending to Google
+      // This captures EVERY audio chunk for text extension window recovery
+      this.audioBufferManager.addChunk(audioBuffer, {
+        chunkId,
+        timestamp: sendTimestamp,
+        source: 'client',
+        ...metadata
+      });
+
       // Double-check stream is still ready
       if (this.isStreamReady()) {
         this.recognizeStream.write(audioBuffer);
@@ -1099,6 +1128,12 @@ export class GoogleSpeechStream {
       this.recognizeStream = null;
     }
 
+    // Clean up audio buffer manager
+    if (this.audioBufferManager) {
+      this.audioBufferManager.destroy();
+      console.log('[GoogleSpeech] Audio buffer manager destroyed');
+    }
+
     this.audioQueue = [];
     this.resultCallback = null;
 
@@ -1106,9 +1141,48 @@ export class GoogleSpeechStream {
   }
 
   /**
+   * Get recent audio from buffer for recovery operations
+   * @param {number} durationMs - Duration in milliseconds to retrieve
+   * @returns {Buffer} Concatenated audio buffer
+   */
+  getRecentAudio(durationMs = 600) {
+    if (!this.audioBufferManager) {
+      console.warn('[GoogleSpeech] AudioBufferManager not initialized');
+      return Buffer.alloc(0);
+    }
+    return Buffer.concat(this.audioBufferManager.getRecentAudio(durationMs));
+  }
+
+  /**
+   * Flush audio buffer (get last N ms of audio)
+   * Typically used on natural finals to send last 600ms
+   * @returns {Buffer} Flushed audio
+   */
+  flushAudioBuffer() {
+    if (!this.audioBufferManager) {
+      console.warn('[GoogleSpeech] AudioBufferManager not initialized');
+      return Buffer.alloc(0);
+    }
+    return this.audioBufferManager.flush();
+  }
+
+  /**
+   * Get audio buffer status for monitoring
+   * @returns {Object} Buffer status
+   */
+  getAudioBufferStatus() {
+    if (!this.audioBufferManager) {
+      return { error: 'AudioBufferManager not initialized' };
+    }
+    return this.audioBufferManager.getStatus();
+  }
+
+  /**
    * Get stream statistics
    */
   getStats() {
+    const audioBufferStatus = this.getAudioBufferStatus();
+
     return {
       isActive: this.isActive,
       isRestarting: this.isRestarting,
@@ -1116,7 +1190,12 @@ export class GoogleSpeechStream {
       elapsedTime: Date.now() - this.startTime,
       queuedAudio: this.audioQueue.length,
       languageCode: this.languageCode,
-      streamReady: this.isStreamReady()
+      streamReady: this.isStreamReady(),
+      audioBuffer: {
+        chunks: audioBufferStatus.chunks || 0,
+        durationMs: audioBufferStatus.durationMs || 0,
+        utilizationPercent: audioBufferStatus.utilizationPercent || 0
+      }
     };
   }
 }

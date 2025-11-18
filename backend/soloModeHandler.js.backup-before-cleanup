@@ -14,6 +14,7 @@ import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
 import { grammarWorker } from './grammarWorker.js';
+import TextExtensionManager from './textExtensionManager.js';
 
 export async function handleSoloMode(clientWs) {
   console.log("[SoloMode] ⚡ Connection using Google Speech + OpenAI Translation");
@@ -168,7 +169,72 @@ export async function handleSoloMode(clientWs) {
               
               // Initialize with source language for transcription
               await speechStream.initialize(currentSourceLang);
-              
+
+              // 🧪 AUDIO BUFFER TEST: Log initial buffer state
+              console.log(`[AUDIO_BUFFER_TEST] 🎬 Speech stream initialized`);
+              const initialBufferStatus = speechStream.getAudioBufferStatus();
+              console.log(`[AUDIO_BUFFER_TEST] 📊 Initial Buffer State:`, {
+                initialized: initialBufferStatus.chunks !== undefined ? '✅ YES' : '❌ NO',
+                maxChunks: initialBufferStatus.maxChunks,
+                targetDurationMs: initialBufferStatus.targetDurationMs,
+                currentChunks: initialBufferStatus.chunks
+              });
+
+              // 🧪 AUDIO BUFFER TEST: Periodic health check (every 10 seconds)
+              const bufferHealthCheckInterval = setInterval(() => {
+                if (!speechStream) return;
+                const status = speechStream.getAudioBufferStatus();
+                const metrics = speechStream.audioBufferManager?.getMetrics();
+
+                console.log(`[AUDIO_BUFFER_TEST] 💓 Health Check:`, {
+                  chunks: status.chunks,
+                  durationMs: status.durationMs,
+                  utilizationPercent: status.utilizationPercent?.toFixed(1) + '%',
+                  totalBytesStored: status.totalBytesStored,
+                  metrics: metrics ? {
+                    totalChunksReceived: metrics.totalChunksReceived,
+                    chunksExpired: metrics.chunksExpired,
+                    avgChunkSize: Math.round(metrics.averageChunkSize)
+                  } : 'N/A',
+                  health: status.chunks > 50 ? '✅ GOOD' : status.chunks > 20 ? '⚠️  MODERATE' : status.chunks > 0 ? '🔶 LOW' : '❌ EMPTY'
+                });
+              }, 10000); // Every 10 seconds
+
+              // 🎯 TEXT EXTENSION MANAGER: Initialize for universal recovery on EVERY line
+              const textExtensionManager = new TextExtensionManager({
+                extendMs: 250,              // 250ms extension window
+                maxRecoveredTokens: 8,      // Safety limit
+                logger: console,
+                enableMetrics: true
+              });
+
+              console.log(`[SoloMode] 🎯 TextExtensionManager initialized (250ms window, universal processing)`);
+
+              // 🎯 TEXT EXTENSION MANAGER: Listen for committed finals (after extension window closes)
+              textExtensionManager.on('extensionClosed', async ({ segmentId, finalText, originalText, recoveredTokens, recoveredTokensCount, wasExtended }) => {
+                console.log(`[TextExtension] ✅ Extension window closed for segment ${segmentId}`);
+                console.log(`[TextExtension] 📊 Stats:`, {
+                  originalLength: originalText.length,
+                  finalLength: finalText.length,
+                  recovered: recoveredTokensCount,
+                  tokens: recoveredTokens,
+                  wasExtended
+                });
+
+                // Process the final text (with recovered tokens if any)
+                // This replaces the old pending final processing
+                processFinalText(finalText);
+              });
+
+              // 🎯 TEXT EXTENSION MANAGER: Listen for token recovery events
+              textExtensionManager.on('recoveredTokens', ({ segmentId, tokens, mergedText, sourcePartialText, mergeType }) => {
+                console.log(`[TextExtension] 🔄 Recovered tokens for segment ${segmentId}:`, {
+                  tokens,
+                  mergeType,
+                  newLength: mergedText.length
+                });
+              });
+
               const isTranscriptionOnly = currentSourceLang === currentTargetLang;
               
               // Set up error callback
@@ -657,12 +723,30 @@ export async function handleSoloMode(clientWs) {
                     last750ms: recentAudio750ms.length + ' bytes',
                     last600ms: recentAudio600ms.length + ' bytes',
                     canRecover: recentAudio750ms.length > 0 ? '✅ YES' : '❌ NO',
-                    estimatedMs: Math.round((recentAudio750ms.length / 48000) * 1000) + 'ms'
+                    estimatedMs: Math.round((recentAudio750ms.length / 48000) * 1000) + 'ms' // Rough estimate
                   });
                 }
 
                 // DEBUG: Log every result to verify callback is being called
                 console.log(`[SoloMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (meta: ${JSON.stringify(meta)})`);
+
+                // 🎯 TEXT EXTENSION MANAGER: Route ALL results through extension manager
+                if (isPartial) {
+                  // Send partial to extension manager (may extend pending final)
+                  textExtensionManager.onPartial({
+                    text: transcriptText,
+                    timestamp: Date.now()
+                  });
+                } else {
+                  // Send final to extension manager (opens 250ms window)
+                  textExtensionManager.onFinal({
+                    text: transcriptText,
+                    timestamp: Date.now(),
+                    isForced: meta.isForced || false
+                  });
+                  // Extension manager will emit 'extensionClosed' when ready to commit
+                  // Processing continues below for immediate partial display
+                }
 
                 if (isPartial) {
                   if (forcedFinalBuffer) {
@@ -791,11 +875,10 @@ export async function handleSoloMode(clientWs) {
                             }
                           }
                         }
-
+                        
                         const textToProcess = finalTextToUse;
-                        // DON'T reset here - FINAL handler needs this data for snapshot
-                        // latestPartialText = '';
-                        // longestPartialText = '';
+                        latestPartialText = '';
+                        longestPartialText = '';
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         pendingFinalization = null;
                         console.log(`[SoloMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
@@ -867,9 +950,8 @@ export async function handleSoloMode(clientWs) {
                           }
                         }
                         const textToProcess = finalTextToUse;
-                        // DON'T reset here - FINAL handler needs this data for snapshot
-                        // latestPartialText = '';
-                        // longestPartialText = '';
+                        latestPartialText = '';
+                        longestPartialText = '';
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         pendingFinalization = null;
                         console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
@@ -932,12 +1014,11 @@ export async function handleSoloMode(clientWs) {
                           }
                         }
                         
-                        // DON'T reset partial tracking here - FINAL handler will use snapshot and reset
-                        // Resetting here causes data loss when FINAL arrives after "new segment detected"
-                        // latestPartialText = '';
-                        // longestPartialText = '';
-                        // latestPartialTime = 0;
-                        // longestPartialTime = 0;
+                        // Reset and commit immediately
+                        latestPartialText = '';
+                        longestPartialText = '';
+                        latestPartialTime = 0;
+                        longestPartialTime = 0;
                         pendingFinalization = null;
                         console.log(`[SoloMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
                         processFinalText(textToProcess);
@@ -1397,49 +1478,47 @@ export async function handleSoloMode(clientWs) {
                     }
                   }
                 } else {
+                  // 🎯 FINALS ARE NOW HANDLED BY TEXT EXTENSION MANAGER
+                  // The old pending final logic below is DISABLED to prevent duplicates
+                  // TextExtensionManager processes all finals via the 250ms extension window
+
+                  console.log(`[SoloMode] ℹ️ Final processing delegated to TextExtensionManager (old system disabled)`);
+
+                  // OLD SYSTEM DISABLED - DO NOT UNCOMMENT UNLESS REMOVING TEXT EXTENSION MANAGER
+                  /*
                   const isForcedFinal = meta?.forced === true;
                   // Final transcript from Google Speech
                   console.log(`[SoloMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
 
-                  // 🔍 CRITICAL SNAPSHOT: Capture longest partial RIGHT NOW before stream restart overwrites it
-                  const longestPartialSnapshot = longestPartialText;
-                  const longestPartialTimeSnapshot = longestPartialTime;
-                  const latestPartialSnapshot = latestPartialText;
-                  const latestPartialTimeSnapshot = latestPartialTime;
-
-                  console.log(`[SoloMode] 📸 SNAPSHOT: longest=${longestPartialSnapshot?.length || 0} chars, latest=${latestPartialSnapshot?.length || 0} chars`);
-
+                  ... [rest of old logic commented out]
+                  */
+                }
+                  
                   if (isForcedFinal) {
                     console.warn(`[SoloMode] ⚠️ Forced FINAL due to stream restart (${transcriptText.length} chars)`);
                     realtimeTranslationCooldownUntil = Date.now() + TRANSLATION_RESTART_COOLDOWN_MS;
-
+                    
                     if (forcedFinalBuffer && forcedFinalBuffer.timeout) {
                       clearTimeout(forcedFinalBuffer.timeout);
                       forcedFinalBuffer = null;
                     }
-
-                    // CRITICAL: Use SNAPSHOT not live value (live value may already be from next segment!)
-                    const timeSinceLongestForced = longestPartialTimeSnapshot ? (Date.now() - longestPartialTimeSnapshot) : Infinity;
-                    if (longestPartialSnapshot && longestPartialSnapshot.length > transcriptText.length && timeSinceLongestForced < 5000) {
+                    
+                    // Use the longest partial if it captured more text AND actually extends the forced final
+                    const timeSinceLongestForced = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                    if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongestForced < 5000) {
                       const forcedTrimmed = transcriptText.trim();
-                      const longestTrimmed = longestPartialSnapshot.trim();
+                      const longestTrimmed = longestPartialText.trim();
                       // Verify it actually extends the forced final (not from a previous segment)
-                      if (longestTrimmed.startsWith(forcedTrimmed) ||
+                      if (longestTrimmed.startsWith(forcedTrimmed) || 
                           (forcedTrimmed.length > 10 && longestTrimmed.substring(0, forcedTrimmed.length) === forcedTrimmed)) {
-                        const missingWords = longestPartialSnapshot.substring(transcriptText.length).trim();
-                        console.log(`[SoloMode] ⚠️ Forced FINAL using LONGEST partial SNAPSHOT (${transcriptText.length} → ${longestPartialSnapshot.length} chars)`);
+                        const missingWords = longestPartialText.substring(transcriptText.length).trim();
+                        console.log(`[SoloMode] ⚠️ Forced FINAL using LONGEST partial (${transcriptText.length} → ${longestPartialText.length} chars)`);
                         console.log(`[SoloMode] 📊 Recovered (forced): "${missingWords}"`);
-                        transcriptText = longestPartialSnapshot;
+                        transcriptText = longestPartialText;
                       } else {
-                        console.log(`[SoloMode] ⚠️ Ignoring LONGEST partial snapshot - doesn't extend forced final`);
+                        console.log(`[SoloMode] ⚠️ Ignoring LONGEST partial for forced final - appears to be from different segment`);
                       }
                     }
-
-                    // NOW reset partial tracking after using snapshot
-                    longestPartialText = '';
-                    latestPartialText = '';
-                    longestPartialTime = 0;
-                    latestPartialTime = 0;
                     
                     const endsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
                     if (endsWithPunctuation) {
@@ -1833,26 +1912,26 @@ export async function handleSoloMode(clientWs) {
                           // Continue with commit using the updated text
                           const textToProcess = finalTextToUse2;
                           const waitTime = Date.now() - pendingFinalization.timestamp;
-                          // DON'T reset here - FINAL handler needs this data for snapshot
-                          // latestPartialText = '';
-                          // longestPartialText = '';
-                          // latestPartialTime = 0;
-                          // longestPartialTime = 0;
+                          latestPartialText = '';
+                          longestPartialText = '';
+                          latestPartialTime = 0;
+                          longestPartialTime = 0;
                           pendingFinalization = null;
                           console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                           processFinalText(textToProcess);
                         }, remainingWait);
                         return; // Don't commit yet
                       }
-
-                      // DON'T reset here - FINAL handler needs this data for snapshot
+                      
+                      // Reset for next segment AFTER processing
                       const textToProcess = finalTextToUse;
                       const waitTime = Date.now() - pendingFinalization.timestamp;
-                      // Partial tracking will be reset by FINAL handler after snapshot
-                      // latestPartialText = '';
-                      // longestPartialText = '';
-                      // latestPartialTime = 0;
-                      // longestPartialTime = 0;
+                      // CRITICAL FIX: Reset partial tracking AFTER final is scheduled for processing
+                      // This prevents accumulation of old partials from previous sentences
+                      latestPartialText = '';
+                      longestPartialText = '';
+                      latestPartialTime = 0;
+                      longestPartialTime = 0;
                       pendingFinalization = null;
                       
                       if (!finalEndsWithCompleteSentence) {
@@ -1959,10 +2038,42 @@ export async function handleSoloMode(clientWs) {
   // Handle client disconnect
   clientWs.on("close", () => {
     console.log("[SoloMode] Client disconnected");
-    
+
+    // 🧪 AUDIO BUFFER TEST: Clean up health check interval
+    if (typeof bufferHealthCheckInterval !== 'undefined') {
+      clearInterval(bufferHealthCheckInterval);
+      console.log("[AUDIO_BUFFER_TEST] 🛑 Health check interval cleared");
+    }
+
     if (speechStream) {
+      // Log final buffer stats before destroying
+      const finalStatus = speechStream.getAudioBufferStatus();
+      const finalMetrics = speechStream.audioBufferManager?.getMetrics();
+      console.log("[AUDIO_BUFFER_TEST] 📊 Final Buffer Stats:", {
+        totalChunksProcessed: finalMetrics?.totalChunksReceived,
+        totalBytesProcessed: finalMetrics?.totalBytesReceived,
+        finalBufferSize: finalStatus.chunks
+      });
+
       speechStream.destroy();
       speechStream = null;
+    }
+
+    // 🎯 TEXT EXTENSION MANAGER: Clean up and log final metrics
+    if (typeof textExtensionManager !== 'undefined') {
+      const textExtMetrics = textExtensionManager.getMetrics();
+      console.log("[TextExtension] 📊 Final Extension Stats:", {
+        extensionsOpened: textExtMetrics.extensionsOpened,
+        extensionsClosed: textExtMetrics.extensionsClosed,
+        tokensRecovered: textExtMetrics.tokensRecovered,
+        mergesSuccessful: textExtMetrics.mergesSuccessful,
+        successRate: textExtMetrics.extensionsOpened > 0
+          ? ((textExtMetrics.mergesSuccessful / textExtMetrics.extensionsOpened) * 100).toFixed(1) + '%'
+          : 'N/A'
+      });
+
+      textExtensionManager.destroy();
+      console.log("[TextExtension] 🛑 TextExtensionManager destroyed");
     }
   });
 
