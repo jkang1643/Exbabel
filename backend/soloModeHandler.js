@@ -1526,6 +1526,7 @@ export async function handleSoloMode(clientWs) {
                             console.log(`[SoloMode] 🎵 Starting decoder gap recovery with PRE+POST-final audio: ${recoveryAudio.length} bytes`);
 
                             try {
+                              console.log(`[SoloMode] 🔄 ENTERED recovery try block - about to import GoogleSpeechStream...`);
                               console.log(`[SoloMode] 🔄 Importing GoogleSpeechStream...`);
                               const { GoogleSpeechStream } = await import('./googleSpeechStream.js');
 
@@ -1533,18 +1534,29 @@ export async function handleSoloMode(clientWs) {
                               await tempStream.initialize(currentSourceLang, { disablePunctuation: true });
                               console.log(`[SoloMode] ✅ Temporary recovery stream initialized`);
 
-                              // Wait for stream to be ready
+                              // Wait for stream to be FULLY ready (not just exist)
+                              console.log(`[SoloMode] ⏳ Waiting for recovery stream to be ready...`);
                               let streamReadyTimeout = 0;
-                              while (!tempStream.recognizeStream && streamReadyTimeout < 2000) {
+                              while (!tempStream.isStreamReady() && streamReadyTimeout < 2000) {
                                 await new Promise(resolve => setTimeout(resolve, 50));
                                 streamReadyTimeout += 50;
                               }
 
-                              if (!tempStream.recognizeStream) {
+                              if (!tempStream.isStreamReady()) {
+                                console.log(`[SoloMode] ❌ Recovery stream not ready after 2000ms!`);
+                                console.log(`[SoloMode] Stream state:`, {
+                                  exists: !!tempStream.recognizeStream,
+                                  writable: tempStream.recognizeStream?.writable,
+                                  destroyed: tempStream.recognizeStream?.destroyed,
+                                  isActive: tempStream.isActive,
+                                  isRestarting: tempStream.isRestarting
+                                });
                                 throw new Error('Recognition stream not ready');
                               }
 
+                              console.log(`[SoloMode] ✅ Recovery stream ready after ${streamReadyTimeout}ms`);
                               await new Promise(resolve => setTimeout(resolve, 100));
+                              console.log(`[SoloMode] ✅ Additional 100ms wait complete`);
 
                               // Set up result handler
                               let recoveredText = '';
@@ -1562,22 +1574,31 @@ export async function handleSoloMode(clientWs) {
 
                               // Send the PRE+POST-final audio
                               const recoveryAudioBase64 = recoveryAudio.toString('base64');
-                              console.log(`[SoloMode] 📤 Sending ${recoveryAudio.length} bytes to recovery stream...`);
+                              console.log(`[SoloMode] 📤 Sending ${recoveryAudio.length} bytes (${recoveryAudioBase64.length} base64 chars) to recovery stream...`);
                               await tempStream.processAudio(recoveryAudioBase64, { isRecovery: true });
+                              console.log(`[SoloMode] ✅ Audio sent to processAudio()`);
 
-                              // Wait for jitter buffer
-                              await new Promise(resolve => setTimeout(resolve, 200));
+                              // Wait for jitter buffer (100ms delay + some margin)
+                              console.log(`[SoloMode] ⏳ Waiting 300ms for jitter buffer to release audio...`);
+                              await new Promise(resolve => setTimeout(resolve, 300));
+                              console.log(`[SoloMode] ✅ Jitter buffer wait complete`);
 
                               // Wait for Google to process
-                              await new Promise(resolve => setTimeout(resolve, 500));
+                              console.log(`[SoloMode] ⏳ Waiting 800ms for Google to process audio...`);
+                              await new Promise(resolve => setTimeout(resolve, 800));
+                              console.log(`[SoloMode] ✅ Google processing wait complete`);
 
-                              // Close stream
+                              // Close stream to force finalization
+                              console.log(`[SoloMode] 🔄 Closing recovery stream to force finalization...`);
                               if (tempStream.recognizeStream) {
                                 tempStream.recognizeStream.end();
+                                console.log(`[SoloMode] ✅ Recognition stream ended`);
                               }
 
-                              // Wait for results
-                              await new Promise(resolve => setTimeout(resolve, 2000));
+                              // Wait for final results to arrive
+                              console.log(`[SoloMode] ⏳ Waiting 1500ms for final results...`);
+                              await new Promise(resolve => setTimeout(resolve, 1500));
+                              console.log(`[SoloMode] ✅ Final results wait complete`);
 
                               // Use last partial if no final
                               if (!recoveredText && lastPartialText) {
@@ -1616,6 +1637,8 @@ export async function handleSoloMode(clientWs) {
 
                             } catch (error) {
                               console.error(`[SoloMode] ❌ Decoder gap recovery failed:`, error.message);
+                              console.error(`[SoloMode] ❌ Error stack:`, error.stack);
+                              console.error(`[SoloMode] ❌ Full error object:`, error);
                             }
                           }
                           console.log(`[SoloMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
