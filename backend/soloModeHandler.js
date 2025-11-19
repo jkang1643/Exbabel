@@ -638,6 +638,12 @@ export async function handleSoloMode(clientWs) {
               speechStream.onResult(async (transcriptText, isPartial, meta = {}) => {
                 if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
 
+                // CRITICAL: Null check - recovery stream may send null results
+                if (!transcriptText || transcriptText.length === 0) {
+                  console.log(`[SoloMode] ⚠️ Received empty/null transcriptText from stream, ignoring`);
+                  return;
+                }
+
                 // 🧪 AUDIO BUFFER TEST: Log buffer status on every result
                 const audioBufferStatus = speechStream.getAudioBufferStatus();
                 console.log(`[AUDIO_BUFFER_TEST] 🎵 Buffer Status:`, {
@@ -1532,7 +1538,12 @@ export async function handleSoloMode(clientWs) {
 
                               const tempStream = new GoogleSpeechStream();
                               await tempStream.initialize(currentSourceLang, { disablePunctuation: true });
-                              console.log(`[SoloMode] ✅ Temporary recovery stream initialized`);
+
+                              // CRITICAL: Disable auto-restart for recovery stream
+                              // We want it to end naturally after processing our audio
+                              tempStream.shouldAutoRestart = false;
+
+                              console.log(`[SoloMode] ✅ Temporary recovery stream initialized (auto-restart disabled)`);
 
                               // Wait for stream to be FULLY ready (not just exist)
                               console.log(`[SoloMode] ⏳ Waiting for recovery stream to be ready...`);
@@ -1558,47 +1569,68 @@ export async function handleSoloMode(clientWs) {
                               await new Promise(resolve => setTimeout(resolve, 100));
                               console.log(`[SoloMode] ✅ Additional 100ms wait complete`);
 
-                              // Set up result handler
+                              // Set up result handler and create promise to wait for stream completion
                               let recoveredText = '';
                               let lastPartialText = '';
                               let allPartials = [];
-                              tempStream.onResult((text, isPartial) => {
-                                console.log(`[SoloMode] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'}: "${text}"`);
-                                if (!isPartial) {
-                                  recoveredText = text;
-                                } else {
-                                  allPartials.push(text);
-                                  lastPartialText = text;
-                                }
+
+                              // CRITICAL: Create promise that waits for Google's 'end' event
+                              const streamCompletionPromise = new Promise((resolve) => {
+                                tempStream.onResult((text, isPartial) => {
+                                  console.log(`[SoloMode] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'}: "${text}"`);
+                                  if (!isPartial) {
+                                    recoveredText = text;
+                                  } else {
+                                    allPartials.push(text);
+                                    lastPartialText = text;
+                                  }
+                                });
+
+                                // Wait for Google to finish processing (stream 'end' event)
+                                tempStream.recognizeStream.on('end', () => {
+                                  console.log(`[SoloMode] 🏁 Recovery stream 'end' event received from Google`);
+                                  resolve();
+                                });
+
+                                // Also handle errors
+                                tempStream.recognizeStream.on('error', (err) => {
+                                  console.error(`[SoloMode] ❌ Recovery stream error:`, err);
+                                  resolve(); // Resolve anyway to prevent hanging
+                                });
                               });
 
-                              // Send the PRE+POST-final audio
-                              const recoveryAudioBase64 = recoveryAudio.toString('base64');
-                              console.log(`[SoloMode] 📤 Sending ${recoveryAudio.length} bytes (${recoveryAudioBase64.length} base64 chars) to recovery stream...`);
-                              await tempStream.processAudio(recoveryAudioBase64, { isRecovery: true });
-                              console.log(`[SoloMode] ✅ Audio sent to processAudio()`);
+                              // Send the PRE+POST-final audio DIRECTLY to recognition stream
+                              // BYPASS jitter buffer - send entire audio as one write for recovery
+                              console.log(`[SoloMode] 📤 Sending ${recoveryAudio.length} bytes directly to recovery stream (bypassing jitter buffer)...`);
 
-                              // Wait for jitter buffer (100ms delay + some margin)
-                              console.log(`[SoloMode] ⏳ Waiting 300ms for jitter buffer to release audio...`);
-                              await new Promise(resolve => setTimeout(resolve, 300));
-                              console.log(`[SoloMode] ✅ Jitter buffer wait complete`);
+                              // Write directly to the recognition stream
+                              if (tempStream.recognizeStream && tempStream.isStreamReady()) {
+                                tempStream.recognizeStream.write(recoveryAudio);
+                                console.log(`[SoloMode] ✅ Audio written directly to recognition stream`);
 
-                              // Wait for Google to process
-                              console.log(`[SoloMode] ⏳ Waiting 800ms for Google to process audio...`);
-                              await new Promise(resolve => setTimeout(resolve, 800));
-                              console.log(`[SoloMode] ✅ Google processing wait complete`);
-
-                              // Close stream to force finalization
-                              console.log(`[SoloMode] 🔄 Closing recovery stream to force finalization...`);
-                              if (tempStream.recognizeStream) {
+                                // CRITICAL: End write side IMMEDIATELY after writing
+                                // This tells Google "no more audio coming, finalize what you have"
                                 tempStream.recognizeStream.end();
-                                console.log(`[SoloMode] ✅ Recognition stream ended`);
+                                console.log(`[SoloMode] ✅ Write side closed - waiting for Google to process and send results...`);
+                              } else {
+                                console.error(`[SoloMode] ❌ Recovery stream not ready for direct write!`);
+                                throw new Error('Recovery stream not ready');
                               }
 
-                              // Wait for final results to arrive
-                              console.log(`[SoloMode] ⏳ Waiting 1500ms for final results...`);
-                              await new Promise(resolve => setTimeout(resolve, 1500));
-                              console.log(`[SoloMode] ✅ Final results wait complete`);
+                              // Wait for Google to process and send back results
+                              // This waits for the actual 'end' event, not a timer
+                              console.log(`[SoloMode] ⏳ Waiting for Google to decode and send results (stream 'end' event)...`);
+
+                              // Add timeout to prevent infinite hang
+                              const timeoutPromise = new Promise((resolve) => {
+                                setTimeout(() => {
+                                  console.warn(`[SoloMode] ⚠️ Recovery stream timeout after 5000ms`);
+                                  resolve();
+                                }, 5000);
+                              });
+
+                              await Promise.race([streamCompletionPromise, timeoutPromise]);
+                              console.log(`[SoloMode] ✅ Google decode wait complete`);
 
                               // Use last partial if no final
                               if (!recoveredText && lastPartialText) {
