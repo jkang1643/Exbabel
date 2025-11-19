@@ -684,11 +684,11 @@ export async function handleSoloMode(clientWs) {
                       forcedFinalBuffer = null;
                       // Continue processing the extended partial normally
                     } else {
-                      // New segment detected - commit forced final separately
-                      console.log('[SoloMode] 🔀 New segment detected - committing forced final separately');
-                      clearTimeout(forcedFinalBuffer.timeout);
-                      processFinalText(forcedFinalBuffer.text, { forceFinal: true });
-                      forcedFinalBuffer = null;
+                      // New segment detected - but DON'T cancel timeout yet!
+                      // Let the POST-final audio recovery complete in the timeout
+                      console.log('[SoloMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                      // DON'T clear timeout or set to null - let it run!
+                      // The timeout will commit the final after POST-final audio recovery
                       // Continue processing the new partial as a new segment
                     }
                   }
@@ -1450,20 +1450,34 @@ export async function handleSoloMode(clientWs) {
                     try {
                       console.log(`[SoloMode] 📝 Forced final text: "${transcriptText.substring(0, 80)}..." (${transcriptText.length} chars, ends with punctuation: ${endsWithPunctuation})`);
 
-                      // CRITICAL: Capture audio buffer BEFORE stream restart to recover missing words
-                      // Capture MORE audio (1500ms = full buffer) to ensure we get everything spoken
-                      // The missing words are between when Google finalized and when new audio arrives
-                      const recoveryAudio = speechStream.getRecentAudio(1500); // Use full buffer (1500ms)
-                      console.log(`[SoloMode] 🎵 Captured recovery audio: ${recoveryAudio.length} bytes (${Math.round((recoveryAudio.length / 48000) * 1000)}ms estimated)`);
+                      // ⭐ CRITICAL TIMING FIX: Capture PRE-final audio (not post-final)
+                      // The decoder gap occurs 200-500ms BEFORE the forced final
+                      // We need a buffer window that spans BOTH before and after the final
+                      console.log(`[SoloMode] 🎯 Starting PRE+POST-final audio capture window (400ms wait)...`);
 
                       const bufferedText = transcriptText;
+                      const forcedFinalTimestamp = Date.now();
+
                       forcedFinalBuffer = {
                         text: transcriptText,
-                        timestamp: Date.now(),
-                        recoveryAudio: recoveryAudio, // Store audio for recovery
-                        recoveryAudioInjected: false,
+                        timestamp: forcedFinalTimestamp,
                         timeout: setTimeout(async () => {
-                          console.warn('[SoloMode] ⏰ Forced final buffer timeout - checking for extensions and audio recovery before commit');
+                          console.warn('[SoloMode] ⏰ Forced final buffer timeout - capturing PRE+POST-final audio');
+
+                          // Calculate how much time has passed since forced final
+                          const timeSinceForcedFinal = Date.now() - forcedFinalTimestamp;
+                          console.log(`[SoloMode] ⏱️ ${timeSinceForcedFinal}ms has passed since forced final`);
+
+                          // ⭐ CRITICAL: Capture 1800ms window that includes BOTH:
+                          // - PRE-final audio (1400ms before the final) ← Contains the decoder gap!
+                          // - POST-final audio (400ms after the final) ← Ensures we got everything
+                          const captureWindowMs = 1800;
+                          console.log(`[SoloMode] 🎵 Capturing PRE+POST-final audio: last ${captureWindowMs}ms`);
+                          console.log(`[SoloMode] 📊 Window covers: [T-${captureWindowMs - timeSinceForcedFinal}ms to T+${timeSinceForcedFinal}ms]`);
+                          console.log(`[SoloMode] 🎯 This INCLUDES the decoder gap at ~T-200ms where missing words exist!`);
+
+                          const recoveryAudio = speechStream.getRecentAudio(captureWindowMs);
+                          console.log(`[SoloMode] 🎵 Captured ${recoveryAudio.length} bytes of PRE+POST-final audio`);
 
                           // CRITICAL: If audio recovery is in progress, wait for it to complete
                           if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress && forcedFinalBuffer.recoveryPromise) {
@@ -1481,7 +1495,13 @@ export async function handleSoloMode(clientWs) {
                           }
 
                           // CRITICAL: Check if longestPartialText has extended the buffered text during wait period
+                          // The POST-final audio is being transcribed by the main stream!
                           let finalTextToCommit = forcedFinalBuffer ? forcedFinalBuffer.text : bufferedText;
+
+                          console.log(`[SoloMode] 📊 Checking for POST-final words:`);
+                          console.log(`[SoloMode]   Buffered final: "${finalTextToCommit}"`);
+                          console.log(`[SoloMode]   Longest partial: "${longestPartialText || 'none'}"`);
+
                           if (longestPartialText && longestPartialText.length > finalTextToCommit.length) {
                             const bufferedTrimmed = finalTextToCommit.trim();
                             const longestTrimmed = longestPartialText.trim();
@@ -1490,216 +1510,28 @@ export async function handleSoloMode(clientWs) {
                             if (longestTrimmed.startsWith(bufferedTrimmed) ||
                                 (bufferedTrimmed.length > 10 && longestTrimmed.substring(0, bufferedTrimmed.length) === bufferedTrimmed)) {
                               const recoveredWords = longestPartialText.substring(finalTextToCommit.length).trim();
-                              console.log(`[SoloMode] ⚠️ Forced final extended by partials during buffer period (${finalTextToCommit.length} → ${longestPartialText.length} chars)`);
-                              console.log(`[SoloMode] 📊 Recovered from partials: "${recoveredWords}"`);
+                              console.log(`[SoloMode] ✅ POST-final words found in main stream partial!`);
+                              console.log(`[SoloMode] 📊 Forced final extended by partials (${finalTextToCommit.length} → ${longestPartialText.length} chars)`);
+                              console.log(`[SoloMode] 🎯 Recovered POST-final words: "${recoveredWords}"`);
                               finalTextToCommit = longestPartialText;
+                            } else {
+                              console.log(`[SoloMode] ⚠️ Longest partial doesn't extend buffered - treating as new segment`);
                             }
+                          } else {
+                            console.log(`[SoloMode] ⚠️ No POST-final extension found in partials`);
                           }
+
+                          // ⭐ POST-FINAL RECOVERY: The main stream already transcribed the POST-final audio!
+                          // We captured it in longestPartialText above. No need for separate temporary stream.
+                          // The temporary stream approach was competing with the main stream.
+                          console.log(`[SoloMode] ✅ POST-final recovery strategy: Using main stream partials (simpler & faster)`);
 
                           console.log(`[SoloMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
                           processFinalText(finalTextToCommit, { forceFinal: true });
                           forcedFinalBuffer = null;
-                        }, FORCED_FINAL_MAX_WAIT_MS)
+                        }, 400)  // ⭐ REDUCED: Only wait 400ms for POST-final audio, not 1200ms
                       };
 
-                      // PHASE 1A: Audio Recovery via SEPARATE temporary stream
-                      // Don't inject into main stream (causes garbled text due to context mixing)
-                      // Instead: Create temporary stream, transcribe recovery audio, merge text results
-                      if (recoveryAudio.length > 0) {
-                        console.log(`[SoloMode] 🎵 Starting audio recovery: ${recoveryAudio.length} bytes (${Math.round((recoveryAudio.length / 48000) * 1000)}ms)`);
-
-                        // Store recovery promise so buffer timeout can check if it's still running
-                        const recoveryPromise = (async () => {
-                          try {
-                            console.log(`[SoloMode] 🔄 Step 1: Importing GoogleSpeechStream...`);
-                            const { GoogleSpeechStream } = await import('./googleSpeechStream.js');
-                            console.log(`[SoloMode] ✅ Step 1 complete: GoogleSpeechStream imported`);
-
-                            console.log(`[SoloMode] 🔄 Step 2: Creating temporary stream...`);
-                            const tempStream = new GoogleSpeechStream();
-                            console.log(`[SoloMode] ✅ Step 2 complete: Temporary stream created`);
-
-                            console.log(`[SoloMode] 🔄 Step 3: Initializing temporary stream for ${currentSourceLang}...`);
-                            // CRITICAL: Disable punctuation for recovery stream to prevent premature finalization
-                            await tempStream.initialize(currentSourceLang, { disablePunctuation: true });
-                            console.log(`[SoloMode] ✅ Temporary stream initialized with punctuation DISABLED`);
-
-                            // CRITICAL: Wait for recognition stream to be actually ready
-                            // The initialize() returns when stream is created, but not when it's ready to accept audio
-                            console.log(`[SoloMode] ⏳ Step 3b: Waiting for recognition stream to be ready...`);
-                            let streamReadyTimeout = 0;
-                            while (!tempStream.recognizeStream && streamReadyTimeout < 2000) {
-                              await new Promise(resolve => setTimeout(resolve, 50));
-                              streamReadyTimeout += 50;
-                            }
-
-                            if (!tempStream.recognizeStream) {
-                              console.log(`[SoloMode] ❌ Step 3b failed: Recognition stream not ready after 2000ms`);
-                              throw new Error('Recognition stream not ready');
-                            }
-
-                            // Additional 100ms for stream to fully initialize
-                            await new Promise(resolve => setTimeout(resolve, 100));
-                            console.log(`[SoloMode] ✅ Step 3 complete: Temporary recovery stream initialized and ready`);
-
-                            // Set up result handler for the temporary stream
-                            let recoveredText = '';
-                            let lastPartialText = '';
-                            let allPartials = []; // Track all partials to debug
-                            tempStream.onResult((text, isPartial, meta) => {
-                              const resultType = isPartial ? 'PARTIAL' : 'FINAL';
-                              console.log(`[SoloMode] 📥 Temp stream result #${allPartials.length + 1}: ${resultType} "${text}" (${text.length} chars)`);
-
-                              if (!isPartial) {
-                                recoveredText = text;
-                                console.log(`[SoloMode] ✅ Recovery stream FINAL captured: "${text}"`);
-                              } else {
-                                // Track all partials for analysis
-                                allPartials.push(text);
-                                lastPartialText = text;
-                                console.log(`[SoloMode] 📝 Recovery stream PARTIAL #${allPartials.length} captured: "${text}"`);
-                              }
-                            });
-                            console.log(`[SoloMode] ✅ Step 4: Result handler registered`);
-
-                            // Send the recovery audio to the temporary stream
-                            // CRITICAL FIX: processAudio expects base64-encoded string, not raw Buffer
-                            const recoveryAudioBase64 = recoveryAudio.toString('base64');
-                            const estimatedDurationMs = Math.round((recoveryAudio.length / 48000) * 1000);
-                            console.log(`[SoloMode] 🔄 Step 5: Sending ${recoveryAudio.length} bytes (${recoveryAudioBase64.length} base64 chars) to temp stream...`);
-                            console.log(`[SoloMode] 📊 Recovery audio details:`);
-                            console.log(`[SoloMode]   Raw bytes: ${recoveryAudio.length}`);
-                            console.log(`[SoloMode]   Base64 length: ${recoveryAudioBase64.length}`);
-                            console.log(`[SoloMode]   Estimated duration: ~${estimatedDurationMs}ms`);
-                            console.log(`[SoloMode]   Expected words: ~${Math.floor(estimatedDurationMs / 200)} words (at ~200ms per word)`);
-
-                            await tempStream.processAudio(recoveryAudioBase64, {
-                              isRecovery: true,
-                              recoverySource: 'forced_final_buffer'
-                            });
-                            console.log(`[SoloMode] ✅ Step 5 complete: Audio queued to temp stream`);
-
-                            // CRITICAL: Wait for jitter buffer to release the audio chunk to Google
-                            // The jitter buffer delay is 100ms, so we wait 200ms to be safe
-                            console.log(`[SoloMode] ⏳ Step 5b: Waiting 200ms for jitter buffer to release audio to Google...`);
-                            await new Promise(resolve => setTimeout(resolve, 200));
-                            console.log(`[SoloMode] ✅ Step 5b complete: Jitter buffer should have released audio`);
-
-                            // CRITICAL: Wait for Google to START processing before closing stream
-                            // Google needs time to receive 67KB and send first partial
-                            console.log(`[SoloMode] ⏳ Step 5c: Waiting 500ms for Google to start processing audio...`);
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                            console.log(`[SoloMode] ✅ Step 5c complete: Google should have started processing`);
-
-                            // End the audio to force final result
-                            // CRITICAL: We need to actually close the recognition stream to force Google to finalize
-                            console.log(`[SoloMode] 🔄 Step 6: Closing recognition stream to force final...`);
-                            if (tempStream.recognizeStream) {
-                              tempStream.recognizeStream.end();
-                              console.log(`[SoloMode] ✅ Step 6 complete: Recognition stream closed, waiting for final`);
-                            } else {
-                              console.log(`[SoloMode] ⚠️ Step 6 warning: No recognition stream to close`);
-                            }
-
-                            // Wait LONGER for the final result (increased from 1500ms to 3000ms)
-                            console.log(`[SoloMode] ⏳ Step 7: Waiting 3000ms for final result...`);
-                            await new Promise(resolve => setTimeout(resolve, 3000));
-                            console.log(`[SoloMode] ✅ Step 7 complete: Wait finished`);
-
-                            // Recovery analysis
-                            console.log(`[SoloMode] 📊 === RECOVERY ANALYSIS ===`);
-                            console.log(`[SoloMode]   Total partials received: ${allPartials.length}`);
-                            console.log(`[SoloMode]   Final received: ${recoveredText ? 'YES' : 'NO'}`);
-                            console.log(`[SoloMode]   Last partial: "${lastPartialText}"`);
-                            console.log(`[SoloMode]   All partials: ${JSON.stringify(allPartials)}`);
-                            console.log(`[SoloMode]   Audio sent: ${recoveryAudio.length} bytes (~${estimatedDurationMs}ms)`);
-                            console.log(`[SoloMode]   Expected ~${Math.floor(estimatedDurationMs / 200)} words, got ${(recoveredText || lastPartialText).split(' ').length} words`);
-
-                            // If we didn't get a FINAL, use the last PARTIAL
-                            if (!recoveredText && lastPartialText) {
-                              console.log(`[SoloMode] 💡 No FINAL received, using last PARTIAL: "${lastPartialText}"`);
-                              recoveredText = lastPartialText;
-                            }
-
-                            // Clean up temporary stream
-                            console.log(`[SoloMode] 🔄 Step 8: Destroying temporary stream...`);
-                            tempStream.destroy();
-                            console.log(`[SoloMode] ✅ Step 8 complete: Temporary stream destroyed`);
-
-                            // If we got a result, try to merge it with the buffered text
-                            if (recoveredText && recoveredText.length > 0) {
-                              console.log(`[SoloMode] ✅ Recovery transcription complete: "${recoveredText}"`);
-
-                              // Check if recovered text extends the buffered final
-                              const bufferedTrimmed = bufferedText.trim().toLowerCase();
-                              const recoveredTrimmed = recoveredText.trim().toLowerCase();
-
-                              console.log(`[SoloMode] 🔍 Merge analysis:`);
-                              console.log(`[SoloMode]   Buffered: "${bufferedTrimmed}"`);
-                              console.log(`[SoloMode]   Recovered: "${recoveredTrimmed}"`);
-
-                              // Strategy 1: Recovered text contains buffered text (full overlap)
-                              if (recoveredTrimmed.includes(bufferedTrimmed)) {
-                                if (recoveredText.length > bufferedText.length) {
-                                  console.log(`[SoloMode] 📊 Strategy 1: Recovered contains buffered - using recovered (${bufferedText.length} → ${recoveredText.length} chars)`);
-                                  if (forcedFinalBuffer) {
-                                    forcedFinalBuffer.text = recoveredText;
-                                    console.log(`[SoloMode] ✅ Updated forced final buffer with recovered text`);
-                                  }
-                                }
-                              }
-                              // Strategy 2: Look for suffix overlap (recovered continues where buffered left off)
-                              else {
-                                // Try to find if buffered ends with beginning of recovered
-                                let bestOverlap = 0;
-                                for (let i = 1; i <= Math.min(bufferedTrimmed.length, recoveredTrimmed.length); i++) {
-                                  const bufferedSuffix = bufferedTrimmed.slice(-i);
-                                  const recoveredPrefix = recoveredTrimmed.slice(0, i);
-                                  if (bufferedSuffix === recoveredPrefix) {
-                                    bestOverlap = i;
-                                  }
-                                }
-
-                                if (bestOverlap > 0) {
-                                  // Found overlap - append the non-overlapping part
-                                  const extension = recoveredText.trim().slice(bestOverlap);
-                                  const merged = bufferedText.trim() + ' ' + extension;
-                                  console.log(`[SoloMode] 📊 Strategy 2: Found overlap of ${bestOverlap} chars - merging`);
-                                  console.log(`[SoloMode]   Extension: "${extension}"`);
-                                  console.log(`[SoloMode]   Merged: "${merged}"`);
-                                  if (forcedFinalBuffer) {
-                                    forcedFinalBuffer.text = merged;
-                                    console.log(`[SoloMode] ✅ Updated forced final buffer with merged text`);
-                                  }
-                                } else {
-                                  // Strategy 3: No overlap - might be continuation, just append
-                                  const merged = bufferedText.trim() + ' ' + recoveredText.trim();
-                                  console.log(`[SoloMode] 📊 Strategy 3: No overlap detected - appending as continuation`);
-                                  console.log(`[SoloMode]   Merged: "${merged}"`);
-                                  if (forcedFinalBuffer) {
-                                    forcedFinalBuffer.text = merged;
-                                    console.log(`[SoloMode] ✅ Updated forced final buffer with appended text`);
-                                  }
-                                }
-                              }
-                            } else {
-                              console.log(`[SoloMode] ⚠️ No recovery transcript received (recoveredText was empty or undefined)`);
-                            }
-
-                            return recoveredText;
-                          } catch (error) {
-                            console.error(`[SoloMode] ❌ Audio recovery failed:`, error.message);
-                            console.error(`[SoloMode] ❌ Stack:`, error.stack);
-                            return null;
-                          }
-                        })();
-
-                        // Mark that recovery is in progress
-                        if (forcedFinalBuffer) {
-                          forcedFinalBuffer.recoveryInProgress = true;
-                          forcedFinalBuffer.recoveryPromise = recoveryPromise;
-                        }
-                      }
                     } catch (error) {
                       console.error(`[SoloMode] ❌ Error in forced final audio recovery setup:`, error);
                       console.error(`[SoloMode] ❌ Stack:`, error.stack);
