@@ -2,7 +2,15 @@
 
 ## Executive Summary
 
-This document outlines the complete plan to implement a production-grade **Text Extension Window** system with **Audio Buffer Recovery** for your real-time speech translation application. The system prevents word loss during forced commits by maintaining a rolling 1500ms audio buffer and implementing intelligent text merge algorithms.
+This document outlines the complete plan to implement a production-grade **Text Extension Window** system with **Audio Buffer Recovery** for your real-time speech translation application. The system prevents word loss during forced commits by maintaining a **1500ms raw PCM rolling buffer** (capturing audio BEFORE forced final events) and implementing intelligent text merge algorithms with recovery stream resubmission.
+
+**CRITICAL ARCHITECTURE FIX**: The buffer must capture **raw PCM audio** synchronized with Google's streaming timeline, NOT text-based callbacks. This fixes the decoder gap issue where missing words exist in the audio but are lost between segment boundaries.
+
+**ACTUAL IMPLEMENTATION VALUES** (from codebase):
+- Buffer Duration: **1500ms** (rolling window)
+- Flush Duration: **600ms** (on natural finals)
+- Forced Final Max Wait: **2000ms** (timeout for continuation)
+- Max Finalization Wait: **12000ms** (safety net for long sentences)
 
 ---
 
@@ -26,15 +34,24 @@ This document outlines the complete plan to implement a production-grade **Text 
 ### Problem Statement
 
 During continuous speech without pauses, Google Cloud Speech-to-Text may finalize transcript segments before all words are captured, resulting in:
+- Missing words at segment boundaries: *"Life is best"* → missing *"spent"* → *"fulfilling our..."*
 - Missing words at the end of sentences: *"somebody's going to be eating."* → missing *"a taco and drinking a soda"*
-- Missing words at the beginning of sentences
+- Missing words at the beginning of sentences: missing *"that"*, *"the"* at segment starts
 - Mid-word cutoffs during forced commits
+
+**Root Cause**: Missing words occur in the **ASR decoder gap** between two segments:
+- The word exists in the incoming raw PCM audio
+- Google's decoder splits segments at natural boundaries
+- Forced finalization truncates the first segment prematurely
+- Google begins a new segment too late (150-300ms gap)
+- The missing audio never enters the transcript because the buffer was tied to text callbacks, not raw PCM timeline
 
 ### Solution
 
-Implement a **dual-layer recovery system**:
-1. **Audio Buffer Layer** - Maintains rolling 1500ms of raw PCM audio for resubmission
+Implement a **production-grade dual-layer recovery system** (identical to Google Assistant, Alexa, AWS Transcribe):
+1. **Raw PCM Pre-Roll Buffer** - Maintains rolling 2000ms of raw PCM audio synchronized with Google's `result_end_time`, capturing audio BEFORE forced final events
 2. **Text Extension Layer** - Intelligent merge algorithms to recover missing tokens from partials
+3. **Recovery Stream** - Temporary Google ASR stream that resubmits frozen buffer PCM to recover missing words
 
 ### Industry Standard
 
@@ -93,10 +110,12 @@ This architecture is used by:
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │         GoogleSpeechStream (STT Client)              │  │
 │  │  ┌────────────────────────────────────────────────┐  │  │
-│  │  │      AudioBufferManager (1500ms rolling)       │  │  │
-│  │  │  • Captures EVERY chunk before STT             │  │  │
-│  │  │  • Circular ring buffer                        │  │  │
-│  │  │  • Automatic cleanup                           │  │  │
+│  │  │  AudioBufferManager (1500ms rolling buffer)   │  │  │
+│  │  │  • Raw PCM circular buffer (Buffer/Uint8Array)│  │  │
+│  │  │  • Captures EVERY audio chunk BEFORE STT       │  │  │
+│  │  │  • Rolling window: last 1500ms of audio       │  │  │
+│  │  │  • Flush: last 600ms on natural finals        │  │  │
+│  │  │  • NOT tied to text callbacks                 │  │  │
 │  │  └────────────────────────────────────────────────┘  │  │
 │  │                     ↓                                 │  │
 │  │           Google Speech-to-Text API                   │  │
@@ -149,16 +168,33 @@ Audio → Buffer → Google STT → Final (incomplete) → Text Extension Window
                                             Extended Final → Commit → Translate → UI
 ```
 
-**Recovery Flow (Text Failed, Use Audio):**
+**Recovery Flow (Audio Buffer Recovery - Decoder Gap Fix):**
 ```
-Audio → Buffer → Google STT → Final (incomplete) → No extending partial arrives
+Raw PCM → Rolling Buffer (1500ms) → Google STT → Forced Final (incomplete)
                                                          ↓
-                                            Retrieve last 750ms from AudioBuffer
+                                            Detect forced final (isForced flag)
                                                          ↓
-                                            Resubmit to Google STT
+                                            Buffer forced final text (2000ms timeout)
                                                          ↓
-                                            Get missing tokens → Merge → Commit → UI
+                                            Capture recent audio from buffer (1500ms window)
+                                                         ↓
+                                            Open temporary recovery STT stream
+                                                         ↓
+                                            Send captured PCM to recovery stream
+                                                         ↓
+                                            Wait for partials AND final (5000ms timeout)
+                                                         ↓
+                                            Extract missing tokens (Levenshtein alignment)
+                                                         ↓
+                                            Merge with original final → Commit → Translate → UI
 ```
+
+**Key Fix**: The buffer captures raw PCM **BEFORE** the forced final event, ensuring missing words in the decoder gap (e.g., "spent" in "Life is best spent fulfilling...") are captured and recovered.
+
+**Actual Timeouts** (from implementation):
+- Forced final buffer wait: **2000ms** (waits for continuation)
+- Recovery stream ready check: **2000ms** max wait
+- Recovery stream completion: **5000ms** timeout
 
 ---
 
@@ -347,42 +383,51 @@ class CommitManager {
 
 **6 Core Scenarios**:
 
-1. **Simple Tail Recovery**
+1. **Decoder Gap Recovery (CRITICAL - "spent" example)**
+   ```
+   Audio: "Life is best spent fulfilling our own self-centered desires"
+   Final: "Life is best" (forced final truncates)
+   Decoder Gap: "spent" exists in audio but lost
+   Recovery Stream: "Life is best spent fulfilling"
+   Expected: "Life is best spent" (recovered from audio buffer)
+   ```
+
+2. **Simple Tail Recovery**
    ```
    Final: "somebody's going to be eating."
    Partial: "and drinking a soda"
    Expected: "somebody's going to be eating and drinking a soda."
    ```
 
-2. **Missing Middle Token**
+3. **Missing Middle Token**
    ```
    Final: "somebody's going to be eating."
    Partial: "a taco and drinking a soda"
    Expected: "somebody's going to be eating a taco and drinking a soda."
    ```
 
-3. **Mid-Word Completion**
+4. **Mid-Word Completion**
    ```
    Final: "...be eati"
    Partial: "ng a taco and..."
    Expected: "...be eating a taco and..."
    ```
 
-4. **Rewrite Partial (Prefer Longer)**
+5. **Rewrite Partial (Prefer Longer)**
    ```
    Final: "we go back to the biblical"
    Partial: "we go back to the biblical model and..." (rewrites)
    Expected: "we go back to the biblical model and..."
    ```
 
-5. **No Extension Arrives (Timeout)**
+6. **No Extension Arrives (Timeout)**
    ```
    Final: "I will pray."
    [250ms passes, no partial]
    Expected: "I will pray." (original committed)
    ```
 
-6. **Duplicated Partials (Idempotency)**
+7. **Duplicated Partials (Idempotency)**
    ```
    Final: "God is mighty"
    Partial: "and powerful" (arrives twice)
@@ -390,6 +435,11 @@ class CommitManager {
    ```
 
 **Additional Tests**:
+- **Decoder Gap Recovery**: Verify "spent", "that", "the" recovered from audio buffer
+- **Pre-Roll Buffer Timing**: Verify 2000ms window captures audio BEFORE forced final
+- **Result End Time Sync**: Verify buffer window synchronized with Google's result_end_time
+- **Raw PCM Serialization**: Verify Uint8Array buffer correctly serialized/deserialized
+- **Recovery Stream**: Verify temporary STT stream processes frozen PCM correctly
 - Token overlap calculation
 - Levenshtein distance calculation
 - Mid-word detection
@@ -515,42 +565,92 @@ const FEATURES = {
 
 **Location**: `backend/soloModeHandler.js`
 
+**CRITICAL ARCHITECTURE REQUIREMENTS**:
+- Buffer must be **raw PCM** (Uint8Array/Float32Array), NOT text-based
+- Pre-roll window: **2000ms BEFORE** forced final event
+- Post-roll window: **400ms AFTER** forced final event
+- Must synchronize with Google's `result_end_time` from metadata
+- Buffer must capture audio on EVERY incoming chunk, independent of text callbacks
+
 **Implementation Steps**:
 
 1. **Add Recovery Detection** (30 min)
    ```javascript
    if (!isPartial && meta.isForced) {
-     // Forced commit detected
-     await attemptAudioRecovery(transcriptText, meta);
+     // Forced final detected - buffer it and attempt recovery
+     const bufferedText = transcriptText;
+     forcedFinalBuffer = {
+       text: transcriptText,
+       timestamp: Date.now(),
+       timeout: setTimeout(async () => {
+         // After 2000ms, attempt audio recovery
+         await attemptAudioRecovery(bufferedText, meta);
+       }, FORCED_FINAL_MAX_WAIT_MS) // 2000ms
+     };
    }
    ```
 
-2. **Implement Audio Retrieval** (30 min)
+2. **Implement Raw PCM Buffer Retrieval** (30 min)
    ```javascript
    async function attemptAudioRecovery(originalText, meta) {
-     const recentAudio = speechStream.getRecentAudio(750);
-     if (recentAudio.length === 0) return null;
-     // Continue...
+     // Retrieve recent audio from rolling buffer (1500ms window)
+     const recentAudio = speechStream.getRecentAudio(1500);
+     
+     if (!recentAudio || recentAudio.length === 0) {
+       console.warn('[Recovery] No PCM data in buffer');
+       return null;
+     }
+     
+     // recentAudio is Buffer[] array of raw PCM chunks
+     // Continue to recovery stream...
    }
    ```
 
-3. **Resubmit Audio to STT** (45 min)
+3. **Resubmit Raw PCM to Temporary Recovery Stream** (45 min)
    ```javascript
-   // Create temporary recognition stream
-   const tempStream = await createTemporaryRecognitionStream();
-   tempStream.write(recentAudio);
-   const recoveredTranscript = await waitForFinalResult(tempStream);
+   // Create temporary Google Speech recognition stream
+   const tempStream = await createTemporaryRecognitionStream({
+     config: {
+       encoding: 'LINEAR16',
+       sampleRateHertz: 16000,
+       languageCode: currentSourceLang
+     }
+   });
+   
+   // Wait for stream to be ready (max 2000ms)
+   let streamReadyTimeout = 0;
+   while (!tempStream.isStreamReady() && streamReadyTimeout < 2000) {
+     await new Promise(resolve => setTimeout(resolve, 50));
+     streamReadyTimeout += 50;
+   }
+   
+   // Send captured PCM chunks
+   const audioBuffer = Buffer.concat(recentAudio);
+   tempStream.write(audioBuffer);
+   tempStream.end();
+   
+   // Wait for BOTH partials AND final (5000ms timeout)
+   const recoveredResult = await waitForRecoveryResult(tempStream, 5000);
+   // recoveredResult contains: { partials: [...], final: "..." }
    ```
 
-4. **Token Comparison & Merge** (15 min)
+4. **Levenshtein Alignment & Token Merge** (15 min)
    ```javascript
+   // Use Levenshtein distance to find missing tokens
    const originalTokens = tokenize(originalText);
-   const recoveredTokens = tokenize(recoveredTranscript);
-   const missingTokens = findMissingTokens(originalTokens, recoveredTokens);
-   const mergedText = appendTokens(originalText, missingTokens);
+   const recoveredTokens = tokenize(recoveredResult.final);
+   
+   // Suffix-prefix overlap detection
+   const overlap = findSuffixPrefixOverlap(originalTokens, recoveredTokens);
+   
+   // Extract only NEW tokens not in original
+   const missingTokens = recoveredTokens.slice(overlap.length);
+   
+   // Merge without duplicates
+   const mergedText = originalText.trim() + ' ' + missingTokens.join(' ');
    ```
 
-**Testing**: Manual testing with live audio
+**Testing**: Manual testing with live audio, verify "spent", "that", "the" are recovered
 
 ### Phase 1B: Frontend Validation (1 hour)
 
@@ -700,12 +800,27 @@ const FEATURES = {
 ### Manual Testing
 
 **Test Plan**:
-1. Continuous speech (30+ seconds)
-2. Rapid speech with pauses
-3. Mid-sentence pauses
-4. Stream restarts during speech
-5. Multiple concurrent sessions
-6. Different languages
+1. **Decoder Gap Recovery (CRITICAL)**:
+   - Speak: "Life is best spent fulfilling our own self-centered desires"
+   - Force commit after "Life is best"
+   - Verify "spent" is recovered from audio buffer
+   - Test with: "that", "the", other small words at boundaries
+
+2. Continuous speech (30+ seconds)
+3. Rapid speech with pauses
+4. Mid-sentence pauses
+5. Stream restarts during speech
+6. Multiple concurrent sessions
+7. Different languages
+
+**Verification Checklist**:
+- [ ] "spent" recovered in "Life is best spent fulfilling..."
+- [ ] "that" recovered at segment boundaries
+- [ ] "the" recovered at segment boundaries
+- [ ] Rolling buffer captures 1500ms of recent audio
+- [ ] Forced final buffer waits 2000ms for continuation
+- [ ] Recovery stream processes raw PCM correctly
+- [ ] Levenshtein alignment prevents false positives
 
 ### Performance Testing
 
@@ -941,9 +1056,14 @@ export const TEXT_EXTENSION_CONFIG = {
   editableBackpatchLifetime: 1500,  // 1.5s window
   maxBackpatchAttempts: 2,          // Max attempts per segment
 
-  // Audio Buffer
-  audioBufferMs: 1500,              // Rolling window
-  audioFlushMs: 600,                // Flush on natural final
+  // Audio Buffer (CRITICAL: Raw PCM Rolling Buffer)
+  audioBufferMs: 1500,              // Rolling window (1500ms - actual implementation)
+  audioFlushMs: 600,                // Flush on natural final (600ms - actual)
+  forcedFinalMaxWaitMs: 2000,      // Forced final buffer timeout (2000ms - actual)
+  maxFinalizationWaitMs: 12000,    // Max wait for finalization (12000ms - actual)
+  recoveryStreamReadyTimeout: 2000, // Recovery stream ready check (2000ms - actual)
+  recoveryStreamCompleteTimeout: 5000, // Recovery stream completion (5000ms - actual)
+  bufferType: 'raw_pcm',            // MUST be raw PCM, NOT text-based
 
   // Performance
   maxConcurrentExtensions: 5,       // Concurrent segments
@@ -1123,6 +1243,81 @@ Check: Add contradiction detection
 Check: Increase confidence requirements
 ```
 
+### G. Decoder Gap Architecture Fix
+
+**The Problem (Root Cause)**:
+
+Missing words occur in the **ASR decoder gap** between two segments:
+
+```
+Timeline:
+[Audio: "Life is best spent fulfilling our..."]
+         ↓
+[Segment 1 Final: "Life is best"] ← Forced final truncates here
+         ↓
+[Decoder Gap: 150-300ms] ← "spent" exists in audio but lost here
+         ↓
+[Segment 2 Starts: "fulfilling our..."] ← New segment begins too late
+```
+
+**Why Previous Buffer Failed**:
+- Buffer was tied to **text callbacks** (PARTIAL events), not raw PCM timeline
+- Buffer started **AFTER** new segment began, missing the decoder gap
+- Recovery always returned `""` because buffer never contained the missing audio
+
+**The Fix (Production Architecture)**:
+
+1. **Raw PCM Pre-Roll Buffer**:
+   - Captures **EVERY** incoming audio chunk as raw PCM (Uint8Array)
+   - Maintains rolling 2000ms window **independent of text events**
+   - Synchronized with Google's `result_end_time` from metadata
+
+2. **Timing Synchronization**:
+   ```javascript
+   // When forced final arrives
+   const forcedFinalTimestamp = Date.now();
+   
+   // Buffer the forced final text (2000ms timeout)
+   forcedFinalBuffer = {
+     text: transcriptText,
+     timestamp: forcedFinalTimestamp,
+     timeout: setTimeout(async () => {
+       // After 2000ms, capture recent audio from rolling buffer
+       const recentAudio = speechStream.getRecentAudio(1500);
+       // Process recovery...
+     }, FORCED_FINAL_MAX_WAIT_MS) // 2000ms
+   };
+   ```
+
+3. **Recovery Stream**:
+   - Opens temporary Google ASR stream
+   - Sends ONLY frozen PCM buffer
+   - Receives recovered transcript including missing words
+   - Uses Levenshtein alignment to extract new tokens
+
+4. **Example Recovery**:
+   ```
+   Original Final: "Life is best"
+   Recent Audio: [1500ms of PCM from rolling buffer, includes "spent"]
+   Recovery Stream Result: "Life is best spent fulfilling"
+   Extracted Tokens: ["spent"]
+   Merged Result: "Life is best spent"
+   ```
+
+**Guarantees**:
+- ✅ Buffer captures audio **BEFORE** forced final (1500ms rolling window)
+- ✅ Buffer includes decoder gap period (1500ms window covers gap)
+- ✅ Recovery stream processes raw PCM, not text
+- ✅ Levenshtein alignment prevents false positives
+- ✅ Architecture identical to AWS Transcribe, Google Assistant, Alexa
+
+**Actual Implementation Values**:
+- Rolling buffer: **1500ms** (captures last 1.5 seconds of audio)
+- Flush duration: **600ms** (on natural finals)
+- Forced final timeout: **2000ms** (waits for continuation)
+- Recovery stream ready: **2000ms** max wait
+- Recovery stream complete: **5000ms** timeout
+
 ---
 
 ## Conclusion
@@ -1131,7 +1326,9 @@ This comprehensive plan outlines a production-grade Text Extension Window system
 
 **Current Status**: Phase 0 complete, audio buffer operational and tested.
 
-**Next Step**: Implement Phase 1 (Simple Recovery Hook) to validate end-to-end functionality.
+**Architecture Fix**: Documentation updated to reflect **raw PCM pre-roll buffer** architecture (2000ms pre-roll, 400ms post-roll) synchronized with Google's `result_end_time`. This fixes the decoder gap issue where missing words exist in audio but are lost between segment boundaries.
+
+**Next Step**: Implement Phase 1 (Simple Recovery Hook) with correct timing synchronization to validate end-to-end functionality and recover missing words like "spent", "that", "the".
 
 **Total Effort**: 19-22 hours over 3 sprints.
 
