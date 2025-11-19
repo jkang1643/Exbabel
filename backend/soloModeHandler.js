@@ -1495,10 +1495,9 @@ export async function handleSoloMode(clientWs) {
                           }
 
                           // CRITICAL: Check if longestPartialText has extended the buffered text during wait period
-                          // The POST-final audio is being transcribed by the main stream!
                           let finalTextToCommit = forcedFinalBuffer ? forcedFinalBuffer.text : bufferedText;
 
-                          console.log(`[SoloMode] 📊 Checking for POST-final words:`);
+                          console.log(`[SoloMode] 📊 Checking for POST-final words in main stream:`);
                           console.log(`[SoloMode]   Buffered final: "${finalTextToCommit}"`);
                           console.log(`[SoloMode]   Longest partial: "${longestPartialText || 'none'}"`);
 
@@ -1510,22 +1509,115 @@ export async function handleSoloMode(clientWs) {
                             if (longestTrimmed.startsWith(bufferedTrimmed) ||
                                 (bufferedTrimmed.length > 10 && longestTrimmed.substring(0, bufferedTrimmed.length) === bufferedTrimmed)) {
                               const recoveredWords = longestPartialText.substring(finalTextToCommit.length).trim();
-                              console.log(`[SoloMode] ✅ POST-final words found in main stream partial!`);
-                              console.log(`[SoloMode] 📊 Forced final extended by partials (${finalTextToCommit.length} → ${longestPartialText.length} chars)`);
-                              console.log(`[SoloMode] 🎯 Recovered POST-final words: "${recoveredWords}"`);
+                              console.log(`[SoloMode] ✅ Main stream captured some POST-final words!`);
+                              console.log(`[SoloMode] 📊 Extended by partials (${finalTextToCommit.length} → ${longestPartialText.length} chars)`);
+                              console.log(`[SoloMode] 🎯 Words from main stream: "${recoveredWords}"`);
                               finalTextToCommit = longestPartialText;
                             } else {
-                              console.log(`[SoloMode] ⚠️ Longest partial doesn't extend buffered - treating as new segment`);
+                              console.log(`[SoloMode] ⚠️ Longest partial doesn't extend buffered`);
                             }
                           } else {
-                            console.log(`[SoloMode] ⚠️ No POST-final extension found in partials`);
+                            console.log(`[SoloMode] ⚠️ No extension in main stream partials`);
                           }
 
-                          // ⭐ POST-FINAL RECOVERY: The main stream already transcribed the POST-final audio!
-                          // We captured it in longestPartialText above. No need for separate temporary stream.
-                          // The temporary stream approach was competing with the main stream.
-                          console.log(`[SoloMode] ✅ POST-final recovery strategy: Using main stream partials (simpler & faster)`);
+                          // ⭐ NOW: Send the PRE+POST-final audio to recovery stream
+                          // This audio includes the decoder gap at T-200ms where "spent" exists!
+                          if (recoveryAudio.length > 0) {
+                            console.log(`[SoloMode] 🎵 Starting decoder gap recovery with PRE+POST-final audio: ${recoveryAudio.length} bytes`);
 
+                            try {
+                              console.log(`[SoloMode] 🔄 Importing GoogleSpeechStream...`);
+                              const { GoogleSpeechStream } = await import('./googleSpeechStream.js');
+
+                              const tempStream = new GoogleSpeechStream();
+                              await tempStream.initialize(currentSourceLang, { disablePunctuation: true });
+                              console.log(`[SoloMode] ✅ Temporary recovery stream initialized`);
+
+                              // Wait for stream to be ready
+                              let streamReadyTimeout = 0;
+                              while (!tempStream.recognizeStream && streamReadyTimeout < 2000) {
+                                await new Promise(resolve => setTimeout(resolve, 50));
+                                streamReadyTimeout += 50;
+                              }
+
+                              if (!tempStream.recognizeStream) {
+                                throw new Error('Recognition stream not ready');
+                              }
+
+                              await new Promise(resolve => setTimeout(resolve, 100));
+
+                              // Set up result handler
+                              let recoveredText = '';
+                              let lastPartialText = '';
+                              let allPartials = [];
+                              tempStream.onResult((text, isPartial) => {
+                                console.log(`[SoloMode] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'}: "${text}"`);
+                                if (!isPartial) {
+                                  recoveredText = text;
+                                } else {
+                                  allPartials.push(text);
+                                  lastPartialText = text;
+                                }
+                              });
+
+                              // Send the PRE+POST-final audio
+                              const recoveryAudioBase64 = recoveryAudio.toString('base64');
+                              console.log(`[SoloMode] 📤 Sending ${recoveryAudio.length} bytes to recovery stream...`);
+                              await tempStream.processAudio(recoveryAudioBase64, { isRecovery: true });
+
+                              // Wait for jitter buffer
+                              await new Promise(resolve => setTimeout(resolve, 200));
+
+                              // Wait for Google to process
+                              await new Promise(resolve => setTimeout(resolve, 500));
+
+                              // Close stream
+                              if (tempStream.recognizeStream) {
+                                tempStream.recognizeStream.end();
+                              }
+
+                              // Wait for results
+                              await new Promise(resolve => setTimeout(resolve, 2000));
+
+                              // Use last partial if no final
+                              if (!recoveredText && lastPartialText) {
+                                recoveredText = lastPartialText;
+                              }
+
+                              console.log(`[SoloMode] 📊 === DECODER GAP RECOVERY RESULTS ===`);
+                              console.log(`[SoloMode]   Total partials: ${allPartials.length}`);
+                              console.log(`[SoloMode]   All partials: ${JSON.stringify(allPartials)}`);
+                              console.log(`[SoloMode]   Final text: "${recoveredText}"`);
+                              console.log(`[SoloMode]   Audio sent: ${recoveryAudio.length} bytes`);
+
+                              // Clean up
+                              tempStream.destroy();
+
+                              // Find the missing words by comparing recovered vs buffered
+                              if (recoveredText && recoveredText.length > 0) {
+                                console.log(`[SoloMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
+
+                                // The recovered text should contain the buffered text PLUS the missing words
+                                // Look for what's NEW in the recovered text
+                                const bufferedLower = bufferedText.trim().toLowerCase();
+                                const recoveredLower = recoveredText.trim().toLowerCase();
+
+                                if (recoveredLower.length > bufferedLower.length && recoveredLower.includes(bufferedLower.substring(0, 30))) {
+                                  // Found overlap - use the recovered version (it's more complete)
+                                  console.log(`[SoloMode] 🎯 Decoder gap recovery found MORE words!`);
+                                  console.log(`[SoloMode]   Before: "${bufferedText}"`);
+                                  console.log(`[SoloMode]   After:  "${recoveredText}"`);
+                                  finalTextToCommit = recoveredText;
+                                } else {
+                                  console.log(`[SoloMode] ⚠️ Recovered text doesn't match expected pattern`);
+                                  console.log(`[SoloMode]   May need smarter merge logic`);
+                                }
+                              }
+
+                            } catch (error) {
+                              console.error(`[SoloMode] ❌ Decoder gap recovery failed:`, error.message);
+                            }
+                          }
                           console.log(`[SoloMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
                           processFinalText(finalTextToCommit, { forceFinal: true });
                           forcedFinalBuffer = null;
