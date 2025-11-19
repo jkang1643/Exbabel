@@ -44,6 +44,10 @@ export class GoogleSpeechStream {
     this.useEnhancedModel = true; // Track if we should use enhanced model (fallback to default if not supported)
     this.hasTriedEnhancedModel = false; // Track if we've already tried enhanced model for this language
 
+    // Unique ID for debugging which stream results come from
+    this.streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`[GoogleSpeech] Created new stream instance: ${this.streamId}`);
+
     // AUDIO BUFFER MANAGER: Captures EVERY audio chunk for recovery operations
     // This rolling buffer maintains the last 1500ms of audio for text extension window
     this.audioBufferManager = new AudioBufferManager({
@@ -113,9 +117,12 @@ export class GoogleSpeechStream {
    * Initialize the Google Speech client and start streaming
    * NOTE: Using API V1 for now. V2 migration pending (requires gRPC streaming implementation).
    */
-  async initialize(sourceLang) {
+  async initialize(sourceLang, options = {}) {
     console.log(`[GoogleSpeech] Initializing streaming transcription for ${sourceLang}...`);
     console.log(`[GoogleSpeech] ✅ Using API v1p1beta1 for PhraseSet support`);
+
+    // Store initialization options for startStream
+    this.initOptions = options;
 
     // Create Speech client with authentication options
     const clientOptions = {};
@@ -193,9 +200,14 @@ export class GoogleSpeechStream {
       encoding: 'LINEAR16',
       sampleRateHertz: 24000, // Match frontend audio capture
       languageCode: this.languageCode,
-      enableAutomaticPunctuation: true,
+      enableAutomaticPunctuation: this.initOptions?.disablePunctuation ? false : true, // Allow disabling for recovery streams
       alternativeLanguageCodes: [],
     };
+
+    // Log if punctuation is disabled (for recovery streams)
+    if (this.initOptions?.disablePunctuation) {
+      console.log('[GoogleSpeech] ⚠️ Automatic punctuation DISABLED for recovery stream');
+    }
 
     // Check if PhraseSet is configured
     const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && process.env.GOOGLE_CLOUD_PROJECT_ID);
@@ -411,6 +423,10 @@ export class GoogleSpeechStream {
         }
       })
       .on('data', (data) => {
+        // Log for recovery streams to debug
+        if (this.initOptions?.disablePunctuation) {
+          console.log('[GoogleSpeech-RECOVERY] 🎤 Received data event from Google');
+        }
         this.handleStreamingResponse(data);
       })
       .on('end', () => {
@@ -640,6 +656,10 @@ export class GoogleSpeechStream {
       }
 
       if (this.resultCallback) {
+        // Log which stream is sending results
+        if (this.initOptions?.disablePunctuation) {
+          console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with FINAL: "${combinedTranscript}"`);
+        }
         this.resultCallback(combinedTranscript, false); // isPartial = false
       }
 
@@ -649,6 +669,10 @@ export class GoogleSpeechStream {
       // Interim result - partial transcription
       // console.log(`[GoogleSpeech] 🔵 PARTIAL (stability: ${stability.toFixed(2)}): "${combinedTranscript}"`);
       if (this.resultCallback) {
+        // Log which stream is sending results
+        if (this.initOptions?.disablePunctuation) {
+          console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with PARTIAL: "${combinedTranscript}"`);
+        }
         this.resultCallback(combinedTranscript, true); // isPartial = true
       }
 
@@ -661,12 +685,25 @@ export class GoogleSpeechStream {
    * Check if stream is ready to accept audio
    */
   isStreamReady() {
-    return this.recognizeStream && 
-           this.recognizeStream.writable && 
-           !this.recognizeStream.destroyed && 
+    const ready = this.recognizeStream &&
+           this.recognizeStream.writable &&
+           !this.recognizeStream.destroyed &&
            !this.recognizeStream.writableEnded &&
            this.isActive &&
            !this.isRestarting;
+
+    // Debug logging for recovery streams
+    if (this.initOptions?.disablePunctuation && !ready) {
+      console.log('[GoogleSpeech-RECOVERY] ❌ Stream NOT ready:');
+      console.log(`  recognizeStream exists: ${!!this.recognizeStream}`);
+      console.log(`  writable: ${this.recognizeStream?.writable}`);
+      console.log(`  destroyed: ${this.recognizeStream?.destroyed}`);
+      console.log(`  writableEnded: ${this.recognizeStream?.writableEnded}`);
+      console.log(`  isActive: ${this.isActive}`);
+      console.log(`  isRestarting: ${this.isRestarting}`);
+    }
+
+    return ready;
   }
 
   /**
@@ -736,7 +773,12 @@ export class GoogleSpeechStream {
       // Double-check stream is still ready
       if (this.isStreamReady()) {
         this.recognizeStream.write(audioBuffer);
-        
+
+        // Log for recovery streams
+        if (this.initOptions?.disablePunctuation) {
+          console.log(`[GoogleSpeech-RECOVERY] 📤 Wrote ${audioBuffer.length} bytes to recognition stream`);
+        }
+
         // Set per-chunk timeout (5s)
         this.setChunkTimeout(chunkId, sendTimestamp, audioData, metadata);
         
