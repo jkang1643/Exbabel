@@ -33,47 +33,187 @@ This system provides **sub-200ms real-time partial transcription**, **accurate g
 ### Architecture Diagram
 
 ```
-┌─────────────────────────────┐
-│           Browser            │
-│  (Mic → 24kHz LINEAR16 PCM)  │
-└───────────────┬─────────────┘
-                │ WebSocket
-                ▼
-┌─────────────────────────────────────────────┐
-│                 Node.js Gateway             │
-│  - WebSocket server                         │
-│  - Forced final buffer                      │
-│  - Audio buffer manager (2.5s rolling)      │
-│  - Merge algorithm                          │
-└───────────────┬─────────────────────────────┘
-                │ Streaming gRPC
-                ▼
-┌─────────────────────────────────────────────┐
-│     Google Speech-to-Text (latest_long)     │
-│  - Enhanced model                           │
-│  - 24 kHz                                   │
-│  - Stability tuning                         │
-└───────────────┬─────────────────────────────┘
-                │ Partials + Finals
-                ▼
-        ┌─────────────────────┐
-        │  Decoder Gap Fix     │
-        │ (Audio Recovery)     │
-        └─────────┬───────────┘
-                  │ Merged text
-                  ▼
-┌─────────────────────────────────────────────┐
-│   Pipeline A: GPT-4o-Mini (Chat API)       │
-│   OR                                         │
-│   Pipeline B: GPT Realtime Mini (WebSocket) │
-└────────────────┬────────────────────────────┘
-                 │ Optional
-                 ▼
-┌─────────────────────────────────────────────┐
-│        GPT-4o Mini (Grammar Polishing)      │
-└────────────────┬────────────────────────────┘
-                 ▼
-           Final output
+                           ┌──────────────────────────────┐
+
+                           │        WebSocket Client       │
+
+                           │  (Mic → 24kHz PCM LINEAR16)   │
+
+                           └───────────────┬──────────────┘
+
+                                           │  audio chunks (20–40 ms)
+
+                                           ▼
+
+                ┌──────────────────────────────────────────────────────────┐
+
+                │                    Node.js Backend                       │
+
+                └────────────────────────┬─────────────────────────────────┘
+
+                                         │
+
+                                         ▼
+
+                     ┌────────────────────────────┐
+
+                     │ 1. Streaming ASR Session    │
+
+                     │ Google STT v2               │
+
+                     │ enhanced / latest_long      │
+
+                     │ 24kHz LINEAR16              │
+
+                     └──────────────┬─────────────┘
+
+                                    │ partial hypotheses
+
+                                    ▼
+
+                 ┌───────────────────────────────┐
+
+                 │ 2. Partial Buffer (Rolling)   │
+
+                 │ • Stores last N words         │
+
+                 │ • PRE window (~950 ms)        │
+
+                 │ • Used for gap alignment      │
+
+                 └───────────────┬───────────────┘
+
+                                 │
+
+                                 │   partial updates → UI
+
+                                 ▼
+
+                    ┌────────────────────────────┐
+
+                    │ 3. Force Finalization Logic │
+
+                    │ When user pauses or event:  │
+
+                    │    googleStream.stop()      │
+
+                    │    → triggers mid-word final│
+
+                    └────────────┬────────────────┘
+
+                                 │
+
+                                 │  timestamp of stop()
+
+                                 ▼
+
+               ┌────────────────────────────────────────────┐
+
+               │ 4. Recovery Audio Extraction               │
+
+               │ PRE window: 950 ms before stop            │
+
+               │ POST window: 1050 ms after stop           │
+
+               │ TOTAL: 2000 ms (2 seconds)                │
+
+               └──────────────────────┬─────────────────────┘
+
+                                      │ raw PCM (target ~96k bytes)
+
+                                      ▼
+
+          ┌────────────────────────────────────────────────────────┐
+
+          │ 5. Recovery Mini-Stream (Second Google STT Session)    │
+
+          │ Starts AFTER original stream is closed                │
+
+          │ Recognizes the 2s buffer cleanly (no interruption)    │
+
+          └──────────────────┬─────────────────────────────────────┘
+
+                             │ recovered text
+
+                             ▼
+
+          ┌────────────────────────────────────────────────────────┐
+
+          │ 6. Merge Engine (Production Grade, Safe Version)       │
+
+          │ Strategy:                                              │
+
+          │    • Find single-word overlap                          │
+
+          │    • Anchor word = last buffered word found in         │
+
+          │      recovered text                                    │
+
+          │    • If found → append ONLY new words                  │
+
+          │    • If not found → drop recovery safely               │
+
+          │                                                         │
+
+          │ Example:                                                │
+
+          │ Buffered: "...best spent fulfilling our"               │
+
+          │ Recovered: "spent fulfilling our own self"             │
+
+          │ Match word: "our"                                      │
+
+          │ Append: "own self"                                     │
+
+          └──────────────────┬─────────────────────────────────────┘
+
+                             │ merged final text
+
+                             ▼
+
+         ┌──────────────────────────────────────────────────────────┐
+
+         │ 7. GPT-4o-mini Grammar Polishing (optional)            │
+
+         │ • Light grammar fixes only                              │
+
+         │ • Removes stutters / false starts                        │
+
+         │ • Keeps meaning identical                                │
+
+         └──────────────────────────┬───────────────────────────────┘
+
+                                    │ polished text
+
+                                    ▼
+
+         ┌──────────────────────────────────────────────────────────┐
+
+         │ 8. GPT Realtime Mini (Fast Translation Layer)           │
+
+         │ • Ultra-low latency (<150 ms)                            │
+
+         │ • Translates to user's target language                   │
+
+         │ • Can also paraphrase/clean up culturally                │
+
+         └──────────────────────────┬───────────────────────────────┘
+
+                                    │ final translated text
+
+                                    ▼
+
+                    ┌────────────────────────────────────┐
+
+                    │ 9. Output to Client (WebSocket)    │
+
+                    │ • Final text                       │
+
+                    │ • Partial updates (live)           │
+
+                    │ • Translated output                │
+
+                    └────────────────────────────────────┘
 ```
 
 ### System Components
@@ -364,17 +504,37 @@ localStorage.setItem('debug', 'true')
 
 ## 📈 Performance
 
-- **Streaming Latency**: 600-2000ms end-to-end for partial results
+### Latency Metrics
+
+**Pipeline B (GPT Realtime Mini) - Recommended for Ultra-Low Latency:**
+- **Streaming Latency**: 150-300ms end-to-end for partial results ⚡
+- **Final Latency**: 200-400ms (without recovery), 400-800ms (with recovery)
 - **Update Frequency**: Character-by-character (1-2 chars)
-- **Translation Latency**: 200-800ms (decoupled from grammar)
+- **Language Switching**: <10ms (instant via connection pool)
+
+**Pipeline A (GPT-4o-Mini Chat API) - Cost-Effective:**
+- **Streaming Latency**: 600-1500ms end-to-end for partial results
+- **Final Latency**: 800-2000ms (without recovery), 1000-2500ms (with recovery)
+- **Update Frequency**: Character-by-character (1-2 chars)
+- **Translation Latency**: 400-1500ms (decoupled from grammar)
+
+**Common Metrics:**
 - **Grammar Latency**: 100-500ms (non-blocking, sent separately)
 - **Audio Chunks**: 300ms segments with 500ms overlap
+- **Jitter Buffer**: 80-150ms batching delay
+- **Recovery Window**: 2000ms (950ms PRE + 1050ms POST)
 - **Bandwidth**: ~8-12 KB per 300ms audio chunk
 - **Memory**: Optimized for long-running sessions (~50-100MB per session)
 - **CPU**: Low impact (browser handles audio encoding)
+
+### Scalability
+
 - **Concurrent Sessions**: Supports multiple simultaneous users
 - **Parallel Processing**: Translation and grammar run in parallel
-- **Rate Limits**: 4,500 RPM / 1.8M TPM with automatic retry
+- **Connection Pooling**: 2 persistent WebSocket sessions per language pair (Pipeline B)
+- **Rate Limits**: 4,500 RPM / 1.8M TPM with automatic retry and exponential backoff
+- **Caching**: Translation cache (200 entries for partials, 100 for finals)
+- **Streaming Limits**: Auto-restart at 4 minutes (before Google's 5-minute limit)
 
 ## 🚀 Deployment
 
@@ -459,61 +619,117 @@ This software and all associated intellectual property, including but not limite
 
 ### Pipeline Summary
 
-1. **WebSocket client streams raw PCM audio to Node.js** (24kHz LINEAR16)
-2. **Node.js forwards audio to Google STT (latest_long + enhanced)**
-3. **Partials stored in tracking variables** (`latestPartialText`, `longestPartialText`)
-4. **When a forced commit happens or STT finalizes a segment:**
-   - Buffer forced final in `forcedFinalBuffer` with 2s timeout
-   - Capture 2200ms audio window (PRE+POST-final) from audio buffer manager
-   - Replay audio through recovery stream to capture missing words
-   - Run **multi-tier merge algorithm** (exact → fuzzy → fallback)
-5. **Recovered final sentence → Translation pipeline**
-   - **Pipeline A**: GPT-4o-Mini Chat API (400-1500ms)
-   - **Pipeline B**: GPT Realtime Mini WebSocket (150-300ms) ⚡
-6. **Optional grammar polish** via GPT-4o-Mini (100-500ms, non-blocking)
-7. **Output streamed back to client** with sequence IDs for ordering
+1. **WebSocket client streams raw PCM audio** (24kHz LINEAR16, 20-40ms chunks) to Node.js backend
+2. **Node.js forwards audio to Google STT v2** (latest_long + enhanced model)
+3. **Partial hypotheses streamed in real-time** to UI for live updates
+4. **Partial Buffer (Rolling)** stores last N words with ~950ms PRE window for gap alignment
+5. **Force Finalization Logic** triggers when user pauses or stream event occurs:
+   - `googleStream.stop()` called
+   - Triggers mid-word finalization
+   - Captures timestamp of stop event
+6. **Recovery Audio Extraction**:
+   - **PRE window**: 950ms before stop timestamp (captures decoder gap)
+   - **POST window**: 1050ms after stop timestamp (captures continuation)
+   - **TOTAL**: 2000ms (2 seconds) of raw PCM audio (~96k bytes)
+7. **Recovery Mini-Stream** (Second Google STT Session):
+   - Starts AFTER original stream is closed
+   - Recognizes the 2s buffer cleanly (no interruption)
+   - Produces recovered text from missing audio
+8. **Merge Engine** (Production-grade, safe version):
+   - Finds single-word overlap between buffered and recovered text
+   - Anchor word = last buffered word found in recovered text
+   - If found → append ONLY new words after anchor
+   - If not found → drop recovery safely (prevents errors)
+9. **GPT-4o-mini Grammar Polishing** (optional):
+   - Light grammar fixes only
+   - Removes stutters / false starts
+   - Keeps meaning identical
+10. **GPT Realtime Mini Translation**:
+    - Ultra-low latency (<150ms)
+    - Translates to user's target language
+    - Can also paraphrase/clean up culturally
+11. **Output to Client** via WebSocket:
+    - Final text with complete recovery
+    - Partial updates (live streaming)
+    - Translated output with sequence IDs for ordering
 
 ### The Forced Commit System with Audio Recovery
 
 Production-safe architecture for preventing word loss during Google STT "natural segment finalization":
 
-```
-Forced Final Buffer = text + timestamp + timeout (2s)
-Audio Buffer Manager = 2.5s rolling window of raw PCM audio
-```
+**Components:**
+- **Forced Final Buffer**: Stores text + timestamp + timeout (2s)
+- **Audio Buffer Manager**: 2.5s rolling window of raw PCM audio
+- **Partial Buffer (Rolling)**: Stores last N words with ~950ms PRE window
 
 **When commit is triggered:**
 
-1. Buffer the forced final text (don't commit immediately)
-2. Wait 800ms for POST-final audio to arrive
-3. Capture 2200ms audio window (includes PRE-final decoder gap + POST-final continuation)
-4. Replay audio through recovery Google STT stream
-5. Collect all partials emitted during recovery
-6. Run merge algorithm to combine buffered + recovered text
-7. Emit final string
-8. Resume live streaming
+1. **Force Finalization Logic** detects pause or stream event
+   - `googleStream.stop()` called
+   - Captures timestamp of stop event
+   - Triggers mid-word finalization
+
+2. **Recovery Audio Extraction**:
+   - **PRE window**: 950ms before stop timestamp
+     - Captures decoder gap (200-500ms before forced final)
+     - Contains missing words that exist in audio but not transcript
+   - **POST window**: 1050ms after stop timestamp
+     - Captures continuation audio
+     - Handles complete phrases like "self-centered"
+   - **TOTAL**: 2000ms (2 seconds) of raw PCM audio (~96k bytes at 24kHz)
+
+3. **Recovery Mini-Stream** (Second Google STT Session):
+   - Starts AFTER original stream is closed
+   - Processes the 2s buffer cleanly (no interruption)
+   - Produces recovered text from missing audio segments
+
+4. **Merge Engine** combines buffered + recovered text:
+   - Finds single-word overlap (anchor word)
+   - Appends only new words after anchor
+   - Safe fallback if no overlap found
+
+5. **Grammar + Translation** processing
+6. **Emit final string** to client
+7. **Resume live streaming**
 
 **Why this works:**
 
-Google STT can lag 300-1500ms behind your audio queue. The decoder gap occurs 200-500ms BEFORE forced finals. Replaying audio ensures the model emits the last missing tokens that were in the audio but not in the transcript.
+Google STT can lag 300-1500ms behind your audio queue. The decoder gap occurs 200-500ms BEFORE forced finals. The PRE window (950ms) captures this gap, while the POST window (1050ms) captures continuation. Replaying audio through a clean recovery stream ensures the model emits the last missing tokens that were in the audio but not in the transcript.
 
 ### Merge Algorithm (Production Safe)
 
-Multi-tier deterministic merge strategy:
+Production-grade, safe merge strategy used by real ASR platforms:
 
 **Inputs:**
 - `bufferedText` – the text before commit or segment break
 - `recoveredText` – text from audio recovery replay
 
-**Algorithm (3-Tier Strategy):**
+**Strategy: Single-Word Overlap (Primary Method)**
 
-**Tier 1: Exact Word Overlap**
 ```
-1. Tokenize both texts
+1. Tokenize both texts into words
 2. Scan from END of buffered words, look for first match in recovery
-3. If match exists:
-   return bufferedText + (trailing tokens from recovery)
+3. Find anchor word = last buffered word found in recovered text
+4. If anchor found:
+   - Append ONLY words AFTER anchor in recovery
+   - Return: bufferedText + " " + newWords
+5. If not found:
+   - Drop recovery safely (prevents errors)
+   - Return: bufferedText (original text preserved)
 ```
+
+**Example:**
+```
+Buffered: "...best spent fulfilling our"
+Recovered: "spent fulfilling our own self"
+Match word: "our" (found at position 3 in recovery)
+Append: "own self"
+Result: "...best spent fulfilling our own self"
+```
+
+**Advanced: Multi-Tier Fallback (If Primary Fails)**
+
+**Tier 1: Exact Word Overlap** (Primary - shown above)
 
 **Tier 2: Fuzzy Matching (Levenshtein)**
 ```
@@ -536,6 +752,7 @@ Multi-tier deterministic merge strategy:
 - Guaranteed deterministic behavior
 - Handles ASR word rewrites via fuzzy matching
 - Deals with edge cases like "spent fulfilling" → "best spent fulfilling"
+- Safe fallback prevents errors when recovery doesn't match
 
 ### Google STT Settings
 
@@ -559,19 +776,30 @@ Use **latest_long** + **enhanced**:
 
 ### Translation Pipelines
 
+The system supports **dual translation pipelines** for different use cases:
+
 #### Pipeline A: GPT-4o-Mini (Chat API)
 - **Model**: `gpt-4o-mini`
 - **API**: OpenAI Chat Completions (REST)
 - **Latency**: 400-1500ms for partials, 800-2000ms for finals
-- **Features**: Streaming tokens, caching, rate limiting
-- **Use case**: Standard translation, cost-effective
+- **Features**: 
+  - Streaming tokens (token-by-token updates)
+  - Translation caching (200 entries, 2min TTL for partials)
+  - Rate limiting (4,500 RPM / 1.8M TPM)
+  - Smart cancellation (only on true resets)
+- **Use case**: Standard translation, cost-effective, familiar API
 
 #### Pipeline B: GPT Realtime Mini (WebSocket) ⚡
 - **Model**: `gpt-realtime-mini`
 - **API**: OpenAI Realtime WebSocket
-- **Latency**: 150-300ms for partials, 200-400ms for finals
-- **Features**: Persistent WebSocket pool (2 sessions per language pair), instant language switching
-- **Use case**: Ultra-low latency requirements
+- **Latency**: 150-300ms for partials, 200-400ms for finals ⚡
+- **Features**: 
+  - Persistent WebSocket pool (2 sessions per language pair)
+  - Instant language switching (<10ms via pool reuse)
+  - Native streaming (delta events)
+  - Connection pooling keeps sockets warm
+  - Prompt-level guardrails (prevents conversational drift)
+- **Use case**: Ultra-low latency requirements, real-time applications
 
 **Translation payload example (Chat API):**
 ```json
@@ -594,9 +822,15 @@ Use **latest_long** + **enhanced**:
 
 ### Grammar Correction (GPT-4o-Mini)
 
-GPT-4o-Mini is used only **after translation** if the user has grammar mode enabled and source language is English.
+GPT-4o-Mini is used for **light grammar polishing** after transcription (English only, optional).
 
-**Example:**
+**Purpose:**
+- Light grammar fixes only
+- Removes stutters / false starts
+- Keeps meaning identical
+- Non-blocking (doesn't delay translation)
+
+**Configuration:**
 ```json
 {
   "model": "gpt-4o-mini",
@@ -607,7 +841,7 @@ GPT-4o-Mini is used only **after translation** if the user has grammar mode enab
     },
     {
       "role": "user",
-      "content": "translatedText"
+      "content": "transcribedText"
     }
   ],
   "temperature": 0.1,
@@ -615,9 +849,14 @@ GPT-4o-Mini is used only **after translation** if the user has grammar mode enab
 }
 ```
 
-**Processing:**
+**Processing Strategy:**
 - **Partials**: Decoupled - sent separately when ready (non-blocking)
+  - Translation appears immediately
+  - Grammar correction follows 100-500ms later
+  - Progressive enhancement in UI
 - **Finals**: Coupled - waits for both translation and grammar before sending
+  - Ensures history entries have complete, corrected data
+  - Single atomic update prevents incomplete history
 
 ### Final Output Example
 
@@ -639,13 +878,24 @@ GPT-4o-Mini is used only **after translation** if the user has grammar mode enab
 | Component                         | Pipeline A (Chat API) | Pipeline B (Realtime) |
 | --------------------------------- | --------------------- | --------------------- |
 | **WebSocket → Node.js**           | 5–15ms                | 5–15ms                |
+| **Audio chunking (jitter buffer)**| 80–150ms              | 80–150ms              |
 | **Node → Google STT partials**   | 80–200ms              | 80–200ms              |
+| **Partial buffer (rolling)**      | ~950ms PRE window     | ~950ms PRE window     |
 | **Forced commit recovery**        | 300–700ms (on commits)| 300–700ms (on commits)|
+| **Recovery audio extraction**     | 2000ms window         | 2000ms window         |
+| **Recovery mini-stream**          | 200–500ms             | 200–500ms             |
+| **Merge algorithm**               | <5ms                  | <5ms                  |
 | **Translation (partials)**        | 400–1500ms            | **150–300ms** ⚡      |
 | **Translation (finals)**          | 800–2000ms            | **200–400ms** ⚡      |
-| **GPT-4o-Mini grammar**          | 100–500ms             | 100–500ms             |
+| **GPT-4o-Mini grammar**          | 100–500ms (non-blocking) | 100–500ms (non-blocking) |
 
-**Normal streaming stays under 200ms end-to-end** (Pipeline B) or **600-2000ms** (Pipeline A).
+**Normal streaming (partials):**
+- **Pipeline B (Realtime)**: **150–300ms** end-to-end ⚡
+- **Pipeline A (Chat API)**: **600–1500ms** end-to-end
+
+**Final results (with recovery):**
+- **Pipeline B (Realtime)**: **400–800ms** (includes recovery)
+- **Pipeline A (Chat API)**: **1000–2500ms** (includes recovery)
 
 ### Audio Format
 
