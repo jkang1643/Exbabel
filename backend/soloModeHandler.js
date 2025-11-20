@@ -749,13 +749,17 @@ export async function handleSoloMode(clientWs) {
                     
                     // If partial might be a continuation, wait longer and don't treat as new segment yet
                     // Continue tracking the partial so it can grow into the complete word
-                    if (mightBeContinuation && !extendsFinal) {
+                    // CRITICAL: Check max wait time - don't extend wait if we've already waited too long
+                    const timeSinceMaxWait = Date.now() - pendingFinalization.maxWaitTimestamp;
+                    if (mightBeContinuation && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
                       console.log(`[SoloMode] ⚠️ Short partial after incomplete FINAL - likely continuation (FINAL: "${finalText}", partial: "${partialText}")`);
                       console.log(`[SoloMode] ⏳ Extending wait to see if partial grows into complete word/phrase`);
                       // Extend timeout significantly to wait for complete word/phrase
                       clearTimeout(pendingFinalization.timeout);
-                      const remainingWait = Math.max(1000, 2500 - timeSinceFinal); // Wait at least 1000ms more
-                      console.log(`[SoloMode] ⏱️ Extending finalization wait by ${remainingWait}ms (waiting for complete word/phrase)`);
+                      // Don't extend beyond max wait - cap at remaining time
+                      const maxRemainingWait = MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait;
+                      const remainingWait = Math.min(Math.max(1000, 2500 - timeSinceFinal), maxRemainingWait);
+                      console.log(`[SoloMode] ⏱️ Extending finalization wait by ${remainingWait}ms (waiting for complete word/phrase, ${timeSinceMaxWait}ms / ${MAX_FINALIZATION_WAIT_MS}ms)`);
                       // Reschedule - will check for longer partials when timeout fires
                       pendingFinalization.timeout = setTimeout(() => {
                         const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
@@ -883,14 +887,22 @@ export async function handleSoloMode(clientWs) {
                         processFinalText(textToProcess);
                       }, remainingWait);
                     } else if (!extendsFinal && timeSinceFinal > 600) {
-                      // New segment detected - but check if final ends with complete sentence first
-                      // If final doesn't end with complete sentence, wait longer before committing
+                      // New segment detected - commit FINAL immediately to avoid blocking
+                      // CRITICAL: Check max wait time - if we've waited too long, commit regardless
+                      const timeSinceMaxWait = Date.now() - pendingFinalization.maxWaitTimestamp;
                       const finalEndsWithCompleteSentence = endsWithCompleteSentence(pendingFinalization.text);
-                      if (!finalEndsWithCompleteSentence && timeSinceFinal < 3000) {
+                      
+                      // Only wait if: final is incomplete AND we haven't hit max wait AND it's been less than 2000ms
+                      // This prevents indefinite waiting while still allowing short waits for continuations
+                      if (!finalEndsWithCompleteSentence && timeSinceFinal < 2000 && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
                         // Final doesn't end with complete sentence and not enough time has passed - wait more
-                        console.log(`[SoloMode] ⏳ New segment detected but final incomplete - waiting longer (${timeSinceFinal}ms < 3000ms)`);
+                        console.log(`[SoloMode] ⏳ New segment detected but final incomplete - waiting longer (${timeSinceFinal}ms < 2000ms, ${timeSinceMaxWait}ms / ${MAX_FINALIZATION_WAIT_MS}ms)`);
                         // Continue tracking - don't commit yet
                       } else {
+                        // Commit FINAL - either sentence is complete, enough time has passed, or max wait is approaching
+                        if (timeSinceMaxWait >= MAX_FINALIZATION_WAIT_MS - 1000) {
+                          console.log(`[SoloMode] ⚠️ Max wait approaching - committing FINAL even if incomplete`);
+                        }
                         // Commit FINAL immediately using longest partial that extends it
                         // CRITICAL: Only use partials that DIRECTLY extend the final (start with it) to prevent mixing segments
                         console.log(`[SoloMode] 🔀 New segment detected during finalization (${timeSinceFinal}ms since final) - committing FINAL`);
@@ -1906,13 +1918,13 @@ export async function handleSoloMode(clientWs) {
                   }
                   
                   // CRITICAL: Sentence-aware finalization - wait for complete sentences
-                  // If FINAL doesn't end with a complete sentence, wait significantly longer
-                  // This prevents cutting off mid-sentence and causing transcription errors
+                  // If FINAL doesn't end with a complete sentence, wait longer for continuation
+                  // But be more reasonable - don't wait too long as it causes delays
                   const finalEndsWithCompleteSentence = endsWithCompleteSentence(transcriptText);
                   if (!finalEndsWithCompleteSentence) {
-                    // FINAL doesn't end with complete sentence - wait MUCH longer for continuation
-                    // This allows long sentences to complete naturally before finalizing
-                    const SENTENCE_WAIT_MS = Math.max(4000, Math.min(8000, transcriptText.length * 20)); // 4-8 seconds based on length (increased)
+                    // FINAL doesn't end with complete sentence - wait longer for continuation
+                    // Reduced from 4-8 seconds to 1.5-3 seconds to prevent excessive delays
+                    const SENTENCE_WAIT_MS = Math.max(1500, Math.min(3000, transcriptText.length * 10)); // 1.5-3 seconds based on length
                     WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, SENTENCE_WAIT_MS);
                     console.log(`[SoloMode] ⚠️ FINAL doesn't end with complete sentence - extending wait to ${WAIT_FOR_PARTIALS_MS}ms to catch sentence completion`);
                     console.log(`[SoloMode] 📝 Current text: "${transcriptText.substring(Math.max(0, transcriptText.length - 60))}"`);
@@ -1921,7 +1933,7 @@ export async function handleSoloMode(clientWs) {
                     const finalEndsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
                     if (!finalEndsWithPunctuation) {
                       // Has sentence ending but not standard punctuation - still wait a bit
-                      WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1500);
+                      WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1000);
                       console.log(`[SoloMode] ⚠️ FINAL doesn't end with standard punctuation - extending wait to ${WAIT_FOR_PARTIALS_MS}ms`);
                     }
                   }
@@ -1938,8 +1950,8 @@ export async function handleSoloMode(clientWs) {
                   // If final doesn't end with complete word, prioritize partials that contain the complete word
                   if (!finalEndsCompleteWord) {
                     console.log(`[SoloMode] ⚠️ FINAL ends mid-word - waiting for complete word in partials`);
-                    // Increase wait time to catch complete word
-                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1200); // At least 1200ms for mid-word finals
+                    // Increase wait time to catch complete word - reduced from 1200ms to 800ms
+                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 800); // At least 800ms for mid-word finals
                   }
                   
                   // Check if longest partial extends the final
@@ -2132,12 +2144,12 @@ export async function handleSoloMode(clientWs) {
                       const timeSinceMaxWait = Date.now() - pendingFinalization.maxWaitTimestamp;
                       finalEndsWithCompleteSentence = endsWithCompleteSentence(finalTextToUse);
                       
-                      if (!finalEndsWithCompleteSentence && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS) {
+                      if (!finalEndsWithCompleteSentence && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 2000) {
                         // Sentence is incomplete but we haven't hit max wait yet - wait a bit more
                         // CRITICAL: Update pendingFinalization.text with the latest finalTextToUse (may include partials)
                         pendingFinalization.text = finalTextToUse;
-                        // More aggressive wait: up to 4 seconds per reschedule, but don't exceed max wait
-                        const remainingWait = Math.min(4000, MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait);
+                        // Reduced wait: up to 2 seconds per reschedule (down from 4), but don't exceed max wait
+                        const remainingWait = Math.min(2000, MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait - 1000);
                         console.log(`[SoloMode] ⏳ Sentence incomplete - waiting ${remainingWait}ms more (${timeSinceMaxWait}ms / ${MAX_FINALIZATION_WAIT_MS}ms)`);
                         // Reschedule the timeout to check again after remaining wait
                         pendingFinalization.timeout = setTimeout(() => {
