@@ -152,7 +152,7 @@ Output: "Some have entertained angels unaware."
 (Note: "on a work" → "unaware" - CRITICAL example of multi-word phrase correction using context - "on a work" doesn't make sense, "unaware" sounds similar and fits the biblical context)
 
 ### Output format:
-Return only the corrected text as a single line, no explanations.`;
+Output ONLY as a JSON object with the key 'corrected_text'. Example: {"corrected_text": "Your corrected text here"}.`;
 
 // Helper function to validate that AI response is actually a correction, not an error message
 function validateCorrectionResponse(corrected, original) {
@@ -288,7 +288,8 @@ export class GrammarWorker {
             { role: 'user', content: text }
           ],
           temperature: 0.2, // Lower temperature for consistency
-          max_tokens: 800 // Reduced for partials - they're typically short
+          max_tokens: 800, // Reduced for partials - they're typically short
+          response_format: { type: 'json_object' } // Use JSON mode instead of tools/functions to reduce token cost
         }),
         signal: abortController.signal
       });
@@ -301,7 +302,19 @@ export class GrammarWorker {
       }
 
       const data = await response.json();
-      let corrected = data.choices[0]?.message?.content?.trim() || text;
+      let corrected = text; // Default to original text
+      
+      // Parse JSON response
+      try {
+        const content = data.choices[0]?.message?.content?.trim() || '';
+        if (content) {
+          const jsonResponse = JSON.parse(content);
+          corrected = jsonResponse.corrected_text || text;
+        }
+      } catch (parseError) {
+        console.warn(`[GrammarWorker] ⚠️ Failed to parse JSON response, using original text:`, parseError.message);
+        corrected = text;
+      }
       
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
@@ -507,7 +520,8 @@ export class GrammarWorker {
             { role: 'user', content: text }
           ],
           temperature: 0.2,
-          max_tokens: 2000
+          max_tokens: 2000,
+          response_format: { type: 'json_object' } // Use JSON mode instead of tools/functions to reduce token cost
         })
       });
 
@@ -520,7 +534,19 @@ export class GrammarWorker {
       clearTimeout(timeoutId); // Clear timeout on success
       
       const elapsed = Date.now() - startTime;
-      let corrected = data.choices[0]?.message?.content?.trim() || text;
+      let corrected = text; // Default to original text
+      
+      // Parse JSON response
+      try {
+        const content = data.choices[0]?.message?.content?.trim() || '';
+        if (content) {
+          const jsonResponse = JSON.parse(content);
+          corrected = jsonResponse.corrected_text || text;
+        }
+      } catch (parseError) {
+        console.warn(`[GrammarWorker] ⚠️ Failed to parse JSON response, using original text:`, parseError.message);
+        corrected = text;
+      }
       
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
