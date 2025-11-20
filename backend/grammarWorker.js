@@ -67,89 +67,29 @@ Your goal is to take partial or final text transcribed from speech-to-text and m
 
 ### Examples:
 
-Input: "and god so loved the world he give his only begotten sun"
-Output: "And God so loved the world that He gave His only begotten Son."
-(Note: "sun" → "Son" because they sound identical)
+Input: "and god so loved the world he give his only begotten sun. One of my Generations. Favorite authors is Max. Lucado. they're heart was broken. we must except Jesus as our savior"
+Output: "And God so loved the world that He gave His only begotten Son. One of my generation's favorite authors is Max Lucado. Their heart was broken. We must accept Jesus as our Savior."
+(Note: **Homophones:** "sun" → "Son", "they're" → "Their", "except" → "accept". **Grammar:** Fixes punctuation/capitalization errors aggressively.)
 
-Input: "come on somebody give him praise"
-Output: "Come on, somebody, give Him praise!"
+Input: "It was so small groups leaving this church in, canoes and boats, and going out and chopping holes in roof and pulling people out. I want to read a Bible verse."
+Output: "It was those small groups leaving this church in canoes and boats, and going out and chopping holes in roofs and pulling people out. I want to read the Bible verse."
+(Note: **CRITICAL STT Fix:** "so" → "those" (very common STT mishear). **Punctuation/Capitalization** fixed. **A/The** correction.)
 
-Input: "let's go back to the text it says when david found mephibosheth"
-Output: "Let's go back to the text — it says when David found Mephibosheth."
+Input: "Says, let Brotherly Love continue, do not neces to show. Hospitality to stranger for theirs. Thereby some have entertained angels on a work. we need to and counter God in our daily lives"
+Output: "Says, 'Let brotherly love continue. Do not neglect to show hospitality to strangers, for thereby some have entertained angels unaware.' We need to encounter God in our daily lives."
+(Note: **Multi-Word Mishears:** "on a work" → "unaware", "neces" → "neglect", "for theirs" → "for strangers". **Speech Mishears:** "and counter" → "encounter". **Capitalization** corrected.)
 
-Input: "they're heart was broken"
-Output: "Their heart was broken."
-(Note: "they're" → "their" because they sound identical)
+Input: "let's go back to the text it says when david found mephibosheth. we was praying last night. I no that God is good."
+Output: "Let's go back to the text — it says when David found Mephibosheth. We were praying last night. I know that God is good."
+(Note: **Punctuation/Capitalization** fixed. **Homophone:** "no" → "know". **Grammar:** "was" → "were" for subject-verb agreement.)
 
-Input: "we was praying last night"
-Output: "We were praying last night."
-(Note: "was" → "were" for subject-verb agreement, sounds similar)
+Input: "The Sugeron General is calling loneliness. God wants us to talk about love. The pastor said we need to pray."
+Output: "The Surgeon General is calling loneliness. God wants us to talk about love. The pastor said we need to pray."
+(Note: **CRITICAL: DO NOT CHANGE SYNONYMS.** Keeps "calling," "talk," and "said." Fixes the near-homophone "Sugeron" → "Surgeon".)
 
-Input: "God wants us to show Hospitality the writer of Hebrews. Says, let Brotherly Love continue."
-Output: "God wants us to show hospitality. The writer of Hebrews says, 'Let brotherly love continue.'"
-
-Input: "One of my Generations. Favorite authors is Max. Lucado"
-Output: "One of my generation's favorite authors is Max Lucado."
-
-Input: "I no that God is good"
-Output: "I know that God is good."
-(Note: "no" → "know" because they sound identical)
-
-Input: "We need to here the word"
-Output: "We need to hear the word."
-(Note: "here" → "hear" because they sound identical)
-
-Input: "The pastor gave a great message"
-Output: "The pastor gave a great message."
-(Note: KEEP "message" even if "sermon" might be more contextually appropriate - they don't sound similar)
-
-Input: "we need to and counter God in our daily lives"
-Output: "We need to encounter God in our daily lives."
-(Note: "and counter" → "encounter" - common STT mishear, sounds similar)
-
-Input: "let us pray for are brothers and sisters"
-Output: "Let us pray for our brothers and sisters."
-(Note: "are" → "our" - sounds similar)
-
-Input: "the lord is my sheppard"
-Output: "The Lord is my shepherd."
-(Note: "sheppard" → "shepherd" - common spelling/STT error, sounds similar)
-
-Input: "we must except Jesus as our savior"
-Output: "We must accept Jesus as our Savior."
-(Note: "except" → "accept" - homophones, sound identical)
-
-Input: "Gods grace is sufficient"
-Output: "God's grace is sufficient."
-(Note: "Gods" → "God's" - possessive form, sounds identical)
-
-Input: "The Sugeron General is calling loneliness"
-Output: "The Surgeon General is calling loneliness."
-(Note: "Sugeron" → "Surgeon" - sounds similar, but KEEP "calling" - do NOT change to "addressing" or other synonyms)
-
-Input: "The pastor said we need to pray"
-Output: "The pastor said we need to pray."
-(Note: KEEP "said" - do NOT change to "stated", "mentioned", "declared", or other synonyms)
-
-Input: "God wants us to talk about love"
-Output: "God wants us to talk about love."
-(Note: KEEP "talk" - do NOT change to "speak", "discuss", or other synonyms)
-
-Input: "It was so small groups that rescued people in boats back during Hurricane Harvey. It was so small groups, leaving this church in, canoes and boats, and going out and chopping holes in roof and pulling people out. It was so small."
-Output: "It was those small groups that rescued people in boats back during Hurricane Harvey. It was those small groups, leaving this church in canoes and boats, and going out and chopping holes in roofs and pulling people out. It was those small groups."
-(Note: "so" → "those" - very common Whisper mishear, sounds similar; also fix "roof" → "roofs" for plural)
-
-Input: "I want to read a Bible verse"
-Output: "I want to read the Bible verse."
-(Note: "a" → "the" when referring to "the Bible" - common speech context, sounds similar)
-
-Input: "Says, let Brotherly Love continue, do not neces to show. Hospitality to stranger for theirs. Thereby some have entertained angels on a work."
-Output: "Says, let brotherly love continue. Do not neglect to show hospitality to strangers, for thereby some have entertained angels unaware."
-(Note: "on a work" → "unaware" - multi-word phrase mishear, sounds similar, "on a work" makes no contextual sense; "neces" → "neglect"; "for theirs" → "for strangers" when context suggests it; fix capitalization and punctuation)
-
-Input: "some have entertained angels on a work"
-Output: "Some have entertained angels unaware."
-(Note: "on a work" → "unaware" - CRITICAL example of multi-word phrase correction using context - "on a work" doesn't make sense, "unaware" sounds similar and fits the biblical context)
+Input: "God wants us to show Hospitality the writer of Hebrews. Says, let Brotherly Love continue. The lord is my sheppard. let us pray for are brothers and sisters."
+Output: "God wants us to show hospitality. The writer of Hebrews says, 'Let brotherly love continue.' The Lord is my shepherd. Let us pray for our brothers and sisters."
+(Note: **Biblical/Church Fixes:** Corrects capitalization of "Hospitality" and "Brotherly Love." Fixes spelling "sheppard" → "shepherd." Homophone "are" → "our".)
 
 ### Output format:
 Output ONLY as a JSON object with the key 'corrected_text'. Example: {"corrected_text": "Your corrected text here"}.`;
