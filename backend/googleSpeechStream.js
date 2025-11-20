@@ -49,9 +49,9 @@ export class GoogleSpeechStream {
     console.log(`[GoogleSpeech] Created new stream instance: ${this.streamId}`);
 
     // AUDIO BUFFER MANAGER: Captures EVERY audio chunk for recovery operations
-    // This rolling buffer maintains the last 1500ms of audio for text extension window
+    // This rolling buffer maintains the last 2500ms of audio for text extension window
     this.audioBufferManager = new AudioBufferManager({
-      bufferDurationMs: 1500,  // 1.5 second rolling window
+      bufferDurationMs: 2500,  // 2.5 second rolling window (extended to capture complete phrases after forced finals)
       flushDurationMs: 600,     // Flush last 600ms on natural finals
       maxChunks: 200,           // Safety limit
       enableMetrics: true,

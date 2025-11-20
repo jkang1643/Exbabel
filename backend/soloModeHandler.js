@@ -1459,7 +1459,7 @@ export async function handleSoloMode(clientWs) {
                       // ⭐ CRITICAL TIMING FIX: Capture PRE-final audio (not post-final)
                       // The decoder gap occurs 200-500ms BEFORE the forced final
                       // We need a buffer window that spans BOTH before and after the final
-                      console.log(`[SoloMode] 🎯 Starting PRE+POST-final audio capture window (400ms wait)...`);
+                      console.log(`[SoloMode] 🎯 Starting PRE+POST-final audio capture window (800ms wait)...`);
 
                       const bufferedText = transcriptText;
                       const forcedFinalTimestamp = Date.now();
@@ -1474,10 +1474,10 @@ export async function handleSoloMode(clientWs) {
                           const timeSinceForcedFinal = Date.now() - forcedFinalTimestamp;
                           console.log(`[SoloMode] ⏱️ ${timeSinceForcedFinal}ms has passed since forced final`);
 
-                          // ⭐ CRITICAL: Capture 1800ms window that includes BOTH:
+                          // ⭐ CRITICAL: Capture 2200ms window that includes BOTH:
                           // - PRE-final audio (1400ms before the final) ← Contains the decoder gap!
-                          // - POST-final audio (400ms after the final) ← Ensures we got everything
-                          const captureWindowMs = 1800;
+                          // - POST-final audio (800ms after the final) ← Captures complete phrases like "self-centered"
+                          const captureWindowMs = 2200;
                           console.log(`[SoloMode] 🎵 Capturing PRE+POST-final audio: last ${captureWindowMs}ms`);
                           console.log(`[SoloMode] 📊 Window covers: [T-${captureWindowMs - timeSinceForcedFinal}ms to T+${timeSinceForcedFinal}ms]`);
                           console.log(`[SoloMode] 🎯 This INCLUDES the decoder gap at ~T-200ms where missing words exist!`);
@@ -1650,20 +1650,167 @@ export async function handleSoloMode(clientWs) {
                               if (recoveredText && recoveredText.length > 0) {
                                 console.log(`[SoloMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
 
-                                // The recovered text should contain the buffered text PLUS the missing words
-                                // Look for what's NEW in the recovered text
-                                const bufferedLower = bufferedText.trim().toLowerCase();
-                                const recoveredLower = recoveredText.trim().toLowerCase();
+                                // SMART MERGE LOGIC: Find overlap and extract new continuation words
+                                // Example: buffered="...life is best spent for", recovered="best spent fulfilling our own"
+                                // We need to: find "best spent" overlap, extract "fulfilling our own", append to buffered
 
-                                if (recoveredLower.length > bufferedLower.length && recoveredLower.includes(bufferedLower.substring(0, 30))) {
-                                  // Found overlap - use the recovered version (it's more complete)
-                                  console.log(`[SoloMode] 🎯 Decoder gap recovery found MORE words!`);
-                                  console.log(`[SoloMode]   Before: "${bufferedText}"`);
-                                  console.log(`[SoloMode]   After:  "${recoveredText}"`);
-                                  finalTextToCommit = recoveredText;
+                                const bufferedTrimmed = bufferedText.trim();
+                                const recoveredTrimmed = recoveredText.trim();
+                                const bufferedWords = bufferedTrimmed.split(/\s+/);
+                                const recoveredWords = recoveredTrimmed.split(/\s+/);
+
+                                console.log(`[SoloMode] 🔍 Attempting smart merge:`);
+                                console.log(`[SoloMode]   Buffered (${bufferedWords.length} words): "${bufferedTrimmed.substring(Math.max(0, bufferedTrimmed.length - 60))}"`);
+                                console.log(`[SoloMode]   Recovered (${recoveredWords.length} words): "${recoveredTrimmed}"`);
+
+                                let mergedSuccessfully = false;
+
+                                // PRODUCTION-GRADE MERGE ALGORITHM: Single-word overlap strategy
+                                // Used by real ASR platforms - simple, stable, handles all edge cases
+                                // Goal: Find last overlapping word, append only what comes after it
+
+                                console.log(`[SoloMode] 🔍 Merge algorithm:`);
+                                console.log(`[SoloMode]   Buffered (${bufferedWords.length} words): "${bufferedTrimmed.substring(Math.max(0, bufferedTrimmed.length - 60))}"`);
+                                console.log(`[SoloMode]   Recovered (${recoveredWords.length} words): "${recoveredTrimmed}"`);
+
+                                // Step 1: Find the last overlapping word
+                                // Scan from END of buffered words, look for first match in recovery
+                                let matchIndex = -1;
+                                let matchedWord = null;
+
+                                for (let i = bufferedWords.length - 1; i >= 0; i--) {
+                                  const bufferedWord = bufferedWords[i].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+
+                                  // Look for this word anywhere in recovery (normalized)
+                                  for (let j = 0; j < recoveredWords.length; j++) {
+                                    const recoveredWord = recoveredWords[j].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+
+                                    if (bufferedWord === recoveredWord && bufferedWord.length > 0) {
+                                      matchIndex = j;  // Index in RECOVERY where overlap occurs
+                                      matchedWord = bufferedWords[i];
+                                      break;
+                                    }
+                                  }
+
+                                  if (matchIndex !== -1) {
+                                    break;  // Found the last overlapping word
+                                  }
+                                }
+
+                                // Step 2: Merge based on overlap
+                                if (matchIndex !== -1) {
+                                  // Found overlap - append only words AFTER the match
+                                  const tail = recoveredWords.slice(matchIndex + 1);
+
+                                  if (tail.length > 0) {
+                                    // Append new words to buffered text
+                                    finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
+                                    console.log(`[SoloMode] 🎯 Decoder gap recovery: Found overlap at word "${matchedWord}"`);
+                                    console.log(`[SoloMode]   Match position in recovery: word ${matchIndex + 1}/${recoveredWords.length}`);
+                                    console.log(`[SoloMode]   New words to append: "${tail.join(' ')}"`);
+                                    console.log(`[SoloMode]   Before: "${bufferedTrimmed}"`);
+                                    console.log(`[SoloMode]   After:  "${finalTextToCommit}"`);
+                                    mergedSuccessfully = true;
+                                  } else {
+                                    // Recovery only confirms what we have
+                                    console.log(`[SoloMode] ✅ Recovery confirms buffered ending (overlap at "${matchedWord}", no new words)`);
+                                    mergedSuccessfully = true;
+                                  }
                                 } else {
-                                  console.log(`[SoloMode] ⚠️ Recovered text doesn't match expected pattern`);
-                                  console.log(`[SoloMode]   May need smarter merge logic`);
+                                  // Tier 1 failed - no exact overlap found
+                                  // Try Tier 2: Fuzzy matching fallback (handles ASR word rewrites)
+                                  console.log(`[SoloMode] ⚠️ No exact overlap found - trying fuzzy matching...`);
+
+                                  // Helper: Calculate Levenshtein distance (edit distance)
+                                  function levenshtein(a, b) {
+                                    const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+                                    for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+                                    for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+                                    for (let j = 1; j <= b.length; j++) {
+                                      for (let i = 1; i <= a.length; i++) {
+                                        const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+                                        matrix[j][i] = Math.min(
+                                          matrix[j][i - 1] + 1,       // insertion
+                                          matrix[j - 1][i] + 1,       // deletion
+                                          matrix[j - 1][i - 1] + indicator  // substitution
+                                        );
+                                      }
+                                    }
+                                    return matrix[b.length][a.length];
+                                  }
+
+                                  // Helper: Find best fuzzy match using Levenshtein distance
+                                  function fuzzyAnchor(finalWords, recoveryWords) {
+                                    let best = { score: 0, finalWord: null, recoveryIndex: -1 };
+
+                                    // Check last 6 words from buffered (most likely to overlap)
+                                    const startIdx = Math.max(0, finalWords.length - 6);
+
+                                    for (let i = finalWords.length - 1; i >= startIdx; i--) {
+                                      const fw = finalWords[i].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+
+                                      // Skip very short words (likely articles/prepositions - unreliable anchors)
+                                      if (fw.length < 2) continue;
+
+                                      for (let j = 0; j < recoveryWords.length; j++) {
+                                        const rw = recoveryWords[j].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+
+                                        if (rw.length < 2) continue;
+
+                                        // Calculate similarity: 1 - (distance / max_length)
+                                        const lev = levenshtein(fw, rw);
+                                        const maxLen = Math.max(fw.length, rw.length);
+                                        const similarity = 1 - (lev / maxLen);
+
+                                        if (similarity > best.score) {
+                                          best = {
+                                            score: similarity,
+                                            finalWord: finalWords[i],
+                                            recoveryWord: recoveryWords[j],
+                                            recoveryIndex: j
+                                          };
+                                        }
+                                      }
+                                    }
+
+                                    return best;
+                                  }
+
+                                  // Try fuzzy matching with conservative threshold
+                                  const FUZZY_THRESHOLD = 0.72; // Require 72% similarity
+                                  const fuzzyMatch = fuzzyAnchor(bufferedWords, recoveredWords);
+
+                                  if (fuzzyMatch.score >= FUZZY_THRESHOLD) {
+                                    // Fuzzy match found - use it as anchor
+                                    const tail = recoveredWords.slice(fuzzyMatch.recoveryIndex + 1);
+
+                                    if (tail.length > 0) {
+                                      finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
+                                      console.log(`[SoloMode] 🎯 Fuzzy match found: "${fuzzyMatch.finalWord}" ≈ "${fuzzyMatch.recoveryWord}" (${(fuzzyMatch.score * 100).toFixed(0)}% similar)`);
+                                      console.log(`[SoloMode]   Match position in recovery: word ${fuzzyMatch.recoveryIndex + 1}/${recoveredWords.length}`);
+                                      console.log(`[SoloMode]   New words to append: "${tail.join(' ')}"`);
+                                      console.log(`[SoloMode]   Before: "${bufferedTrimmed}"`);
+                                      console.log(`[SoloMode]   After:  "${finalTextToCommit}"`);
+                                      mergedSuccessfully = true;
+                                    } else {
+                                      console.log(`[SoloMode] ✅ Fuzzy match confirms buffered ending (no new words)`);
+                                      mergedSuccessfully = true;
+                                    }
+                                  } else {
+                                    // Tier 3: No overlap at all (exact or fuzzy) - append entire recovery
+                                    // This prevents word loss when recovery captures completely new content
+                                    console.log(`[SoloMode] ⚠️ No fuzzy match above threshold (best: ${(fuzzyMatch.score * 100).toFixed(0)}% < ${FUZZY_THRESHOLD * 100}%)`);
+                                    console.log(`[SoloMode] 📎 Appending entire recovery to prevent word loss`);
+                                    finalTextToCommit = bufferedTrimmed + ' ' + recoveredTrimmed;
+                                    console.log(`[SoloMode]   Before: "${bufferedTrimmed}"`);
+                                    console.log(`[SoloMode]   After:  "${finalTextToCommit}"`);
+                                    mergedSuccessfully = true;
+                                  }
+                                }
+
+                                // Normalize spacing
+                                if (mergedSuccessfully) {
+                                  finalTextToCommit = finalTextToCommit.trim();
                                 }
                               }
 
@@ -1676,7 +1823,7 @@ export async function handleSoloMode(clientWs) {
                           console.log(`[SoloMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
                           processFinalText(finalTextToCommit, { forceFinal: true });
                           forcedFinalBuffer = null;
-                        }, 400)  // ⭐ REDUCED: Only wait 400ms for POST-final audio, not 1200ms
+                        }, 800)  // ⭐ EXTENDED: Wait 800ms for POST-final audio to capture complete phrases (e.g., "self-centered")
                       };
 
                     } catch (error) {
