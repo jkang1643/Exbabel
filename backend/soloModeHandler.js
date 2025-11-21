@@ -1453,12 +1453,6 @@ export async function handleSoloMode(clientWs) {
                       }
                     }
 
-                    // NOW reset partial tracking after using snapshot
-                    longestPartialText = '';
-                    latestPartialText = '';
-                    longestPartialTime = 0;
-                    latestPartialTime = 0;
-                    
                     const endsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
 
                     // ALWAYS capture and inject recovery audio for ALL forced finals (for testing)
@@ -1479,8 +1473,47 @@ export async function handleSoloMode(clientWs) {
                       forcedFinalBuffer = {
                         text: transcriptText,
                         timestamp: forcedFinalTimestamp,
-                        timeout: setTimeout(async () => {
-                          console.warn('[SoloMode] ⏰ Forced final buffer timeout - capturing PRE+POST-final audio');
+                        timeout: setTimeout(() => {
+                          console.log('[SoloMode] ⏰ Phase 1: Waiting 1200ms for late partials and POST-final audio accumulation...');
+
+                          // Phase 1: Wait 1200ms for late partials to arrive AND for POST-final audio to accumulate
+                          setTimeout(async () => {
+                            console.warn('[SoloMode] ⏰ Phase 2: Late partial window complete - capturing PRE+POST-final audio');
+
+                          // Snapshot any late partials that arrived during the 1200ms wait
+                          const partialSnapshot = {
+                            longest: longestPartialText,
+                            latest: latestPartialText,
+                            longestTime: longestPartialTime,
+                            latestTime: latestPartialTime
+                          };
+
+                          console.log(`[SoloMode] 📸 Late partial snapshot: longest=${partialSnapshot.longest?.length || 0} chars, latest=${partialSnapshot.latest?.length || 0} chars`);
+
+                          // Check if late partials extend the buffered text
+                          let finalWithPartials = bufferedText;
+                          if (partialSnapshot.longest && partialSnapshot.longest.length > bufferedText.length) {
+                            const bufferedTrimmed = bufferedText.trim();
+                            const longestTrimmed = partialSnapshot.longest.trim();
+                            const timeSinceLongest = partialSnapshot.longestTime ? (Date.now() - partialSnapshot.longestTime) : Infinity;
+
+                            // Verify it extends the buffered text and is recent (< 5000ms)
+                            if (timeSinceLongest < 5000 &&
+                                (longestTrimmed.startsWith(bufferedTrimmed) ||
+                                 (bufferedTrimmed.length > 10 && longestTrimmed.substring(0, bufferedTrimmed.length) === bufferedTrimmed))) {
+                              const recoveredWords = partialSnapshot.longest.substring(bufferedText.length).trim();
+                              console.log(`[SoloMode] ✅ Late partials extended buffered text (${bufferedText.length} → ${partialSnapshot.longest.length} chars)`);
+                              console.log(`[SoloMode] 📊 Recovered from late partials: "${recoveredWords}"`);
+                              finalWithPartials = partialSnapshot.longest;
+                            }
+                          }
+
+                          // NOW reset partial tracking for next segment (clean slate for recovery)
+                          console.log(`[SoloMode] 🧹 Resetting partial tracking for next segment`);
+                          longestPartialText = '';
+                          latestPartialText = '';
+                          longestPartialTime = 0;
+                          latestPartialTime = 0;
 
                           // Calculate how much time has passed since forced final
                           const timeSinceForcedFinal = Date.now() - forcedFinalTimestamp;
@@ -1512,31 +1545,11 @@ export async function handleSoloMode(clientWs) {
                             }
                           }
 
-                          // CRITICAL: Check if longestPartialText has extended the buffered text during wait period
-                          let finalTextToCommit = forcedFinalBuffer ? forcedFinalBuffer.text : bufferedText;
+                          // Use finalWithPartials (which includes any late partials captured in Phase 1)
+                          let finalTextToCommit = finalWithPartials;
 
-                          console.log(`[SoloMode] 📊 Checking for POST-final words in main stream:`);
-                          console.log(`[SoloMode]   Buffered final: "${finalTextToCommit}"`);
-                          console.log(`[SoloMode]   Longest partial: "${longestPartialText || 'none'}"`);
-
-                          if (longestPartialText && longestPartialText.length > finalTextToCommit.length) {
-                            const bufferedTrimmed = finalTextToCommit.trim();
-                            const longestTrimmed = longestPartialText.trim();
-
-                            // Check if longest partial extends the buffered text
-                            if (longestTrimmed.startsWith(bufferedTrimmed) ||
-                                (bufferedTrimmed.length > 10 && longestTrimmed.substring(0, bufferedTrimmed.length) === bufferedTrimmed)) {
-                              const recoveredWords = longestPartialText.substring(finalTextToCommit.length).trim();
-                              console.log(`[SoloMode] ✅ Main stream captured some POST-final words!`);
-                              console.log(`[SoloMode] 📊 Extended by partials (${finalTextToCommit.length} → ${longestPartialText.length} chars)`);
-                              console.log(`[SoloMode] 🎯 Words from main stream: "${recoveredWords}"`);
-                              finalTextToCommit = longestPartialText;
-                            } else {
-                              console.log(`[SoloMode] ⚠️ Longest partial doesn't extend buffered`);
-                            }
-                          } else {
-                            console.log(`[SoloMode] ⚠️ No extension in main stream partials`);
-                          }
+                          console.log(`[SoloMode] 📊 Text to commit after late partial recovery:`);
+                          console.log(`[SoloMode]   Text: "${finalTextToCommit}"`);
 
                           // ⭐ NOW: Send the PRE+POST-final audio to recovery stream
                           // This audio includes the decoder gap at T-200ms where "spent" exists!
@@ -1663,10 +1676,10 @@ export async function handleSoloMode(clientWs) {
                                 console.log(`[SoloMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
 
                                 // SMART MERGE LOGIC: Find overlap and extract new continuation words
-                                // Example: buffered="...life is best spent for", recovered="best spent fulfilling our own"
-                                // We need to: find "best spent" overlap, extract "fulfilling our own", append to buffered
+                                // Example: finalWithPartials="...life is best spent for", recovered="best spent fulfilling our own"
+                                // We need to: find "best spent" overlap, extract "fulfilling our own", append to finalWithPartials
 
-                                const bufferedTrimmed = bufferedText.trim();
+                                const bufferedTrimmed = finalWithPartials.trim();
                                 const recoveredTrimmed = recoveredText.trim();
                                 const bufferedWords = bufferedTrimmed.split(/\s+/);
                                 const recoveredWords = recoveredTrimmed.split(/\s+/);
@@ -1835,7 +1848,8 @@ export async function handleSoloMode(clientWs) {
                           console.log(`[SoloMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
                           processFinalText(finalTextToCommit, { forceFinal: true });
                           forcedFinalBuffer = null;
-                        }, 800)  // ⭐ EXTENDED: Wait 800ms for POST-final audio to capture complete phrases (e.g., "self-centered")
+                        }, 1200);  // Phase 2: Wait 1200ms to capture more POST-final audio (shifts window from [T-1500,T+500] to [T-800,T+1200])
+                      }, 0)  // Phase 1: Start immediately
                       };
 
                     } catch (error) {
