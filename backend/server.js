@@ -123,6 +123,8 @@ const server = app.listen(port, '0.0.0.0', () => {
 });
 
 // Import WebSocket handlers
+// PHASE 8: Host adapter created but not yet active (requires full migration of 2409-line hostModeHandler)
+// TODO: Complete migration of hostModeHandler.js to use CoreEngine via host/adapter.js
 import { handleHostConnection } from './hostModeHandler.js';
 import { handleListenerConnection } from './websocketHandler.js';
 import { handleSoloMode } from './soloModeHandler.js';

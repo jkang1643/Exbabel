@@ -14,6 +14,9 @@ import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
 import { grammarWorker } from './grammarWorker.js';
+import { CoreEngine } from '../core/engine/coreEngine.js';
+// PHASE 7: Using CoreEngine which coordinates all extracted engines
+// Individual engines are still accessible via coreEngine properties if needed
 
 export async function handleSoloMode(clientWs) {
   console.log("[SoloMode] ⚡ Connection using Google Speech + OpenAI Translation");
@@ -28,69 +31,89 @@ export async function handleSoloMode(clientWs) {
   // This allows the rate limiter to distribute capacity fairly across sessions
   const sessionId = legacySessionId;
   
-  // Sequence tracking and RTT measurement
-  let sequenceCounter = 0;
-  let latestSeqId = -1;
-  let rttMeasurements = []; // Store recent RTT measurements for adaptive finalization
-  const MAX_RTT_SAMPLES = 10;
+  // PHASE 7: Core Engine Orchestrator - coordinates all extracted engines
+  // Initialize core engine (replaces individual engine instances)
+  const coreEngine = new CoreEngine();
+  coreEngine.initialize();
   
-  // Finalization state tracking
-  let pendingFinalization = null; // { seqId, text, timestamp, timeout, maxWaitTimestamp }
-  const MAX_FINALIZATION_WAIT_MS = 12000; // Maximum 12 seconds - safety net for long sentences (increased to prevent mid-sentence cutoffs)
-  const FINALIZATION_CONFIRMATION_WINDOW = 300; // 300ms confirmation window
-  const MIN_SILENCE_MS = 600; // Minimum 600ms silence before finalization (optimized for natural speech pauses)
-  const DEFAULT_LOOKAHEAD_MS = 200; // Default 200ms lookahead
-  const FORCED_FINAL_MAX_WAIT_MS = 2000; // Time to wait for continuation before committing forced final
+  // PHASE 7: Access individual engines via coreEngine for backward compatibility
+  const timelineTracker = coreEngine.timelineTracker;
+  const rttTracker = coreEngine.rttTracker;
+  const partialTracker = coreEngine.partialTracker;
+  const finalizationEngine = coreEngine.finalizationEngine;
+  const forcedCommitEngine = coreEngine.forcedCommitEngine;
+  
+  const DEFAULT_LOOKAHEAD_MS = 200; // Default 200ms lookahead (used by RTT tracker)
+  
+  // PHASE 7: Constants now from core engine (for backward compatibility)
+  const MAX_FINALIZATION_WAIT_MS = finalizationEngine.MAX_FINALIZATION_WAIT_MS;
+  const FINALIZATION_CONFIRMATION_WINDOW = finalizationEngine.FINALIZATION_CONFIRMATION_WINDOW;
+  const MIN_SILENCE_MS = finalizationEngine.MIN_SILENCE_MS;
+  const FORCED_FINAL_MAX_WAIT_MS = forcedCommitEngine.FORCED_FINAL_MAX_WAIT_MS;
   const TRANSLATION_RESTART_COOLDOWN_MS = 400; // Pause realtime translations briefly after stream restart
+  
+  // PHASE 6: Compatibility layer - forcedFinalBuffer variable synced with engine
+  let forcedFinalBuffer = null;
+  
+  // Helper to sync forcedFinalBuffer from engine (call after engine operations)
+  const syncForcedFinalBuffer = () => {
+    forcedFinalBuffer = forcedCommitEngine.getForcedFinalBuffer();
+  };
+  
+  // PHASE 5: Compatibility layer - pendingFinalization variable synced with engine
+  // This allows existing code to continue working with minimal changes
+  let pendingFinalization = null;
+  
+  // Helper to sync pendingFinalization from engine (call after engine operations)
+  const syncPendingFinalization = () => {
+    pendingFinalization = finalizationEngine.getPendingFinalization();
+  };
+  
+  // Helper to update engine from pendingFinalization (call before engine operations)
+  const updateEngineFromPending = () => {
+    if (pendingFinalization && !finalizationEngine.hasPendingFinalization()) {
+      finalizationEngine.createPendingFinalization(pendingFinalization.text, pendingFinalization.seqId);
+      if (pendingFinalization.timestamp) {
+        finalizationEngine.pendingFinalization.timestamp = pendingFinalization.timestamp;
+      }
+      if (pendingFinalization.maxWaitTimestamp) {
+        finalizationEngine.pendingFinalization.maxWaitTimestamp = pendingFinalization.maxWaitTimestamp;
+      }
+    } else if (pendingFinalization && finalizationEngine.hasPendingFinalization()) {
+      finalizationEngine.updatePendingFinalizationText(pendingFinalization.text);
+    }
+  };
   
   // Last audio timestamp for silence detection
   let lastAudioTimestamp = null;
   let silenceStartTime = null;
-  let forcedFinalBuffer = null; // { text, timeout }
+  // PHASE 6: forcedFinalBuffer is now managed by forcedCommitEngine (see compatibility layer above)
   let realtimeTranslationCooldownUntil = 0;
   
-  // Helper: Calculate RTT from client timestamp
+  // PHASE 2: RTT functions now delegate to RTT tracker
+  // Helper: Calculate RTT from client timestamp (delegates to RTT tracker)
   const measureRTT = (clientTimestamp) => {
-    if (!clientTimestamp) return null;
-    const rtt = Date.now() - clientTimestamp;
-    // Filter out negative RTT (clock sync issues) and extremely large values (bad measurements)
-    if (rtt < 0 || rtt > 10000) {
-      console.warn(`[SoloMode] ⚠️ Invalid RTT measurement: ${rtt}ms (skipping)`);
-      return null;
-    }
-    rttMeasurements.push(rtt);
-    if (rttMeasurements.length > MAX_RTT_SAMPLES) {
-      rttMeasurements.shift();
-    }
-    return rtt;
+    return rttTracker.measureRTT(clientTimestamp);
   };
   
-  // Helper: Get adaptive lookahead based on RTT
+  // Helper: Get adaptive lookahead based on RTT (delegates to RTT tracker)
   const getAdaptiveLookahead = () => {
-    if (rttMeasurements.length === 0) return DEFAULT_LOOKAHEAD_MS;
-    const avgRTT = rttMeasurements.reduce((a, b) => a + b, 0) / rttMeasurements.length;
-    // Lookahead = RTT/2, but capped between 200-700ms
-    return Math.max(200, Math.min(700, Math.floor(avgRTT / 2)));
+    return rttTracker.getAdaptiveLookahead();
   };
   
+  // PHASE 3: Send message with sequence info (uses Timeline Offset Tracker)
   // Helper: Send message with sequence info
   const sendWithSequence = (messageData, isPartial = true) => {
-    const seqId = sequenceCounter++;
-    latestSeqId = Math.max(latestSeqId, seqId);
+    // Use timeline tracker to create sequenced message
+    const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
     
-    const message = {
-      ...messageData,
-      seqId,
-      serverTimestamp: Date.now(),
-      isPartial,
-      type: isPartial ? 'translation' : 'translation'
-    };
+    // DEBUG: Log sequence ID for verification (Phase 3)
+    console.log(`[SoloMode] 📤 Sending message (seq: ${seqId}, isPartial: ${isPartial})`);
     
     // DEBUG: Log if correctedText is present
     if (message.correctedText && message.originalText !== message.correctedText) {
-      console.log(`[SoloMode] 📤 Sending message with CORRECTION (seq: ${seqId}, isPartial: ${isPartial}):`);
-      console.log(`[SoloMode]   originalText: "${message.originalText?.substring(0, 60)}${(message.originalText?.length || 0) > 60 ? '...' : ''}"`);
-      console.log(`[SoloMode]   correctedText: "${message.correctedText?.substring(0, 60)}${(message.correctedText?.length || 0) > 60 ? '...' : ''}"`);
+      console.log(`[SoloMode]   CORRECTION: originalText: "${message.originalText?.substring(0, 60)}${(message.originalText?.length || 0) > 60 ? '...' : ''}"`);
+      console.log(`[SoloMode]   CORRECTION: correctedText: "${message.correctedText?.substring(0, 60)}${(message.correctedText?.length || 0) > 60 ? '...' : ''}"`);
       console.log(`[SoloMode]   hasCorrection: ${message.hasCorrection}`);
     }
     
@@ -188,74 +211,55 @@ export async function handleSoloMode(clientWs) {
               let lastPartialTranslationTime = 0;
               let pendingPartialTranslation = null;
               let currentPartialText = ''; // Track current partial text for delayed translations
-              let latestPartialTextForCorrection = ''; // Track the absolute latest partial to avoid race conditions
               
-              // CRITICAL: Track latest partial to prevent word loss
-              let latestPartialText = ''; // Most recent partial text from Google Speech
-              let latestPartialTime = 0; // Timestamp of latest partial
-              let longestPartialText = ''; // Track the longest partial seen in current segment
-              let longestPartialTime = 0; // Timestamp of longest partial
+              // PHASE 7: Partial Tracker now accessed via CoreEngine
+              // Use the partial tracker from coreEngine (already initialized)
+              const partialTracker = coreEngine.partialTracker;
+              
+              // PHASE 4: Helper getters for backward compatibility (delegate to tracker)
+              // These allow existing code to continue working with minimal changes
+              const getLatestPartialText = () => partialTracker.getLatestPartial();
+              const getLongestPartialText = () => partialTracker.getLongestPartial();
+              const getLatestPartialTime = () => partialTracker.getLatestPartialTime();
+              const getLongestPartialTime = () => partialTracker.getLongestPartialTime();
+              const getLatestPartialTextForCorrection = () => partialTracker.getLatestPartialForCorrection();
+              
+              // PHASE 4: Compatibility layer - variables that reference tracker (for closures/timeouts)
+              // These are kept in sync via getter functions
+              let latestPartialText = '';
+              let longestPartialText = '';
+              let latestPartialTime = 0;
+              let longestPartialTime = 0;
+              let latestPartialTextForCorrection = '';
+              
+              // Helper to sync variables from tracker (call after updatePartial)
+              const syncPartialVariables = () => {
+                latestPartialText = getLatestPartialText();
+                longestPartialText = getLongestPartialText();
+                latestPartialTime = getLatestPartialTime();
+                longestPartialTime = getLongestPartialTime();
+                latestPartialTextForCorrection = getLatestPartialTextForCorrection();
+              };
               
               // CRITICAL: Track last sent FINAL to merge consecutive continuations
               let lastSentFinalText = ''; // Last FINAL text that was sent to client
               let lastSentFinalTime = 0; // Timestamp when last FINAL was sent
               const FINAL_CONTINUATION_WINDOW_MS = 3000; // 3 seconds - if new FINAL arrives within this window and continues last, merge them
               
-              
-              // Helper function to tokenize text for overlap matching
+              // PHASE 4: Helper functions now delegate to Partial Tracker
+              // Helper function to tokenize text for overlap matching (delegates to tracker)
               const tokenize = (text) => {
-                return text.trim().toLowerCase().split(/\s+/).filter(t => t.length > 0);
+                return partialTracker.tokenize(text);
               };
               
-              // Helper function to calculate token overlap
+              // Helper function to calculate token overlap (delegates to tracker)
               const calculateTokenOverlap = (tokens1, tokens2) => {
-                if (tokens1.length === 0 || tokens2.length === 0) {
-                  return { overlapType: 'none', overlapTokens: 0, similarity: 0 };
-                }
-                const maxCheck = 6;
-                let bestOverlap = 0;
-                let bestType = 'none';
-                
-                // Check if tokens2 starts with end of tokens1
-                for (let i = 1; i <= Math.min(tokens1.length, maxCheck); i++) {
-                  const suffix = tokens1.slice(-i);
-                  if (tokens2.slice(0, i).join(' ') === suffix.join(' ')) {
-                    if (i > bestOverlap) {
-                      bestOverlap = i;
-                      bestType = 'suffix-prefix';
-                    }
-                  }
-                }
-                
-                // Check if tokens2 contains tokens1
-                const tokens1Str = tokens1.join(' ');
-                const tokens2Str = tokens2.join(' ');
-                if (tokens2Str.includes(tokens1Str)) {
-                  const overlapTokens = tokens1.length;
-                  if (overlapTokens > bestOverlap) {
-                    bestOverlap = overlapTokens;
-                    bestType = 'contains';
-                  }
-                }
-                
-                const similarity = bestOverlap > 0 ? bestOverlap / Math.max(tokens1.length, tokens2.length) : 0;
-                return { overlapType: bestType, overlapTokens: bestOverlap, similarity };
+                return partialTracker.calculateTokenOverlap(tokens1, tokens2);
               };
               
-              // Helper function to merge tokens
+              // Helper function to merge tokens (delegates to tracker)
               const mergeTokens = (text1, text2) => {
-                const tokens1 = tokenize(text1);
-                const tokens2 = tokenize(text2);
-                const overlap = calculateTokenOverlap(tokens1, tokens2);
-                
-                if (overlap.overlapType === 'suffix-prefix') {
-                  const newTokens = tokens2.slice(overlap.overlapTokens);
-                  return text1 + ' ' + newTokens.join(' ');
-                } else if (overlap.overlapType === 'contains') {
-                  return text2; // text2 contains text1, use text2
-                } else {
-                  return text1 + ' ' + text2;
-                }
+                return partialTracker.mergeTokens(text1, text2);
               };
 
               // Persist grammar corrections so we can reapply them to extending partials
@@ -306,60 +310,9 @@ export async function handleSoloMode(clientWs) {
                 return updated;
               };
           
+          // PHASE 4: mergeWithOverlap now delegates to Partial Tracker
           const mergeWithOverlap = (previousText = '', currentText = '') => {
-            const prev = (previousText || '').trim();
-            const curr = (currentText || '').trim();
-            if (!prev) return curr;
-            if (!curr) return prev;
-            if (curr.startsWith(prev)) {
-              return curr;
-            }
-            // CRITICAL: More lenient matching - check if current text starts with previous (case-insensitive, ignoring extra spaces)
-            const prevNormalized = prev.replace(/\s+/g, ' ').toLowerCase();
-            const currNormalized = curr.replace(/\s+/g, ' ').toLowerCase();
-            if (currNormalized.startsWith(prevNormalized)) {
-              // Current extends previous (with normalization) - use current
-              return curr;
-            }
-            // CRITICAL: Prevent cross-segment merging
-            // If current text is significantly longer and doesn't start with previous, it's likely a different segment
-            // Only merge if there's a clear overlap AND the texts are similar in structure
-            if (curr.length > prev.length * 1.5) {
-              // Current is much longer - check if it contains the previous text in a way that suggests same segment
-              const prevWords = prev.split(/\s+/).filter(w => w.length > 2); // Words longer than 2 chars (more lenient)
-              const currWords = curr.split(/\s+/).filter(w => w.length > 2);
-              // If current doesn't share significant words with previous, don't merge
-              const sharedWords = prevWords.filter(w => currWords.includes(w));
-              if (sharedWords.length < Math.min(2, prevWords.length * 0.3)) {
-                // Not enough shared words - likely different segment
-                return null; // Don't merge
-              }
-            }
-            const maxOverlap = Math.min(prev.length, curr.length, 200);
-            // More lenient: Require overlap (at least 3 chars) to catch more cases, including short words
-            // Also try case-insensitive matching
-            for (let overlap = maxOverlap; overlap >= 3; overlap--) {
-              const prevSuffix = prev.slice(-overlap).toLowerCase();
-              const currPrefix = curr.slice(0, overlap).toLowerCase();
-              // Try exact match first
-              if (prev.slice(-overlap) === curr.slice(0, overlap)) {
-                return (prev + curr.slice(overlap)).trim();
-              }
-              // Try case-insensitive match
-              if (prevSuffix === currPrefix) {
-                // Case-insensitive match - use original case from current text
-                return (prev + curr.slice(overlap)).trim();
-              }
-              // Try normalized (ignore extra spaces)
-              const prevSuffixNorm = prev.slice(-overlap).replace(/\s+/g, ' ').toLowerCase();
-              const currPrefixNorm = curr.slice(0, overlap).replace(/\s+/g, ' ').toLowerCase();
-              if (prevSuffixNorm === currPrefixNorm && overlap >= 5) {
-                // Normalized match - merge them
-                return (prev + curr.slice(overlap)).trim();
-              }
-            }
-            // No significant overlap found - don't merge (return null to indicate failure)
-            return null;
+            return partialTracker.mergeWithOverlap(previousText, currentText);
           };
           
           // Helper: Check if text ends with a complete word (not mid-word)
@@ -373,9 +326,21 @@ export async function handleSoloMode(clientWs) {
             return false;
           };
           
+          // PHASE 5: endsWithCompleteSentence now delegates to Finalization Engine
           // Helper: Check if text ends with a complete sentence
           // A complete sentence ends with sentence-ending punctuation (. ! ?) followed by optional quotes/closing punctuation
           const endsWithCompleteSentence = (text) => {
+            // Delegate to finalization engine (which has the same logic)
+            return finalizationEngine.endsWithCompleteSentence(text);
+            // Original logic preserved in FinalizationEngine.endsWithCompleteSentence():
+            // - Checks for sentence-ending punctuation (. ! ? …)
+            // - Handles closing quotes/parentheses
+            // - Returns true if ends with punctuation/space
+          };
+          
+          // Keep original logic comment for reference:
+          /*
+          Original logic:
             if (!text || text.length === 0) return false;
             const trimmed = text.trim();
             // Ends with sentence-ending punctuation (period, exclamation, question mark, ellipsis)
@@ -384,7 +349,7 @@ export async function handleSoloMode(clientWs) {
             // Also check for common sentence-ending patterns
             if (/[.!?…]\s*$/.test(trimmed)) return true;
             return false;
-          };
+          */
               
               // SIMPLE FIX: Just use the longest partial we've seen - no complex delays
               
@@ -671,23 +636,25 @@ export async function handleSoloMode(clientWs) {
                 console.log(`[SoloMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (meta: ${JSON.stringify(meta)})`);
 
                 if (isPartial) {
-                  if (forcedFinalBuffer) {
+                  // PHASE 6: Use Forced Commit Engine to check for forced final extensions
+                  syncForcedFinalBuffer(); // Sync variable from engine
+                  if (forcedCommitEngine.hasForcedFinalBuffer()) {
                     // CRITICAL: Check if this partial extends the forced final or is a new segment
-                    const forcedText = forcedFinalBuffer.text.trim();
-                    const partialText = transcriptText.trim();
+                    const extension = forcedCommitEngine.checkPartialExtendsForcedFinal(transcriptText);
                     
-                    // Check if partial extends the forced final (starts with it or has significant overlap)
-                    const extendsForced = partialText.length > forcedText.length && 
-                                         (partialText.startsWith(forcedText) || 
-                                          (forcedText.length > 10 && partialText.substring(0, forcedText.length) === forcedText));
-                    
-                    if (extendsForced) {
+                    if (extension && extension.extends) {
                       // Partial extends the forced final - merge and commit
                       console.log('[SoloMode] 🔁 New partial extends forced final - merging and committing');
-                      clearTimeout(forcedFinalBuffer.timeout);
-                      const mergedFinal = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
-                      processFinalText(mergedFinal, { forceFinal: true });
-                      forcedFinalBuffer = null;
+                      forcedCommitEngine.clearForcedFinalBufferTimeout();
+                      const mergedFinal = mergeWithOverlap(forcedCommitEngine.getForcedFinalBuffer().text, transcriptText);
+                      if (mergedFinal) {
+                        processFinalText(mergedFinal, { forceFinal: true });
+                      } else {
+                        // Merge failed - use extended text
+                        processFinalText(extension.extendedText, { forceFinal: true });
+                      }
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
                       // Continue processing the extended partial normally
                     } else {
                       // New segment detected - but DON'T cancel timeout yet!
@@ -698,23 +665,10 @@ export async function handleSoloMode(clientWs) {
                       // Continue processing the new partial as a new segment
                     }
                   }
-                  // Track latest partial for correction race condition prevention
-                  latestPartialTextForCorrection = transcriptText;
+                  // PHASE 4: Update partial tracking using Partial Tracker
+                  partialTracker.updatePartial(transcriptText);
+                  syncPartialVariables(); // Sync variables for compatibility
                   const translationSeedText = applyCachedCorrections(transcriptText);
-                  
-                  // Track latest partial
-                  if (!latestPartialText || transcriptText.length > latestPartialText.length) {
-                    latestPartialText = transcriptText;
-                    latestPartialTime = Date.now();
-                  }
-                  
-                  // CRITICAL FIX: Track the LONGEST partial we've seen
-                  // This prevents word loss when finals come before all words are captured
-                  if (!longestPartialText || transcriptText.length > longestPartialText.length) {
-                    longestPartialText = transcriptText;
-                    longestPartialTime = Date.now();
-                    console.log(`[SoloMode] 📏 New longest partial: ${longestPartialText.length} chars`);
-                  }
                   // Live partial transcript - send original immediately with sequence ID
                   // Note: This is the initial send before grammar/translation, so use raw text
                   const seqId = sendWithSequence({
@@ -755,27 +709,37 @@ export async function handleSoloMode(clientWs) {
                       console.log(`[SoloMode] ⚠️ Short partial after incomplete FINAL - likely continuation (FINAL: "${finalText}", partial: "${partialText}")`);
                       console.log(`[SoloMode] ⏳ Extending wait to see if partial grows into complete word/phrase`);
                       // Extend timeout significantly to wait for complete word/phrase
-                      clearTimeout(pendingFinalization.timeout);
+                      // PHASE 5: Clear timeout using engine
+                      finalizationEngine.clearPendingFinalizationTimeout();
                       // Don't extend beyond max wait - cap at remaining time
                       const maxRemainingWait = MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait;
                       const remainingWait = Math.min(Math.max(1000, 2500 - timeSinceFinal), maxRemainingWait);
                       console.log(`[SoloMode] ⏱️ Extending finalization wait by ${remainingWait}ms (waiting for complete word/phrase, ${timeSinceMaxWait}ms / ${MAX_FINALIZATION_WAIT_MS}ms)`);
                       // Reschedule - will check for longer partials when timeout fires
-                      pendingFinalization.timeout = setTimeout(() => {
-                        const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
-                        const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                      // PHASE 5: Use engine to set timeout
+                      updateEngineFromPending();
+                      finalizationEngine.setPendingFinalizationTimeout(() => {
+                        // PHASE 5: Sync and null check (CRITICAL)
+                        syncPendingFinalization();
+                        if (!pendingFinalization) {
+                          console.warn('[SoloMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
+                          return;
+                        }
+                        
+                        // PHASE 4: Use tracker methods to check for extending partials
+                        const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
+                        const latestExtends = partialTracker.checkLatestExtends(pendingFinalization.text, 5000);
                         let finalTextToUse = pendingFinalization.text;
                         const finalTrimmed = pendingFinalization.text.trim();
                         
                         // Check for longest partial that extends the final
-                        if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
-                          const longestTrimmed = longestPartialText.trim();
+                        if (longestExtends) {
+                          const longestTrimmed = longestExtends.extendedText.trim();
                           if (longestTrimmed.startsWith(finalTrimmed) || 
                               (finalTrimmed.length > 10 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
-                            const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
-                            console.log(`[SoloMode] ⚠️ Using LONGEST partial after continuation wait (${pendingFinalization.text.length} → ${longestPartialText.length} chars)`);
-                            console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
-                            finalTextToUse = longestPartialText;
+                            console.log(`[SoloMode] ⚠️ Using LONGEST partial after continuation wait (${pendingFinalization.text.length} → ${longestExtends.extendedText.length} chars)`);
+                            console.log(`[SoloMode] 📊 Recovered: "${longestExtends.missingWords}"`);
+                            finalTextToUse = longestExtends.extendedText;
                           } else {
                             // Try overlap merge - might have missing words in middle
                             const merged = mergeWithOverlap(finalTrimmed, longestTrimmed);
@@ -784,14 +748,13 @@ export async function handleSoloMode(clientWs) {
                               finalTextToUse = merged;
                             }
                           }
-                        } else if (latestPartialText && latestPartialText.length > pendingFinalization.text.length && timeSinceLatest < 5000) {
-                          const latestTrimmed = latestPartialText.trim();
+                        } else if (latestExtends) {
+                          const latestTrimmed = latestExtends.extendedText.trim();
                           if (latestTrimmed.startsWith(finalTrimmed) || 
                               (finalTrimmed.length > 10 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
-                            const missingWords = latestPartialText.substring(pendingFinalization.text.length).trim();
-                            console.log(`[SoloMode] ⚠️ Using LATEST partial after continuation wait (${pendingFinalization.text.length} → ${latestPartialText.length} chars)`);
-                            console.log(`[SoloMode] 📊 Recovered: "${missingWords}"`);
-                            finalTextToUse = latestPartialText;
+                            console.log(`[SoloMode] ⚠️ Using LATEST partial after continuation wait (${pendingFinalization.text.length} → ${latestExtends.extendedText.length} chars)`);
+                            console.log(`[SoloMode] 📊 Recovered: "${latestExtends.missingWords}"`);
+                            finalTextToUse = latestExtends.extendedText;
                           } else {
                             // Try overlap merge
                             const merged = mergeWithOverlap(finalTrimmed, latestTrimmed);
@@ -807,10 +770,13 @@ export async function handleSoloMode(clientWs) {
                         // latestPartialText = '';
                         // longestPartialText = '';
                         const waitTime = Date.now() - pendingFinalization.timestamp;
-                        pendingFinalization = null;
+                        // PHASE 5: Clear using engine
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
                         processFinalText(textToProcess);
                       }, remainingWait);
+                      syncPendingFinalization(); // Sync after setting timeout
                       // Continue tracking this partial (don't return - let it be tracked normally below)
                     }
                     
@@ -844,14 +810,24 @@ export async function handleSoloMode(clientWs) {
                         }
                       }
                       // Clear existing timeout and reschedule with fresh delay
-                      clearTimeout(pendingFinalization.timeout);
+                      // PHASE 5: Clear timeout using engine
+                      finalizationEngine.clearPendingFinalizationTimeout();
                       // If extended text ends with complete sentence, use shorter wait; otherwise wait longer
                       const extendedEndsWithCompleteSentence = endsWithCompleteSentence(textToUpdate);
                       const baseWait = extendedEndsWithCompleteSentence ? 1000 : 2000; // Shorter wait if sentence is complete
                       const remainingWait = Math.max(800, baseWait - timeSinceFinal);
                       console.log(`[SoloMode] ⏱️ Extending finalization wait by ${remainingWait}ms (partial still growing: ${textToUpdate.length} chars, sentence complete: ${extendedEndsWithCompleteSentence})`);
                       // Reschedule with the same processing logic
-                      pendingFinalization.timeout = setTimeout(() => {
+                      // PHASE 5: Use engine to set timeout
+                      updateEngineFromPending();
+                      finalizationEngine.setPendingFinalizationTimeout(() => {
+                        // PHASE 5: Sync and null check (CRITICAL)
+                        syncPendingFinalization();
+                        if (!pendingFinalization) {
+                          console.warn('[SoloMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
+                          return;
+                        }
+                        
                         const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                         const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
                         let finalTextToUse = pendingFinalization.text;
@@ -881,7 +857,9 @@ export async function handleSoloMode(clientWs) {
                         // latestPartialText = '';
                         // longestPartialText = '';
                         const waitTime = Date.now() - pendingFinalization.timestamp;
-                        pendingFinalization = null;
+                        // PHASE 5: Clear using engine
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                         // Process final (reuse the async function logic from the main timeout)
                         processFinalText(textToProcess);
@@ -909,7 +887,8 @@ export async function handleSoloMode(clientWs) {
                         console.log(`[SoloMode] 📊 Pending final: "${pendingFinalization.text.substring(0, 100)}..."`);
                         console.log(`[SoloMode] 📊 Longest partial: "${longestPartialText?.substring(0, 100) || 'none'}..."`);
                         
-                        clearTimeout(pendingFinalization.timeout);
+                        // PHASE 5: Clear timeout using engine
+                      finalizationEngine.clearPendingFinalizationTimeout();
                         
                         // Save current partials before new segment overwrites them
                         const savedLongestPartial = longestPartialText;
@@ -956,7 +935,9 @@ export async function handleSoloMode(clientWs) {
                         // longestPartialText = '';
                         // latestPartialTime = 0;
                         // longestPartialTime = 0;
-                        pendingFinalization = null;
+                        // PHASE 5: Clear using engine
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
                         processFinalText(textToProcess);
                         // Continue processing the new partial as a new segment
@@ -1420,10 +1401,12 @@ export async function handleSoloMode(clientWs) {
                   console.log(`[SoloMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
 
                   // 🔍 CRITICAL SNAPSHOT: Capture longest partial RIGHT NOW before stream restart overwrites it
-                  const longestPartialSnapshot = longestPartialText;
-                  const longestPartialTimeSnapshot = longestPartialTime;
-                  const latestPartialSnapshot = latestPartialText;
-                  const latestPartialTimeSnapshot = latestPartialTime;
+                  // PHASE 4: Get snapshot from tracker
+                  const snapshot = partialTracker.getSnapshot();
+                  const longestPartialSnapshot = snapshot.longest;
+                  const longestPartialTimeSnapshot = snapshot.longestTime;
+                  const latestPartialSnapshot = snapshot.latest;
+                  const latestPartialTimeSnapshot = snapshot.latestTime;
 
                   console.log(`[SoloMode] 📸 SNAPSHOT: longest=${longestPartialSnapshot?.length || 0} chars, latest=${latestPartialSnapshot?.length || 0} chars`);
 
@@ -1431,9 +1414,11 @@ export async function handleSoloMode(clientWs) {
                     console.warn(`[SoloMode] ⚠️ Forced FINAL due to stream restart (${transcriptText.length} chars)`);
                     realtimeTranslationCooldownUntil = Date.now() + TRANSLATION_RESTART_COOLDOWN_MS;
 
-                    if (forcedFinalBuffer && forcedFinalBuffer.timeout) {
-                      clearTimeout(forcedFinalBuffer.timeout);
-                      forcedFinalBuffer = null;
+                    // PHASE 6: Use Forced Commit Engine to clear existing buffer
+                    if (forcedCommitEngine.hasForcedFinalBuffer()) {
+                      forcedCommitEngine.clearForcedFinalBufferTimeout();
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
                     }
 
                     // CRITICAL: Use SNAPSHOT not live value (live value may already be from next segment!)
@@ -1470,15 +1455,20 @@ export async function handleSoloMode(clientWs) {
                       const bufferedText = transcriptText;
                       const forcedFinalTimestamp = Date.now();
 
-                      forcedFinalBuffer = {
-                        text: transcriptText,
-                        timestamp: forcedFinalTimestamp,
-                        timeout: setTimeout(() => {
+                      // PHASE 6: Create forced final buffer using engine
+                      forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp);
+                      syncForcedFinalBuffer(); // Sync variable for compatibility
+
+                      // PHASE 6: Set up two-phase timeout using engine
+                      forcedCommitEngine.setForcedFinalBufferTimeout(() => {
                           console.log('[SoloMode] ⏰ Phase 1: Waiting 1200ms for late partials and POST-final audio accumulation...');
 
                           // Phase 1: Wait 1200ms for late partials to arrive AND for POST-final audio to accumulate
                           setTimeout(async () => {
                             console.warn('[SoloMode] ⏰ Phase 2: Late partial window complete - capturing PRE+POST-final audio');
+                            
+                            // PHASE 6: Sync forced final buffer before accessing
+                            syncForcedFinalBuffer();
 
                           // Snapshot any late partials that arrived during the 1200ms wait
                           const partialSnapshot = {
@@ -1510,10 +1500,9 @@ export async function handleSoloMode(clientWs) {
 
                           // NOW reset partial tracking for next segment (clean slate for recovery)
                           console.log(`[SoloMode] 🧹 Resetting partial tracking for next segment`);
-                          longestPartialText = '';
-                          latestPartialText = '';
-                          longestPartialTime = 0;
-                          latestPartialTime = 0;
+                          // PHASE 4: Reset partial tracking using tracker
+                          partialTracker.reset();
+                          syncPartialVariables(); // Sync variables after reset
 
                           // Calculate how much time has passed since forced final
                           const timeSinceForcedFinal = Date.now() - forcedFinalTimestamp;
@@ -1531,6 +1520,8 @@ export async function handleSoloMode(clientWs) {
                           console.log(`[SoloMode] 🎵 Captured ${recoveryAudio.length} bytes of PRE+POST-final audio`);
 
                           // CRITICAL: If audio recovery is in progress, wait for it to complete
+                          // PHASE 6: Sync buffer and check recovery status
+                          syncForcedFinalBuffer();
                           if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress && forcedFinalBuffer.recoveryPromise) {
                             console.log('[SoloMode] ⏳ Audio recovery still in progress, waiting for completion...');
                             try {
@@ -1847,10 +1838,11 @@ export async function handleSoloMode(clientWs) {
                           }
                           console.log(`[SoloMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
                           processFinalText(finalTextToCommit, { forceFinal: true });
-                          forcedFinalBuffer = null;
+                          // PHASE 6: Clear forced final buffer using engine
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
                         }, 1200);  // Phase 2: Wait 1200ms to capture more POST-final audio (shifts window from [T-1500,T+500] to [T-800,T+1200])
-                      }, 0)  // Phase 1: Start immediately
-                      };
+                      }, 0);  // Phase 1: Start immediately
 
                     } catch (error) {
                       console.error(`[SoloMode] ❌ Error in forced final audio recovery setup:`, error);
@@ -1858,19 +1850,36 @@ export async function handleSoloMode(clientWs) {
                     }
                     
                     // Cancel pending finalization timers (if any) since we're handling it now
-                    if (pendingFinalization && pendingFinalization.timeout) {
-                      clearTimeout(pendingFinalization.timeout);
+                    // PHASE 5: Clear using engine
+                    if (finalizationEngine.hasPendingFinalization()) {
+                      finalizationEngine.clearPendingFinalization();
                     }
-                    pendingFinalization = null;
+                    syncPendingFinalization();
                     
                     return;
                   }
                   
-                  if (forcedFinalBuffer) {
+                  // PHASE 6: Check for forced final buffer using engine
+                  syncForcedFinalBuffer();
+                  if (forcedCommitEngine.hasForcedFinalBuffer()) {
                     console.log('[SoloMode] 🔁 Merging buffered forced final with new FINAL transcript');
-                    clearTimeout(forcedFinalBuffer.timeout);
-                    transcriptText = mergeWithOverlap(forcedFinalBuffer.text, transcriptText);
-                    forcedFinalBuffer = null;
+                    forcedCommitEngine.clearForcedFinalBufferTimeout();
+                    const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                    const merged = mergeWithOverlap(buffer.text, transcriptText);
+                    if (merged) {
+                      transcriptText = merged;
+                    } else {
+                      // Merge failed - use the new FINAL transcript as-is
+                      console.warn('[SoloMode] ⚠️ Merge failed, using new FINAL transcript');
+                    }
+                    forcedCommitEngine.clearForcedFinalBuffer();
+                    syncForcedFinalBuffer();
+                  }
+                  
+                  // CRITICAL: Null check after merge operations
+                  if (!transcriptText || transcriptText.length === 0) {
+                    console.warn('[SoloMode] ⚠️ transcriptText is null or empty after merge operations - skipping final processing');
+                    return;
                   }
                   
                   // CRITICAL: Check if this FINAL is a continuation of the last sent FINAL
@@ -1906,6 +1915,12 @@ export async function handleSoloMode(clientWs) {
                         transcriptText = merged;
                       }
                     }
+                  }
+                  
+                  // CRITICAL: Null check after merge operations (before accessing transcriptText.length)
+                  if (!transcriptText || transcriptText.length === 0) {
+                    console.warn('[SoloMode] ⚠️ transcriptText is null or empty after merge operations - skipping final processing');
+                    return;
                   }
                   
                   // CRITICAL: For long text, wait proportionally longer before processing final
@@ -2046,38 +2061,42 @@ export async function handleSoloMode(clientWs) {
                         finalTextToUse.startsWith(pendingFinalization.text.trim())) {
                       // This final extends the pending one - update it with the extended text
                       console.log(`[SoloMode] 📦 Final extends pending (${pendingFinalization.text.length} → ${finalTextToUse.length} chars)`);
-                      pendingFinalization.text = finalTextToUse;
-                      pendingFinalization.timestamp = Date.now();
+                      // PHASE 5: Update using engine
+                      finalizationEngine.updatePendingFinalizationText(finalTextToUse);
+                      syncPendingFinalization();
                       // Reset the timeout to give more time for partials
-                      clearTimeout(pendingFinalization.timeout);
+                      finalizationEngine.clearPendingFinalizationTimeout();
                       // Recalculate wait time for the longer text
                       if (finalTextToUse.length > VERY_LONG_TEXT_THRESHOLD) {
                         WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (finalTextToUse.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
                       }
                     } else {
                       // Different final - cancel old one and start new
-                      clearTimeout(pendingFinalization.timeout);
-                      pendingFinalization = null;
+                      // PHASE 5: Clear using engine
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
                     }
                   }
                   
                   // Schedule final processing after a delay to catch any remaining partials
+                  // PHASE 5: Use Finalization Engine for pending finalization
                   // If pendingFinalization exists and was extended, we'll reschedule it below
-                  if (!pendingFinalization) {
+                  if (!finalizationEngine.hasPendingFinalization()) {
                     // CRITICAL: Don't reset partials here - they're needed during timeout check
                     // Both BASIC and PREMIUM tiers need partials available during the wait period
                     // Partials will be reset AFTER final processing completes (see timeout callback)
-                    pendingFinalization = {
-                      seqId: null,
-                      text: finalTextToUse, // Use the extended text if available
-                      timestamp: Date.now(),
-                      maxWaitTimestamp: Date.now(), // Track when FINAL was first received - ensures commit after MAX_FINALIZATION_WAIT_MS
-                      timeout: null
-                    };
+                    finalizationEngine.createPendingFinalization(finalTextToUse, null);
                   }
                   
                   // Schedule or reschedule the timeout
-                  pendingFinalization.timeout = setTimeout(() => {
+                  finalizationEngine.setPendingFinalizationTimeout(() => {
+                      // PHASE 5: Sync variable from engine at start of timeout (CRITICAL - must be first)
+                      syncPendingFinalization();
+                      if (!pendingFinalization) {
+                        console.warn('[SoloMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
+                        return; // Safety check
+                      }
+                      
                       // After waiting, check again for longer partials
                       // CRITICAL: Google Speech may send FINALs that are incomplete (missing words)
                       // Always prefer partials that extend the FINAL, even if FINAL appears "complete"
@@ -2166,7 +2185,16 @@ export async function handleSoloMode(clientWs) {
                         const remainingWait = Math.min(2000, MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait - 1000);
                         console.log(`[SoloMode] ⏳ Sentence incomplete - waiting ${remainingWait}ms more (${timeSinceMaxWait}ms / ${MAX_FINALIZATION_WAIT_MS}ms)`);
                         // Reschedule the timeout to check again after remaining wait
-                        pendingFinalization.timeout = setTimeout(() => {
+                        // PHASE 5: Use engine to set timeout
+                        updateEngineFromPending();
+                        finalizationEngine.setPendingFinalizationTimeout(() => {
+                          // PHASE 5: Sync and null check (CRITICAL)
+                          syncPendingFinalization();
+                          if (!pendingFinalization) {
+                            console.warn('[SoloMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
+                            return;
+                          }
+                          
                           // CRITICAL: Re-check for partials again - they may have updated since last check
                           const timeSinceLongest2 = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                           const timeSinceLatest2 = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
@@ -2236,7 +2264,9 @@ export async function handleSoloMode(clientWs) {
                           // longestPartialText = '';
                           // latestPartialTime = 0;
                           // longestPartialTime = 0;
-                          pendingFinalization = null;
+                          // PHASE 5: Clear using engine
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
                           console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                           processFinalText(textToProcess);
                         }, remainingWait);
@@ -2251,7 +2281,9 @@ export async function handleSoloMode(clientWs) {
                       // longestPartialText = '';
                       // latestPartialTime = 0;
                       // longestPartialTime = 0;
-                      pendingFinalization = null;
+                      // PHASE 5: Clear using engine (prevents duplicate processing)
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
                       
                       if (!finalEndsWithCompleteSentence) {
                         console.log(`[SoloMode] ⚠️ Committing incomplete sentence after ${waitTime}ms wait (max wait: ${MAX_FINALIZATION_WAIT_MS}ms)`);
@@ -2294,7 +2326,8 @@ export async function handleSoloMode(clientWs) {
             if (message.clientTimestamp) {
               const rtt = measureRTT(message.clientTimestamp);
               if (rtt !== null) {
-                console.log(`[SoloMode] 📊 RTT: ${rtt}ms (avg: ${rttMeasurements.length > 0 ? Math.round(rttMeasurements.reduce((a, b) => a + b, 0) / rttMeasurements.length) : 'N/A'}ms)`);
+                const avgRTT = rttTracker.getAverageRTT();
+                console.log(`[SoloMode] 📊 RTT: ${rtt}ms (avg: ${avgRTT !== null ? avgRTT : 'N/A'}ms)`);
               }
             }
             

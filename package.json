@@ -2,6 +2,7 @@
   "name": "exbabel",
   "version": "1.0.0",
   "description": "Exbabel - Real-time speech translation powered by Gemini AI",
+  "type": "module",
   "main": "backend/server.js",
   "scripts": {
     "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:dev\"",
