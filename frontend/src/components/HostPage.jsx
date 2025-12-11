@@ -12,6 +12,7 @@ import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
 import { SentenceSegmenter } from '../utils/sentenceSegmenter';
 import { TRANSCRIPTION_LANGUAGES } from '../config/languages.js';
+import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -72,7 +73,64 @@ export function HostPage({ onBackToHome }) {
   const [error, setError] = useState('');
 
   const wsRef = useRef(null);
-  const { startRecording, stopRecording, isRecording, audioLevel } = useAudioCapture();
+  
+  // Track corrected text for merging (similar to TranslationInterface.jsx)
+  const longestCorrectedTextRef = useRef('');
+  const longestCorrectedOriginalRef = useRef('');
+  
+  // Merge text with grammar corrections (similar to TranslationInterface.jsx)
+  const mergeTextWithCorrection = (newRawText, correctedOverride = null) => {
+    const trimmedRaw = (newRawText || '').trim();
+    if (!trimmedRaw) {
+      return '';
+    }
+
+    // If we have a corrected override, prefer it and update refs to keep alignment
+    if (correctedOverride && correctedOverride.trim()) {
+      longestCorrectedTextRef.current = correctedOverride;
+      longestCorrectedOriginalRef.current = trimmedRaw;
+      return correctedOverride;
+    }
+
+    const existingCorrected = longestCorrectedTextRef.current;
+    const existingOriginal = longestCorrectedOriginalRef.current;
+
+    if (existingCorrected && existingOriginal) {
+      if (trimmedRaw.startsWith(existingOriginal)) {
+        const extension = trimmedRaw.substring(existingOriginal.length);
+        const merged = existingCorrected + extension;
+        longestCorrectedTextRef.current = merged;
+        longestCorrectedOriginalRef.current = trimmedRaw;
+        return merged;
+      } else if (trimmedRaw.startsWith(existingOriginal.substring(0, Math.min(existingOriginal.length, trimmedRaw.length)))) {
+        const extension = trimmedRaw.substring(existingOriginal.length);
+        const merged = existingCorrected + extension;
+        longestCorrectedTextRef.current = merged;
+        longestCorrectedOriginalRef.current = trimmedRaw;
+        return merged;
+      }
+    }
+
+    // No existing correction or unable to merge - treat as fresh text
+    longestCorrectedTextRef.current = trimmedRaw;
+    longestCorrectedOriginalRef.current = trimmedRaw;
+    return trimmedRaw;
+  };
+  const { 
+    startRecording, 
+    stopRecording, 
+    isRecording, 
+    audioLevel,
+    availableDevices,
+    selectedDeviceId,
+    setSelectedDeviceId,
+    audioSource,
+    setAudioSource
+  } = useAudioCapture();
+  
+  // Check device capabilities
+  const isMobile = isMobileDevice();
+  const systemAudioSupported = isSystemAudioSupported();
 
   // Sentence segmenter for smart text management
   const segmenterRef = useRef(null);
@@ -190,7 +248,18 @@ export function HostPage({ onBackToHome }) {
           case 'translation':
             // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
             if (message.isPartial) {
-              const rawText = message.originalText || message.translatedText;
+              // CRITICAL: Merge grammar corrections with existing partial text
+              // This ensures grammar corrections are applied live to the transcription
+              const originalText = message.originalText || '';
+              const correctedText = message.correctedText;
+              const translatedText = message.translatedText || '';
+              
+              // Use merge function to intelligently combine original and corrected text
+              const rawText = mergeTextWithCorrection(originalText, correctedText) || translatedText;
+
+              if (!rawText || !rawText.trim()) {
+                return; // No text to display
+              }
 
               // Process through segmenter (auto-flushes complete sentences)
               const { liveText } = segmenterRef.current.processPartial(rawText);
@@ -202,7 +271,14 @@ export function HostPage({ onBackToHome }) {
               });
             } else {
               // Final transcript - process through segmenter (deduplicated)
-              const finalText = message.originalText || message.translatedText;
+              // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
+              // This ensures grammar corrections and recovered text are applied to finals
+              const finalText = message.correctedText || message.translatedText || message.originalText;
+              
+              // Reset correction tracking for next segment
+              longestCorrectedTextRef.current = '';
+              longestCorrectedOriginalRef.current = '';
+              
               const { flushedSentences } = segmenterRef.current.processFinal(finalText, { isForced: message.forceFinal === true });
               
               // Add deduplicated sentences to history
@@ -368,7 +444,99 @@ export function HostPage({ onBackToHome }) {
             {/* Settings Panel */}
             {showSettings && (
               <div className="bg-gray-50 rounded-lg p-3 sm:p-4 mt-4">
-                <h3 className="text-sm sm:text-base font-semibold text-gray-900 mb-3">Translation Tier</h3>
+                <h3 className="text-sm sm:text-base font-semibold text-gray-900 mb-3">Settings</h3>
+                
+                {/* Audio Source Selector */}
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Audio Source
+                  </label>
+                  <div className="space-y-2">
+                    <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${
+                      audioSource === 'microphone' 
+                        ? 'bg-blue-50 border-blue-300' 
+                        : 'bg-white border-gray-300 hover:bg-gray-50'
+                    } ${isStreaming ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                      <input
+                        type="radio"
+                        name="audioSource"
+                        value="microphone"
+                        checked={audioSource === 'microphone'}
+                        onChange={(e) => setAudioSource(e.target.value)}
+                        disabled={isStreaming}
+                        className="text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-sm text-gray-700">🎤 Microphone</span>
+                    </label>
+                    <label className={`flex items-center space-x-2 p-2 rounded-lg border transition-colors ${
+                      !systemAudioSupported
+                        ? 'bg-gray-100 border-gray-200 cursor-not-allowed opacity-60'
+                        : audioSource === 'system'
+                        ? 'bg-blue-50 border-blue-300 cursor-pointer'
+                        : 'bg-white border-gray-300 hover:bg-gray-50 cursor-pointer'
+                    } ${isStreaming ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                      <input
+                        type="radio"
+                        name="audioSource"
+                        value="system"
+                        checked={audioSource === 'system'}
+                        onChange={(e) => setAudioSource(e.target.value)}
+                        disabled={!systemAudioSupported || isStreaming}
+                        className="text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+                      />
+                      <span className="text-sm text-gray-700">🔊 System Audio</span>
+                      {!systemAudioSupported && (
+                        <span className="text-xs text-gray-500 ml-auto">
+                          {isMobile ? '(Not available on mobile)' : '(Not supported)'}
+                        </span>
+                      )}
+                    </label>
+                  </div>
+                  {isStreaming && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      Stop broadcasting to change audio source
+                    </p>
+                  )}
+                </div>
+                
+                {/* Microphone Selector - only show when microphone is selected */}
+                {audioSource === 'microphone' && availableDevices.length > 0 && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      🎤 Microphone Device
+                    </label>
+                    <select
+                      value={selectedDeviceId || ''}
+                      onChange={(e) => setSelectedDeviceId(e.target.value || null)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      disabled={isStreaming}
+                    >
+                      <option value="">Auto-select (Recommended)</option>
+                      {availableDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label || `Microphone ${device.deviceId.substring(0, 8)}`}
+                        </option>
+                      ))}
+                    </select>
+                    {isStreaming && (
+                      <p className="text-xs text-amber-600 mt-1">
+                        Stop broadcasting to change microphone
+                      </p>
+                    )}
+                  </div>
+                )}
+                
+                {audioSource === 'system' && (
+                  <div className="mb-4 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-xs text-blue-800">
+                      💡 <strong>Important:</strong> When you start broadcasting, your browser will show a screen sharing dialog. 
+                      You can select any window or screen - we only need the audio. <strong>Make sure to check "Share audio" or enable audio sharing</strong> 
+                      in the browser prompt, otherwise no audio will be captured.
+                    </p>
+                  </div>
+                )}
+                
+                <h3 className="text-sm sm:text-base font-semibold text-gray-900 mb-3 mt-4">Translation Tier</h3>
                 <div className="space-y-2">
                   <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${
                     !usePremiumTier 

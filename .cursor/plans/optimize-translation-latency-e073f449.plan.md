@@ -1,4 +1,24 @@
-<!-- e073f449-1c16-48fe-abcf-fdaaffb0abce e1ad3ade-02dd-4b2a-bf62-f8bcdf69e867 -->
+---
+name: Optimize Translation Latency - Decouple Grammar & Translation
+overview: ""
+todos:
+  - id: 1dc89af1-5d9f-4b48-aad9-8cdf17469f7a
+    content: "Optimize grammar worker parameters: increase min text threshold to 8 chars, reduce max_tokens to 800 for partials, add 2s timeout"
+    status: pending
+  - id: 6b7074f9-4aa4-44fe-a826-28ad1d640a7f
+    content: Refactor partial translation (immediate) to send translation and grammar independently in soloModeHandler.js
+    status: pending
+  - id: d43137fe-3123-4cb7-a5dd-af457990cd44
+    content: Refactor partial translation (delayed) to send translation and grammar independently in soloModeHandler.js
+    status: pending
+  - id: 28a220d8-f835-403d-8f0d-5201d85c57bc
+    content: Refactor final translation to send translation and grammar independently in soloModeHandler.js
+    status: pending
+  - id: b62dcabf-a8ba-44b3-9eb7-1d37940d013c
+    content: Update OPTIMIZATIONS_STATUS.md to document the decoupled architecture and parameter optimizations
+    status: pending
+---
+
 # Optimize Translation Latency - Decouple Grammar & Translation
 
 ## Problem
@@ -113,11 +133,3 @@ Document the decoupled architecture and parameter optimizations.
 2. Refactor backend message sending to decouple translation/grammar
 3. Test with short, medium, and long texts
 4. Update documentation
-
-### To-dos
-
-- [ ] Optimize grammar worker parameters: increase min text threshold to 8 chars, reduce max_tokens to 800 for partials, add 2s timeout
-- [ ] Refactor partial translation (immediate) to send translation and grammar independently in soloModeHandler.js
-- [ ] Refactor partial translation (delayed) to send translation and grammar independently in soloModeHandler.js
-- [ ] Refactor final translation to send translation and grammar independently in soloModeHandler.js
-- [ ] Update OPTIMIZATIONS_STATUS.md to document the decoupled architecture and parameter optimizations

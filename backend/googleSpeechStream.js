@@ -467,6 +467,20 @@ export class GoogleSpeechStream {
     this.restartCount++;
     console.log(`[GoogleSpeech] 🔄 Restarting stream (restart #${this.restartCount})...`);
 
+    // CRITICAL: If Google never emitted a FINAL for the most recent partial, force-emit it
+    // This ensures recovery system is triggered for forced finals
+    if (this.lastPartialTranscript && this.lastPartialTranscript.trim().length > 0) {
+      console.warn(`[GoogleSpeech] ⚠️ Forcing FINAL of latest partial before restart (${this.lastPartialTranscript.length} chars)`);
+      if (this.resultCallback) {
+        try {
+          this.resultCallback(this.lastPartialTranscript, false, { forced: true });
+        } catch (err) {
+          console.error('[GoogleSpeech] ⚠️ Error forcing final transcript before restart:', err.message);
+        }
+      }
+      this.lastPartialTranscript = '';
+    }
+
     // Mark as inactive during restart
     this.isActive = false;
 
