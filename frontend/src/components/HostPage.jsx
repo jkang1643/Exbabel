@@ -274,20 +274,163 @@ export function HostPage({ onBackToHome }) {
               // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
               // This ensures grammar corrections and recovered text are applied to finals
               const finalText = message.correctedText || message.translatedText || message.originalText;
+              const finalSeqId = message.seqId;
+              const isForcedFinal = message.forceFinal === true;
+              
+              console.log(`[HostPage] 📝 FINAL received seqId=${finalSeqId}: "${finalText.substring(0, 50)}..."`);
+              if (isForcedFinal) {
+                console.warn('[HostPage] ⚠️ Forced FINAL received from backend (may be incomplete)');
+              }
               
               // Reset correction tracking for next segment
               longestCorrectedTextRef.current = '';
               longestCorrectedOriginalRef.current = '';
               
-              const { flushedSentences } = segmenterRef.current.processFinal(finalText, { isForced: message.forceFinal === true });
+              const { flushedSentences } = segmenterRef.current.processFinal(finalText, { isForced: isForcedFinal });
               
-              // Add deduplicated sentences to history
+              // Add deduplicated sentences to history with sequence ID tracking (like solo mode)
               if (flushedSentences.length > 0) {
                 const joinedText = flushedSentences.join(' ').trim();
-                setTranscript(prev => [...prev, {
-                  text: joinedText,
-                  timestamp: message.timestamp || Date.now()
-                }].slice(-10));
+                
+                // CRITICAL: Deduplicate using sequence IDs and text similarity (like solo mode)
+                // Check if this exact text, sequence ID, or similar text was already added recently
+                setTranscript(prev => {
+                  // Check last 5 entries for duplicates (increased from 3 to catch more cases)
+                  const recentEntries = prev.slice(-5);
+                  
+                  // Helper: Check if two texts are similar (one contains the other or shares significant prefix)
+                  const isSimilarText = (text1, text2) => {
+                    if (!text1 || !text2) return false;
+                    const t1 = text1.trim().toLowerCase();
+                    const t2 = text2.trim().toLowerCase();
+                    
+                    // Exact match
+                    if (t1 === t2) return true;
+                    
+                    // One contains the other (with at least 80% overlap)
+                    const minLength = Math.min(t1.length, t2.length);
+                    const maxLength = Math.max(t1.length, t2.length);
+                    if (minLength < 20) return false; // Too short to compare
+                    
+                    if (t1.includes(t2) || t2.includes(t1)) {
+                      const overlapRatio = minLength / maxLength;
+                      return overlapRatio >= 0.8; // 80% overlap threshold
+                    }
+                    
+                    // Check if they share a long common prefix (for grammar corrections)
+                    const commonPrefixLength = (() => {
+                      let i = 0;
+                      while (i < minLength && t1[i] === t2[i]) i++;
+                      return i;
+                    })();
+                    
+                    // If they share at least 80% of the shorter text as prefix, consider them similar
+                    return commonPrefixLength >= minLength * 0.8;
+                  };
+                  
+                  // Find similar or duplicate entries
+                  const duplicateEntry = recentEntries.find(entry => {
+                    // Exact text match
+                    if (entry.text === joinedText) return true;
+                    
+                    // Same sequence ID
+                    if (entry.seqId !== undefined && finalSeqId !== undefined && entry.seqId === finalSeqId) {
+                      return true;
+                    }
+                    
+                    // Similar text (for grammar corrections and audio recovery)
+                    if (isSimilarText(entry.text, joinedText)) {
+                      return true;
+                    }
+                    
+                    return false;
+                  });
+                  
+                  if (duplicateEntry) {
+                    // If we found a duplicate, check if the new one is more recent/better
+                    const newIsMoreRecent = (finalSeqId !== undefined && duplicateEntry.seqId !== undefined) 
+                      ? finalSeqId > duplicateEntry.seqId
+                      : (message.timestamp || Date.now()) > (duplicateEntry.timestamp || 0);
+                    
+                    const newIsLonger = joinedText.length > duplicateEntry.text.length;
+                    
+                    // If new entry is more recent AND (longer OR has higher seqId), replace the old one
+                    if (newIsMoreRecent && (newIsLonger || finalSeqId > duplicateEntry.seqId)) {
+                      console.log(`[HostPage] 🔄 Replacing similar entry with more recent version (seqId: ${duplicateEntry.seqId} → ${finalSeqId})`);
+                      // Remove the old entry and add the new one
+                      const filtered = prev.filter(entry => entry !== duplicateEntry);
+                      const newItem = {
+                        text: joinedText,
+                        timestamp: message.timestamp || Date.now(),
+                        seqId: finalSeqId
+                      };
+                      const newHistory = [...filtered, newItem].sort((a, b) => {
+                        if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                          return a.seqId - b.seqId;
+                        }
+                        return (a.timestamp || 0) - (b.timestamp || 0);
+                      });
+                      return newHistory.slice(-10);
+                    } else {
+                      console.log('[HostPage] ⚠️ Duplicate/similar final detected, keeping existing (older or same)');
+                      return prev;
+                    }
+                  }
+                  
+                  // No duplicate found - add new entry
+                  const newItem = {
+                    text: joinedText,
+                    timestamp: message.timestamp || Date.now(),
+                    seqId: finalSeqId
+                  };
+                  
+                  // CRITICAL: Insert in correct position based on sequenceId to maintain chronological order
+                  // This prevents race conditions where longer translations complete after shorter ones
+                  const newHistory = [...prev, newItem].sort((a, b) => {
+                    // Sort by sequenceId first (most reliable), then by timestamp
+                    if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                      return a.seqId - b.seqId;
+                    }
+                    // Fallback to timestamp if sequenceId not available
+                    return (a.timestamp || 0) - (b.timestamp || 0);
+                  });
+                  
+                  return newHistory.slice(-10); // Keep last 10
+                });
+              } else {
+                // FALLBACK: If segmenter deduplicated everything, still add the final text if it's substantial
+                const finalTextTrimmed = finalText.trim();
+                if (finalTextTrimmed.length > 10) {
+                  console.log(`[HostPage] ⚠️ Segmenter deduplicated all, using fallback`);
+                  setTranscript(prev => {
+                    // Check for duplicates
+                    const recentEntries = prev.slice(-3);
+                    const isDuplicate = recentEntries.some(entry => 
+                      entry.text === finalTextTrimmed || 
+                      (entry.seqId !== undefined && finalSeqId !== undefined && entry.seqId === finalSeqId)
+                    );
+                    
+                    if (isDuplicate) {
+                      console.log('[HostPage] ⚠️ Duplicate final detected (fallback), skipping');
+                      return prev;
+                    }
+                    
+                    const newItem = {
+                      text: finalTextTrimmed,
+                      timestamp: message.timestamp || Date.now(),
+                      seqId: finalSeqId
+                    };
+                    
+                    const newHistory = [...prev, newItem].sort((a, b) => {
+                      if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                        return a.seqId - b.seqId;
+                      }
+                      return (a.timestamp || 0) - (b.timestamp || 0);
+                    });
+                    
+                    return newHistory.slice(-10);
+                  });
+                }
               }
               
               setCurrentTranscript('');

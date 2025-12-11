@@ -585,13 +585,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                       syncForcedFinalBuffer();
                       // Continue processing the extended partial normally
                     } else {
-                      // New segment detected - commit forced final separately
-                      console.log('[HostMode] 🔀 New segment detected - committing forced final separately');
-                      forcedCommitEngine.clearForcedFinalBufferTimeout();
-                      const buffer = forcedCommitEngine.getForcedFinalBuffer();
-                      processFinalText(buffer.text, { forceFinal: true });
-                      forcedCommitEngine.clearForcedFinalBuffer();
-                      syncForcedFinalBuffer();
+                      // New segment detected - but DON'T cancel timeout yet!
+                      // Let the POST-final audio recovery complete in the timeout
+                      console.log('[HostMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                      // DON'T clear timeout or set to null - let it run!
+                      // The timeout will commit the final after POST-final audio recovery
                       // Continue processing the new partial as a new segment
                     }
                   }
@@ -819,17 +817,25 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
                         
                         // Also check current partials - ONLY if they start with the final
+                        // CRITICAL: Don't use current partials if they're from a new segment (don't start with final)
+                        // This prevents wayward partials like "Important of." from being finalized
                         if (longestPartialText && longestPartialText.length > textToProcess.length) {
                           const longestTrimmed = longestPartialText.trim();
+                          // CRITICAL: Must start with final to prevent mixing segments
                           if (longestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using CURRENT LONGEST partial (${textToProcess.length} → ${longestPartialText.length} chars)`);
                             textToProcess = longestPartialText;
+                          } else {
+                            console.log(`[HostMode] ⚠️ Ignoring CURRENT LONGEST partial - doesn't start with final (new segment detected)`);
                           }
                         } else if (latestPartialText && latestPartialText.length > textToProcess.length) {
                           const latestTrimmed = latestPartialText.trim();
+                          // CRITICAL: Must start with final to prevent mixing segments
                           if (latestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using CURRENT LATEST partial (${textToProcess.length} → ${latestPartialText.length} chars)`);
                             textToProcess = latestPartialText;
+                          } else {
+                            console.log(`[HostMode] ⚠️ Ignoring CURRENT LATEST partial - doesn't start with final (new segment detected)`);
                           }
                         }
                         
@@ -910,6 +916,45 @@ export async function handleHostConnection(clientWs, sessionId) {
                             hasTranslation: false,
                             hasCorrection: false
                           }, true);
+                          
+                          // CRITICAL: Still run grammar correction even with no listeners
+                          // This ensures the host sees grammar corrections in real-time
+                          if (currentSourceLang === 'en') {
+                            grammarWorker.correctPartial(rawCapturedText, process.env.OPENAI_API_KEY)
+                              .then(correctedText => {
+                                // Check if still relevant
+                                if (latestPartialTextForCorrection !== rawCapturedText) {
+                                  if (latestPartialTextForCorrection.length < rawCapturedText.length * 0.5) {
+                                    console.log(`[HostMode] ⏭️ Skipping outdated grammar (text reset: ${rawCapturedText.length} → ${latestPartialTextForCorrection.length} chars)`);
+                                    return;
+                                  }
+                                }
+                                
+                                rememberGrammarCorrection(rawCapturedText, correctedText);
+                                console.log(`[HostMode] ✅ GRAMMAR (ASYNC, no listeners): "${correctedText.substring(0, 40)}..."`);
+                                
+                                // Send grammar correction to host client
+                                broadcastWithSequence({
+                                  type: 'translation',
+                                  originalText: rawCapturedText,
+                                  correctedText: correctedText,
+                                  translatedText: correctedText,
+                                  sourceLang: currentSourceLang,
+                                  targetLang: currentSourceLang,
+                                  timestamp: Date.now(),
+                                  isTranscriptionOnly: true,
+                                  hasTranslation: false,
+                                  hasCorrection: true,
+                                  updateType: 'grammar'
+                                }, true, currentSourceLang);
+                              })
+                              .catch(error => {
+                                if (error.name !== 'AbortError') {
+                                  console.error(`[HostMode] ❌ Grammar error (${rawCapturedText.length} chars):`, error.message);
+                                }
+                              });
+                          }
+                          
                           return;
                         }
                         
@@ -1446,9 +1491,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] ✅ Forced final buffer created - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
                     console.log(`[HostMode] 🎯 DUAL BUFFER: Setting up Phase 1 timeout (delay: 0ms) - recovery system initializing`);
                     
-                    // PHASE 8: Set up two-phase timeout using engine (same as solo mode)
-                    console.log(`[HostMode] 🔧 DEBUG: About to call setForcedFinalBufferTimeout - buffer exists: ${forcedCommitEngine.hasForcedFinalBuffer()}`);
-                    forcedCommitEngine.setForcedFinalBufferTimeout(() => {
+                  // PHASE 8: Set up two-phase timeout using engine (same as solo mode)
+                  console.log(`[HostMode] 🔧 DEBUG: About to call setForcedFinalBufferTimeout - buffer exists: ${forcedCommitEngine.hasForcedFinalBuffer()}`);
+                  forcedCommitEngine.setForcedFinalBufferTimeout(() => {
+                      // CRITICAL: Check if buffer still exists (might have been committed by new segment)
+                      syncForcedFinalBuffer();
+                      if (!forcedCommitEngine.hasForcedFinalBuffer()) {
+                        console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new segment) - skipping recovery');
+                        return;
+                      }
+                      
                       console.log('[HostMode] ⏰ Phase 1: Waiting 1200ms for late partials and POST-final audio accumulation...');
                       console.log(`[HostMode] 🎯 DUAL BUFFER SYSTEM: Phase 1 started - audio buffer active`);
                       console.log(`[HostMode] 🎯 DUAL BUFFER: Phase 1 callback EXECUTED - recovery system is running!`);
@@ -1460,6 +1512,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         // PHASE 8: Sync forced final buffer before accessing
                         syncForcedFinalBuffer();
+                        
+                        // CRITICAL: Check if buffer still exists (might have been committed by new segment)
+                        if (!forcedCommitEngine.hasForcedFinalBuffer()) {
+                          console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new segment) - skipping recovery commit');
+                          return;
+                        }
 
                         // Snapshot any late partials that arrived during the 1200ms wait
                         syncPartialVariables();
@@ -1582,6 +1640,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.log(`[HostMode] ✅ Recovery stream ready after ${streamReadyTimeout}ms`);
                             await new Promise(resolve => setTimeout(resolve, 100));
                             console.log(`[HostMode] ✅ Additional 100ms wait complete`);
+
+                            // CRITICAL: Create recovery promise NOW (after stream is ready) so new segments can wait for it
+                            let recoveryResolve = null;
+                            const recoveryPromise = new Promise((resolve) => {
+                              recoveryResolve = resolve;
+                            });
+                            
+                            // Store recovery promise in buffer
+                            syncForcedFinalBuffer();
+                            if (forcedFinalBuffer) {
+                              forcedCommitEngine.setRecoveryInProgress(true, recoveryPromise);
+                              syncForcedFinalBuffer();
+                              console.log('[HostMode] 🔄 Recovery promise created and stored in buffer');
+                            }
 
                             // Set up result handler and create promise to wait for stream completion
                             let recoveredText = '';
@@ -1828,14 +1900,39 @@ export async function handleHostConnection(clientWs, sessionId) {
                               }
                             }
 
+                            // Resolve recovery promise with recovered text (inside try block where recoveryResolve is in scope)
+                            const originalBufferedText = finalWithPartials;
+                            if (finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length) {
+                              console.log(`[HostMode] ✅ Resolving recovery promise with recovered text: "${finalTextToCommit.substring(0, 80)}..."`);
+                              if (recoveryResolve) {
+                                recoveryResolve(finalTextToCommit);
+                              }
+                            } else {
+                              console.log(`[HostMode] ⚠️ No new text recovered, resolving recovery promise with empty`);
+                              if (recoveryResolve) {
+                                recoveryResolve('');
+                              }
+                            }
+
                           } catch (error) {
                             console.error(`[HostMode] ❌ Decoder gap recovery failed:`, error.message);
                             console.error(`[HostMode] ❌ Error stack:`, error.stack);
                             console.error(`[HostMode] ❌ Full error object:`, error);
+                            
+                            // Resolve recovery promise with empty on error
+                            if (recoveryResolve) {
+                              recoveryResolve('');
+                            }
+                          } finally {
+                            // Mark recovery as complete
+                            syncForcedFinalBuffer();
+                            if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress) {
+                              forcedCommitEngine.setRecoveryInProgress(false, null);
+                              syncForcedFinalBuffer();
+                            }
                           }
                         }
-                        console.log(`[HostMode] 📝 Committing forced final (with audio recovery): "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
-                        console.log(`[HostMode] 📡 Broadcasting recovered text to HOST and ALL LISTENERS`);
+                        console.log(`[HostMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
                         processFinalText(finalTextToCommit, { forceFinal: true });
                         // PHASE 8: Clear forced final buffer using engine
                         forcedCommitEngine.clearForcedFinalBuffer();
@@ -2287,6 +2384,11 @@ export async function handleHostConnection(clientWs, sessionId) {
               });
               
               console.log('[HostMode] ✅ Google Speech stream initialized and ready');
+              
+              // CRITICAL: Mark session as active so listeners can join
+              sessionStore.setHost(currentSessionId, clientWs, null);
+              const activeSession = sessionStore.getSession(currentSessionId);
+              console.log(`[HostMode] ✅ Session ${activeSession?.sessionCode || currentSessionId} marked as active`);
               
             } catch (error) {
               console.error('[HostMode] Failed to initialize Google Speech stream:', error);
