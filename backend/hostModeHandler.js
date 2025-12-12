@@ -1884,10 +1884,41 @@ export async function handleHostConnection(clientWs, sessionId) {
                     }
                   } else {
                     // Different final - cancel old one and start new
-                    // PHASE 8: Clear using engine
-                    finalizationEngine.clearPendingFinalizationTimeout();
-                    finalizationEngine.clearPendingFinalization();
-                    syncPendingFinalization();
+                    // CRITICAL FIX: Process the old pending final BEFORE clearing it
+                    // This prevents dropping finals when a new final arrives during high partial activity
+                    const oldPending = finalizationEngine.getPendingFinalization();
+                    if (oldPending) {
+                      console.log(`[HostMode] 🔀 New final arrived - processing old pending final before clearing: "${oldPending.text.substring(0, 80)}..."`);
+                      // Process the old final immediately with its current text
+                      // Use the longest partial if it extends the old final
+                      let oldFinalText = oldPending.text;
+                      const oldFinalTrimmed = oldPending.text.trim();
+                      
+                      // Check if longest partial extends the old final
+                      if (longestPartialText && longestPartialText.length > oldPending.text.length) {
+                        const longestTrimmed = longestPartialText.trim();
+                        const oldFinalNormalized = oldFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        if (longestNormalized.startsWith(oldFinalNormalized) || 
+                            (oldFinalTrimmed.length > 5 && longestNormalized.substring(0, oldFinalNormalized.length) === oldFinalNormalized)) {
+                          oldFinalText = longestPartialText;
+                          console.log(`[HostMode] 📊 Using longest partial for old final (${oldPending.text.length} → ${longestPartialText.length} chars)`);
+                        }
+                      }
+                      
+                      // Clear timeout and pending finalization
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      
+                      // Process the old final immediately
+                      processFinalText(oldFinalText);
+                    } else {
+                      // No old pending - just clear
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                    }
                   }
                 }
                 
