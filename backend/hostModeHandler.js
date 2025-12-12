@@ -767,11 +767,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       
                       // CRITICAL: Update last sent FINAL tracking after sending
-                      lastSentFinalText = textToProcess;
-                      lastSentFinalTime = Date.now();
+                      // BUT: For forced finals, clear the tracking to prevent next FINAL from merging with it
+                      // Forced finals should always start a new line, not be merged with previous finals
+                      const isForcedFinal = !!options.forceFinal;
+                      if (isForcedFinal) {
+                        // Clear tracking for forced finals - they should start a new line
+                        lastSentFinalText = '';
+                        lastSentFinalTime = 0;
+                        console.log('[HostMode] 🧹 Cleared lastSentFinalText for forced final (should start new line)');
+                      } else {
+                        lastSentFinalText = textToProcess;
+                        lastSentFinalTime = Date.now();
+                      }
                       
                       // Add to recently finalized window for backpatching (Delayed Final Reconciliation System)
-                      const isForcedFinal = !!options.forceFinal;
                       // PHASE 8: Removed deprecated backpatching logic (recentlyFinalized tracking)
                       // Dual buffer recovery system handles word recovery now
                     } catch (error) {
@@ -792,9 +801,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }, false);
                       
                       // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
+                      // BUT: For forced finals, clear the tracking to prevent next FINAL from merging with it
+                      const isForcedFinal = !!options.forceFinal;
                       if (error.skipRequest || finalText !== `[Translation error: ${error.message}]`) {
-                        lastSentFinalText = textToProcess;
-                        lastSentFinalTime = Date.now();
+                        if (isForcedFinal) {
+                          // Clear tracking for forced finals - they should start a new line
+                          lastSentFinalText = '';
+                          lastSentFinalTime = 0;
+                          console.log('[HostMode] 🧹 Cleared lastSentFinalText for forced final (error case, should start new line)');
+                        } else {
+                          lastSentFinalText = textToProcess;
+                          lastSentFinalTime = Date.now();
+                        }
                         
                         // PHASE 8: Removed deprecated backpatching check
                       }
@@ -1619,6 +1637,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                   if (endsWithPunctuation) {
                     console.log('[HostMode] ✅ Forced final already complete - committing immediately');
                     processFinalText(transcriptText, { forceFinal: true });
+                    // CRITICAL: Reset partial tracker after forced final is committed to prevent cross-segment contamination
+                    partialTracker.reset();
+                    syncPartialVariables();
                   } else {
                     console.log('[HostMode] ⏳ Buffering forced final until continuation arrives or timeout elapses');
                     const bufferedText = transcriptText;
@@ -1639,6 +1660,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                       processFinalText(forcedFinalBuffer.text, { forceFinal: true });
                       forcedCommitEngine.clearForcedFinalBuffer();
                       syncForcedFinalBuffer();
+                      // CRITICAL: Reset partial tracker after forced final is committed to prevent cross-segment contamination
+                      partialTracker.reset();
+                      syncPartialVariables();
                     }, FORCED_FINAL_MAX_WAIT_MS);
                   }
                   
@@ -1672,7 +1696,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                 
                 // CRITICAL: Check if this FINAL is a continuation of the last sent FINAL
                 // This prevents splitting sentences like "Where two or three" / "Are gathered together"
-                if (lastSentFinalText && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
+                // BUT: Skip this check if last sent was a forced final (forced finals should always start new lines)
+                // Note: We check lastSentFinalText being empty as the signal that last final was forced
+                if (lastSentFinalText && lastSentFinalText.length > 0 && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
                   const lastSentTrimmed = lastSentFinalText.trim();
                   const newFinalTrimmed = transcriptText.trim();
                   
