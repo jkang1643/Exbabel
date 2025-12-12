@@ -49,6 +49,11 @@ function TranslationInterface({ onBackToHome }) {
   const segmenterRef = useRef(null)
   const sendMessageRef = useRef(null)
   const handleStopListeningRef = useRef(null)
+  
+  // Catch-up mode and lag detection refs
+  const catchUpModeRef = useRef(false)
+  const messageTimestampsRef = useRef([])
+  const lastTextLengthRef = useRef(0)
 
   if (!segmenterRef.current) {
     segmenterRef.current = new SentenceSegmenter({
