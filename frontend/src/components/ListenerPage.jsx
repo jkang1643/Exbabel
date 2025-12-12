@@ -210,6 +210,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               // CRITICAL: Only use translatedText if hasTranslation is true - never fallback to English
               const finalText = message.hasTranslation ? (message.translatedText || undefined) : undefined;
               const originalText = message.originalText || '';
+              // CRITICAL: Use correctedText for original display (grammar corrections)
+              const correctedOriginalText = message.correctedText || originalText;
               
               // Skip if no translation and not transcription mode
               const isTranscriptionMode = targetLang === message.sourceLang;
@@ -219,7 +221,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               }
               
               // Use translatedText if available, otherwise use correctedText/originalText for transcription mode
-              const textToDisplay = finalText || (isTranscriptionMode ? (message.correctedText || originalText) : undefined);
+              const textToDisplay = finalText || (isTranscriptionMode ? correctedOriginalText : undefined);
               
               if (!textToDisplay) {
                 console.warn('[ListenerPage] ⚠️ Final received with no displayable text, skipping');
@@ -234,7 +236,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 const recentEntries = prev.slice(-3);
                 const isDuplicate = recentEntries.some(entry => 
                   entry.translated === textToDisplay || 
-                  (entry.original === originalText && originalText.length > 0)
+                  (entry.original === correctedOriginalText && correctedOriginalText.length > 0)
                 );
                 
                 if (isDuplicate) {
@@ -243,7 +245,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 }
                 
                 return [...prev, {
-                  original: originalText,
+                  original: correctedOriginalText, // Use correctedText for grammar-corrected original
                   translated: textToDisplay,
                   timestamp: message.timestamp || Date.now()
                 }].slice(-50);

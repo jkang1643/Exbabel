@@ -1932,6 +1932,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                             }
                           }
                         }
+                        // CRITICAL: Double-check buffer still exists (might have been committed by new partial)
+                        syncForcedFinalBuffer();
+                        if (!forcedCommitEngine.hasForcedFinalBuffer()) {
+                          console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new partial) - skipping recovery commit');
+                          return;
+                        }
+                        
                         console.log(`[HostMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
                         processFinalText(finalTextToCommit, { forceFinal: true });
                         // PHASE 8: Clear forced final buffer using engine
