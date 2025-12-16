@@ -48,3 +48,31 @@ PORT=3001
 # Node environment (development|production)
 NODE_ENV=production
 
+# ===================================
+# WebSocket API Security Configuration
+# ===================================
+
+# API Keys for /api/translate WebSocket endpoint (comma-separated)
+# Generate secure random keys (e.g., openssl rand -hex 32)
+# Example: WS_API_KEYS=key1,key2,key3
+WS_API_KEYS=
+
+# Rate Limiting (Attack-Focused, Permissive for Legitimate Use)
+# These limits are set 20-100x above normal usage to only block attacks
+
+# Max connections per IP address (default: 50, allows multi-device usage)
+WS_API_RATE_LIMIT_CONNECTIONS=50
+
+# Max messages per second per connection (default: 1000, normal usage ~10-50/sec)
+WS_API_RATE_LIMIT_MESSAGES=1000
+
+# Max audio bytes per second per connection (default: 1048576 = 1MB, allows high-quality streaming)
+WS_API_RATE_LIMIT_AUDIO=1048576
+
+# Seconds of sustained high rate before enforcement (default: 5)
+# Only enforces limits when abuse is clearly detected
+WS_API_RATE_LIMIT_ADAPTIVE_THRESHOLD=5
+
+# API WebSocket port (default: 5000, or same as PORT if not set)
+# WS_API_PORT=5000
+
