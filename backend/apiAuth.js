@@ -7,6 +7,15 @@
 
 class APIAuth {
   constructor() {
+    this.validKeys = new Set();
+    this.loadKeys();
+  }
+
+  /**
+   * Load API keys from environment variable
+   * Can be called multiple times to reload keys after dotenv.config()
+   */
+  loadKeys() {
     // Load API keys from environment variable (comma-separated)
     const apiKeysEnv = process.env.WS_API_KEYS || '';
     this.validKeys = new Set(

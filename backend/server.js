@@ -145,6 +145,10 @@ import apiAuth from './apiAuth.js';
 import rateLimiter from './rateLimiter.js';
 import inputValidator from './inputValidator.js';
 
+// Reload API keys now that dotenv has loaded the .env file
+// (apiAuth is instantiated when imported, but dotenv.config runs after imports)
+apiAuth.loadKeys();
+
 // Handle WebSocket upgrades
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || '';
@@ -459,6 +463,11 @@ app.post('/test-translation', async (req, res) => {
     console.error('Test translation error:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// Serve test WebSocket API page (development)
+app.get('/test-websocket-api.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'test-websocket-api.html'));
 });
 
 // Serve static files in production

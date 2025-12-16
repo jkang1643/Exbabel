@@ -5,8 +5,10 @@
 The Exbabel WebSocket API provides secure, real-time access to the transcription and translation engine for external clients. The API is designed for applications like Python overlays, mobile apps, or other services that need to integrate real-time translation capabilities.
 
 **Endpoints:**
-- **Local Development**: `ws://localhost:5000/api/translate`
+- **Local Development**: `ws://localhost:${PORT}/api/translate` (default port: 3001)
 - **Production**: `wss://api.exbabel.com/api/translate`
+
+**Note**: The API runs on the same port as the main server. The default port is 3001, but you can set `PORT` in your `.env` file to use a different port.
 
 ## Features
 
@@ -33,8 +35,11 @@ WS_API_RATE_LIMIT_MESSAGES=1000      # Max messages/second per connection
 WS_API_RATE_LIMIT_AUDIO=1048576       # Max audio bytes/second (1MB)
 WS_API_RATE_LIMIT_ADAPTIVE_THRESHOLD=5  # Seconds before enforcing limits
 
-# Optional: Separate port for API (defaults to same as PORT)
-WS_API_PORT=5000
+# Optional: Server port (defaults to 3001)
+PORT=3001
+
+# Note: WS_API_PORT is only used for logging/documentation purposes.
+# The API actually runs on the same port as the main server (PORT).
 ```
 
 **Generate secure API keys:**
@@ -54,7 +59,28 @@ npm start
 ```
 
 The API will be available at:
-- **WebSocket**: `ws://localhost:5000/api/translate` (or `ws://localhost:${PORT}/api/translate`)
+- **WebSocket**: `ws://localhost:${PORT}/api/translate` (default: `ws://localhost:3001/api/translate`)
+
+**Important**: The API runs on the same port as your main server. Check your server console output to see which port it's running on, or set `PORT` in your `.env` file.
+
+### 3. Test the Connection
+
+A test HTML page is included to help you verify the WebSocket API connection:
+
+**Open in your browser:**
+```
+http://localhost:3001/test-websocket-api.html
+```
+(Replace `3001` with your actual `PORT` if different)
+
+**The test page allows you to:**
+- Enter your API key
+- Connect to the WebSocket endpoint
+- Send initialization messages
+- View connection status and all WebSocket messages
+- Test the full connection flow without writing code
+
+**Note**: WebSocket URLs (`ws://`) cannot be opened directly in a browser address bar. You must use JavaScript to establish WebSocket connections, which is why the test HTML page is provided.
 
 ## Production Deployment
 
@@ -139,8 +165,9 @@ All API connections require a valid API key. Provide it in one of two ways:
 ### Option 1: Query Parameter (Recommended)
 **Local Development:**
 ```
-ws://localhost:5000/api/translate?apiKey=your-api-key-here
+ws://localhost:3001/api/translate?apiKey=your-api-key-here
 ```
+(Replace 3001 with your actual PORT if different)
 
 **Production:**
 ```
@@ -290,7 +317,9 @@ ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')  # 'development' or 'produ
 if ENVIRONMENT == 'production':
     WS_URL = f"wss://api.exbabel.com/api/translate?apiKey={API_KEY}"
 else:
-    WS_URL = f"ws://localhost:5000/api/translate?apiKey={API_KEY}"
+    # Default port is 3001, but you can set PORT in .env
+    PORT = os.getenv('PORT', '3001')
+    WS_URL = f"ws://localhost:{PORT}/api/translate?apiKey={API_KEY}"
 
 SOURCE_LANG = "en"
 TARGET_LANG = "es"
@@ -377,9 +406,10 @@ const API_KEY = 'your-api-key-here';
 
 // Environment-aware URL configuration
 const ENVIRONMENT = process.env.NODE_ENV || 'development';
+const PORT = process.env.PORT || '3001';
 const WS_URL = ENVIRONMENT === 'production'
   ? `wss://api.exbabel.com/api/translate?apiKey=${API_KEY}`
-  : `ws://localhost:5000/api/translate?apiKey=${API_KEY}`;
+  : `ws://localhost:${PORT}/api/translate?apiKey=${API_KEY}`;
 
 const ws = new WebSocket(WS_URL);
 
@@ -447,7 +477,10 @@ class ExbabelOverlay:
         if environment == "production":
             self.ws_url = f"wss://api.exbabel.com/api/translate?apiKey={api_key}"
         else:
-            self.ws_url = f"ws://localhost:5000/api/translate?apiKey={api_key}"
+            # Default port is 3001, but you can set PORT in .env
+            import os
+            port = os.getenv('PORT', '3001')
+            self.ws_url = f"ws://localhost:{port}/api/translate?apiKey={api_key}"
         
         self.message_queue = queue.Queue()
         self.ws = None
@@ -570,10 +603,11 @@ Wait `retryAfter` seconds before retrying.
 
 ### Connection Fails
 
-1. Check server is running: `curl http://localhost:5000/health`
+1. Check server is running: `curl http://localhost:3001/health` (or your PORT)
 2. Verify API key in `WS_API_KEYS` environment variable
 3. Check firewall/network settings
 4. Verify WebSocket URL format: `ws://host:port/api/translate?apiKey=xxx` (local) or `wss://api.exbabel.com/api/translate?apiKey=xxx` (production)
+5. **Use the test page**: Open `http://localhost:3001/test-websocket-api.html` to test the connection with a visual interface and see detailed error messages
 
 ### Production Connection Issues
 
@@ -601,7 +635,7 @@ Wait `retryAfter` seconds before retrying.
 
 ### Endpoints
 
-- **Local Development**: `ws://localhost:5000/api/translate?apiKey=xxx`
+- **Local Development**: `ws://localhost:3001/api/translate?apiKey=xxx` (or your PORT)
 - **Production**: `wss://api.exbabel.com/api/translate?apiKey=xxx`
 
 ### Message Types
@@ -625,7 +659,7 @@ WS_API_RATE_LIMIT_CONNECTIONS=50             # Optional
 WS_API_RATE_LIMIT_MESSAGES=1000              # Optional
 WS_API_RATE_LIMIT_AUDIO=1048576              # Optional
 WS_API_RATE_LIMIT_ADAPTIVE_THRESHOLD=5       # Optional
-WS_API_PORT=5000                             # Optional
+PORT=3001                                     # Optional (default: 3001)
 ```
 
 ## Support
