@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        input, button, select {
+            padding: 10px;
+            margin: 5px;
+            font-size: 14px;
+        }
+        input[type="text"] {
+            width: 400px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .disconnect {
+            background-color: #f44336;
+        }
+        .disconnect:hover {
+            background-color: #da190b;
+        }
+        #status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .connecting {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        #messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #f9f9f9;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #007bff;
+            background-color: white;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background-color: #ffe6e6;
+        }
+        .success {
+            border-left-color: #28a745;
+            background-color: #e6ffe6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebSocket API Test Client</h1>
+        
+        <div>
+            <label>API Key:</label><br>
+            <input type="text" id="apiKey" placeholder="Enter your API key" value="2e6a847507d285b2670a34f8c2149c18b812ea7fff0643dc97e6116ce3d3d22a">
+        </div>
+        
+        <div>
+            <label>Server URL:</label><br>
+            <input type="text" id="serverUrl" placeholder="ws://localhost:3001/api/translate" value="ws://localhost:3001/api/translate">
+        </div>
+        
+        <div>
+            <label>Source Language:</label>
+            <select id="sourceLang">
+                <option value="en" selected>English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+            </select>
+            
+            <label>Target Language:</label>
+            <select id="targetLang">
+                <option value="en">English</option>
+                <option value="es" selected>Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="ja">Japanese</option>
+                <option value="ko">Korean</option>
+            </select>
+        </div>
+        
+        <div>
+            <button id="connectBtn" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled class="disconnect">Disconnect</button>
+            <button onclick="sendInit()" id="initBtn" disabled>Send Init</button>
+        </div>
+        
+        <div id="status" class="disconnected">Disconnected</div>
+        
+        <div>
+            <h3>Messages:</h3>
+            <div id="messages"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let connectionId = null;
+
+        function addMessage(message, type = 'info') {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function updateStatus(status, className) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = status;
+            statusDiv.className = className;
+        }
+
+        function connect() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const serverUrl = document.getElementById('serverUrl').value.trim();
+            
+            if (!apiKey) {
+                alert('Please enter an API key');
+                return;
+            }
+            
+            if (!serverUrl) {
+                alert('Please enter a server URL');
+                return;
+            }
+            
+            // Add API key to URL if not already present
+            let url = serverUrl;
+            if (!url.includes('apiKey=')) {
+                const separator = url.includes('?') ? '&' : '?';
+                url = `${url}${separator}apiKey=${encodeURIComponent(apiKey)}`;
+            }
+            
+            updateStatus('Connecting...', 'connecting');
+            addMessage(`Connecting to ${url}...`, 'info');
+            
+            try {
+                ws = new WebSocket(url);
+                
+                ws.onopen = function() {
+                    updateStatus('Connected', 'connected');
+                    addMessage('WebSocket connection opened', 'success');
+                    document.getElementById('connectBtn').disabled = true;
+                    document.getElementById('disconnectBtn').disabled = false;
+                    document.getElementById('initBtn').disabled = false;
+                };
+                
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        addMessage(`Received: ${JSON.stringify(data, null, 2)}`, 'info');
+                        
+                        if (data.type === 'info') {
+                            connectionId = data.connectionId;
+                            addMessage(`Connection ID: ${connectionId}`, 'success');
+                        } else if (data.type === 'error') {
+                            addMessage(`Error: ${data.message} (Code: ${data.code})`, 'error');
+                        } else if (data.type === 'translation') {
+                            addMessage(`Translation - Transcript: "${data.transcript}", Translation: "${data.translation}", Partial: ${data.isPartial}`, 'success');
+                        }
+                    } catch (e) {
+                        addMessage(`Received (non-JSON): ${event.data}`, 'info');
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    addMessage(`WebSocket error: ${error}`, 'error');
+                    updateStatus('Error', 'disconnected');
+                };
+                
+                ws.onclose = function(event) {
+                    updateStatus('Disconnected', 'disconnected');
+                    
+                    // Provide helpful error messages for common close codes
+                    let closeMessage = `WebSocket closed (Code: ${event.code}`;
+                    if (event.reason) {
+                        closeMessage += `, Reason: ${event.reason}`;
+                    } else {
+                        closeMessage += ', No reason provided';
+                    }
+                    closeMessage += ')';
+                    
+                    // Add helpful hints for common error codes
+                    if (event.code === 1006) {
+                        closeMessage += '\n\n💡 Code 1006 (Abnormal Closure) usually means:\n';
+                        closeMessage += '   • Server is not running on this port\n';
+                        closeMessage += '   • Wrong port number (check server console for actual port)\n';
+                        closeMessage += '   • Network/firewall blocking the connection\n';
+                        closeMessage += '   • Server crashed or closed connection unexpectedly';
+                    } else if (event.code === 1008) {
+                        closeMessage += '\n\n💡 Code 1008 (Policy Violation) usually means:\n';
+                        closeMessage += '   • Invalid API key\n';
+                        closeMessage += '   • Rate limit exceeded\n';
+                        closeMessage += '   • Authentication failed';
+                    }
+                    
+                    addMessage(closeMessage, event.code === 1006 || event.code === 1008 ? 'error' : 'info');
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('initBtn').disabled = true;
+                    ws = null;
+                };
+                
+            } catch (error) {
+                addMessage(`Failed to create WebSocket: ${error.message}`, 'error');
+                updateStatus('Connection Failed', 'disconnected');
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function sendInit() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                alert('Not connected. Please connect first.');
+                return;
+            }
+            
+            const sourceLang = document.getElementById('sourceLang').value;
+            const targetLang = document.getElementById('targetLang').value;
+            
+            const initMessage = {
+                type: 'init',
+                sourceLang: sourceLang,
+                targetLang: targetLang
+            };
+            
+            ws.send(JSON.stringify(initMessage));
+            addMessage(`Sent init: ${JSON.stringify(initMessage)}`, 'info');
+        }
+
+        // Allow Enter key to connect
+        document.getElementById('apiKey').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                connect();
+            }
+        });
+        
+        document.getElementById('serverUrl').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                connect();
+            }
+        });
+    </script>
+</body>
+</html>

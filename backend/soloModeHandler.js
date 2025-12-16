@@ -107,6 +107,17 @@ export async function handleSoloMode(clientWs) {
     // Use timeline tracker to create sequenced message
     const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
     
+    // Add transcript and translation keys for API compatibility
+    if (message.type === 'translation') {
+      // transcript = originalText or correctedText (prefer corrected)
+      message.transcript = message.correctedText || message.originalText || '';
+      
+      // translation = translatedText or transcript (if transcription-only)
+      message.translation = message.translatedText || 
+                           (message.isTranscriptionOnly ? message.transcript : '') || 
+                           '';
+    }
+    
     // DEBUG: Log sequence ID for verification (Phase 3)
     console.log(`[SoloMode] 📤 Sending message (seq: ${seqId}, isPartial: ${isPartial})`);
     

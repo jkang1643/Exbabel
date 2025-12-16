@@ -38,7 +38,14 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // Middleware
-// CORS configuration - allow frontend domains
+// CORS configuration - separate policies for API and frontend
+// API endpoints: No CORS (or specific origins only)
+app.use('/api', cors({
+  origin: false, // No CORS for API endpoints (WebSocket doesn't use CORS anyway)
+  credentials: false
+}));
+
+// Frontend endpoints: allow frontend domains
 app.use(cors({
   origin: [
     'http://localhost:3000',                        // Local development
@@ -119,6 +126,12 @@ const server = app.listen(port, '0.0.0.0', () => {
   console.log(`[Backend] Server running on port ${port}`);
   console.log(`[Backend] Local: http://localhost:${port}`);
   console.log(`[Backend] WebSocket: ws://localhost:${port}/translate`);
+  const apiPort = process.env.WS_API_PORT || 5000;
+  if (apiPort !== port) {
+    console.log(`[Backend] API WebSocket: ws://localhost:${apiPort}/api/translate`);
+  } else {
+    console.log(`[Backend] API WebSocket: ws://localhost:${port}/api/translate`);
+  }
   console.log(`[Backend] For network access, use your local IP address instead of localhost`);
 });
 
@@ -127,28 +140,56 @@ const server = app.listen(port, '0.0.0.0', () => {
 import { handleHostConnection } from './host/adapter.js';
 import { handleListenerConnection } from './websocketHandler.js';
 import { handleSoloMode } from './soloModeHandler.js';
+import { handleAPIConnection } from './apiWebSocketHandler.js';
+import apiAuth from './apiAuth.js';
+import rateLimiter from './rateLimiter.js';
+import inputValidator from './inputValidator.js';
+
+// Reload API keys now that dotenv has loaded the .env file
+// (apiAuth is instantiated when imported, but dotenv.config runs after imports)
+apiAuth.loadKeys();
 
 // Handle WebSocket upgrades
 server.on("upgrade", (req, socket, head) => {
-  if (req.url?.startsWith("/translate")) {
+  const url = req.url || '';
+  
+  // API endpoint - requires authentication
+  if (url.startsWith("/api/translate")) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
-  } else {
+  } 
+  // Existing frontend endpoint
+  else if (url.startsWith("/translate")) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  } 
+  else {
     socket.destroy();
   }
 });
 
 // Handle WebSocket connections
 wss.on("connection", async (clientWs, req) => {
+  const url = req.url || '';
+  
+  // Route API connections to secure API handler
+  if (url.startsWith("/api/translate")) {
+    console.log("[Backend] API WebSocket connection");
+    handleAPIConnection(clientWs, req);
+    return;
+  }
+  
+  // Existing frontend connections
   console.log("[Backend] New WebSocket client connected");
 
   // Parse URL parameters
-  const url = new URL(req.url, `http://localhost:${port}`);
-  const role = url.searchParams.get('role'); // 'host' or 'listener'
-  const sessionId = url.searchParams.get('sessionId');
-  const targetLang = url.searchParams.get('targetLang');
-  const userName = decodeURIComponent(url.searchParams.get('userName') || 'Anonymous');
+  const urlObj = new URL(url, `http://localhost:${port}`);
+  const role = urlObj.searchParams.get('role'); // 'host' or 'listener'
+  const sessionId = urlObj.searchParams.get('sessionId');
+  const targetLang = urlObj.searchParams.get('targetLang');
+  const userName = decodeURIComponent(urlObj.searchParams.get('userName') || 'Anonymous');
 
   // Route to appropriate handler
   if (role === 'host' && sessionId) {
@@ -175,6 +216,19 @@ wss.on("connection", async (clientWs, req) => {
  */
 app.post('/session/start', (req, res) => {
   try {
+    // Input validation
+    const clientIP = inputValidator.getClientIP(req);
+    
+    // Rate limiting - check message rate (permissive)
+    const rateCheck = rateLimiter.checkMessageRate(`http_${clientIP}_session_start`);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        success: false,
+        error: 'Rate limit exceeded. Please try again later.',
+        retryAfter: rateCheck.retryAfter
+      });
+    }
+    
     const { sessionId, sessionCode } = sessionStore.createSession();
     
     res.json({
@@ -198,16 +252,61 @@ app.post('/session/start', (req, res) => {
  */
 app.post('/session/join', (req, res) => {
   try {
+    // Input validation
+    const clientIP = inputValidator.getClientIP(req);
     const { sessionCode, targetLang, userName } = req.body;
     
-    if (!sessionCode) {
+    // Validate sessionCode
+    const sessionCodeValidation = inputValidator.validateString(sessionCode, {
+      required: true,
+      allowEmpty: false,
+      maxLength: 20
+    });
+    if (!sessionCodeValidation.valid) {
       return res.status(400).json({
         success: false,
-        error: 'Session code is required'
+        error: sessionCodeValidation.error || 'Session code is required'
       });
     }
     
-    const session = sessionStore.getSessionByCode(sessionCode);
+    // Validate targetLang if provided
+    // targetLang is used for translation, so it can be any translation-supported language (131+ languages)
+    if (targetLang) {
+      const langValidation = inputValidator.validateLanguageCode(targetLang, true);
+      if (!langValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: langValidation.error
+        });
+      }
+    }
+    
+    // Validate userName if provided
+    if (userName) {
+      const userNameValidation = inputValidator.validateString(userName, {
+        required: false,
+        allowEmpty: false,
+        maxLength: 50
+      });
+      if (!userNameValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          error: userNameValidation.error
+        });
+      }
+    }
+    
+    // Rate limiting - check message rate (permissive)
+    const rateCheck = rateLimiter.checkMessageRate(`http_${clientIP}_session_join`);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({
+        success: false,
+        error: 'Rate limit exceeded. Please try again later.',
+        retryAfter: rateCheck.retryAfter
+      });
+    }
+    
+    const session = sessionStore.getSessionByCode(sessionCodeValidation.sanitized);
     
     if (!session) {
       return res.status(404).json({
@@ -223,13 +322,16 @@ app.post('/session/join', (req, res) => {
       });
     }
     
+    const sanitizedTargetLang = targetLang || 'en';
+    const sanitizedUserName = userName ? inputValidator.validateString(userName, { maxLength: 50 }).sanitized || 'Anonymous' : 'Anonymous';
+    
     res.json({
       success: true,
       sessionId: session.sessionId,
       sessionCode: session.sessionCode,
       sourceLang: session.sourceLang,
-      targetLang: targetLang || 'en',
-      wsUrl: `/translate?role=listener&sessionId=${session.sessionId}&targetLang=${targetLang || 'en'}&userName=${encodeURIComponent(userName || 'Anonymous')}`
+      targetLang: sanitizedTargetLang,
+      wsUrl: `/translate?role=listener&sessionId=${session.sessionId}&targetLang=${sanitizedTargetLang}&userName=${encodeURIComponent(sanitizedUserName)}`
     });
   } catch (error) {
     console.error('[Backend] Error joining session:', error);
@@ -274,9 +376,19 @@ app.get('/session/:sessionCode/info', (req, res) => {
 /**
  * GET /sessions
  * Get all active sessions (for admin/debugging)
+ * SECURITY: Requires API key authentication
  */
 app.get('/sessions', (req, res) => {
   try {
+    // Authentication check
+    const apiKey = req.headers['x-api-key'] || req.query.apiKey;
+    if (!apiKey || !apiAuth.isValidKey(apiKey)) {
+      return res.status(401).json({
+        success: false,
+        error: 'Authentication required. Provide valid API key via X-API-Key header or ?apiKey=xxx'
+      });
+    }
+    
     const sessions = sessionStore.getAllSessions();
     res.json({
       success: true,
@@ -353,6 +465,11 @@ app.post('/test-translation', async (req, res) => {
   }
 });
 
+// Serve test WebSocket API page (development)
+app.get('/test-websocket-api.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'test-websocket-api.html'));
+});
+
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../frontend/dist')));
@@ -365,6 +482,12 @@ if (process.env.NODE_ENV === 'production') {
 // Startup messages for dual-service architecture
 console.log("[Backend] Starting Dual-Service Translation Server...");
 console.log("[Backend] WebSocket endpoint: ws://localhost:" + port + "/translate");
+const apiPort = process.env.WS_API_PORT || 5000;
+if (apiPort !== port) {
+  console.log("[Backend] API WebSocket endpoint: ws://localhost:" + apiPort + "/api/translate");
+} else {
+  console.log("[Backend] API WebSocket endpoint: ws://localhost:" + port + "/api/translate");
+}
 console.log("[Backend] ===== TRANSCRIPTION SERVICE =====");
 console.log("[Backend] Provider: Google Cloud Speech-to-Text");
 console.log("[Backend] Model: Chirp 3 (latest_long)");
