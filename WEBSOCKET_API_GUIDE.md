@@ -65,20 +65,55 @@ The API will be available at:
 
 ### 3. Test the Connection
 
-A test HTML page is included to help you verify the WebSocket API connection:
+A test HTML page is included to help you verify the WebSocket API connection without writing any code.
 
-**Open in your browser:**
+#### Using the Test Page
+
+**Local Development:**
 ```
 http://localhost:3001/test-websocket-api.html
 ```
 (Replace `3001` with your actual `PORT` if different)
 
-**The test page allows you to:**
-- Enter your API key
-- Connect to the WebSocket endpoint
-- Send initialization messages
-- View connection status and all WebSocket messages
-- Test the full connection flow without writing code
+**Production:**
+```
+https://api.exbabel.com/test-websocket-api.html
+```
+
+**The test page provides:**
+- **API Key Input**: Enter your API key (pre-filled if you've used it before)
+- **Server URL**: Configure the WebSocket endpoint URL
+- **Language Selection**: Choose source and target languages
+- **Connection Controls**: Connect/disconnect buttons
+- **Message Log**: View all WebSocket messages in real-time
+- **Status Indicator**: Visual connection status (Connected/Disconnected/Connecting)
+
+#### Testing Steps
+
+1. **Open the test page** in your browser:
+   - **Local**: `http://localhost:3001/test-websocket-api.html`
+   - **Production**: `https://api.exbabel.com/test-websocket-api.html`
+2. **Enter your API key** (or use the pre-filled value)
+3. **Verify the Server URL** is correct:
+   - **Local**: `ws://localhost:3001/api/translate` (or your PORT)
+   - **Production**: `wss://api.exbabel.com/api/translate`
+4. **Select languages** (source and target)
+5. **Click "Connect"** to establish the WebSocket connection
+6. **Check the status** - should show "Connected" in green
+7. **Click "Send Init"** to initialize the translation session
+8. **View messages** in the message log to see server responses
+
+#### What to Expect
+
+When you connect successfully, you should see:
+- Connection status: "Connected" (green)
+- Info message: `"Connected to Exbabel API. Send init message to start."`
+- Connection ID: e.g., `api_1765920318630_mcvf3exeg`
+
+If you see errors:
+- **Code 1006**: Server not running or wrong port
+- **Code 1008**: Invalid API key or authentication failed
+- See the troubleshooting section for more details
 
 **Note**: WebSocket URLs (`ws://`) cannot be opened directly in a browser address bar. You must use JavaScript to establish WebSocket connections, which is why the test HTML page is provided.
 
