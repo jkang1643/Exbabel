@@ -213,9 +213,15 @@ export class GoogleSpeechStream {
     const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && process.env.GOOGLE_CLOUD_PROJECT_ID);
     
     // Use enhanced model with PhraseSets for best accuracy
-    if (this.useEnhancedModel && !this.hasTriedEnhancedModel) {
+    // Check for forceEnhanced option (used by recovery streams for maximum accuracy)
+    const forceEnhanced = this.initOptions?.forceEnhanced === true;
+    
+    if (forceEnhanced || (this.useEnhancedModel && !this.hasTriedEnhancedModel)) {
       requestConfig.useEnhanced = true;
       requestConfig.model = 'latest_long'; // Enhanced model for long-form audio
+      if (forceEnhanced) {
+        console.log(`[GoogleSpeech] ✅ FORCING enhanced model (latest_long) for recovery stream - maximum accuracy`);
+      }
       if (hasPhraseSet) {
         console.log(`[GoogleSpeech] ✅ Using latest_long model WITH PhraseSet (v1p1beta1 API - recommended configuration)`);
         console.log(`[GoogleSpeech]    latest_long supports PhraseSets and provides best accuracy for sermons`);
