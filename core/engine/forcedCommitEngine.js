@@ -60,7 +60,8 @@ export class ForcedCommitEngine {
       timestamp,
       timeout: null,
       recoveryInProgress: false,
-      recoveryPromise: null
+      recoveryPromise: null,
+      committedByRecovery: false  // Track if recovery already committed this
     };
     return this.forcedFinalBuffer;
   }

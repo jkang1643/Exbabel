@@ -19,6 +19,7 @@ import { partialTranslationWorker, finalTranslationWorker } from '../translation
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from '../translationWorkersRealtime.js';
 import { grammarWorker } from '../grammarWorker.js';
 import { CoreEngine } from '../../core/engine/coreEngine.js';
+import { mergeRecoveryText } from '../utils/recoveryMerge.js';
 
 /**
  * Handle host connection using CoreEngine
@@ -311,40 +312,139 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Track last sent FINAL (from solo mode)
               let lastSentFinalText = '';
               let lastSentFinalTime = 0;
+              let lastSentOriginalText = ''; // Track original text to prevent grammar correction duplicates
               const FINAL_CONTINUATION_WINDOW_MS = 3000;
               
               // Flag to prevent concurrent final processing
               let isProcessingFinal = false;
+              // Queue for finals that arrive while another is being processed
+              const finalProcessingQueue = [];
               
               // Extract final processing into separate async function (using solo mode logic, adapted for broadcasting)
               const processFinalText = (textToProcess, options = {}) => {
+                // If already processing, queue this final instead of skipping
+                if (isProcessingFinal) {
+                  console.log(`[HostMode] ⏳ Final already being processed, queuing: "${textToProcess.substring(0, 60)}..."`);
+                  finalProcessingQueue.push({ textToProcess, options });
+                  return; // Queue instead of skip
+                }
+                
+                // Process immediately
                 (async () => {
                   try {
-                    // CRITICAL: Prevent concurrent final processing
-                    if (isProcessingFinal) {
-                      console.log(`[HostMode] ⚠️ Final already being processed, skipping: "${textToProcess.substring(0, 60)}..."`);
-                      return; // Skip if already processing a final
-                    }
-                    
                     // Set flag to prevent concurrent processing
                     isProcessingFinal = true;
                     
-                    // CRITICAL: Duplicate prevention - skip if same text was just sent
+                    // CRITICAL: Duplicate prevention - check against both original and corrected text
+                    // This prevents sending grammar-corrected version of same original text twice
                     const trimmedText = textToProcess.trim();
-                    if (lastSentFinalText && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
-                      const lastSentTrimmed = lastSentFinalText.trim();
-                      // Normalize for comparison (case-insensitive, normalize whitespace)
-                      const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
-                      const lastSentNormalized = lastSentTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                    const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+                    
+                    // Always check for duplicates if we have tracking data (not just within time window)
+                    // This catches duplicates even if they arrive outside the continuation window
+                    if (lastSentOriginalText) {
+                      const lastSentOriginalNormalized = lastSentOriginalText.replace(/\s+/g, ' ').toLowerCase();
+                      const lastSentFinalNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                      const timeSinceLastFinal = Date.now() - lastSentFinalTime;
                       
-                      // Check if text is essentially the same (exact match or very similar)
-                      if (textNormalized === lastSentNormalized || 
-                          (textNormalized.length > 10 && lastSentNormalized.length > 10 && 
-                           (textNormalized.includes(lastSentNormalized) || lastSentNormalized.includes(textNormalized)) &&
-                           Math.abs(textNormalized.length - lastSentNormalized.length) < 5)) {
-                        console.log(`[HostMode] ⚠️ Duplicate final detected, skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentTrimmed.substring(0, 60)}...")`);
-                        isProcessingFinal = false; // Clear flag before returning
-                        return; // Skip processing duplicate
+                      // Check if this is the same original text (even if grammar correction would change it)
+                      // Use stricter matching for very recent commits (within 5 seconds)
+                      if (textNormalized === lastSentOriginalNormalized) {
+                        if (timeSinceLastFinal < 5000) {
+                          console.log(`[HostMode] ⚠️ Duplicate final detected (same original text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
+                          isProcessingFinal = false; // Clear flag before returning
+                          return; // Skip processing duplicate
+                        }
+                      }
+                      
+                      // Also check if corrected text matches what we already sent
+                      // Use stricter matching for very recent commits
+                      if (timeSinceLastFinal < 5000) {
+                        if (textNormalized === lastSentFinalNormalized) {
+                          console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
+                          isProcessingFinal = false; // Clear flag before returning
+                          return; // Skip processing duplicate
+                        }
+                        
+                        // Check for near-exact matches (very similar text within 5 seconds)
+                        if (textNormalized.length > 10 && lastSentFinalNormalized.length > 10) {
+                          const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
+                          const similarity = textNormalized.includes(lastSentFinalNormalized) || lastSentFinalNormalized.includes(textNormalized);
+                          
+                          // If texts are very similar (one contains the other) and length difference is small
+                          if (similarity && lengthDiff < 10 && lengthDiff < Math.min(textNormalized.length, lastSentFinalNormalized.length) * 0.1) {
+                            console.log(`[HostMode] ⚠️ Duplicate final detected (very similar text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
+                            isProcessingFinal = false; // Clear flag before returning
+                            return; // Skip processing duplicate
+                          }
+                          
+                          // CRITICAL: Also check for high word overlap (catches cases with punctuation/capitalization differences)
+                          // Split into words and compare word-by-word similarity
+                          const textWords = textNormalized.split(/\s+/).filter(w => w.length > 2); // Words longer than 2 chars
+                          const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
+                          
+                          if (textWords.length > 3 && lastSentWords.length > 3) {
+                            // Count matching words
+                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
+                            
+                            // If 80%+ words match and texts are similar length, it's likely a duplicate
+                            if (wordOverlapRatio >= 0.8 && lengthDiff < 20) {
+                              console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
+                              isProcessingFinal = false; // Clear flag before returning
+                              return; // Skip processing duplicate
+                            }
+                          }
+                        }
+                      } else if (timeSinceLastFinal < FINAL_CONTINUATION_WINDOW_MS) {
+                        // Within continuation window but not very recent - use original logic
+                        if (textNormalized === lastSentFinalNormalized || 
+                            (textNormalized.length > 10 && lastSentFinalNormalized.length > 10 && 
+                             (textNormalized.includes(lastSentFinalNormalized) || lastSentFinalNormalized.includes(textNormalized)) &&
+                             Math.abs(textNormalized.length - lastSentFinalNormalized.length) < 5)) {
+                          console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
+                          isProcessingFinal = false; // Clear flag before returning
+                          return; // Skip processing duplicate
+                        }
+                        
+                        // Also check word overlap for continuation window (catches punctuation/capitalization differences)
+                        if (textNormalized.length > 10 && lastSentFinalNormalized.length > 10) {
+                          const textWords = textNormalized.split(/\s+/).filter(w => w.length > 2);
+                          const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
+                          
+                          if (textWords.length > 3 && lastSentWords.length > 3) {
+                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
+                            const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
+                            
+                            // If 85%+ words match and texts are similar length, it's likely a duplicate
+                            if (wordOverlapRatio >= 0.85 && lengthDiff < 15) {
+                              console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% in continuation window), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
+                              isProcessingFinal = false; // Clear flag before returning
+                              return; // Skip processing duplicate
+                            }
+                          }
+                        }
+                      } else {
+                        // Outside continuation window - still check for very high word overlap (90%+) to catch obvious duplicates
+                        // This catches duplicates that arrive later but are clearly the same text
+                        if (textNormalized.length > 15 && lastSentFinalNormalized.length > 15) {
+                          const textWords = textNormalized.split(/\s+/).filter(w => w.length > 2);
+                          const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
+                          
+                          if (textWords.length > 5 && lastSentWords.length > 5) {
+                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
+                            const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
+                            
+                            // If 90%+ words match and texts are very similar length, it's likely a duplicate even outside time window
+                            if (wordOverlapRatio >= 0.9 && lengthDiff < 25) {
+                              console.log(`[HostMode] ⚠️ Duplicate final detected (very high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% outside time window, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
+                              isProcessingFinal = false; // Clear flag before returning
+                              return; // Skip processing duplicate
+                            }
+                          }
+                        }
                       }
                     }
                     
@@ -522,6 +622,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       
                       // CRITICAL: Update last sent FINAL tracking after sending
+                      // Track both original and corrected text to prevent duplicates
+                      lastSentOriginalText = textToProcess; // Always track the original
                       lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
                       lastSentFinalTime = Date.now();
                     } catch (error) {
@@ -543,17 +645,33 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
                       if (error.skipRequest || finalText !== `[Translation error: ${error.message}]`) {
+                        lastSentOriginalText = textToProcess; // Track original
                         lastSentFinalText = textToProcess;
                         lastSentFinalTime = Date.now();
                       }
                     } finally {
                       // CRITICAL: Always clear the processing flag when done
                       isProcessingFinal = false;
+                      
+                      // Process next queued final if any
+                      if (finalProcessingQueue.length > 0) {
+                        const next = finalProcessingQueue.shift();
+                        console.log(`[HostMode] 🔄 Processing queued final: "${next.textToProcess.substring(0, 60)}..."`);
+                        // Recursively process the next queued final
+                        processFinalText(next.textToProcess, next.options);
+                      }
                     }
                   } catch (error) {
                     console.error(`[HostMode] Error processing final:`, error);
                     // CRITICAL: Clear flag on outer error too
                     isProcessingFinal = false;
+                    
+                    // Process next queued final even on error
+                    if (finalProcessingQueue.length > 0) {
+                      const next = finalProcessingQueue.shift();
+                      console.log(`[HostMode] 🔄 Processing queued final after error: "${next.textToProcess.substring(0, 60)}..."`);
+                      processFinalText(next.textToProcess, next.options);
+                    }
                   }
                 })();
               };
@@ -609,7 +727,35 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const extension = forcedCommitEngine.checkPartialExtendsForcedFinal(transcriptText);
                     
                     if (extension && extension.extends) {
-                      // Partial extends the forced final - merge and commit
+                      // Partial extends the forced final - but wait for recovery if in progress
+                      console.log('[HostMode] 🔁 New partial extends forced final - checking if recovery is in progress...');
+                      syncForcedFinalBuffer();
+                      
+                      // CRITICAL: If recovery is in progress, wait for it to complete first
+                      if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress && forcedFinalBuffer.recoveryPromise) {
+                        console.log('[HostMode] ⏳ Recovery in progress - waiting for completion before committing extended partial...');
+                        try {
+                          const recoveredText = await forcedFinalBuffer.recoveryPromise;
+                          if (recoveredText && recoveredText.length > 0) {
+                            console.log(`[HostMode] ✅ Recovery completed with text: "${recoveredText.substring(0, 60)}..."`);
+                            // Recovery found words - merge recovered text with extending partial
+                            const recoveredMerged = partialTracker.mergeWithOverlap(recoveredText, transcriptText);
+                            if (recoveredMerged) {
+                              console.log('[HostMode] 🔁 Merging recovered text with extending partial and committing');
+                              forcedCommitEngine.clearForcedFinalBufferTimeout();
+                              processFinalText(recoveredMerged, { forceFinal: true });
+                              forcedCommitEngine.clearForcedFinalBuffer();
+                              syncForcedFinalBuffer();
+                              // Continue processing the extended partial normally
+                              return; // Exit early - already committed
+                            }
+                          }
+                        } catch (error) {
+                          console.error('[HostMode] ❌ Error waiting for recovery:', error.message);
+                        }
+                      }
+                      
+                      // No recovery or recovery completed - merge and commit normally
                       console.log('[HostMode] 🔁 New partial extends forced final - merging and committing');
                       forcedCommitEngine.clearForcedFinalBufferTimeout();
                       const mergedFinal = partialTracker.mergeWithOverlap(forcedCommitEngine.getForcedFinalBuffer().text, transcriptText);
@@ -1515,7 +1661,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // ALWAYS capture and inject recovery audio for ALL forced finals
                   // This ensures we can recover missing words from decoder gaps
                   // Even if the final ends with punctuation, there may still be missing words
-                  console.log('[HostMode] ⏳ Buffering forced final until continuation arrives or timeout elapses');
+                  // CRITICAL: Don't commit immediately - wait for recovery and grammar correction
+                  // The timeout callback will commit after recovery completes (with grammar correction)
+                  console.log('[HostMode] ⏳ Buffering forced final until recovery completes (with grammar correction)');
                   console.log(`[HostMode] 🎯 DUAL BUFFER SYSTEM: Setting up audio recovery for forced final`);
                   console.log(`[HostMode] 📝 Forced final text: "${transcriptText.substring(0, 80)}..." (${transcriptText.length} chars, ends with punctuation: ${endsWithPunctuation})`);
 
@@ -1527,10 +1675,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                     recoveryStartTime = Date.now();
                     nextFinalAfterRecovery = null; // Reset
                     
-                    // PHASE 8: Create forced final buffer using engine
+                    // PHASE 8: Create forced final buffer using engine (for recovery tracking)
+                    // Note: We've already committed the forced final above, so this buffer is just for recovery
                     forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp);
                     syncForcedFinalBuffer();
-                    console.log(`[HostMode] ✅ Forced final buffer created - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
+                    console.log(`[HostMode] ✅ Forced final buffer created for recovery - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
                     console.log(`[HostMode] 🎯 DUAL BUFFER: Setting up Phase 1 timeout (delay: 0ms) - recovery system initializing`);
                     
                   // PHASE 8: Set up two-phase timeout using engine (same as solo mode)
@@ -1615,6 +1764,31 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log(`[HostMode] 🎵 Captured ${recoveryAudio.length} bytes of PRE+POST-final audio`);
                         console.log(`[HostMode] 🎯 DUAL BUFFER SYSTEM: Audio buffer retrieved - ${recoveryAudio.length} bytes available for recovery`);
                         
+                        // CRITICAL: If audio buffer is empty (stream ended), commit forced final immediately
+                        if (recoveryAudio.length === 0) {
+                          console.log('[HostMode] ⚠️ Audio buffer is empty (stream likely ended) - committing forced final immediately without recovery');
+                          syncForcedFinalBuffer();
+                          if (forcedCommitEngine.hasForcedFinalBuffer()) {
+                            const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                            const forcedFinalText = buffer.text;
+                            
+                            // Mark as committed to prevent timeout from also committing
+                            if (forcedFinalBuffer) {
+                              forcedFinalBuffer.committedByRecovery = true;
+                            }
+                            
+                            // Commit the forced final immediately
+                            processFinalText(forcedFinalText, { forceFinal: true });
+                            
+                            // Clear the buffer
+                            forcedCommitEngine.clearForcedFinalBuffer();
+                            syncForcedFinalBuffer();
+                            
+                            console.log('[HostMode] ✅ Forced final committed immediately (no audio to recover)');
+                            return; // Skip recovery attempt
+                          }
+                        }
+                        
                         if (recoveryAudio.length === 0) {
                           console.error(`[HostMode] ❌ CRITICAL: Audio buffer is EMPTY! Dual buffer system not working!`);
                           console.error(`[HostMode] ❌ This means audio chunks are not being added to AudioBufferManager`);
@@ -1639,9 +1813,13 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                         // Use finalWithPartials (which includes any late partials captured in Phase 1)
                         let finalTextToCommit = finalWithPartials;
+                        
+                        // CRITICAL: bufferedText (captured at line 1566) is the original forced final text
+                        // We'll use this as fallback if buffer is cleared before we can commit
 
                         console.log(`[HostMode] 📊 Text to commit after late partial recovery:`);
                         console.log(`[HostMode]   Text: "${finalTextToCommit}"`);
+                        console.log(`[HostMode]   Original forced final (bufferedText): "${bufferedText}"`);
 
                         // ⭐ NOW: Send the PRE+POST-final audio to recovery stream
                         // This audio includes the decoder gap at T-200ms where "spent" exists!
@@ -1655,7 +1833,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                             const { GoogleSpeechStream } = await import('../googleSpeechStream.js');
 
                             const tempStream = new GoogleSpeechStream();
-                            await tempStream.initialize(currentSourceLang, { disablePunctuation: true });
+                            await tempStream.initialize(currentSourceLang, { 
+                              disablePunctuation: true,
+                              forceEnhanced: true  // Always use enhanced model for recovery streams
+                            });
 
                             // CRITICAL: Disable auto-restart for recovery stream
                             // We want it to end naturally after processing our audio
@@ -1779,587 +1960,79 @@ export async function handleHostConnection(clientWs, sessionId) {
                             tempStream.destroy();
 
                             // Find the missing words by comparing recovered vs buffered
+                            // Update finalTextToCommit (declared at line 1642) with recovered text
+                            let finalRecoveredText = '';
                             if (recoveredText && recoveredText.length > 0) {
                               console.log(`[HostMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
 
-                              // SMART MERGE LOGIC: Find overlap and extract new continuation words
-                              // Example: finalWithPartials="...life is best spent for", recovered="best spent fulfilling our own"
-                              // We need to: find "best spent" overlap, extract "fulfilling our own", append to finalWithPartials
-
-                              const bufferedTrimmed = finalWithPartials.trim();
-                              const recoveredTrimmed = recoveredText.trim();
-                              const bufferedWords = bufferedTrimmed.split(/\s+/);
-                              const recoveredWords = recoveredTrimmed.split(/\s+/);
-
-                              console.log(`[HostMode] 🔍 Attempting smart merge:`);
-                              console.log(`[HostMode]   Buffered (${bufferedWords.length} words): "${bufferedTrimmed.substring(Math.max(0, bufferedTrimmed.length - 60))}"`);
-                              console.log(`[HostMode]   Recovered (${recoveredWords.length} words): "${recoveredTrimmed}"`);
-
-                              let mergedSuccessfully = false;
-
-                              // PRODUCTION-GRADE MERGE ALGORITHM: Single-word overlap strategy
-                              // Used by real ASR platforms - simple, stable, handles all edge cases
-                              // Goal: Find last overlapping word, append only what comes after it
-
-                              console.log(`[HostMode] 🔍 Merge algorithm:`);
-                              console.log(`[HostMode]   Buffered (${bufferedWords.length} words): "${bufferedTrimmed.substring(Math.max(0, bufferedTrimmed.length - 60))}"`);
-                              console.log(`[HostMode]   Recovered (${recoveredWords.length} words): "${recoveredTrimmed}"`);
-
-                              // Step 1: Find the last overlapping word
-                              // Scan from END of buffered words, look for first match in recovery
-                              let matchIndex = -1;
-                              let matchedWord = null;
-
-                              for (let i = bufferedWords.length - 1; i >= 0; i--) {
-                                const bufferedWord = bufferedWords[i].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-
-                                // Look for this word anywhere in recovery (normalized)
-                                for (let j = 0; j < recoveredWords.length; j++) {
-                                  const recoveredWord = recoveredWords[j].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-
-                                  if (bufferedWord === recoveredWord && bufferedWord.length > 0) {
-                                    matchIndex = j;  // Index in RECOVERY where overlap occurs
-                                    matchedWord = bufferedWords[i];
-                                    break;
-                                  }
+                              // Use shared merge utility for improved merge logic
+                              syncPartialVariables();
+                              const mergeResult = mergeRecoveryText(
+                                finalWithPartials,
+                                recoveredText,
+                                {
+                                  nextPartialText: latestPartialText,
+                                  nextFinalText: nextFinalAfterRecovery?.text,
+                                  mode: 'HostMode'
                                 }
+                              );
 
-                                if (matchIndex !== -1) {
-                                  break;  // Found the last overlapping word
-                                }
-                              }
-
-                              // Step 2: Merge based on overlap
-                              if (matchIndex !== -1) {
-                                // Found overlap - append only words AFTER the match
-                                let tail = recoveredWords.slice(matchIndex + 1);
-
-                                if (tail.length > 0) {
-                                  // Helper functions for intelligent matching
-                                  const wordsAreRelated = (word1, word2) => {
-                                    const w1 = word1.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-                                    const w2 = word2.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-                                    
-                                    if (w1 === w2) return true;
-                                    if (w1.includes(w2) || w2.includes(w1)) {
-                                      // Check if one is a variation of the other (gathered/gather, week/weed)
-                                      const shorter = w1.length < w2.length ? w1 : w2;
-                                      const longer = w1.length >= w2.length ? w1 : w2;
-                                      
-                                      // Stem matching: check if longer word starts with shorter (common suffixes)
-                                      if (longer.startsWith(shorter) && shorter.length >= 3) {
-                                        const remaining = longer.substring(shorter.length);
-                                        // Common suffixes: ing, ed, er, s, es, ly, d
-                                        if (['ing', 'ed', 'er', 's', 'es', 'ly', 'd'].includes(remaining)) {
-                                          return true;
-                                        }
-                                      }
-                                      
-                                      // Check for transcription errors using Levenshtein distance
-                                      const lev = levenshteinDistance(w1, w2);
-                                      const maxLen = Math.max(w1.length, w2.length);
-                                      const similarity = 1 - (lev / maxLen);
-                                      // If words are very similar (>= 85%), likely transcription error
-                                      if (similarity >= 0.85 && maxLen >= 4) {
-                                        return true;
-                                      }
-                                    }
-                                    return false;
-                                  };
-                                  
-                                  const levenshteinDistance = (a, b) => {
-                                    const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
-                                    for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
-                                    for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
-                                    for (let j = 1; j <= b.length; j++) {
-                                      for (let i = 1; i <= a.length; i++) {
-                                        const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
-                                        matrix[j][i] = Math.min(
-                                          matrix[j][i - 1] + 1,
-                                          matrix[j - 1][i] + 1,
-                                          matrix[j - 1][i - 1] + indicator
-                                        );
-                                      }
-                                    }
-                                    return matrix[b.length][a.length];
-                                  };
-                                  
-                                  // Check for phrase-level overlaps (handles filler text)
-                                  // tailPhrase is an array of words, not a string
-                                  const findPhraseOverlap = (tailPhraseArray, nextText) => {
-                                    // Check if tail phrase appears in next text (even with filler)
-                                    // Look for 2-4 word phrases from tail at start of next text
-                                    for (let phraseLen = Math.min(4, tailPhraseArray.length); phraseLen >= 2; phraseLen--) {
-                                      const tailPhraseWords = tailPhraseArray.slice(-phraseLen).map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
-                                      const tailPhraseStr = tailPhraseWords.join(' ');
-                                      
-                                      // Check first 6 words of next text for phrase match
-                                      const nextWords = nextText.toLowerCase().split(/\s+/).slice(0, 6);
-                                      
-                                      // Try to find the phrase in next text (allowing for 1-2 filler words)
-                                      for (let start = 0; start <= Math.min(2, nextWords.length - phraseLen); start++) {
-                                        const nextPhraseWords = nextWords.slice(start, start + phraseLen);
-                                        const nextPhraseStr = nextPhraseWords.map(w => w.replace(/[.,!?;:\-'"()]/g, '')).join(' ');
-                                        
-                                        // Check if phrases match (exact or word-by-word related)
-                                        if (tailPhraseStr === nextPhraseStr) {
-                                          return { matched: true, phraseLen, start };
-                                        }
-                                        
-                                        // Check if words are related (handles variations)
-                                        let allRelated = true;
-                                        for (let i = 0; i < phraseLen; i++) {
-                                          if (!wordsAreRelated(tailPhraseWords[i], nextPhraseWords[i])) {
-                                            allRelated = false;
-                                            break;
-                                          }
-                                        }
-                                        if (allRelated) {
-                                          return { matched: true, phraseLen, start };
-                                        }
-                                      }
-                                    }
-                                    return { matched: false };
-                                  };
-                                  
-                                  // CRITICAL: Check if tail words are already at the START of the next final OR latest partial
-                                  // Check both next final and latest partial (partials arrive before finals)
-                                  const textsToCheck = [];
-                                  if (nextFinalAfterRecovery && nextFinalAfterRecovery.text) {
-                                    textsToCheck.push({ text: nextFinalAfterRecovery.text, type: 'final' });
-                                  }
-                                  // Also check latest partial text (it may have arrived after recovery started)
-                                  syncPartialVariables();
-                                  if (latestPartialText && latestPartialText.length > 0) {
-                                    textsToCheck.push({ text: latestPartialText, type: 'partial' });
-                                  }
-                                  
-                                  if (textsToCheck.length > 0) {
-                                    // First, check for phrase-level overlaps (handles filler text)
-                                    let phraseOverlap = null;
-                                    for (const checkItem of textsToCheck) {
-                                      phraseOverlap = findPhraseOverlap(tail, checkItem.text);
-                                      if (phraseOverlap.matched) {
-                                        console.log(`[HostMode] 🔍 Found phrase overlap: "${tail.slice(-phraseOverlap.phraseLen).join(' ')}" in next ${checkItem.type}`);
-                                        break;
-                                      }
-                                    }
-                                    
-                                    if (phraseOverlap && phraseOverlap.matched) {
-                                      // Phrase overlap found - trim the overlapping phrase
-                                      const wordsToKeep = tail.length - phraseOverlap.phraseLen;
-                                      if (wordsToKeep > 0) {
-                                        tail = tail.slice(0, wordsToKeep);
-                                        console.log(`[HostMode] ✂️ Trimming ${phraseOverlap.phraseLen} overlapping phrase word(s) from tail. Keeping: "${tail.join(' ')}"`);
-                                      } else {
-                                        console.log(`[HostMode] ⚠️ All tail words already in next text (phrase match) - skipping recovery append`);
-                                        tail = [];
-                                      }
-                                    } else {
-                                      // No phrase overlap - check word-by-word with intelligent matching
-                                      let overlapCount = 0;
-                                      let matchedText = null;
-                                      // Check from the END of tail backwards (last word of tail vs first word of next text)
-                                      // CRITICAL: Check original words first (before normalization) to detect hyphens
-                                      for (let i = tail.length - 1; i >= 0; i--) {
-                                        const tailWordOriginal = tail[i].toLowerCase();
-                                        const tailWordClean = tailWordOriginal.replace(/[.,!?;:\-'"()]/g, '');
-                                        
-                                        // Check each text (final or partial)
-                                        for (const checkItem of textsToCheck) {
-                                          const checkWords = checkItem.text.trim().toLowerCase().split(/\s+/);
-                                          // Check if this tail word matches any of the first few words
-                                          const checkWordsSlice = checkWords.slice(0, Math.min(5, checkWords.length)); // Check first 5 words (increased for filler text)
-                                          const matches = checkWordsSlice.some(nfw => {
-                                            const nfwOriginal = nfw.toLowerCase();
-                                            const nfwClean = nfwOriginal.replace(/[.,!?;:\-'"()]/g, '');
-                                            
-                                            // CRITICAL: Improved matching logic to handle hyphens, compound words, and word variations
-                                            // 1. Exact match (best case) - check both original and cleaned
-                                            if (tailWordOriginal === nfwOriginal || tailWordClean === nfwClean) {
-                                              return true;
-                                            }
-                                            
-                                            // 2. Check if words are related (handles variations like gathered/gather, week/weed)
-                                            if (wordsAreRelated(tailWordOriginal, nfwOriginal)) {
-                                              return true;
-                                            }
-                                            
-                                            // 3. Check if tail word is a compound word (contains hyphen)
-                                            const tailHasHyphen = tailWordOriginal.includes('-');
-                                            const nextHasHyphen = nfwOriginal.includes('-');
-                                            
-                                            // 4. If tail is compound and next is not, check if next is just the second part
-                                            // Example: tail="self-centered", next="centered" - DON'T match (they're different)
-                                            if (tailHasHyphen && !nextHasHyphen) {
-                                              const tailParts = tailWordOriginal.split('-');
-                                              const lastPart = tailParts[tailParts.length - 1].replace(/[.,!?;:\-'"()]/g, '');
-                                              // Only match if next word is exactly the last part AND tail word is significantly longer
-                                              // This prevents matching "centered" in "self-centered" with standalone "centered"
-                                              if (lastPart === nfwClean && tailWordClean.length > nfwClean.length + 3) {
-                                                // This is a compound word where next is just the suffix - likely different words
-                                                console.log(`[HostMode] 🚫 Rejecting match: compound word "${tailWordOriginal}" suffix "${lastPart}" vs standalone "${nfwOriginal}"`);
-                                                return false;
-                                              }
-                                            }
-                                            
-                                            // 5. For substring matches, require words to be similar in length (within 30% difference)
-                                            // This prevents matching parts of compound words
-                                            const lengthDiff = Math.abs(tailWordClean.length - nfwClean.length);
-                                            const maxLength = Math.max(tailWordClean.length, nfwClean.length);
-                                            const lengthSimilarity = maxLength > 0 ? 1 - (lengthDiff / maxLength) : 0;
-                                            
-                                            // 6. Only allow substring match if:
-                                            //    - Words are similar in length (within 30%)
-                                            //    - OR the shorter word is at least 5 characters (to avoid matching short words in compounds)
-                                            const minLength = Math.min(tailWordClean.length, nfwClean.length);
-                                            if (nfwClean.includes(tailWordClean) || tailWordClean.includes(nfwClean)) {
-                                              if (lengthSimilarity >= 0.7 || minLength >= 5) {
-                                                return true;
-                                              }
-                                            }
-                                            
-                                            return false;
-                                          });
-                                          
-                                          if (matches) {
-                                            overlapCount = tail.length - i; // Count from this position to end
-                                            matchedText = checkItem;
-                                            console.log(`[HostMode] 🔍 Found overlap: tail word "${tail[i]}" matches next ${checkItem.type} start: "${checkItem.text.substring(0, 40)}..."`);
-                                            break;
-                                          }
-                                        }
-                                        
-                                        if (overlapCount > 0) break;
-                                      }
-                                      
-                                      if (overlapCount > 0) {
-                                        // Trim overlapping words from tail
-                                        const wordsToKeep = tail.length - overlapCount;
-                                        if (wordsToKeep > 0) {
-                                          tail = tail.slice(0, wordsToKeep);
-                                          console.log(`[HostMode] ✂️ Trimming ${overlapCount} overlapping word(s) from tail. Keeping: "${tail.join(' ')}"`);
-                                        } else {
-                                          // All tail words are in next final/partial - skip recovery
-                                          console.log(`[HostMode] ⚠️ All recovered tail words already in next ${matchedText.type} - skipping recovery append`);
-                                          tail = []; // Don't append anything
-                                        }
-                                      }
-                                    }
-                                  }
-                                  
-                                  if (tail.length > 0) {
-                                    // Append trimmed tail (only words not in next final)
-                                    finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
-                                    console.log(`[HostMode] 🎯 Decoder gap recovery: Found overlap at word "${matchedWord}"`);
-                                    console.log(`[HostMode]   Match position in recovery: word ${matchIndex + 1}/${recoveredWords.length}`);
-                                    console.log(`[HostMode]   New words to append (after dedup): "${tail.join(' ')}"`);
-                                    console.log(`[HostMode]   Before: "${bufferedTrimmed}"`);
-                                    console.log(`[HostMode]   After:  "${finalTextToCommit}"`);
-                                    mergedSuccessfully = true;
-                                  } else {
-                                    // Recovery only confirms what we have, or all words are in next final
-                                    console.log(`[HostMode] ✅ Recovery confirms buffered ending (overlap at "${matchedWord}", no new words to append)`);
-                                    mergedSuccessfully = true;
-                                  }
-                                } else {
-                                  // Recovery only confirms what we have
-                                  console.log(`[HostMode] ✅ Recovery confirms buffered ending (overlap at "${matchedWord}", no new words)`);
-                                  mergedSuccessfully = true;
-                                }
+                              // Use merge result
+                              if (mergeResult.merged) {
+                                finalTextToCommit = mergeResult.mergedText;
+                                finalRecoveredText = mergeResult.mergedText; // Store for promise resolution
                               } else {
-                                // Tier 1 failed - no exact overlap found
-                                // Try Tier 2: Fuzzy matching fallback (handles ASR word rewrites)
-                                console.log(`[HostMode] ⚠️ No exact overlap found - trying fuzzy matching...`);
-
-                                // Helper: Calculate Levenshtein distance (edit distance)
-                                function levenshtein(a, b) {
-                                  const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
-                                  for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
-                                  for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
-                                  for (let j = 1; j <= b.length; j++) {
-                                    for (let i = 1; i <= a.length; i++) {
-                                      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
-                                      matrix[j][i] = Math.min(
-                                        matrix[j][i - 1] + 1,       // insertion
-                                        matrix[j - 1][i] + 1,       // deletion
-                                        matrix[j - 1][i - 1] + indicator  // substitution
-                                      );
-                                    }
-                                  }
-                                  return matrix[b.length][a.length];
-                                }
-
-                                // Helper: Find best fuzzy match using Levenshtein distance
-                                function fuzzyAnchor(finalWords, recoveryWords) {
-                                  let best = { score: 0, finalWord: null, recoveryIndex: -1 };
-
-                                  // Check last 6 words from buffered (most likely to overlap)
-                                  const startIdx = Math.max(0, finalWords.length - 6);
-
-                                  for (let i = finalWords.length - 1; i >= startIdx; i--) {
-                                    const fw = finalWords[i].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-
-                                    // Skip very short words (likely articles/prepositions - unreliable anchors)
-                                    if (fw.length < 2) continue;
-
-                                    for (let j = 0; j < recoveryWords.length; j++) {
-                                      const rw = recoveryWords[j].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-
-                                      if (rw.length < 2) continue;
-
-                                      // Calculate similarity: 1 - (distance / max_length)
-                                      const lev = levenshtein(fw, rw);
-                                      const maxLen = Math.max(fw.length, rw.length);
-                                      const similarity = 1 - (lev / maxLen);
-
-                                      if (similarity > best.score) {
-                                        best = {
-                                          score: similarity,
-                                          finalWord: finalWords[i],
-                                          recoveryWord: recoveryWords[j],
-                                          recoveryIndex: j
-                                        };
-                                      }
-                                    }
-                                  }
-
-                                  return best;
-                                }
-
-                                // Try fuzzy matching with conservative threshold
-                                const FUZZY_THRESHOLD = 0.72; // Require 72% similarity
-                                const fuzzyMatch = fuzzyAnchor(bufferedWords, recoveredWords);
-
-                                if (fuzzyMatch.score >= FUZZY_THRESHOLD) {
-                                  // Fuzzy match found - use it as anchor
-                                  let tail = recoveredWords.slice(fuzzyMatch.recoveryIndex + 1);
-
-                                  if (tail.length > 0) {
-                                    // Helper functions (same as above)
-                                    const wordsAreRelated = (word1, word2) => {
-                                      const w1 = word1.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-                                      const w2 = word2.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
-                                      
-                                      if (w1 === w2) return true;
-                                      if (w1.includes(w2) || w2.includes(w1)) {
-                                        const shorter = w1.length < w2.length ? w1 : w2;
-                                        const longer = w1.length >= w2.length ? w1 : w2;
-                                        
-                                        if (longer.startsWith(shorter) && shorter.length >= 3) {
-                                          const remaining = longer.substring(shorter.length);
-                                          if (['ing', 'ed', 'er', 's', 'es', 'ly', 'd'].includes(remaining)) {
-                                            return true;
-                                          }
-                                        }
-                                        
-                                        const lev = levenshteinDistance(w1, w2);
-                                        const maxLen = Math.max(w1.length, w2.length);
-                                        const similarity = 1 - (lev / maxLen);
-                                        if (similarity >= 0.85 && maxLen >= 4) {
-                                          return true;
-                                        }
-                                      }
-                                      return false;
-                                    };
-                                    
-                                    const levenshteinDistance = (a, b) => {
-                                      const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
-                                      for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
-                                      for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
-                                      for (let j = 1; j <= b.length; j++) {
-                                        for (let i = 1; i <= a.length; i++) {
-                                          const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
-                                          matrix[j][i] = Math.min(
-                                            matrix[j][i - 1] + 1,
-                                            matrix[j - 1][i] + 1,
-                                            matrix[j - 1][i - 1] + indicator
-                                          );
-                                        }
-                                      }
-                                      return matrix[b.length][a.length];
-                                    };
-                                    
-                                    const findPhraseOverlap = (tailPhrase, nextText) => {
-                                      for (let phraseLen = Math.min(4, tail.length); phraseLen >= 2; phraseLen--) {
-                                        const tailPhraseWords = tail.slice(-phraseLen).map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
-                                        const tailPhraseStr = tailPhraseWords.join(' ');
-                                        
-                                        const nextWords = nextText.toLowerCase().split(/\s+/).slice(0, 6);
-                                        
-                                        for (let start = 0; start <= Math.min(2, nextWords.length - phraseLen); start++) {
-                                          const nextPhraseWords = nextWords.slice(start, start + phraseLen);
-                                          const nextPhraseStr = nextPhraseWords.map(w => w.replace(/[.,!?;:\-'"()]/g, '')).join(' ');
-                                          
-                                          if (tailPhraseStr === nextPhraseStr) {
-                                            return { matched: true, phraseLen, start };
-                                          }
-                                          
-                                          let allRelated = true;
-                                          for (let i = 0; i < phraseLen; i++) {
-                                            if (!wordsAreRelated(tailPhraseWords[i], nextPhraseWords[i])) {
-                                              allRelated = false;
-                                              break;
-                                            }
-                                          }
-                                          if (allRelated) {
-                                            return { matched: true, phraseLen, start };
-                                          }
-                                        }
-                                      }
-                                      return { matched: false };
-                                    };
-                                    
-                                    // CRITICAL: Check if tail words are already at the START of the next final OR latest partial
-                                    const textsToCheck = [];
-                                    if (nextFinalAfterRecovery && nextFinalAfterRecovery.text) {
-                                      textsToCheck.push({ text: nextFinalAfterRecovery.text, type: 'final' });
-                                    }
-                                    // Also check latest partial text
-                                    syncPartialVariables();
-                                    if (latestPartialText && latestPartialText.length > 0) {
-                                      textsToCheck.push({ text: latestPartialText, type: 'partial' });
-                                    }
-                                    
-                                    if (textsToCheck.length > 0) {
-                                      // First, check for phrase-level overlaps
-                                      let phraseOverlap = null;
-                                      for (const checkItem of textsToCheck) {
-                                        phraseOverlap = findPhraseOverlap(tail, checkItem.text);
-                                        if (phraseOverlap.matched) {
-                                          console.log(`[HostMode] 🔍 Fuzzy: Found phrase overlap: "${tail.slice(-phraseOverlap.phraseLen).join(' ')}" in next ${checkItem.type}`);
-                                          break;
-                                        }
-                                      }
-                                      
-                                      if (phraseOverlap && phraseOverlap.matched) {
-                                        const wordsToKeep = tail.length - phraseOverlap.phraseLen;
-                                        if (wordsToKeep > 0) {
-                                          tail = tail.slice(0, wordsToKeep);
-                                          console.log(`[HostMode] ✂️ Fuzzy: Trimming ${phraseOverlap.phraseLen} overlapping phrase word(s). Keeping: "${tail.join(' ')}"`);
-                                        } else {
-                                          console.log(`[HostMode] ⚠️ Fuzzy: All tail words already in next text (phrase match) - skipping recovery append`);
-                                          tail = [];
-                                        }
-                                      } else {
-                                        // Word-by-word matching with intelligent logic
-                                        let overlapCount = 0;
-                                        let matchedText = null;
-                                        for (let i = tail.length - 1; i >= 0; i--) {
-                                          const tailWordOriginal = tail[i].toLowerCase();
-                                          const tailWordClean = tailWordOriginal.replace(/[.,!?;:\-'"()]/g, '');
-                                          
-                                          for (const checkItem of textsToCheck) {
-                                            const checkWords = checkItem.text.trim().toLowerCase().split(/\s+/);
-                                            const checkWordsSlice = checkWords.slice(0, Math.min(5, checkWords.length));
-                                            const matches = checkWordsSlice.some(nfw => {
-                                              const nfwOriginal = nfw.toLowerCase();
-                                              const nfwClean = nfwOriginal.replace(/[.,!?;:\-'"()]/g, '');
-                                              
-                                              if (tailWordOriginal === nfwOriginal || tailWordClean === nfwClean) {
-                                                return true;
-                                              }
-                                              
-                                              if (wordsAreRelated(tailWordOriginal, nfwOriginal)) {
-                                                return true;
-                                              }
-                                              
-                                              const tailHasHyphen = tailWordOriginal.includes('-');
-                                              const nextHasHyphen = nfwOriginal.includes('-');
-                                              
-                                              if (tailHasHyphen && !nextHasHyphen) {
-                                                const tailParts = tailWordOriginal.split('-');
-                                                const lastPart = tailParts[tailParts.length - 1].replace(/[.,!?;:\-'"()]/g, '');
-                                                if (lastPart === nfwClean && tailWordClean.length > nfwClean.length + 3) {
-                                                  console.log(`[HostMode] 🚫 Fuzzy: Rejecting match: compound word "${tailWordOriginal}" suffix "${lastPart}" vs standalone "${nfwOriginal}"`);
-                                                  return false;
-                                                }
-                                              }
-                                              
-                                              const lengthDiff = Math.abs(tailWordClean.length - nfwClean.length);
-                                              const maxLength = Math.max(tailWordClean.length, nfwClean.length);
-                                              const lengthSimilarity = maxLength > 0 ? 1 - (lengthDiff / maxLength) : 0;
-                                              
-                                              const minLength = Math.min(tailWordClean.length, nfwClean.length);
-                                              if (nfwClean.includes(tailWordClean) || tailWordClean.includes(nfwClean)) {
-                                                if (lengthSimilarity >= 0.7 || minLength >= 5) {
-                                                  return true;
-                                                }
-                                              }
-                                              
-                                              return false;
-                                            });
-                                            
-                                            if (matches) {
-                                              overlapCount = tail.length - i;
-                                              matchedText = checkItem;
-                                              console.log(`[HostMode] 🔍 Fuzzy match: tail word "${tail[i]}" matches next ${checkItem.type} start: "${checkItem.text.substring(0, 40)}..."`);
-                                              break;
-                                            }
-                                          }
-                                          
-                                          if (overlapCount > 0) break;
-                                        }
-                                        
-                                        if (overlapCount > 0) {
-                                          const wordsToKeep = tail.length - overlapCount;
-                                          if (wordsToKeep > 0) {
-                                            tail = tail.slice(0, wordsToKeep);
-                                            console.log(`[HostMode] ✂️ Trimming ${overlapCount} overlapping word(s) from fuzzy tail. Keeping: "${tail.join(' ')}"`);
-                                          } else {
-                                            console.log(`[HostMode] ⚠️ All fuzzy tail words already in next ${matchedText.type} - skipping recovery append`);
-                                            tail = [];
-                                          }
-                                        }
-                                      }
-                                    }
-                                    
-                                    if (tail.length > 0) {
-                                      finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
-                                      console.log(`[HostMode] 🎯 Fuzzy match found: "${fuzzyMatch.finalWord}" ≈ "${fuzzyMatch.recoveryWord}" (${(fuzzyMatch.score * 100).toFixed(0)}% similar)`);
-                                      console.log(`[HostMode]   Match position in recovery: word ${fuzzyMatch.recoveryIndex + 1}/${recoveredWords.length}`);
-                                      console.log(`[HostMode]   New words to append (after dedup): "${tail.join(' ')}"`);
-                                      console.log(`[HostMode]   Before: "${bufferedTrimmed}"`);
-                                      console.log(`[HostMode]   After:  "${finalTextToCommit}"`);
-                                      mergedSuccessfully = true;
-                                    } else {
-                                      console.log(`[HostMode] ✅ Fuzzy match confirms buffered ending (no new words to append)`);
-                                      mergedSuccessfully = true;
-                                    }
-                                  } else {
-                                    console.log(`[HostMode] ✅ Fuzzy match confirms buffered ending (no new words)`);
-                                    mergedSuccessfully = true;
-                                  }
-                                } else {
-                                  // Tier 3: No overlap at all (exact or fuzzy) - append entire recovery
-                                  // This prevents word loss when recovery captures completely new content
-                                  console.log(`[HostMode] ⚠️ No fuzzy match above threshold (best: ${(fuzzyMatch.score * 100).toFixed(0)}% < ${FUZZY_THRESHOLD * 100}%)`);
-                                  console.log(`[HostMode] 📎 Appending entire recovery to prevent word loss`);
-                                  finalTextToCommit = bufferedTrimmed + ' ' + recoveredTrimmed;
-                                  console.log(`[HostMode]   Before: "${bufferedTrimmed}"`);
-                                  console.log(`[HostMode]   After:  "${finalTextToCommit}"`);
-                                  mergedSuccessfully = true;
-                                }
-                              }
-
-                              // Normalize spacing
-                              if (mergedSuccessfully) {
-                                finalTextToCommit = finalTextToCommit.trim();
-                              }
-                            }
-
-                            // Resolve recovery promise with recovered text (inside try block where recoveryResolve is in scope)
-                            const originalBufferedText = finalWithPartials;
-                            if (finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length) {
-                              console.log(`[HostMode] ✅ Resolving recovery promise with recovered text: "${finalTextToCommit.substring(0, 80)}..."`);
-                              if (recoveryResolve) {
-                                recoveryResolve(finalTextToCommit);
+                                // Fallback to buffered text if merge failed
+                                finalTextToCommit = finalWithPartials;
+                                console.log(`[HostMode] ⚠️ Merge failed: ${mergeResult.reason}`);
                               }
                             } else {
-                              console.log(`[HostMode] ⚠️ No new text recovered, resolving recovery promise with empty`);
-                              if (recoveryResolve) {
-                                recoveryResolve('');
+                              console.log(`[HostMode] ⚠️ Recovery stream returned no text`);
+                            }
+
+                            // CRITICAL: If recovery found additional words, commit them as an update
+                            // The forced final was already committed immediately when detected
+                            // Recovery just adds the missing words we found
+                            const originalBufferedText = finalWithPartials;
+                            if (finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length) {
+                              // Check if buffer still exists before committing recovery update
+                              syncForcedFinalBuffer();
+                              if (forcedCommitEngine.hasForcedFinalBuffer()) {
+                                const additionalWords = finalTextToCommit.substring(originalBufferedText.length).trim();
+                                console.log(`[HostMode] ✅ Recovery found additional words: "${additionalWords}"`);
+                                console.log(`[HostMode] 📊 Committing recovery update: "${finalTextToCommit.substring(0, 80)}..."`);
+                                
+                                // Mark as committed by recovery BEFORE clearing buffer
+                                syncForcedFinalBuffer();
+                                if (forcedFinalBuffer) {
+                                  forcedFinalBuffer.committedByRecovery = true;
+                                }
+                                
+                                // Commit the full recovered text (forced final + recovery words)
+                                processFinalText(finalTextToCommit, { forceFinal: true });
+                                forcedCommitEngine.clearForcedFinalBuffer();
+                                syncForcedFinalBuffer();
+                                
+                                // Reset recovery tracking after commit
+                                recoveryStartTime = 0;
+                                nextFinalAfterRecovery = null;
+                                
+                                // Mark that we've already committed, so timeout callback can skip
+                                console.log(`[HostMode] ✅ Recovery commit completed - timeout callback will skip`);
+                              } else {
+                                console.log(`[HostMode] ⚠️ Buffer already cleared - recovery found words but cannot commit update`);
                               }
+                            } else {
+                              console.log(`[HostMode] ⚠️ No new text recovered - will commit forced final with grammar correction via timeout`);
+                              // Don't clear buffer - let timeout callback commit the forced final (with grammar correction)
+                              // The timeout will handle committing the original forced final text
+                            }
+
+                            // CRITICAL: Resolve recovery promise with recovered text (or empty if nothing found)
+                            // This allows other code (like new FINALs) to wait for recovery to complete
+                            if (recoveryResolve) {
+                              console.log(`[HostMode] ✅ Resolving recovery promise with recovered text: "${finalRecoveredText || ''}"`);
+                              recoveryResolve(finalRecoveredText || '');
                             }
 
                           } catch (error) {
@@ -2367,9 +2040,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.error(`[HostMode] ❌ Error stack:`, error.stack);
                             console.error(`[HostMode] ❌ Full error object:`, error);
                             
-                            // Resolve recovery promise with empty on error
-                            // CRITICAL: Check if recoveryResolve exists (it should be declared above)
-                            if (typeof recoveryResolve !== 'undefined' && recoveryResolve) {
+                            // CRITICAL: Resolve recovery promise even on error (with empty string)
+                            // This prevents other code from hanging while waiting for recovery
+                            if (recoveryResolve) {
+                              console.log(`[HostMode] ⚠️ Resolving recovery promise with empty text due to error`);
                               recoveryResolve('');
                             } else {
                               console.warn('[HostMode] ⚠️ recoveryResolve not available in catch block - this should not happen');
@@ -2377,24 +2051,61 @@ export async function handleHostConnection(clientWs, sessionId) {
                           } finally {
                             // Mark recovery as complete
                             syncForcedFinalBuffer();
-                            if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress) {
+                            if (forcedCommitEngine.hasForcedFinalBuffer()) {
                               forcedCommitEngine.setRecoveryInProgress(false, null);
                               syncForcedFinalBuffer();
                             }
                           }
+                        } else {
+                          // No recovery audio available
+                          console.log(`[HostMode] ⚠️ No recovery audio available (${recoveryAudio.length} bytes) - committing without recovery`);
                         }
-                        // CRITICAL: Double-check buffer still exists (might have been committed by new partial)
+                        
+                        // CRITICAL: Check if recovery already committed before committing from timeout
                         syncForcedFinalBuffer();
-                        if (!forcedCommitEngine.hasForcedFinalBuffer()) {
-                          console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new partial) - skipping recovery commit');
+                        const bufferStillExists = forcedCommitEngine.hasForcedFinalBuffer();
+                        const wasCommittedByRecovery = forcedFinalBuffer?.committedByRecovery === true;
+                        
+                        if (wasCommittedByRecovery) {
+                          console.log('[HostMode] ⏭️ Skipping timeout commit - recovery already committed this forced final');
+                          // Clear buffer if it still exists
+                          if (bufferStillExists) {
+                            forcedCommitEngine.clearForcedFinalBuffer();
+                            syncForcedFinalBuffer();
+                          }
+                          return; // Skip commit - recovery already handled it
+                        }
+                        
+                        // Use finalTextToCommit (which may include recovery words) or fallback to bufferedText
+                        // CRITICAL: bufferedText is captured in closure, so it's always available even if buffer is cleared
+                        const textToCommit = finalTextToCommit || bufferedText;
+                        
+                        if (!textToCommit || textToCommit.length === 0) {
+                          console.error('[HostMode] ❌ No text to commit - forced final text is empty!');
+                          // Clear buffer if it still exists
+                          if (bufferStillExists) {
+                            forcedCommitEngine.clearForcedFinalBuffer();
+                            syncForcedFinalBuffer();
+                          }
                           return;
                         }
                         
-                        console.log(`[HostMode] 📝 Committing forced final: "${finalTextToCommit.substring(0, 80)}..." (${finalTextToCommit.length} chars)`);
-                        processFinalText(finalTextToCommit, { forceFinal: true });
-                        // PHASE 8: Clear forced final buffer using engine
-                        forcedCommitEngine.clearForcedFinalBuffer();
-                        syncForcedFinalBuffer();
+                        if (!bufferStillExists) {
+                          console.log('[HostMode] ⚠️ Forced final buffer already cleared - but committing forced final to ensure it is not lost');
+                          // Buffer was cleared (likely by extending partial or new FINAL), but we should still commit
+                          // the forced final text to ensure it's not lost (recovery didn't commit it, so timeout must)
+                        }
+                        
+                        // Commit the forced final (with grammar correction via processFinalText)
+                        console.log(`[HostMode] 📝 Committing forced final from timeout: "${textToCommit.substring(0, 80)}..." (${textToCommit.length} chars)`);
+                        console.log(`[HostMode] 📊 Final text to commit: "${textToCommit}"`);
+                        processFinalText(textToCommit, { forceFinal: true });
+                        
+                        // Clear buffer if it still exists
+                        if (bufferStillExists) {
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
+                        }
                         
                         // Reset recovery tracking after commit
                         recoveryStartTime = 0;
@@ -2420,22 +2131,104 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // PHASE 8: Check for forced final buffer using engine
                 syncForcedFinalBuffer();
                 if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                  console.log('[HostMode] 🔁 Merging buffered forced final with new FINAL transcript');
-                  forcedCommitEngine.clearForcedFinalBufferTimeout();
                   const buffer = forcedCommitEngine.getForcedFinalBuffer();
-                  const merged = partialTracker.mergeWithOverlap(buffer.text, transcriptText);
-                  if (merged) {
-                    transcriptText = merged;
-                  } else {
-                    // Merge failed - use the new FINAL transcript as-is
-                    console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
-                  }
-                  forcedCommitEngine.clearForcedFinalBuffer();
-                  syncForcedFinalBuffer();
                   
-                  // Reset recovery tracking since recovery was cancelled by new final
-                  recoveryStartTime = 0;
-                  nextFinalAfterRecovery = null;
+                  // CRITICAL: If recovery is in progress, wait for it to complete first
+                  // This ensures forced finals are committed in chronological order
+                  if (buffer.recoveryInProgress && buffer.recoveryPromise) {
+                    console.log('[HostMode] ⏳ Forced final recovery in progress - waiting for completion before processing new FINAL (maintaining order)...');
+                    try {
+                      const recoveredText = await buffer.recoveryPromise;
+                      if (recoveredText && recoveredText.length > 0) {
+                        console.log(`[HostMode] ✅ Forced final recovery completed with text: "${recoveredText.substring(0, 60)}..."`);
+                        // Recovery found words - commit the forced final first
+                        console.log('[HostMode] 📝 Committing forced final first (maintaining chronological order)');
+                        
+                        // Mark as committed by recovery BEFORE clearing buffer
+                        syncForcedFinalBuffer();
+                        if (forcedFinalBuffer) {
+                          forcedFinalBuffer.committedByRecovery = true;
+                        }
+                        
+                        processFinalText(recoveredText, { forceFinal: true });
+                        forcedCommitEngine.clearForcedFinalBuffer();
+                        syncForcedFinalBuffer();
+                        
+                        // Reset recovery tracking
+                        recoveryStartTime = 0;
+                        nextFinalAfterRecovery = null;
+                        
+                        // Now process the new FINAL (which arrived after the forced final)
+                        console.log('[HostMode] 📝 Now processing new FINAL that arrived after forced final');
+                        // Continue with transcriptText processing below
+                      } else {
+                        console.log('[HostMode] ⚠️ Forced final recovery completed but no text was recovered');
+                        // Recovery found nothing - need to commit the forced final first, then process new FINAL
+                        console.log('[HostMode] 📝 Committing forced final first (recovery found nothing, but forced final must be committed)');
+                        
+                        // CRITICAL: Mark as committed BEFORE clearing buffer so timeout callback can skip
+                        // Even though recovery found nothing, we're committing it here due to new FINAL arriving
+                        syncForcedFinalBuffer();
+                        if (forcedFinalBuffer) {
+                          forcedFinalBuffer.committedByRecovery = true; // Mark as committed to prevent timeout from also committing
+                        }
+                        
+                        // Commit the forced final (from buffer, since recovery found nothing)
+                        const forcedFinalText = buffer.text;
+                        processFinalText(forcedFinalText, { forceFinal: true });
+                        
+                        // Now merge with new FINAL and process it
+                        forcedCommitEngine.clearForcedFinalBufferTimeout();
+                        const merged = partialTracker.mergeWithOverlap(forcedFinalText, transcriptText);
+                        if (merged) {
+                          transcriptText = merged;
+                        } else {
+                          console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
+                        }
+                        forcedCommitEngine.clearForcedFinalBuffer();
+                        syncForcedFinalBuffer();
+                        
+                        // Reset recovery tracking
+                        recoveryStartTime = 0;
+                        nextFinalAfterRecovery = null;
+                        
+                        // Continue processing the new FINAL below
+                      }
+                    } catch (error) {
+                      console.error('[HostMode] ❌ Error waiting for forced final recovery:', error.message);
+                      // On error, proceed with merge as before
+                      forcedCommitEngine.clearForcedFinalBufferTimeout();
+                      const merged = partialTracker.mergeWithOverlap(buffer.text, transcriptText);
+                      if (merged) {
+                        transcriptText = merged;
+                      } else {
+                        console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
+                      }
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
+                      
+                      // Reset recovery tracking
+                      recoveryStartTime = 0;
+                      nextFinalAfterRecovery = null;
+                    }
+                  } else {
+                    // No recovery in progress - merge immediately as before
+                    console.log('[HostMode] 🔁 Merging buffered forced final with new FINAL transcript');
+                    forcedCommitEngine.clearForcedFinalBufferTimeout();
+                    const merged = partialTracker.mergeWithOverlap(buffer.text, transcriptText);
+                    if (merged) {
+                      transcriptText = merged;
+                    } else {
+                      // Merge failed - use the new FINAL transcript as-is
+                      console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
+                    }
+                    forcedCommitEngine.clearForcedFinalBuffer();
+                    syncForcedFinalBuffer();
+                    
+                    // Reset recovery tracking since recovery was cancelled by new final
+                    recoveryStartTime = 0;
+                    nextFinalAfterRecovery = null;
+                  }
                 }
                 
                 // CRITICAL: Null check after merge operations
@@ -3047,6 +2840,28 @@ export async function handleHostConnection(clientWs, sessionId) {
           
         case 'audio_end':
           console.log('[HostMode] Audio stream ended');
+          
+          // CRITICAL: If there's a forced final buffer waiting for recovery, commit it immediately
+          // The audio buffer will be empty, so recovery won't work anyway
+          syncForcedFinalBuffer();
+          if (forcedCommitEngine.hasForcedFinalBuffer()) {
+            const buffer = forcedCommitEngine.getForcedFinalBuffer();
+            console.log('[HostMode] ⚠️ Audio stream ended with forced final buffer - committing immediately (no audio to recover)');
+            
+            // Cancel recovery timeout since there's no audio to recover
+            forcedCommitEngine.clearForcedFinalBufferTimeout();
+            
+            // Commit the forced final immediately
+            const forcedFinalText = buffer.text;
+            processFinalText(forcedFinalText, { forceFinal: true });
+            
+            // Clear the buffer
+            forcedCommitEngine.clearForcedFinalBuffer();
+            syncForcedFinalBuffer();
+            
+            console.log('[HostMode] ✅ Forced final committed due to audio stream end');
+          }
+          
           if (speechStream) {
             await speechStream.endAudio();
           }
@@ -3066,6 +2881,28 @@ export async function handleHostConnection(clientWs, sessionId) {
   // Handle client disconnect
   clientWs.on('close', () => {
     console.log(`[HostMode] Host disconnected from session ${currentSessionId}`);
+    
+    // CRITICAL: If there's a forced final buffer waiting for recovery, commit it immediately
+    // The audio buffer will be cleared, so recovery won't work anyway
+    syncForcedFinalBuffer();
+    if (forcedCommitEngine.hasForcedFinalBuffer()) {
+      const buffer = forcedCommitEngine.getForcedFinalBuffer();
+      console.log('[HostMode] ⚠️ Client disconnected with forced final buffer - committing immediately (no audio to recover)');
+      
+      // Cancel recovery timeout since there's no audio to recover
+      forcedCommitEngine.clearForcedFinalBufferTimeout();
+      
+      // Commit the forced final immediately
+      const forcedFinalText = buffer.text;
+      processFinalText(forcedFinalText, { forceFinal: true });
+      
+      // Clear the buffer
+      forcedCommitEngine.clearForcedFinalBuffer();
+      syncForcedFinalBuffer();
+      
+      console.log('[HostMode] ✅ Forced final committed due to client disconnect');
+    }
+    
     if (speechStream) {
       speechStream.destroy();
       speechStream = null;
