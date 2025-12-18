@@ -92,6 +92,10 @@ export async function handleHostConnection(clientWs, sessionId) {
   let lastAudioTimestamp = null;
   let silenceStartTime = null;
   let realtimeTranslationCooldownUntil = 0;
+  
+  // Track next final that arrives after recovery starts (to prevent word duplication)
+  let nextFinalAfterRecovery = null;
+  let recoveryStartTime = 0;
 
   // Helper: Measure RTT from client timestamp
   const measureRTT = (clientTimestamp) => {
@@ -309,10 +313,41 @@ export async function handleHostConnection(clientWs, sessionId) {
               let lastSentFinalTime = 0;
               const FINAL_CONTINUATION_WINDOW_MS = 3000;
               
+              // Flag to prevent concurrent final processing
+              let isProcessingFinal = false;
+              
               // Extract final processing into separate async function (using solo mode logic, adapted for broadcasting)
               const processFinalText = (textToProcess, options = {}) => {
                 (async () => {
                   try {
+                    // CRITICAL: Prevent concurrent final processing
+                    if (isProcessingFinal) {
+                      console.log(`[HostMode] ⚠️ Final already being processed, skipping: "${textToProcess.substring(0, 60)}..."`);
+                      return; // Skip if already processing a final
+                    }
+                    
+                    // Set flag to prevent concurrent processing
+                    isProcessingFinal = true;
+                    
+                    // CRITICAL: Duplicate prevention - skip if same text was just sent
+                    const trimmedText = textToProcess.trim();
+                    if (lastSentFinalText && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
+                      const lastSentTrimmed = lastSentFinalText.trim();
+                      // Normalize for comparison (case-insensitive, normalize whitespace)
+                      const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+                      const lastSentNormalized = lastSentTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                      
+                      // Check if text is essentially the same (exact match or very similar)
+                      if (textNormalized === lastSentNormalized || 
+                          (textNormalized.length > 10 && lastSentNormalized.length > 10 && 
+                           (textNormalized.includes(lastSentNormalized) || lastSentNormalized.includes(textNormalized)) &&
+                           Math.abs(textNormalized.length - lastSentNormalized.length) < 5)) {
+                        console.log(`[HostMode] ⚠️ Duplicate final detected, skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentTrimmed.substring(0, 60)}...")`);
+                        isProcessingFinal = false; // Clear flag before returning
+                        return; // Skip processing duplicate
+                      }
+                    }
+                    
                     const isTranscriptionOnly = false; // Host mode always translates
                     
                     // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
@@ -320,13 +355,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                     try {
                       // CRITICAL FIX: Get grammar correction FIRST (English only), then translate the CORRECTED text
                       // This ensures the translation matches the corrected English text
+                      // Use Promise.race to prevent grammar correction from blocking too long
                       if (currentSourceLang === 'en') {
                         try {
-                          correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                          // Set a timeout for grammar correction (max 2 seconds) to prevent blocking
+                          const grammarTimeout = new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Grammar correction timeout')), 2000)
+                          );
+                          
+                          correctedText = await Promise.race([
+                            grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY),
+                            grammarTimeout
+                          ]);
+                          
                           rememberGrammarCorrection(textToProcess, correctedText);
                         } catch (grammarError) {
-                          console.warn(`[HostMode] Grammar correction failed, using original text:`, grammarError.message);
-                          correctedText = textToProcess; // Fallback to original on error
+                          if (grammarError.message === 'Grammar correction timeout') {
+                            console.warn(`[HostMode] Grammar correction timed out after 2s, using original text`);
+                          } else {
+                            console.warn(`[HostMode] Grammar correction failed, using original text:`, grammarError.message);
+                          }
+                          correctedText = textToProcess; // Fallback to original on error/timeout
                         }
                       } else {
                         // Non-English source - skip grammar correction
@@ -407,27 +456,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                       const hasCorrection = correctedText !== textToProcess;
 
                       // Log FINAL with correction details
-                      console.log(`[HostMode] 📤 Sending FINAL (coupled for history integrity):`);
+                      console.log(`[HostMode] 📤 Processing FINAL translations for listeners:`);
                       console.log(`[HostMode]   originalText: "${textToProcess}"`);
                       console.log(`[HostMode]   correctedText: "${correctedText}"`);
                       console.log(`[HostMode]   translations: ${Object.keys(translations).length} language(s)`);
                       console.log(`[HostMode]   hasCorrection: ${hasCorrection}`);
-
-                      // Send to host first
-                      if (clientWs && clientWs.readyState === WebSocket.OPEN) {
-                        broadcastWithSequence({
-                          type: 'translation',
-                          originalText: textToProcess,
-                          correctedText: correctedText,
-                          translatedText: correctedText, // Host sees corrected source text
-                          sourceLang: currentSourceLang,
-                          targetLang: currentSourceLang,
-                          timestamp: Date.now(),
-                          hasTranslation: false,
-                          hasCorrection: hasCorrection,
-                          forceFinal: !!options.forceFinal
-                        }, false);
-                      }
 
                       // Broadcast to each language group
                       for (const targetLang of targetLanguages) {
@@ -489,7 +522,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       
                       // CRITICAL: Update last sent FINAL tracking after sending
-                      lastSentFinalText = textToProcess;
+                      lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
                       lastSentFinalTime = Date.now();
                     } catch (error) {
                       console.error(`[HostMode] Final processing error:`, error);
@@ -513,9 +546,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                         lastSentFinalText = textToProcess;
                         lastSentFinalTime = Date.now();
                       }
+                    } finally {
+                      // CRITICAL: Always clear the processing flag when done
+                      isProcessingFinal = false;
                     }
                   } catch (error) {
                     console.error(`[HostMode] Error processing final:`, error);
+                    // CRITICAL: Clear flag on outer error too
+                    isProcessingFinal = false;
                   }
                 })();
               };
@@ -1485,6 +1523,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const bufferedText = transcriptText;
                     const forcedFinalTimestamp = Date.now();
                     
+                    // Track recovery start time to capture next final for deduplication
+                    recoveryStartTime = Date.now();
+                    nextFinalAfterRecovery = null; // Reset
+                    
                     // PHASE 8: Create forced final buffer using engine
                     forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp);
                     syncForcedFinalBuffer();
@@ -1507,6 +1549,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode] 🔧 DEBUG: Phase 1 timeout callback FIRED - recovery code will execute`);
 
                       // Phase 1: Wait 1200ms for late partials to arrive AND for POST-final audio to accumulate
+                      // CRITICAL: Declare recoveryResolve at the start of setTimeout callback so it's accessible in catch
+                      let recoveryResolve = null;
+                      
                       setTimeout(async () => {
                         console.warn('[HostMode] ⏰ Phase 2: Late partial window complete - capturing PRE+POST-final audio');
                         
@@ -1600,6 +1645,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                         // ⭐ NOW: Send the PRE+POST-final audio to recovery stream
                         // This audio includes the decoder gap at T-200ms where "spent" exists!
+                        
                         if (recoveryAudio.length > 0) {
                           console.log(`[HostMode] 🎵 Starting decoder gap recovery with PRE+POST-final audio: ${recoveryAudio.length} bytes`);
 
@@ -1642,7 +1688,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.log(`[HostMode] ✅ Additional 100ms wait complete`);
 
                             // CRITICAL: Create recovery promise NOW (after stream is ready) so new segments can wait for it
-                            let recoveryResolve = null;
+                            // recoveryResolve is already declared at the start of setTimeout callback
                             const recoveryPromise = new Promise((resolve) => {
                               recoveryResolve = resolve;
                             });
@@ -1786,17 +1832,236 @@ export async function handleHostConnection(clientWs, sessionId) {
                               // Step 2: Merge based on overlap
                               if (matchIndex !== -1) {
                                 // Found overlap - append only words AFTER the match
-                                const tail = recoveredWords.slice(matchIndex + 1);
+                                let tail = recoveredWords.slice(matchIndex + 1);
 
                                 if (tail.length > 0) {
-                                  // Append new words to buffered text
-                                  finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
-                                  console.log(`[HostMode] 🎯 Decoder gap recovery: Found overlap at word "${matchedWord}"`);
-                                  console.log(`[HostMode]   Match position in recovery: word ${matchIndex + 1}/${recoveredWords.length}`);
-                                  console.log(`[HostMode]   New words to append: "${tail.join(' ')}"`);
-                                  console.log(`[HostMode]   Before: "${bufferedTrimmed}"`);
-                                  console.log(`[HostMode]   After:  "${finalTextToCommit}"`);
-                                  mergedSuccessfully = true;
+                                  // Helper functions for intelligent matching
+                                  const wordsAreRelated = (word1, word2) => {
+                                    const w1 = word1.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+                                    const w2 = word2.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+                                    
+                                    if (w1 === w2) return true;
+                                    if (w1.includes(w2) || w2.includes(w1)) {
+                                      // Check if one is a variation of the other (gathered/gather, week/weed)
+                                      const shorter = w1.length < w2.length ? w1 : w2;
+                                      const longer = w1.length >= w2.length ? w1 : w2;
+                                      
+                                      // Stem matching: check if longer word starts with shorter (common suffixes)
+                                      if (longer.startsWith(shorter) && shorter.length >= 3) {
+                                        const remaining = longer.substring(shorter.length);
+                                        // Common suffixes: ing, ed, er, s, es, ly, d
+                                        if (['ing', 'ed', 'er', 's', 'es', 'ly', 'd'].includes(remaining)) {
+                                          return true;
+                                        }
+                                      }
+                                      
+                                      // Check for transcription errors using Levenshtein distance
+                                      const lev = levenshteinDistance(w1, w2);
+                                      const maxLen = Math.max(w1.length, w2.length);
+                                      const similarity = 1 - (lev / maxLen);
+                                      // If words are very similar (>= 85%), likely transcription error
+                                      if (similarity >= 0.85 && maxLen >= 4) {
+                                        return true;
+                                      }
+                                    }
+                                    return false;
+                                  };
+                                  
+                                  const levenshteinDistance = (a, b) => {
+                                    const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+                                    for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+                                    for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+                                    for (let j = 1; j <= b.length; j++) {
+                                      for (let i = 1; i <= a.length; i++) {
+                                        const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+                                        matrix[j][i] = Math.min(
+                                          matrix[j][i - 1] + 1,
+                                          matrix[j - 1][i] + 1,
+                                          matrix[j - 1][i - 1] + indicator
+                                        );
+                                      }
+                                    }
+                                    return matrix[b.length][a.length];
+                                  };
+                                  
+                                  // Check for phrase-level overlaps (handles filler text)
+                                  // tailPhrase is an array of words, not a string
+                                  const findPhraseOverlap = (tailPhraseArray, nextText) => {
+                                    // Check if tail phrase appears in next text (even with filler)
+                                    // Look for 2-4 word phrases from tail at start of next text
+                                    for (let phraseLen = Math.min(4, tailPhraseArray.length); phraseLen >= 2; phraseLen--) {
+                                      const tailPhraseWords = tailPhraseArray.slice(-phraseLen).map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+                                      const tailPhraseStr = tailPhraseWords.join(' ');
+                                      
+                                      // Check first 6 words of next text for phrase match
+                                      const nextWords = nextText.toLowerCase().split(/\s+/).slice(0, 6);
+                                      
+                                      // Try to find the phrase in next text (allowing for 1-2 filler words)
+                                      for (let start = 0; start <= Math.min(2, nextWords.length - phraseLen); start++) {
+                                        const nextPhraseWords = nextWords.slice(start, start + phraseLen);
+                                        const nextPhraseStr = nextPhraseWords.map(w => w.replace(/[.,!?;:\-'"()]/g, '')).join(' ');
+                                        
+                                        // Check if phrases match (exact or word-by-word related)
+                                        if (tailPhraseStr === nextPhraseStr) {
+                                          return { matched: true, phraseLen, start };
+                                        }
+                                        
+                                        // Check if words are related (handles variations)
+                                        let allRelated = true;
+                                        for (let i = 0; i < phraseLen; i++) {
+                                          if (!wordsAreRelated(tailPhraseWords[i], nextPhraseWords[i])) {
+                                            allRelated = false;
+                                            break;
+                                          }
+                                        }
+                                        if (allRelated) {
+                                          return { matched: true, phraseLen, start };
+                                        }
+                                      }
+                                    }
+                                    return { matched: false };
+                                  };
+                                  
+                                  // CRITICAL: Check if tail words are already at the START of the next final OR latest partial
+                                  // Check both next final and latest partial (partials arrive before finals)
+                                  const textsToCheck = [];
+                                  if (nextFinalAfterRecovery && nextFinalAfterRecovery.text) {
+                                    textsToCheck.push({ text: nextFinalAfterRecovery.text, type: 'final' });
+                                  }
+                                  // Also check latest partial text (it may have arrived after recovery started)
+                                  syncPartialVariables();
+                                  if (latestPartialText && latestPartialText.length > 0) {
+                                    textsToCheck.push({ text: latestPartialText, type: 'partial' });
+                                  }
+                                  
+                                  if (textsToCheck.length > 0) {
+                                    // First, check for phrase-level overlaps (handles filler text)
+                                    let phraseOverlap = null;
+                                    for (const checkItem of textsToCheck) {
+                                      phraseOverlap = findPhraseOverlap(tail, checkItem.text);
+                                      if (phraseOverlap.matched) {
+                                        console.log(`[HostMode] 🔍 Found phrase overlap: "${tail.slice(-phraseOverlap.phraseLen).join(' ')}" in next ${checkItem.type}`);
+                                        break;
+                                      }
+                                    }
+                                    
+                                    if (phraseOverlap && phraseOverlap.matched) {
+                                      // Phrase overlap found - trim the overlapping phrase
+                                      const wordsToKeep = tail.length - phraseOverlap.phraseLen;
+                                      if (wordsToKeep > 0) {
+                                        tail = tail.slice(0, wordsToKeep);
+                                        console.log(`[HostMode] ✂️ Trimming ${phraseOverlap.phraseLen} overlapping phrase word(s) from tail. Keeping: "${tail.join(' ')}"`);
+                                      } else {
+                                        console.log(`[HostMode] ⚠️ All tail words already in next text (phrase match) - skipping recovery append`);
+                                        tail = [];
+                                      }
+                                    } else {
+                                      // No phrase overlap - check word-by-word with intelligent matching
+                                      let overlapCount = 0;
+                                      let matchedText = null;
+                                      // Check from the END of tail backwards (last word of tail vs first word of next text)
+                                      // CRITICAL: Check original words first (before normalization) to detect hyphens
+                                      for (let i = tail.length - 1; i >= 0; i--) {
+                                        const tailWordOriginal = tail[i].toLowerCase();
+                                        const tailWordClean = tailWordOriginal.replace(/[.,!?;:\-'"()]/g, '');
+                                        
+                                        // Check each text (final or partial)
+                                        for (const checkItem of textsToCheck) {
+                                          const checkWords = checkItem.text.trim().toLowerCase().split(/\s+/);
+                                          // Check if this tail word matches any of the first few words
+                                          const checkWordsSlice = checkWords.slice(0, Math.min(5, checkWords.length)); // Check first 5 words (increased for filler text)
+                                          const matches = checkWordsSlice.some(nfw => {
+                                            const nfwOriginal = nfw.toLowerCase();
+                                            const nfwClean = nfwOriginal.replace(/[.,!?;:\-'"()]/g, '');
+                                            
+                                            // CRITICAL: Improved matching logic to handle hyphens, compound words, and word variations
+                                            // 1. Exact match (best case) - check both original and cleaned
+                                            if (tailWordOriginal === nfwOriginal || tailWordClean === nfwClean) {
+                                              return true;
+                                            }
+                                            
+                                            // 2. Check if words are related (handles variations like gathered/gather, week/weed)
+                                            if (wordsAreRelated(tailWordOriginal, nfwOriginal)) {
+                                              return true;
+                                            }
+                                            
+                                            // 3. Check if tail word is a compound word (contains hyphen)
+                                            const tailHasHyphen = tailWordOriginal.includes('-');
+                                            const nextHasHyphen = nfwOriginal.includes('-');
+                                            
+                                            // 4. If tail is compound and next is not, check if next is just the second part
+                                            // Example: tail="self-centered", next="centered" - DON'T match (they're different)
+                                            if (tailHasHyphen && !nextHasHyphen) {
+                                              const tailParts = tailWordOriginal.split('-');
+                                              const lastPart = tailParts[tailParts.length - 1].replace(/[.,!?;:\-'"()]/g, '');
+                                              // Only match if next word is exactly the last part AND tail word is significantly longer
+                                              // This prevents matching "centered" in "self-centered" with standalone "centered"
+                                              if (lastPart === nfwClean && tailWordClean.length > nfwClean.length + 3) {
+                                                // This is a compound word where next is just the suffix - likely different words
+                                                console.log(`[HostMode] 🚫 Rejecting match: compound word "${tailWordOriginal}" suffix "${lastPart}" vs standalone "${nfwOriginal}"`);
+                                                return false;
+                                              }
+                                            }
+                                            
+                                            // 5. For substring matches, require words to be similar in length (within 30% difference)
+                                            // This prevents matching parts of compound words
+                                            const lengthDiff = Math.abs(tailWordClean.length - nfwClean.length);
+                                            const maxLength = Math.max(tailWordClean.length, nfwClean.length);
+                                            const lengthSimilarity = maxLength > 0 ? 1 - (lengthDiff / maxLength) : 0;
+                                            
+                                            // 6. Only allow substring match if:
+                                            //    - Words are similar in length (within 30%)
+                                            //    - OR the shorter word is at least 5 characters (to avoid matching short words in compounds)
+                                            const minLength = Math.min(tailWordClean.length, nfwClean.length);
+                                            if (nfwClean.includes(tailWordClean) || tailWordClean.includes(nfwClean)) {
+                                              if (lengthSimilarity >= 0.7 || minLength >= 5) {
+                                                return true;
+                                              }
+                                            }
+                                            
+                                            return false;
+                                          });
+                                          
+                                          if (matches) {
+                                            overlapCount = tail.length - i; // Count from this position to end
+                                            matchedText = checkItem;
+                                            console.log(`[HostMode] 🔍 Found overlap: tail word "${tail[i]}" matches next ${checkItem.type} start: "${checkItem.text.substring(0, 40)}..."`);
+                                            break;
+                                          }
+                                        }
+                                        
+                                        if (overlapCount > 0) break;
+                                      }
+                                      
+                                      if (overlapCount > 0) {
+                                        // Trim overlapping words from tail
+                                        const wordsToKeep = tail.length - overlapCount;
+                                        if (wordsToKeep > 0) {
+                                          tail = tail.slice(0, wordsToKeep);
+                                          console.log(`[HostMode] ✂️ Trimming ${overlapCount} overlapping word(s) from tail. Keeping: "${tail.join(' ')}"`);
+                                        } else {
+                                          // All tail words are in next final/partial - skip recovery
+                                          console.log(`[HostMode] ⚠️ All recovered tail words already in next ${matchedText.type} - skipping recovery append`);
+                                          tail = []; // Don't append anything
+                                        }
+                                      }
+                                    }
+                                  }
+                                  
+                                  if (tail.length > 0) {
+                                    // Append trimmed tail (only words not in next final)
+                                    finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
+                                    console.log(`[HostMode] 🎯 Decoder gap recovery: Found overlap at word "${matchedWord}"`);
+                                    console.log(`[HostMode]   Match position in recovery: word ${matchIndex + 1}/${recoveredWords.length}`);
+                                    console.log(`[HostMode]   New words to append (after dedup): "${tail.join(' ')}"`);
+                                    console.log(`[HostMode]   Before: "${bufferedTrimmed}"`);
+                                    console.log(`[HostMode]   After:  "${finalTextToCommit}"`);
+                                    mergedSuccessfully = true;
+                                  } else {
+                                    // Recovery only confirms what we have, or all words are in next final
+                                    console.log(`[HostMode] ✅ Recovery confirms buffered ending (overlap at "${matchedWord}", no new words to append)`);
+                                    mergedSuccessfully = true;
+                                  }
                                 } else {
                                   // Recovery only confirms what we have
                                   console.log(`[HostMode] ✅ Recovery confirms buffered ending (overlap at "${matchedWord}", no new words)`);
@@ -1868,16 +2133,199 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                                 if (fuzzyMatch.score >= FUZZY_THRESHOLD) {
                                   // Fuzzy match found - use it as anchor
-                                  const tail = recoveredWords.slice(fuzzyMatch.recoveryIndex + 1);
+                                  let tail = recoveredWords.slice(fuzzyMatch.recoveryIndex + 1);
 
                                   if (tail.length > 0) {
-                                    finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
-                                    console.log(`[HostMode] 🎯 Fuzzy match found: "${fuzzyMatch.finalWord}" ≈ "${fuzzyMatch.recoveryWord}" (${(fuzzyMatch.score * 100).toFixed(0)}% similar)`);
-                                    console.log(`[HostMode]   Match position in recovery: word ${fuzzyMatch.recoveryIndex + 1}/${recoveredWords.length}`);
-                                    console.log(`[HostMode]   New words to append: "${tail.join(' ')}"`);
-                                    console.log(`[HostMode]   Before: "${bufferedTrimmed}"`);
-                                    console.log(`[HostMode]   After:  "${finalTextToCommit}"`);
-                                    mergedSuccessfully = true;
+                                    // Helper functions (same as above)
+                                    const wordsAreRelated = (word1, word2) => {
+                                      const w1 = word1.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+                                      const w2 = word2.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+                                      
+                                      if (w1 === w2) return true;
+                                      if (w1.includes(w2) || w2.includes(w1)) {
+                                        const shorter = w1.length < w2.length ? w1 : w2;
+                                        const longer = w1.length >= w2.length ? w1 : w2;
+                                        
+                                        if (longer.startsWith(shorter) && shorter.length >= 3) {
+                                          const remaining = longer.substring(shorter.length);
+                                          if (['ing', 'ed', 'er', 's', 'es', 'ly', 'd'].includes(remaining)) {
+                                            return true;
+                                          }
+                                        }
+                                        
+                                        const lev = levenshteinDistance(w1, w2);
+                                        const maxLen = Math.max(w1.length, w2.length);
+                                        const similarity = 1 - (lev / maxLen);
+                                        if (similarity >= 0.85 && maxLen >= 4) {
+                                          return true;
+                                        }
+                                      }
+                                      return false;
+                                    };
+                                    
+                                    const levenshteinDistance = (a, b) => {
+                                      const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+                                      for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+                                      for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+                                      for (let j = 1; j <= b.length; j++) {
+                                        for (let i = 1; i <= a.length; i++) {
+                                          const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+                                          matrix[j][i] = Math.min(
+                                            matrix[j][i - 1] + 1,
+                                            matrix[j - 1][i] + 1,
+                                            matrix[j - 1][i - 1] + indicator
+                                          );
+                                        }
+                                      }
+                                      return matrix[b.length][a.length];
+                                    };
+                                    
+                                    const findPhraseOverlap = (tailPhrase, nextText) => {
+                                      for (let phraseLen = Math.min(4, tail.length); phraseLen >= 2; phraseLen--) {
+                                        const tailPhraseWords = tail.slice(-phraseLen).map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+                                        const tailPhraseStr = tailPhraseWords.join(' ');
+                                        
+                                        const nextWords = nextText.toLowerCase().split(/\s+/).slice(0, 6);
+                                        
+                                        for (let start = 0; start <= Math.min(2, nextWords.length - phraseLen); start++) {
+                                          const nextPhraseWords = nextWords.slice(start, start + phraseLen);
+                                          const nextPhraseStr = nextPhraseWords.map(w => w.replace(/[.,!?;:\-'"()]/g, '')).join(' ');
+                                          
+                                          if (tailPhraseStr === nextPhraseStr) {
+                                            return { matched: true, phraseLen, start };
+                                          }
+                                          
+                                          let allRelated = true;
+                                          for (let i = 0; i < phraseLen; i++) {
+                                            if (!wordsAreRelated(tailPhraseWords[i], nextPhraseWords[i])) {
+                                              allRelated = false;
+                                              break;
+                                            }
+                                          }
+                                          if (allRelated) {
+                                            return { matched: true, phraseLen, start };
+                                          }
+                                        }
+                                      }
+                                      return { matched: false };
+                                    };
+                                    
+                                    // CRITICAL: Check if tail words are already at the START of the next final OR latest partial
+                                    const textsToCheck = [];
+                                    if (nextFinalAfterRecovery && nextFinalAfterRecovery.text) {
+                                      textsToCheck.push({ text: nextFinalAfterRecovery.text, type: 'final' });
+                                    }
+                                    // Also check latest partial text
+                                    syncPartialVariables();
+                                    if (latestPartialText && latestPartialText.length > 0) {
+                                      textsToCheck.push({ text: latestPartialText, type: 'partial' });
+                                    }
+                                    
+                                    if (textsToCheck.length > 0) {
+                                      // First, check for phrase-level overlaps
+                                      let phraseOverlap = null;
+                                      for (const checkItem of textsToCheck) {
+                                        phraseOverlap = findPhraseOverlap(tail, checkItem.text);
+                                        if (phraseOverlap.matched) {
+                                          console.log(`[HostMode] 🔍 Fuzzy: Found phrase overlap: "${tail.slice(-phraseOverlap.phraseLen).join(' ')}" in next ${checkItem.type}`);
+                                          break;
+                                        }
+                                      }
+                                      
+                                      if (phraseOverlap && phraseOverlap.matched) {
+                                        const wordsToKeep = tail.length - phraseOverlap.phraseLen;
+                                        if (wordsToKeep > 0) {
+                                          tail = tail.slice(0, wordsToKeep);
+                                          console.log(`[HostMode] ✂️ Fuzzy: Trimming ${phraseOverlap.phraseLen} overlapping phrase word(s). Keeping: "${tail.join(' ')}"`);
+                                        } else {
+                                          console.log(`[HostMode] ⚠️ Fuzzy: All tail words already in next text (phrase match) - skipping recovery append`);
+                                          tail = [];
+                                        }
+                                      } else {
+                                        // Word-by-word matching with intelligent logic
+                                        let overlapCount = 0;
+                                        let matchedText = null;
+                                        for (let i = tail.length - 1; i >= 0; i--) {
+                                          const tailWordOriginal = tail[i].toLowerCase();
+                                          const tailWordClean = tailWordOriginal.replace(/[.,!?;:\-'"()]/g, '');
+                                          
+                                          for (const checkItem of textsToCheck) {
+                                            const checkWords = checkItem.text.trim().toLowerCase().split(/\s+/);
+                                            const checkWordsSlice = checkWords.slice(0, Math.min(5, checkWords.length));
+                                            const matches = checkWordsSlice.some(nfw => {
+                                              const nfwOriginal = nfw.toLowerCase();
+                                              const nfwClean = nfwOriginal.replace(/[.,!?;:\-'"()]/g, '');
+                                              
+                                              if (tailWordOriginal === nfwOriginal || tailWordClean === nfwClean) {
+                                                return true;
+                                              }
+                                              
+                                              if (wordsAreRelated(tailWordOriginal, nfwOriginal)) {
+                                                return true;
+                                              }
+                                              
+                                              const tailHasHyphen = tailWordOriginal.includes('-');
+                                              const nextHasHyphen = nfwOriginal.includes('-');
+                                              
+                                              if (tailHasHyphen && !nextHasHyphen) {
+                                                const tailParts = tailWordOriginal.split('-');
+                                                const lastPart = tailParts[tailParts.length - 1].replace(/[.,!?;:\-'"()]/g, '');
+                                                if (lastPart === nfwClean && tailWordClean.length > nfwClean.length + 3) {
+                                                  console.log(`[HostMode] 🚫 Fuzzy: Rejecting match: compound word "${tailWordOriginal}" suffix "${lastPart}" vs standalone "${nfwOriginal}"`);
+                                                  return false;
+                                                }
+                                              }
+                                              
+                                              const lengthDiff = Math.abs(tailWordClean.length - nfwClean.length);
+                                              const maxLength = Math.max(tailWordClean.length, nfwClean.length);
+                                              const lengthSimilarity = maxLength > 0 ? 1 - (lengthDiff / maxLength) : 0;
+                                              
+                                              const minLength = Math.min(tailWordClean.length, nfwClean.length);
+                                              if (nfwClean.includes(tailWordClean) || tailWordClean.includes(nfwClean)) {
+                                                if (lengthSimilarity >= 0.7 || minLength >= 5) {
+                                                  return true;
+                                                }
+                                              }
+                                              
+                                              return false;
+                                            });
+                                            
+                                            if (matches) {
+                                              overlapCount = tail.length - i;
+                                              matchedText = checkItem;
+                                              console.log(`[HostMode] 🔍 Fuzzy match: tail word "${tail[i]}" matches next ${checkItem.type} start: "${checkItem.text.substring(0, 40)}..."`);
+                                              break;
+                                            }
+                                          }
+                                          
+                                          if (overlapCount > 0) break;
+                                        }
+                                        
+                                        if (overlapCount > 0) {
+                                          const wordsToKeep = tail.length - overlapCount;
+                                          if (wordsToKeep > 0) {
+                                            tail = tail.slice(0, wordsToKeep);
+                                            console.log(`[HostMode] ✂️ Trimming ${overlapCount} overlapping word(s) from fuzzy tail. Keeping: "${tail.join(' ')}"`);
+                                          } else {
+                                            console.log(`[HostMode] ⚠️ All fuzzy tail words already in next ${matchedText.type} - skipping recovery append`);
+                                            tail = [];
+                                          }
+                                        }
+                                      }
+                                    }
+                                    
+                                    if (tail.length > 0) {
+                                      finalTextToCommit = bufferedTrimmed + ' ' + tail.join(' ');
+                                      console.log(`[HostMode] 🎯 Fuzzy match found: "${fuzzyMatch.finalWord}" ≈ "${fuzzyMatch.recoveryWord}" (${(fuzzyMatch.score * 100).toFixed(0)}% similar)`);
+                                      console.log(`[HostMode]   Match position in recovery: word ${fuzzyMatch.recoveryIndex + 1}/${recoveredWords.length}`);
+                                      console.log(`[HostMode]   New words to append (after dedup): "${tail.join(' ')}"`);
+                                      console.log(`[HostMode]   Before: "${bufferedTrimmed}"`);
+                                      console.log(`[HostMode]   After:  "${finalTextToCommit}"`);
+                                      mergedSuccessfully = true;
+                                    } else {
+                                      console.log(`[HostMode] ✅ Fuzzy match confirms buffered ending (no new words to append)`);
+                                      mergedSuccessfully = true;
+                                    }
                                   } else {
                                     console.log(`[HostMode] ✅ Fuzzy match confirms buffered ending (no new words)`);
                                     mergedSuccessfully = true;
@@ -1920,8 +2368,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.error(`[HostMode] ❌ Full error object:`, error);
                             
                             // Resolve recovery promise with empty on error
-                            if (recoveryResolve) {
+                            // CRITICAL: Check if recoveryResolve exists (it should be declared above)
+                            if (typeof recoveryResolve !== 'undefined' && recoveryResolve) {
                               recoveryResolve('');
+                            } else {
+                              console.warn('[HostMode] ⚠️ recoveryResolve not available in catch block - this should not happen');
                             }
                           } finally {
                             // Mark recovery as complete
@@ -1944,6 +2395,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // PHASE 8: Clear forced final buffer using engine
                         forcedCommitEngine.clearForcedFinalBuffer();
                         syncForcedFinalBuffer();
+                        
+                        // Reset recovery tracking after commit
+                        recoveryStartTime = 0;
+                        nextFinalAfterRecovery = null;
                       }, 1200);  // Phase 2: Wait 1200ms to capture more POST-final audio (shifts window from [T-1500,T+500] to [T-800,T+1200])
                     }, 0);  // Phase 1: Start immediately
 
@@ -1977,12 +2432,124 @@ export async function handleHostConnection(clientWs, sessionId) {
                   }
                   forcedCommitEngine.clearForcedFinalBuffer();
                   syncForcedFinalBuffer();
+                  
+                  // Reset recovery tracking since recovery was cancelled by new final
+                  recoveryStartTime = 0;
+                  nextFinalAfterRecovery = null;
+                }
+                
+                // CRITICAL: Null check after merge operations
+                if (!transcriptText || transcriptText.length === 0) {
+                  console.warn('[HostMode] ⚠️ transcriptText is null or empty after merge operations - skipping final processing');
+                  return;
+                }
+                
+                // Capture next final if it arrives after recovery started (for deduplication)
+                if (recoveryStartTime > 0 && Date.now() > recoveryStartTime) {
+                  // This final arrived after recovery started - store it for deduplication
+                  if (!nextFinalAfterRecovery) {
+                    nextFinalAfterRecovery = {
+                      text: transcriptText,
+                      timestamp: Date.now()
+                    };
+                    console.log(`[HostMode] 📌 Captured next final after recovery start: "${transcriptText.substring(0, 60)}..."`);
+                  }
+                }
+                
+                // CRITICAL: Check if lastSentFinalText (which may include recovery) ends with words
+                // that overlap with the start of the new final - this prevents duplication
+                // Example: lastSentFinalText="...self-centered desires", newFinal="Desires cordoned off..."
+                let lastSentFinalTextToUse = lastSentFinalText;
+                if (lastSentFinalText && transcriptText) {
+                  const lastSentWords = lastSentFinalText.trim().split(/\s+/);
+                  const newFinalWords = transcriptText.trim().toLowerCase().split(/\s+/);
+                  
+                  // Helper function for word matching (same as in recovery merge)
+                  const wordsAreRelated = (word1, word2) => {
+                    const w1 = word1.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+                    const w2 = word2.toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+                    
+                    if (w1 === w2) return true;
+                    if (w1.includes(w2) || w2.includes(w1)) {
+                      const shorter = w1.length < w2.length ? w1 : w2;
+                      const longer = w1.length >= w2.length ? w1 : w2;
+                      if (longer.startsWith(shorter) && shorter.length >= 3) {
+                        const remaining = longer.substring(shorter.length);
+                        if (['ing', 'ed', 'er', 's', 'es', 'ly', 'd'].includes(remaining)) {
+                          return true;
+                        }
+                      }
+                    }
+                    // Levenshtein distance for transcription errors
+                    const levenshteinDistance = (a, b) => {
+                      const matrix = [];
+                      for (let i = 0; i <= b.length; i++) {
+                        matrix[i] = [i];
+                      }
+                      for (let j = 0; j <= a.length; j++) {
+                        matrix[0][j] = j;
+                      }
+                      for (let i = 1; i <= b.length; i++) {
+                        for (let j = 1; j <= a.length; j++) {
+                          if (b.charAt(i - 1) === a.charAt(j - 1)) {
+                            matrix[i][j] = matrix[i - 1][j - 1];
+                          } else {
+                            matrix[i][j] = Math.min(
+                              matrix[i - 1][j - 1] + 1,
+                              matrix[i][j - 1] + 1,
+                              matrix[i - 1][j] + 1
+                            );
+                          }
+                        }
+                      }
+                      return matrix[b.length][a.length];
+                    };
+                    const distance = levenshteinDistance(w1, w2);
+                    const maxLen = Math.max(w1.length, w2.length);
+                    return maxLen > 0 && distance / maxLen <= 0.3; // 30% difference threshold
+                  };
+                  
+                  // Check if last words of lastSentFinalText overlap with first words of new final
+                  // Check up to 5 words from the end of lastSentFinalText
+                  let overlapCount = 0;
+                  for (let i = lastSentWords.length - 1; i >= Math.max(0, lastSentWords.length - 5); i--) {
+                    const lastWord = lastSentWords[i].toLowerCase().replace(/[.,!?;:\-'"()]/g, '');
+                    // Check first 5 words of new final
+                    const checkWords = newFinalWords.slice(0, Math.min(5, newFinalWords.length));
+                    const matches = checkWords.some(newWord => {
+                      const newWordClean = newWord.replace(/[.,!?;:\-'"()]/g, '');
+                      if (lastWord === newWordClean) return true;
+                      if (wordsAreRelated(lastWord, newWordClean)) return true;
+                      return false;
+                    });
+                    if (matches) {
+                      overlapCount++;
+                    } else {
+                      break; // Stop at first non-match
+                    }
+                  }
+                  
+                  if (overlapCount > 0) {
+                    // Trim overlapping words from lastSentFinalText
+                    const wordsToKeep = lastSentWords.length - overlapCount;
+                    if (wordsToKeep > 0) {
+                      lastSentFinalTextToUse = lastSentWords.slice(0, wordsToKeep).join(' ');
+                      // Update lastSentFinalText so future checks use the trimmed version
+                      lastSentFinalText = lastSentFinalTextToUse;
+                      console.log(`[HostMode] ✂️ Trimming ${overlapCount} overlapping word(s) from lastSentFinalText: "${lastSentWords.slice(-overlapCount).join(' ')}"`);
+                      console.log(`[HostMode]   Before: "${lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 60))}"`);
+                      console.log(`[HostMode]   After:  "${lastSentFinalTextToUse.substring(Math.max(0, lastSentFinalTextToUse.length - 60))}"`);
+                    } else {
+                      console.log(`[HostMode] ⚠️ All words in lastSentFinalText overlap with new final - this should not happen`);
+                    }
+                  }
                 }
                 
                 // CRITICAL: Check if this FINAL is a continuation of the last sent FINAL
                 // This prevents splitting sentences like "Where two or three" / "Are gathered together"
-                if (lastSentFinalText && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
-                  const lastSentTrimmed = lastSentFinalText.trim();
+                let wasContinuationMerged = false;
+                if (lastSentFinalTextToUse && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
+                  const lastSentTrimmed = lastSentFinalTextToUse.trim();
                   const newFinalTrimmed = transcriptText.trim();
                   
                   // Check if new FINAL continues the last sent FINAL
@@ -2001,6 +2568,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] 📦 Merging consecutive FINALs: "${lastSentTrimmed}" + "${continuation}"`);
                     // Merge them - the new FINAL contains the continuation
                     transcriptText = newFinalTrimmed; // Use the full new FINAL (it already contains the continuation)
+                    wasContinuationMerged = true;
                   } else {
                     // Check for overlap - last FINAL might end mid-sentence and new FINAL continues it
                     const merged = mergeWithOverlap(lastSentTrimmed, newFinalTrimmed);
@@ -2010,7 +2578,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode] 🔗 New FINAL continues last sent FINAL via overlap: "${lastSentTrimmed.substring(Math.max(0, lastSentTrimmed.length - 40))}" + "${continuation.substring(0, 40)}..."`);
                       console.log(`[HostMode] 📦 Merging consecutive FINALs via overlap: "${lastSentTrimmed}" + "${continuation}"`);
                       transcriptText = merged;
+                      wasContinuationMerged = true;
                     }
+                  }
+                  
+                  // CRITICAL: If continuation was merged, clear pending finalization to prevent duplicate sends
+                  // Also update lastSentFinalText immediately so the merged version is used
+                  if (wasContinuationMerged) {
+                    syncPendingFinalization();
+                    if (finalizationEngine.hasPendingFinalization()) {
+                      const pending = finalizationEngine.getPendingFinalization();
+                      // Check if pending matches the old (unmerged) final - if so, cancel it
+                      const pendingTrimmed = pending.text.trim();
+                      if (pendingTrimmed === lastSentTrimmed || pendingTrimmed === newFinalTrimmed) {
+                        console.log(`[HostMode] 🔄 Cancelling pending finalization (continuation merge occurred)`);
+                        finalizationEngine.clearPendingFinalizationTimeout();
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
+                      }
+                    }
+                    // Update lastSentFinalText to the merged version BEFORE finalization
+                    // This ensures if the same continuation logic runs again, it won't create duplicates
+                    lastSentFinalText = transcriptText;
+                    lastSentFinalTime = Date.now();
                   }
                 }
                 
@@ -2190,6 +2780,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                 finalizationEngine.setPendingFinalizationTimeout(() => {
                   // PHASE 8: Sync and null check (CRITICAL)
                   syncPendingFinalization();
+                  // CRITICAL: Sync partial variables to get fresh data before checking
+                  syncPartialVariables();
                   if (!pendingFinalization) {
                     console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
                     return;
@@ -2288,6 +2880,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       finalizationEngine.setPendingFinalizationTimeout(() => {
                         // PHASE 8: Sync and null check (CRITICAL)
                         syncPendingFinalization();
+                        // CRITICAL: Sync partial variables to get fresh data before checking
+                        syncPartialVariables();
                         if (!pendingFinalization) {
                           console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
                           return;
@@ -2356,12 +2950,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Continue with commit using the updated text
                         const textToProcess = finalTextToUse2;
                         const waitTime = Date.now() - pendingFinalization.timestamp;
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables();
+                        // CRITICAL: Clear pending finalization FIRST to prevent other timeouts from firing
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
+                        // CRITICAL: Reset partial tracking AFTER clearing finalization, but BEFORE processing
+                        // This ensures no other timeout callbacks can use stale partials
+                        // PHASE 8: Reset partial tracking using tracker
+                        partialTracker.reset();
+                        syncPartialVariables();
                         console.log(`[HostMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                         processFinalText(textToProcess);
                       }, remainingWait);
@@ -2371,14 +2968,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Reset for next segment AFTER processing
                     const textToProcess = finalTextToUse;
                     const waitTime = Date.now() - pendingFinalization.timestamp;
-                    // CRITICAL FIX: Reset partial tracking AFTER final is scheduled for processing
-                    // This prevents accumulation of old partials from previous sentences
-                    // PHASE 8: Reset partial tracking using tracker
-                    partialTracker.reset();
-                    syncPartialVariables();
+                    // CRITICAL: Clear pending finalization FIRST to prevent other timeouts from firing
                     // PHASE 8: Clear using engine
                     finalizationEngine.clearPendingFinalization();
                     syncPendingFinalization();
+                    // CRITICAL FIX: Reset partial tracking AFTER clearing finalization, but BEFORE processing
+                    // This prevents accumulation of old partials from previous sentences
+                    // and ensures no other timeout callbacks can use stale partials
+                    // PHASE 8: Reset partial tracking using tracker
+                    partialTracker.reset();
+                    syncPartialVariables();
                     
                     if (!finalEndsWithCompleteSentence) {
                       console.log(`[HostMode] ⚠️ Committing incomplete sentence after ${waitTime}ms wait (max wait: ${MAX_FINALIZATION_WAIT_MS}ms)`);
