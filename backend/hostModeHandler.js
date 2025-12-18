@@ -478,6 +478,9 @@ export async function handleHostConnection(clientWs, sessionId) {
               let lastSentFinalTime = 0;
               const FINAL_CONTINUATION_WINDOW_MS = 3000;
               
+              // Flag to prevent concurrent final processing
+              let isProcessingFinal = false;
+              
               // PHASE 8: Removed deprecated checkForExtendingPartialsAfterFinal and cleanupRecentlyFinalized functions
               // These were part of the old backpatching system, now replaced by dual buffer recovery
               
@@ -487,6 +490,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                 
                 let finalTextToProcess = pendingFinal.text;
                 const isForcedFinal = pendingFinal.isForced;
+                
+                // CRITICAL: Sync partial variables to get fresh data before checking
+                syncPartialVariables();
                 
                 // LAST CHANCE: Aggressively check for any partials that extend the pending final
                 const now = Date.now();
@@ -597,6 +603,34 @@ export async function handleHostConnection(clientWs, sessionId) {
               const processFinalText = (textToProcess, options = {}) => {
                 (async () => {
                   try {
+                    // CRITICAL: Prevent concurrent final processing
+                    if (isProcessingFinal) {
+                      console.log(`[HostMode] ⚠️ Final already being processed, skipping: "${textToProcess.substring(0, 60)}..."`);
+                      return; // Skip if already processing a final
+                    }
+                    
+                    // Set flag to prevent concurrent processing
+                    isProcessingFinal = true;
+                    
+                    // CRITICAL: Duplicate prevention - skip if same text was just sent
+                    const trimmedText = textToProcess.trim();
+                    if (lastSentFinalText && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
+                      const lastSentTrimmed = lastSentFinalText.trim();
+                      // Normalize for comparison (case-insensitive, normalize whitespace)
+                      const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+                      const lastSentNormalized = lastSentTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                      
+                      // Check if text is essentially the same (exact match or very similar)
+                      if (textNormalized === lastSentNormalized || 
+                          (textNormalized.length > 10 && lastSentNormalized.length > 10 && 
+                           (textNormalized.includes(lastSentNormalized) || lastSentNormalized.includes(textNormalized)) &&
+                           Math.abs(textNormalized.length - lastSentNormalized.length) < 5)) {
+                        console.log(`[HostMode] ⚠️ Duplicate final detected, skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentTrimmed.substring(0, 60)}...")`);
+                        isProcessingFinal = false; // Clear flag before returning
+                        return; // Skip processing duplicate
+                      }
+                    }
+                    
                     const isTranscriptionOnly = false; // Host mode always translates
                     
                     // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
@@ -604,13 +638,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                     try {
                       // CRITICAL FIX: Get grammar correction FIRST (English only), then translate the CORRECTED text
                       // This ensures the translation matches the corrected English text
+                      // Use Promise.race to prevent grammar correction from blocking too long
                       if (currentSourceLang === 'en') {
                         try {
-                          correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                          // Set a timeout for grammar correction (max 2 seconds) to prevent blocking
+                          const grammarTimeout = new Promise((_, reject) => 
+                            setTimeout(() => reject(new Error('Grammar correction timeout')), 2000)
+                          );
+                          
+                          correctedText = await Promise.race([
+                            grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY),
+                            grammarTimeout
+                          ]);
+                          
                           rememberGrammarCorrection(textToProcess, correctedText);
                         } catch (grammarError) {
-                          console.warn(`[HostMode] Grammar correction failed, using original text:`, grammarError.message);
-                          correctedText = textToProcess; // Fallback to original on error
+                          if (grammarError.message === 'Grammar correction timeout') {
+                            console.warn(`[HostMode] Grammar correction timed out after 2s, using original text`);
+                          } else {
+                            console.warn(`[HostMode] Grammar correction failed, using original text:`, grammarError.message);
+                          }
+                          correctedText = textToProcess; // Fallback to original on error/timeout
                         }
                       } else {
                         // Non-English source - skip grammar correction
@@ -776,7 +824,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         lastSentFinalTime = 0;
                         console.log('[HostMode] 🧹 Cleared lastSentFinalText for forced final (should start new line)');
                       } else {
-                        lastSentFinalText = textToProcess;
+                        lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
                         lastSentFinalTime = Date.now();
                       }
                       
@@ -816,9 +864,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         // PHASE 8: Removed deprecated backpatching check
                       }
+                    } finally {
+                      // CRITICAL: Always clear the processing flag when done
+                      isProcessingFinal = false;
                     }
                   } catch (error) {
                     console.error(`[HostMode] Error processing final:`, error);
+                    // CRITICAL: Clear flag on outer error too
+                    isProcessingFinal = false;
                   }
                 })();
               };
@@ -1698,6 +1751,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // This prevents splitting sentences like "Where two or three" / "Are gathered together"
                 // BUT: Skip this check if last sent was a forced final (forced finals should always start new lines)
                 // Note: We check lastSentFinalText being empty as the signal that last final was forced
+                let wasContinuationMerged = false;
                 if (lastSentFinalText && lastSentFinalText.length > 0 && (Date.now() - lastSentFinalTime) < FINAL_CONTINUATION_WINDOW_MS) {
                   const lastSentTrimmed = lastSentFinalText.trim();
                   const newFinalTrimmed = transcriptText.trim();
@@ -1718,6 +1772,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] 📦 Merging consecutive FINALs: "${lastSentTrimmed}" + "${continuation}"`);
                     // Merge them - the new FINAL contains the continuation
                     transcriptText = newFinalTrimmed; // Use the full new FINAL (it already contains the continuation)
+                    wasContinuationMerged = true;
                   } else {
                     // Check for overlap - last FINAL might end mid-sentence and new FINAL continues it
                     const merged = mergeWithOverlap(lastSentTrimmed, newFinalTrimmed);
@@ -1727,7 +1782,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode] 🔗 New FINAL continues last sent FINAL via overlap: "${lastSentTrimmed.substring(Math.max(0, lastSentTrimmed.length - 40))}" + "${continuation.substring(0, 40)}..."`);
                       console.log(`[HostMode] 📦 Merging consecutive FINALs via overlap: "${lastSentTrimmed}" + "${continuation}"`);
                       transcriptText = merged;
+                      wasContinuationMerged = true;
                     }
+                  }
+                  
+                  // CRITICAL: If continuation was merged, clear pending finalization to prevent duplicate sends
+                  // Also update lastSentFinalText immediately so the merged version is used
+                  if (wasContinuationMerged) {
+                    syncPendingFinalization();
+                    if (finalizationEngine.hasPendingFinalization()) {
+                      const pending = finalizationEngine.getPendingFinalization();
+                      // Check if pending matches the old (unmerged) final - if so, cancel it
+                      const pendingTrimmed = pending.text.trim();
+                      if (pendingTrimmed === lastSentTrimmed || pendingTrimmed === newFinalTrimmed) {
+                        console.log(`[HostMode] 🔄 Cancelling pending finalization (continuation merge occurred)`);
+                        finalizationEngine.clearPendingFinalizationTimeout();
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
+                      }
+                    }
+                    // Update lastSentFinalText to the merged version BEFORE finalization
+                    // This ensures if the same continuation logic runs again, it won't create duplicates
+                    lastSentFinalText = transcriptText;
+                    lastSentFinalTime = Date.now();
                   }
                 }
                 
@@ -1938,6 +2015,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                 finalizationEngine.setPendingFinalizationTimeout(() => {
                   // PHASE 8: Sync and null check (CRITICAL)
                   syncPendingFinalization();
+                  // CRITICAL: Sync partial variables to get fresh data before checking
+                  syncPartialVariables();
                   if (!pendingFinalization) {
                     console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
                     return;
@@ -2036,6 +2115,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       finalizationEngine.setPendingFinalizationTimeout(() => {
                         // PHASE 8: Sync and null check (CRITICAL)
                         syncPendingFinalization();
+                        // CRITICAL: Sync partial variables to get fresh data before checking
+                        syncPartialVariables();
                         if (!pendingFinalization) {
                           console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
                           return;
@@ -2104,12 +2185,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Continue with commit using the updated text
                         const textToProcess = finalTextToUse2;
                         const waitTime = Date.now() - pendingFinalization.timestamp;
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables();
+                        // CRITICAL: Clear pending finalization FIRST to prevent other timeouts from firing
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
+                        // CRITICAL: Reset partial tracking AFTER clearing finalization, but BEFORE processing
+                        // This ensures no other timeout callbacks can use stale partials
+                        // PHASE 8: Reset partial tracking using tracker
+                        partialTracker.reset();
+                        syncPartialVariables();
                         console.log(`[HostMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                         processFinalText(textToProcess);
                       }, remainingWait);
@@ -2119,14 +2203,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Reset for next segment AFTER processing
                     const textToProcess = finalTextToUse;
                     const waitTime = Date.now() - pendingFinalization.timestamp;
-                    // CRITICAL FIX: Reset partial tracking AFTER final is scheduled for processing
-                    // This prevents accumulation of old partials from previous sentences
-                    // PHASE 8: Reset partial tracking using tracker
-                    partialTracker.reset();
-                    syncPartialVariables();
+                    // CRITICAL: Clear pending finalization FIRST to prevent other timeouts from firing
                     // PHASE 8: Clear using engine
                     finalizationEngine.clearPendingFinalization();
                     syncPendingFinalization();
+                    // CRITICAL FIX: Reset partial tracking AFTER clearing finalization, but BEFORE processing
+                    // This prevents accumulation of old partials from previous sentences
+                    // and ensures no other timeout callbacks can use stale partials
+                    // PHASE 8: Reset partial tracking using tracker
+                    partialTracker.reset();
+                    syncPartialVariables();
                     
                     if (!finalEndsWithCompleteSentence) {
                       console.log(`[HostMode] ⚠️ Committing incomplete sentence after ${waitTime}ms wait (max wait: ${MAX_FINALIZATION_WAIT_MS}ms)`);
