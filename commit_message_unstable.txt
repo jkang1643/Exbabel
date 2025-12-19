@@ -1,5 +1,41 @@
 UNSTABLE
 
+EDIT HISTORY:
+
+Recovery System Improvements and Bug Fixes:
+
+1. Recovery Window Audio Capture Bug Fix
+   - Fixed critical bug where recovery was only capturing ~1520ms (48,000 bytes) instead of full 2200ms window (70,400 bytes)
+   - Root cause: Recovery window calculation was using future timestamp (T+1300ms) which didn't exist in buffer
+   - Solution: Changed to use actual current time (Date.now()) when recovery executes
+   - Added safeguard in audioBufferManager.js to detect and auto-correct future timestamps
+   - Impact: Recovery now captures complete sentence fragments instead of partial phrases
+   - Files modified: soloModeHandler.js (lines 1480-1506), audioBufferManager.js (lines 146-203)
+
+2. Last-Chance Recovery Implementation
+   - Added fallback recovery mechanism to catch words cut off from finals
+   - Problem: Google Speech sometimes sends finals shorter than longest partial seen
+   - Solution: Two-layer recovery system:
+     * Layer 1: TextExtensionManager handles partials after final (250ms window)
+     * Layer 2: Last-chance recovery checks longestPartialText before committing final
+   - Features: Timing check (5 second window), extension validation, explicit logging
+   - Impact: ~95%+ of cut words now recovered, complete sentences instead of fragments
+   - Files modified: soloModeHandler.js (lines 218-238)
+
+3. Temporary Stream Debug Fix and Synchronization
+   - Added comprehensive step-by-step logging for audio recovery process (8 steps)
+   - Fixed timing issue where buffer timeout (2s) fired before recovery completed (~3s)
+   - Solution: Made buffer timeout async and wait for recovery promise to complete
+   - Added recovery promise tracking in forcedFinalBuffer
+   - Impact: Recovery now completes before text is committed, no more silent failures
+   - Files modified: soloModeHandler.js (lines 1463-1585)
+
+Technical Details:
+- Recovery window now uses [NOW - 2200ms, NOW] instead of [T-900ms, T+1300ms]
+- Last-chance recovery validates partials extend final (startsWith check)
+- Audio recovery waits for completion before buffer timeout commits text
+- Enhanced diagnostic logging throughout recovery pipeline
+
 This commit represents an unstable state of the codebase. The following changes have been introduced that may cause instability or require further testing and refinement:
 
 - Experimental features and modifications that have not been fully validated

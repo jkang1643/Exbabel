@@ -1047,6 +1047,11 @@ export async function handleSoloMode(clientWs) {
                       // Extend timeout significantly to wait for complete word/phrase
                       // PHASE 5: Clear timeout using engine
                       finalizationEngine.clearPendingFinalizationTimeout();
+                      // Mark that we've extended the wait
+                      syncPendingFinalization();
+                      if (pendingFinalization) {
+                        pendingFinalization.extendedWaitCount = (pendingFinalization.extendedWaitCount || 0) + 1;
+                      }
                       // Don't extend beyond max wait - cap at remaining time
                       const maxRemainingWait = MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait;
                       const remainingWait = Math.min(Math.max(1000, 2500 - timeSinceFinal), maxRemainingWait);
@@ -1099,7 +1104,32 @@ export async function handleSoloMode(clientWs) {
                               finalTextToUse = merged;
                             }
                           }
+                        } else {
+                          // No extending partial found via checkLongestExtends/checkLatestExtends
+                          // But we might have partials that are continuations (don't start with final)
+                          // Check longestPartialText and latestPartialText directly for overlap merge
+                          syncPartialVariables();
+                          if (longestPartialText && longestPartialText.length > 0) {
+                            const longestTrimmed = longestPartialText.trim();
+                            const merged = mergeWithOverlap(finalTrimmed, longestTrimmed);
+                            if (merged && merged.length > finalTrimmed.length + 3) {
+                              console.log(`[SoloMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                              console.log(`[SoloMode] 📊 Merged: "${finalTrimmed}" + "${longestTrimmed}" = "${merged}"`);
+                              finalTextToUse = merged;
+                            }
+                          } else if (latestPartialText && latestPartialText.length > 0) {
+                            const latestTrimmed = latestPartialText.trim();
+                            const merged = mergeWithOverlap(finalTrimmed, latestTrimmed);
+                            if (merged && merged.length > finalTrimmed.length + 3) {
+                              console.log(`[SoloMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                              console.log(`[SoloMode] 📊 Merged: "${finalTrimmed}" + "${latestTrimmed}" = "${merged}"`);
+                              finalTextToUse = merged;
+                            }
+                          }
                         }
+                        
+                        // CRITICAL: Always finalize, even if no extending partial found
+                        // The final text might be incomplete, but we need to commit it to prevent loss
 
                         const textToProcess = finalTextToUse;
                         // DON'T reset here - FINAL handler needs this data for snapshot
@@ -1206,13 +1236,20 @@ export async function handleSoloMode(clientWs) {
                       const timeSinceMaxWait = Date.now() - pendingFinalization.maxWaitTimestamp;
                       const finalEndsWithCompleteSentence = endsWithCompleteSentence(pendingFinalization.text);
                       
-                      // Only wait if: final is incomplete AND we haven't hit max wait AND it's been less than 2000ms
-                      // This prevents indefinite waiting while still allowing short waits for continuations
-                      if (!finalEndsWithCompleteSentence && timeSinceFinal < 2000 && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
+                      // CRITICAL FIX: If we've already extended the wait once (from "short partial after incomplete FINAL"),
+                      // and a new partial arrives that doesn't extend the final, commit immediately to prevent indefinite waiting
+                      // Only wait if: final is incomplete AND we haven't hit max wait AND it's been less than 2000ms AND we haven't already extended once
+                      const hasExtendedWait = pendingFinalization.extendedWaitCount > 0;
+                      const shouldWait = !finalEndsWithCompleteSentence && timeSinceFinal < 2000 && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000 && !hasExtendedWait;
+                      
+                      if (shouldWait) {
                         // Final doesn't end with complete sentence and not enough time has passed - wait more
                         console.log(`[SoloMode] ⏳ New segment detected but final incomplete - waiting longer (${timeSinceFinal}ms < 2000ms, ${timeSinceMaxWait}ms / ${MAX_FINALIZATION_WAIT_MS}ms)`);
                         // Continue tracking - don't commit yet
                       } else {
+                        if (hasExtendedWait) {
+                          console.log(`[SoloMode] ⚠️ Already extended wait once - committing FINAL to prevent indefinite waiting`);
+                        }
                         // Commit FINAL - either sentence is complete, enough time has passed, or max wait is approaching
                         if (timeSinceMaxWait >= MAX_FINALIZATION_WAIT_MS - 1000) {
                           console.log(`[SoloMode] ⚠️ Max wait approaching - committing FINAL even if incomplete`);
@@ -2070,12 +2107,13 @@ export async function handleSoloMode(clientWs) {
 
                               // Find the missing words by comparing recovered vs buffered
                               let finalRecoveredText = '';
+                              let mergeResult = null;
                               if (recoveredText && recoveredText.length > 0) {
                                 console.log(`[SoloMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
 
                                 // Use shared merge utility for improved merge logic
                                 syncPartialVariables();
-                                const mergeResult = mergeRecoveryText(
+                                mergeResult = mergeRecoveryText(
                                   finalWithPartials,
                                   recoveredText,
                                   {
@@ -2090,6 +2128,7 @@ export async function handleSoloMode(clientWs) {
                                 if (mergeResult.merged) {
                                   finalTextToCommit = mergeResult.mergedText;
                                   finalRecoveredText = mergeResult.mergedText; // Store for promise resolution
+                                  console.log(`[SoloMode] 📋 Merge result: ${mergeResult.reason}`);
                                 } else {
                                   // Fallback to buffered text if merge failed
                                   finalTextToCommit = finalWithPartials;
@@ -2099,11 +2138,18 @@ export async function handleSoloMode(clientWs) {
                                 // CRITICAL: If recovery found additional words, commit them as an update
                                 // The forced final was already committed immediately when detected
                                 // Recovery just adds the missing words we found
-                                if (finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length) {
+                                // Special handling for "full append" case (no overlap - entire recovery appended)
+                                const isFullAppend = mergeResult?.reason?.startsWith('No overlap - full append');
+                                const hasAdditionalWords = finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length;
+                                
+                                if (isFullAppend || hasAdditionalWords) {
                                   // Check if buffer still exists before committing recovery update
                                   syncForcedFinalBuffer();
                                   if (forcedCommitEngine.hasForcedFinalBuffer()) {
                                     const additionalWords = finalTextToCommit.substring(originalBufferedText.length).trim();
+                                    if (isFullAppend) {
+                                      console.log(`[SoloMode] 📎 Full append case detected - appending entire recovery text`);
+                                    }
                                     console.log(`[SoloMode] ✅ Recovery found additional words: "${additionalWords}"`);
                                     console.log(`[SoloMode] 📊 Committing recovery update: "${finalTextToCommit.substring(0, 80)}..."`);
                                     

@@ -984,6 +984,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // Extend timeout significantly to wait for complete word/phrase
                       // PHASE 8: Clear timeout using engine
                       finalizationEngine.clearPendingFinalizationTimeout();
+                      // Mark that we've extended the wait
+                      syncPendingFinalization();
+                      if (pendingFinalization) {
+                        pendingFinalization.extendedWaitCount = (pendingFinalization.extendedWaitCount || 0) + 1;
+                      }
                       // Don't extend beyond max wait - cap at remaining time
                       const maxRemainingWait = MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait;
                       const remainingWait = Math.min(Math.max(1000, 2500 - timeSinceFinal), maxRemainingWait);
@@ -1012,7 +1017,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                           console.log(`[HostMode] ⚠️ Using LATEST partial after continuation wait (${pendingFinalization.text.length} → ${latestExtends.extendedText.length} chars)`);
                           console.log(`[HostMode] 📊 Recovered: "${latestExtends.missingWords}"`);
                           finalTextToUse = latestExtends.extendedText;
+                        } else {
+                          // No extending partial found via checkLongestExtends/checkLatestExtends
+                          // But we might have partials that are continuations (don't start with final)
+                          // Check longestPartialText and latestPartialText directly for overlap merge
+                          syncPartialVariables();
+                          if (longestPartialText && longestPartialText.length > 0) {
+                            const longestTrimmed = longestPartialText.trim();
+                            const merged = partialTracker.mergeWithOverlap(finalTrimmed, longestTrimmed);
+                            if (merged && merged.length > finalTrimmed.length + 3) {
+                              console.log(`[HostMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                              console.log(`[HostMode] 📊 Merged: "${finalTrimmed}" + "${longestTrimmed}" = "${merged}"`);
+                              finalTextToUse = merged;
+                            }
+                          } else if (latestPartialText && latestPartialText.length > 0) {
+                            const latestTrimmed = latestPartialText.trim();
+                            const merged = partialTracker.mergeWithOverlap(finalTrimmed, latestTrimmed);
+                            if (merged && merged.length > finalTrimmed.length + 3) {
+                              console.log(`[HostMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                              console.log(`[HostMode] 📊 Merged: "${finalTrimmed}" + "${latestTrimmed}" = "${merged}"`);
+                              finalTextToUse = merged;
+                            }
+                          }
                         }
+                        
+                        // CRITICAL: Always finalize, even if no extending partial found
+                        // The final text might be incomplete, but we need to commit it to prevent loss
                         
                         const textToProcess = finalTextToUse;
                         // PHASE 8: Reset partial tracking using tracker
@@ -1107,11 +1137,19 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // If final doesn't end with complete sentence, wait longer before committing
                       syncPendingFinalization();
                       const finalEndsWithCompleteSentence = pendingFinalization ? finalizationEngine.endsWithCompleteSentence(pendingFinalization.text) : false;
-                      if (!finalEndsWithCompleteSentence && timeSinceFinal < 3000) {
+                      // CRITICAL FIX: If we've already extended the wait once (from "short partial after incomplete FINAL"),
+                      // and a new partial arrives that doesn't extend the final, commit immediately to prevent indefinite waiting
+                      const hasExtendedWait = pendingFinalization ? (pendingFinalization.extendedWaitCount || 0) > 0 : false;
+                      const shouldWait = !finalEndsWithCompleteSentence && timeSinceFinal < 3000 && !hasExtendedWait;
+                      
+                      if (shouldWait) {
                         // Final doesn't end with complete sentence and not enough time has passed - wait more
                         console.log(`[HostMode] ⏳ New segment detected but final incomplete - waiting longer (${timeSinceFinal}ms < 3000ms)`);
                         // Continue tracking - don't commit yet
                       } else {
+                        if (hasExtendedWait) {
+                          console.log(`[HostMode] ⚠️ Already extended wait once - committing FINAL to prevent indefinite waiting`);
+                        }
                         // Commit FINAL immediately using longest partial that extends it
                         // CRITICAL: Only use partials that DIRECTLY extend the final (start with it) to prevent mixing segments
                         console.log(`[HostMode] 🔀 New segment detected during finalization (${timeSinceFinal}ms since final) - committing FINAL`);
