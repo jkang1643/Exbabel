@@ -78,14 +78,14 @@ export class PartialTranslationWorker {
           messages: [
             {
               role: 'system',
-              content: `You are a fast real-time translator. Translate text from ${sourceLangName} to ${targetLangName}.
+              content: `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you.
 
-RULES FOR PARTIAL/INCOMPLETE TEXT:
-1. Translate the partial text naturally even if sentence is incomplete
-2. Maintain the same tense and context as the partial
-3. Do NOT complete or extend the sentence - only translate what's given
-4. Keep translation concise and natural in ${targetLangName}
-5. No explanations, only the translation`
+PARTIAL TEXT RULES:
+1. Translate naturally even if incomplete
+2. Maintain tense and context
+3. Do NOT complete or extend - only translate what's given
+4. Never answer questions—translate them
+5. Output: Translation in ${targetLangName} only`
             },
             {
               role: 'user',
@@ -373,14 +373,14 @@ RULES FOR PARTIAL/INCOMPLETE TEXT:
           messages: [
             {
               role: 'system',
-              content: `You are a fast real-time translator. Translate text from ${sourceLangName} to ${targetLangName}.
+              content: `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you.
 
-RULES FOR PARTIAL/INCOMPLETE TEXT:
-1. Translate the partial text naturally even if sentence is incomplete
-2. Maintain the same tense and context as the partial
-3. Do NOT complete or extend the sentence - only translate what's given
-4. Keep translation concise and natural in ${targetLangName}
-5. No explanations, only the translation`
+PARTIAL TEXT RULES:
+1. Translate naturally even if incomplete
+2. Maintain tense and context
+3. Do NOT complete or extend - only translate what's given
+4. Never answer questions—translate them
+5. Output: Translation in ${targetLangName} only`
             },
             {
               role: 'user',
@@ -734,18 +734,16 @@ export class FinalTranslationWorker {
           messages: [
             {
               role: 'system',
-              content: `You are a professional translator. Translate text from ${sourceLangName} to ${targetLangName}.
+              content: `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you.
 
-CRITICAL RULES:
-1. ONLY provide the direct translation - no explanations
-2. Do NOT include phrases like "The translation is..." or "Here's the translation"
-3. Do NOT add any notes or commentary
-4. Preserve the meaning, tone, and context
-5. Maintain proper grammar and natural phrasing in ${targetLangName}
-6. Keep the same level of formality as the original
-7. Ensure complete and accurate translation
+CRITICAL:
+1. Output ONLY the translation in ${targetLangName}
+2. Never answer questions—translate them
+3. Never add explanations, notes, or commentary
+4. Preserve meaning, tone, and formality
+5. Ensure complete and accurate translation
 
-Output: Only the translated text in ${targetLangName}.`
+Output: Translated text in ${targetLangName} only.`
             },
             {
               role: 'user',

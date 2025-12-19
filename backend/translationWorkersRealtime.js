@@ -209,7 +209,7 @@ export class RealtimePartialTranslationWorker {
         
         // Configure session for text-to-text translation
         // Use SHORT instructions like Chat API - verbose instructions waste token budget
-        const translationInstructions = `Translate from ${sourceLangName} to ${targetLangName}. Translate literally, word-for-word. Do not complete, rephrase, or extend. Output ONLY the translation.`;
+        const translationInstructions = `You are a world-class church translator. Translate from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Translate literally. Do not complete, rephrase, or extend. Output ONLY the translation.`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -312,7 +312,7 @@ export class RealtimePartialTranslationWorker {
                   type: 'response.create',
                   response: {
                     modalities: ['text'],
-                    instructions: `You are a translation API. Translate text from ${sourceLangName} to ${targetLangName}. CRITICAL: If input is a question, translate the question - do NOT answer it. If input is a statement, translate the statement - do NOT respond to it. Output ONLY the translated text in ${targetLangName}. No explanations, no conversational responses. Examples: "Can you hear me?" → "¿Puedes oírme?" (NOT "Yes, I can"). "Testing one, two, three" → "Probando uno, dos, tres" (NOT "I hear you"). You are a TRANSLATOR, not an assistant.`
+                    instructions: `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Never answer or respond—only translate. Output ONLY the translation in ${targetLangName}. Examples: "Do you know about the Bible?" → [Translate to ${targetLangName}]. "How are you?" → [Translate to ${targetLangName}]. "What is going on?" → [Translate to ${targetLangName}].`
                   }
                 };
                 console.log(`[RealtimePartialWorker] 🚀 Creating response for item ${event.item.id}, linked to request ${matchedRequestId}`);
@@ -1168,7 +1168,7 @@ export class RealtimeFinalTranslationWorker {
         console.log(`[RealtimeFinalWorker] Connection opened for ${sourceLang} → ${targetLang}`);
         
         // Use SHORT instructions like Chat API - verbose instructions waste token budget
-        const translationInstructions = `Translate from ${sourceLangName} to ${targetLangName}. Translate literally, word-for-word. Do not complete, rephrase, or extend. Output ONLY the translation.`;
+        const translationInstructions = `You are a world-class church translator. Translate from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Translate literally. Do not complete, rephrase, or extend. Output ONLY the translation.`;
 
         const sessionConfig = {
           type: 'session.update',

@@ -1,0 +1,38 @@
+UNSTABLE
+
+This commit represents an unstable state of the codebase. The following changes have been introduced that may cause instability or require further testing and refinement:
+
+- Experimental features and modifications that have not been fully validated
+- Potential breaking changes that may affect existing functionality
+- Code that requires additional testing and review before being considered stable
+- Temporary implementations or work-in-progress features that need further development
+- Dependencies or configurations that may not be fully compatible with the current system
+- Performance optimizations or refactorings that need thorough testing
+- Integration points that may have compatibility issues with external systems
+
+WARNING: This version should not be used in production environments. It is recommended to thoroughly test all functionality before deploying. Please review all changes carefully and ensure proper testing procedures are followed before merging to stable branches.
+
+The development team should be aware that this commit may contain:
+- Incomplete implementations
+- Known bugs or issues
+- Temporary workarounds
+- Experimental code paths
+- Unverified fixes or patches
+
+Additional considerations:
+- Database migrations or schema changes may be incomplete
+- API contracts may have been modified without proper versioning
+- Security implementations may require additional review
+- Error handling may not be comprehensive
+- Logging and monitoring may be insufficient
+- Documentation may be outdated or missing
+
+Proceed with caution when working with this version of the codebase. It is strongly recommended to:
+1. Run comprehensive test suites before integration
+2. Review all code changes with the development team
+3. Perform security audits on new or modified code
+4. Test in isolated environments before merging
+5. Document any known issues or limitations
+6. Ensure proper rollback procedures are in place
+
+This unstable state is temporary and should be resolved before the next stable release.

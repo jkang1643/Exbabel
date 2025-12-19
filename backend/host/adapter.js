@@ -19,7 +19,7 @@ import { partialTranslationWorker, finalTranslationWorker } from '../translation
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from '../translationWorkersRealtime.js';
 import { grammarWorker } from '../grammarWorker.js';
 import { CoreEngine } from '../../core/engine/coreEngine.js';
-import { mergeRecoveryText } from '../utils/recoveryMerge.js';
+import { mergeRecoveryText, wordsAreRelated } from '../utils/recoveryMerge.js';
 
 /**
  * Handle host connection using CoreEngine
@@ -379,13 +379,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                           }
                           
                           // CRITICAL: Also check for high word overlap (catches cases with punctuation/capitalization differences)
-                          // Split into words and compare word-by-word similarity
+                          // Split into words and compare word-by-word similarity using wordsAreRelated for stem matching
                           const textWords = textNormalized.split(/\s+/).filter(w => w.length > 2); // Words longer than 2 chars
                           const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
                           
                           if (textWords.length > 3 && lastSentWords.length > 3) {
-                            // Count matching words
-                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            // Count matching words using wordsAreRelated (handles punctuation and stem variations like gather/gathered)
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             
                             // If 80%+ words match and texts are similar length, it's likely a duplicate
@@ -413,7 +415,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                           const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
                           
                           if (textWords.length > 3 && lastSentWords.length > 3) {
-                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            // Use wordsAreRelated for stem matching (handles gather/gathered, punctuation, etc.)
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
                             
@@ -433,7 +438,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                           const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
                           
                           if (textWords.length > 5 && lastSentWords.length > 5) {
-                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            // Use wordsAreRelated for stem matching (handles gather/gathered, punctuation, etc.)
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
                             
@@ -771,10 +779,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                     } else {
                       // New segment detected - but DON'T cancel timeout yet!
                       // Let the POST-final audio recovery complete in the timeout
-                      console.log('[HostMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                      // CRITICAL: Check if recovery is in progress - if so, don't reset partial tracker yet
+                      // This prevents race conditions where new partials mix with recovery data
+                      syncForcedFinalBuffer();
+                      const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
+                      if (recoveryInProgress) {
+                        console.log('[HostMode] 🔀 New segment detected but recovery in progress - deferring partial tracker reset');
+                        console.log('[HostMode] ⏳ Will reset partial tracker after recovery completes');
+                      } else {
+                        console.log('[HostMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                      }
                       // DON'T clear timeout or set to null - let it run!
                       // The timeout will commit the final after POST-final audio recovery
                       // Continue processing the new partial as a new segment
+                      // NOTE: Partial tracker reset will happen in the timeout callback after recovery
                     }
                   }
                   
@@ -791,12 +809,85 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] 📏 New longest partial: ${snapshot.longest.length} chars`);
                   }
                   
+                  // CRITICAL: Check if this partial duplicates words from the previous FINAL
+                  // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
+                  let partialTextToSend = transcriptText;
+                  if (lastSentFinalText && lastSentFinalTime) {
+                    const timeSinceLastFinal = Date.now() - lastSentFinalTime;
+                    // Only check if FINAL was sent recently (within 5 seconds)
+                    if (timeSinceLastFinal < 5000) {
+                      const lastSentFinalNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                      const partialNormalized = transcriptText.replace(/\s+/g, ' ').toLowerCase();
+                      
+                      // Get last few words from previous FINAL (check last 3-5 words)
+                      const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
+                      const partialWords = partialNormalized.split(/\s+/).filter(w => w.length > 2);
+                      
+                      // Check if partial starts with words that are related to the end of previous FINAL
+                      if (lastSentWords.length > 0 && partialWords.length > 0) {
+                        const lastWordsFromFinal = lastSentWords.slice(-3); // Last 3 words from FINAL
+                        const firstWordsFromPartial = partialWords.slice(0, 3); // First 3 words from PARTIAL
+                        
+                        // Check if the first word(s) of partial match the last word(s) of final
+                        // This catches cases like "desires" at end of FINAL followed by "Desires" at start of PARTIAL
+                        let wordsToSkip = 0;
+                        
+                        // Check backwards: first word of partial vs last word of final, second vs second-to-last, etc.
+                        for (let i = 0; i < Math.min(firstWordsFromPartial.length, lastWordsFromFinal.length); i++) {
+                          const partialWord = firstWordsFromPartial[i];
+                          const finalWord = lastWordsFromFinal[lastWordsFromFinal.length - 1 - i];
+                          
+                          if (wordsAreRelated(partialWord, finalWord)) {
+                            wordsToSkip++;
+                            console.log(`[HostMode] ⚠️ Partial word "${partialWord}" (position ${i}) matches final word "${finalWord}" (position ${lastWordsFromFinal.length - 1 - i})`);
+                          } else {
+                            // Stop checking once we find a non-match
+                            break;
+                          }
+                        }
+                        
+                        if (wordsToSkip > 0) {
+                          // Skip the duplicate words
+                          const partialWordsArray = transcriptText.split(/\s+/);
+                          partialTextToSend = partialWordsArray.slice(wordsToSkip).join(' ').trim();
+                          console.log(`[HostMode] ✂️ Trimmed ${wordsToSkip} duplicate word(s) from partial: "${transcriptText.substring(0, 50)}..." → "${partialTextToSend.substring(0, 50)}..."`);
+                          
+                          // If nothing left after trimming, skip sending this partial entirely
+                          if (!partialTextToSend || partialTextToSend.length < 3) {
+                            console.log(`[HostMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
+                            return; // Skip this partial entirely
+                          }
+                        }
+                      }
+                    }
+                  }
+                  
+                  // CRITICAL: Don't send very short partials at the start of a new segment
+                  // Google Speech needs time to refine the transcription, especially for the first word
+                  // Very short partials (< 15 chars) at segment start are often inaccurate
+                  const isVeryShortPartial = partialTextToSend.trim().length < 15;
+                  syncPendingFinalization();
+                  const hasPendingFinal = finalizationEngine.hasPendingFinalization();
+                  syncForcedFinalBuffer();
+                  const timeSinceLastFinal = lastSentFinalTime ? (Date.now() - lastSentFinalTime) : Infinity;
+                  // New segment start if: no pending final AND (no forced final buffer OR forced final recovery not in progress) AND recent final (< 2 seconds)
+                  const isNewSegmentStart = !hasPendingFinal && 
+                                            (!forcedFinalBuffer || !forcedFinalBuffer.recoveryInProgress) &&
+                                            timeSinceLastFinal < 2000;
+                  
+                  if (isVeryShortPartial && isNewSegmentStart) {
+                    console.log(`[HostMode] ⏳ Delaying very short partial at segment start (${partialTextToSend.trim().length} chars, ${timeSinceLastFinal}ms since last final): "${partialTextToSend.substring(0, 30)}..." - waiting for transcription to stabilize`);
+                    // Don't send yet - wait for partial to grow
+                    // Continue tracking so we can send it once it's longer
+                    return; // Skip sending this partial
+                  }
+                  
                   // Live partial transcript - send original immediately with sequence ID (solo mode style)
                   // Note: This is the initial send before grammar/translation, so use raw text
                   const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
                   const seqId = broadcastWithSequence({
                     type: 'translation',
-                    originalText: transcriptText, // Raw STT text (shown immediately)
+                    originalText: partialTextToSend, // Use deduplicated text
                     translatedText: undefined, // Will be updated when translation arrives
                     sourceLang: currentSourceLang,
                     targetLang: currentSourceLang,
@@ -826,14 +917,71 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const finalEndsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(finalText);
                     const finalEndsWithPunctuationOrSpace = /[.!?…\s]$/.test(finalText);
                     const isVeryShortPartial = partialText.length < 20; // Very short partials (< 20 chars) are likely continuations
-                    // If final doesn't end with complete sentence, wait longer for continuation (up to 5 seconds)
-                    const mightBeContinuation = !finalEndsWithCompleteSentence && isVeryShortPartial && timeSinceFinal < 5000;
                     
-                    // If partial might be a continuation, wait longer and don't treat as new segment yet
+                    // CRITICAL FIX: Check if partial actually shares words with final before treating as continuation
+                    // If partial is completely unrelated (no shared words, doesn't start with final), it's a new segment
+                    const finalWords = finalText.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                    const partialWords = partialText.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                    const sharedWords = finalWords.filter(w => partialWords.includes(w));
+                    const hasWordOverlap = sharedWords.length > 0;
+                    
+                    // Also check if partial starts with any of the last few words of final (catches cases like "haven't" -> "haven't been")
+                    const lastWordsOfFinal = finalWords.slice(-3);
+                    const startsWithFinalWord = partialWords.length > 0 && lastWordsOfFinal.some(w => 
+                      partialWords[0].startsWith(w) || w.startsWith(partialWords[0]) || wordsAreRelated(partialWords[0], w)
+                    );
+                    
+                    // Partial is only a potential continuation if:
+                    // 1. Final doesn't end with complete sentence AND
+                    // 2. Partial is very short AND
+                    // 3. Partial actually has some relationship to final (word overlap OR starts with final word OR extends final)
+                    const mightBeContinuation = !finalEndsWithCompleteSentence && 
+                                                isVeryShortPartial && 
+                                                timeSinceFinal < 5000 &&
+                                                (hasWordOverlap || startsWithFinalWord || extendsFinal);
+                    
+                    // CRITICAL: Even if FINAL ends with period, Google Speech may have incorrectly finalized mid-sentence
+                    // If a very short partial arrives very soon after (< 1.5 seconds), wait briefly to see if it's a continuation
+                    // This catches cases like "You just can't." followed by "People...." which should be "You just can't beat people..."
+                    const mightBeFalseFinal = finalEndsWithCompleteSentence && 
+                                             isVeryShortPartial && 
+                                             timeSinceFinal < 1500 && 
+                                             !hasWordOverlap && 
+                                             !startsWithFinalWord && 
+                                             !extendsFinal;
+                    
+                    // If partial is clearly a new segment (no relationship to final), commit the pending final immediately
+                    // BUT: If it might be a false final (period added incorrectly), wait a bit longer
+                    if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord && timeSinceFinal > 500 && !mightBeFalseFinal) {
+                      console.log(`[HostMode] 🔀 New segment detected - partial "${partialText}" has no relationship to pending FINAL "${finalText.substring(0, 50)}..."`);
+                      console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
+                      // PHASE 8: Clear timeout using engine
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      const textToCommit = pendingFinalization.text;
+                      // PHASE 8: Clear using engine
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      // PHASE 8: Reset partial tracking using tracker
+                      partialTracker.reset();
+                      syncPartialVariables();
+                      processFinalText(textToCommit);
+                      // Continue processing the new partial as a new segment (don't return - let it be processed below)
+                    }
+                    
+                    // If partial might be a continuation OR might be a false final (period added incorrectly), wait longer
                     // Continue tracking the partial so it can grow into the complete word
                     // CRITICAL: Check max wait time - don't extend wait if we've already waited too long
+                    // CRITICAL: Check if pending still exists (it may have been cleared above)
+                    if (!pending) {
+                      // pendingFinalization was cleared (final was committed) - skip continuation logic
+                      return; // Continue processing the new partial as a new segment
+                    }
                     const timeSinceMaxWait = Date.now() - pending.maxWaitTimestamp;
-                    if (mightBeContinuation && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
+                    if ((mightBeContinuation || mightBeFalseFinal) && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
+                      if (mightBeFalseFinal) {
+                        console.log(`[HostMode] ⚠️ Possible false final - FINAL ends with period but very short partial arrived soon after (${timeSinceFinal}ms)`);
+                        console.log(`[HostMode] ⏳ Waiting to see if partial grows into continuation: FINAL="${finalText}", partial="${partialText}"`);
+                      }
                       console.log(`[HostMode] ⚠️ Short partial after incomplete FINAL - likely continuation (FINAL: "${finalText}", partial: "${partialText}")`);
                       console.log(`[HostMode] ⏳ Extending wait to see if partial grows into complete word/phrase`);
                       // Extend timeout significantly to wait for complete word/phrase
@@ -1023,9 +1171,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                           }
                         }
                         
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables();
+                        // CRITICAL: Check if forced final recovery is in progress before resetting
+                        // If recovery is in progress, defer reset until recovery completes
+                        syncForcedFinalBuffer();
+                        const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
+                        if (recoveryInProgress) {
+                          console.log('[HostMode] ⏳ Recovery in progress - deferring partial tracker reset until recovery completes');
+                          // Reset will happen in recovery completion callback
+                        } else {
+                          // PHASE 8: Reset partial tracking using tracker
+                          partialTracker.reset();
+                          syncPartialVariables();
+                        }
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
@@ -1743,8 +1900,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
 
                         // NOW reset partial tracking for next segment (clean slate for recovery)
+                        // CRITICAL: Use snapshotAndReset to prevent race conditions where new partials
+                        // arrive between snapshot and reset, which could mix segments
                         console.log(`[HostMode] 🧹 Resetting partial tracking for next segment`);
-                        // PHASE 8: Reset partial tracking using tracker
+                        // PHASE 8: Reset partial tracking using tracker (snapshot already taken above)
                         partialTracker.reset();
                         syncPartialVariables(); // Sync variables after reset
 
@@ -2420,41 +2579,41 @@ export async function handleHostConnection(clientWs, sessionId) {
                   WAIT_FOR_PARTIALS_MS = BASE_WAIT_MS;
                 }
                 
-                // CRITICAL: Sentence-aware finalization - wait for complete sentences
-                // If FINAL doesn't end with a complete sentence, wait significantly longer
-                // This prevents cutting off mid-sentence and causing transcription errors
+                // CRITICAL: Check if FINAL is incomplete - if so, wait briefly for extending partials
+                // This prevents committing incomplete phrases like "you just," when they should continue
                 const finalEndsWithCompleteSentence = endsWithCompleteSentence(transcriptText);
-                if (!finalEndsWithCompleteSentence) {
-                  // FINAL doesn't end with complete sentence - wait MUCH longer for continuation
-                  // This allows long sentences to complete naturally before finalizing
-                  const SENTENCE_WAIT_MS = Math.max(4000, Math.min(8000, transcriptText.length * 20)); // 4-8 seconds based on length (increased)
-                  WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, SENTENCE_WAIT_MS);
-                  console.log(`[HostMode] ⚠️ FINAL doesn't end with complete sentence - extending wait to ${WAIT_FOR_PARTIALS_MS}ms to catch sentence completion`);
+                const finalEndsWithSentencePunctuation = /[.!?…]$/.test(transcriptText.trim());
+                // Incomplete if: doesn't end with sentence punctuation (period, exclamation, question mark)
+                // Commas, semicolons, colons are NOT sentence-ending, so text ending with them is incomplete
+                const isIncomplete = !finalEndsWithSentencePunctuation;
+                
+                if (isIncomplete) {
+                  console.log(`[HostMode] 📝 FINAL is incomplete (ends with "${transcriptText.trim().slice(-1)}" not sentence punctuation) - will wait briefly for extending partials`);
                   console.log(`[HostMode] 📝 Current text: "${transcriptText.substring(Math.max(0, transcriptText.length - 60))}"`);
-                } else {
-                  // FINAL ends with complete sentence - still check for punctuation for backward compatibility
-                  const finalEndsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
-                  if (!finalEndsWithPunctuation) {
-                    // Has sentence ending but not standard punctuation - still wait a bit
-                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1500);
-                    console.log(`[HostMode] ⚠️ FINAL doesn't end with standard punctuation - extending wait to ${WAIT_FOR_PARTIALS_MS}ms`);
+                  // For incomplete finals, extend wait time to catch extending partials
+                  // Short incomplete finals (< 50 chars) likely need more words - wait longer
+                  if (transcriptText.length < 50) {
+                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 2000); // At least 2 seconds for short incomplete phrases
+                  } else {
+                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1500); // 1.5 seconds for longer incomplete text
                   }
+                } else if (!finalEndsWithCompleteSentence) {
+                  // Ends with sentence punctuation but not complete sentence - still wait a bit
+                  console.log(`[HostMode] 📝 FINAL ends with sentence punctuation but not complete sentence - will commit after standard wait`);
                 }
                 
                 // CRITICAL: Before setting up finalization, check if we have longer partials that extend this final
                 // This ensures we don't lose words like "gathered" that might be in a partial but not in the FINAL
-                // ALSO: Check if final ends mid-word - if so, wait for complete word in partials
                 let finalTextToUse = transcriptText;
                 const finalTrimmed = transcriptText.trim();
                 const finalEndsCompleteWord = endsWithCompleteWord(finalTrimmed);
                 const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                 const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
                 
-                // If final doesn't end with complete word, prioritize partials that contain the complete word
+                // Note: We no longer extend wait time for mid-word finals - commit immediately
+                // Continuations will be caught by the partial continuation detection logic
                 if (!finalEndsCompleteWord) {
-                  console.log(`[HostMode] ⚠️ FINAL ends mid-word - waiting for complete word in partials`);
-                  // Increase wait time to catch complete word
-                  WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1200); // At least 1200ms for mid-word finals
+                  console.log(`[HostMode] 📝 FINAL ends mid-word - will commit immediately, continuation will be caught in partials`);
                 }
                 
                 // Check if longest partial extends the final

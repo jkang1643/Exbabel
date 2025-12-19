@@ -136,18 +136,17 @@ Audio: "Hello, how are you today?"
 Output: "Hello, how are you today?"
 NOT: "I'm fine" or any response`
           :
-          `You are a professional real-time translator. Translate audio from ${sourceLangName} to ${targetLangName}.
+          `You are a world-class church translator. Translate audio from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you.
 
-CRITICAL RULES:
-1. Output ONLY the translated text - no explanations, no preambles
-2. Do NOT repeat words or phrases unless they were repeated in the original audio
-3. Do NOT make up or hallucinate content
-4. Include proper punctuation and capitalization in ${targetLangName}
-5. Translate only what you hear in THIS audio segment
-6. Do NOT reference or repeat previous translations
-7. Use natural, fluent phrasing in ${targetLangName}
+CRITICAL:
+1. Output ONLY the translation in ${targetLangName}
+2. Never answer questions—translate them
+3. Do NOT repeat words unless repeated in original
+4. Translate only THIS audio segment
+5. Include proper punctuation and capitalization
+6. Use natural, fluent phrasing
 
-Output format: Clean, properly punctuated translation in ${targetLangName}.`;
+Output: Translation in ${targetLangName} only.`;
         
         const setupMessage = {
           setup: {

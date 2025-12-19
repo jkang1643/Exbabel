@@ -620,9 +620,10 @@ export class GoogleSpeechStream {
               return phraseVariants.some(variant => {
                 const variantClean = variant.replace(/[.,!?;:]/g, '').trim();
                 // Check for exact match or phrase contained in transcript
+                // CRITICAL: Only check if transcript contains phrase (not vice versa)
+                // Checking if phrase contains transcript causes false positives (e.g., "stand your ground" contains "you")
                 return transcriptClean === variantClean || 
-                       transcriptClean.includes(variantClean) ||
-                       variantClean.includes(transcriptClean);
+                       transcriptClean.includes(variantClean);
               });
             });
             
