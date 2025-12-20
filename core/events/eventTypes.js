@@ -70,8 +70,22 @@
  */
 
 /**
+ * @typedef {Object} ScriptureDetectedEvent
+ * @property {string} type - Always "scriptureDetected"
+ * @property {Object} reference - Bible reference object
+ * @property {string} reference.book - Book name (e.g., "Acts")
+ * @property {number} reference.chapter - Chapter number
+ * @property {number} [reference.verse] - Verse number (optional)
+ * @property {string} displayText - Display text (e.g., "Acts 2:38")
+ * @property {number} confidence - Confidence score (0.0-1.0)
+ * @property {string} method - Detection method ("regex", "keywords", "keywords+ai")
+ * @property {number} seqId - Sequence ID for ordering
+ * @property {number} timestamp - Event timestamp (ms since epoch)
+ */
+
+/**
  * Union type of all possible Exbabel events
- * @typedef {PartialEvent | FinalEvent | CommitEvent | LLMEvent | LatencyReportEvent | GrammarUpdateEvent | TranslationEvent} ExbabelEvent
+ * @typedef {PartialEvent | FinalEvent | CommitEvent | LLMEvent | LatencyReportEvent | GrammarUpdateEvent | TranslationEvent | ScriptureDetectedEvent} ExbabelEvent
  */
 
 /**
@@ -84,7 +98,8 @@ export const EVENT_TYPES = {
   LLM: 'llm',
   LATENCY_REPORT: 'latencyReport',
   GRAMMAR_UPDATE: 'grammarUpdate',
-  TRANSLATION: 'translation'
+  TRANSLATION: 'translation',
+  SCRIPTURE_DETECTED: 'scriptureDetected'
 };
 
 /**
@@ -130,6 +145,15 @@ export function validateEvent(event) {
     case EVENT_TYPES.GRAMMAR_UPDATE:
       return typeof event.originalText === 'string' && 
              typeof event.correctedText === 'string' && 
+             typeof event.seqId === 'number';
+    
+    case EVENT_TYPES.SCRIPTURE_DETECTED:
+      return typeof event.reference === 'object' &&
+             typeof event.reference.book === 'string' &&
+             typeof event.reference.chapter === 'number' &&
+             typeof event.displayText === 'string' &&
+             typeof event.confidence === 'number' &&
+             typeof event.method === 'string' &&
              typeof event.seqId === 'number';
     
     default:

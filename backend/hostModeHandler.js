@@ -51,7 +51,16 @@ export async function handleHostConnection(clientWs, sessionId) {
 
   // PHASE 8: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (same as solo mode)
-  const coreEngine = new CoreEngine();
+  const coreEngine = new CoreEngine({
+    bibleConfig: {
+      confidenceThreshold: 0.85,
+      aiFallbackThreshold: 0.70,
+      enableLLMConfirmation: true,
+      llmModel: 'gpt-4o-mini',
+      openaiApiKey: process.env.OPENAI_API_KEY,
+      transcriptWindowSeconds: 10
+    }
+  });
   coreEngine.initialize();
   
   // PHASE 8: Access individual engines via coreEngine for backward compatibility
@@ -630,6 +639,38 @@ export async function handleHostConnection(clientWs, sessionId) {
                         return; // Skip processing duplicate
                       }
                     }
+                    
+                    // Bible reference detection (non-blocking, runs in parallel)
+                    coreEngine.detectReferences(textToProcess, {
+                      sourceLang: currentSourceLang,
+                      targetLang: currentSourceLang, // Host mode broadcasts to all languages
+                      seqId: timelineTracker.getCurrentSeqId(),
+                      openaiApiKey: process.env.OPENAI_API_KEY
+                    }).then(references => {
+                      if (references && references.length > 0) {
+                        // Broadcast scripture detected events to all listeners
+                        for (const ref of references) {
+                          const message = {
+                            type: 'scriptureDetected',
+                            reference: {
+                              book: ref.book,
+                              chapter: ref.chapter,
+                              verse: ref.verse
+                            },
+                            displayText: ref.displayText,
+                            confidence: ref.confidence,
+                            method: ref.method,
+                            timestamp: Date.now(),
+                            seqId: timelineTracker.getCurrentSeqId()
+                          };
+                          sessionStore.broadcastToListeners(currentSessionId, message);
+                          console.log(`[HostMode] 📜 Scripture detected: ${ref.displayText} (confidence: ${ref.confidence.toFixed(2)}, method: ${ref.method})`);
+                        }
+                      }
+                    }).catch(err => {
+                      console.error('[HostMode] Bible reference detection error:', err);
+                      // Fail silently - don't block transcript delivery
+                    });
                     
                     const isTranscriptionOnly = false; // Host mode always translates
                     

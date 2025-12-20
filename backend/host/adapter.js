@@ -59,7 +59,16 @@ export async function handleHostConnection(clientWs, sessionId) {
 
   // PHASE 8: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (same as solo mode)
-  const coreEngine = new CoreEngine();
+  const coreEngine = new CoreEngine({
+    bibleConfig: {
+      confidenceThreshold: 0.85,
+      aiFallbackThreshold: 0.70,
+      enableLLMConfirmation: true,
+      llmModel: 'gpt-4o-mini',
+      openaiApiKey: process.env.OPENAI_API_KEY,
+      transcriptWindowSeconds: 10
+    }
+  });
   coreEngine.initialize();
   
   // PHASE 8: Access individual engines via coreEngine for backward compatibility
@@ -239,23 +248,45 @@ export async function handleHostConnection(clientWs, sessionId) {
                   return -1;
                 }
                 
-                // PHASE 8: Use CoreEngine timeline tracker for sequence IDs
-                const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
+                // OPTIMIZATION: If seqId is provided in messageData (for updates), use it; otherwise generate new one
+                let seqId;
+                let message;
+                
+                if (messageData.seqId !== undefined) {
+                  // Reuse existing seqId for updates (e.g., grammar/translation updates for forced finals)
+                  seqId = messageData.seqId;
+                  const { seqId: _, ...dataWithoutSeqId } = messageData; // Extract seqId to avoid duplication
+                  message = {
+                    ...dataWithoutSeqId,
+                    seqId, // Add seqId back explicitly
+                    serverTimestamp: Date.now(),
+                    isPartial,
+                    type: messageData.type || 'translation'
+                  };
+                } else {
+                  // Generate new seqId for new messages
+                  const sequenced = timelineTracker.createSequencedMessage(messageData, isPartial);
+                  message = sequenced.message;
+                  seqId = sequenced.seqId;
+                }
                 
                 // Send to host
                 if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify(message));
-                  console.log(`[HostMode] 📤 Sent to host (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${messageData.targetLang || 'N/A'})`);
+                  const updateType = message.updateType ? ` (${message.updateType} update)` : '';
+                  console.log(`[HostMode] 📤 Sent to host (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${messageData.targetLang || 'N/A'}${updateType})`);
                 }
                 
                 // Broadcast to listeners
                 if (targetLang) {
                   // Broadcast to specific language group
-                  console.log(`[HostMode] 📡 Broadcasting to ${targetLang} listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
+                  const updateType = message.updateType ? ` (${message.updateType} update)` : '';
+                  console.log(`[HostMode] 📡 Broadcasting to ${targetLang} listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}${updateType})`);
                   sessionStore.broadcastToListeners(currentSessionId, message, targetLang);
                 } else {
                   // Broadcast to all listeners
-                  console.log(`[HostMode] 📡 Broadcasting to ALL listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
+                  const updateType = message.updateType ? ` (${message.updateType} update)` : '';
+                  console.log(`[HostMode] 📡 Broadcasting to ALL listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}${updateType})`);
                   sessionStore.broadcastToListeners(currentSessionId, message);
                 }
                 
@@ -456,6 +487,185 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                     }
                     
+                    // OPTIMIZATION: For forced finals, send immediately without waiting for grammar/translation
+                    // Then update asynchronously when ready (reduces commit latency from 4-5s to ~1-1.5s)
+                    const isForcedFinal = !!options.forceFinal;
+                    
+                    if (isForcedFinal) {
+                      // Get all target languages needed for listeners
+                      const targetLanguages = sessionStore.getSessionLanguages(currentSessionId);
+                      console.log(`[HostMode] ⚡ FORCED FINAL: Sending immediately to ${targetLanguages.length} language(s) (no grammar/translation wait)`);
+                      
+                      // Send forced final immediately with original text only to all languages
+                      const immediateSeqIds = {};
+                      
+                      // Send to host first
+                      if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+                        const hostSeqId = broadcastWithSequence({
+                          type: 'translation',
+                          originalText: textToProcess,
+                          correctedText: textToProcess, // Will be updated asynchronously
+                          translatedText: textToProcess, // Will be updated asynchronously
+                          sourceLang: currentSourceLang,
+                          targetLang: currentSourceLang,
+                          timestamp: Date.now(),
+                          hasTranslation: false, // Will be updated asynchronously
+                          hasCorrection: false, // Will be updated asynchronously
+                          forceFinal: true
+                        }, false);
+                        immediateSeqIds[currentSourceLang] = hostSeqId;
+                      }
+                      
+                      // Send to all listener languages
+                      for (const targetLang of targetLanguages) {
+                        const seqId = broadcastWithSequence({
+                          type: 'translation',
+                          originalText: textToProcess,
+                          correctedText: textToProcess, // Will be updated asynchronously
+                          translatedText: textToProcess, // Will be updated asynchronously
+                          sourceLang: currentSourceLang,
+                          targetLang: targetLang,
+                          timestamp: Date.now(),
+                          hasTranslation: false, // Will be updated asynchronously
+                          hasCorrection: false, // Will be updated asynchronously
+                          forceFinal: true
+                        }, false, targetLang);
+                        immediateSeqIds[targetLang] = seqId;
+                      }
+                      
+                      // Update tracking immediately
+                      lastSentOriginalText = textToProcess;
+                      lastSentFinalText = textToProcess;
+                      lastSentFinalTime = Date.now();
+                      
+                      // Asynchronously process grammar/translation and send updates
+                      (async () => {
+                        try {
+                          let correctedText = textToProcess;
+                          
+                          // Grammar correction (English only)
+                          if (currentSourceLang === 'en') {
+                            try {
+                              correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                              rememberGrammarCorrection(textToProcess, correctedText);
+                              
+                              if (correctedText !== textToProcess) {
+                                // Send grammar update to all languages with same seqId
+                                if (clientWs && clientWs.readyState === WebSocket.OPEN && immediateSeqIds[currentSourceLang]) {
+                                  broadcastWithSequence({
+                                    type: 'translation',
+                                    originalText: textToProcess,
+                                    correctedText: correctedText,
+                                    translatedText: textToProcess, // Translation not ready yet
+                                    sourceLang: currentSourceLang,
+                                    targetLang: currentSourceLang,
+                                    timestamp: Date.now(),
+                                    hasCorrection: true,
+                                    forceFinal: true,
+                                    updateType: 'grammar',
+                                    seqId: immediateSeqIds[currentSourceLang]
+                                  }, false);
+                                }
+                                
+                                for (const targetLang of targetLanguages) {
+                                  if (immediateSeqIds[targetLang]) {
+                                    broadcastWithSequence({
+                                      type: 'translation',
+                                      originalText: textToProcess,
+                                      correctedText: correctedText,
+                                      translatedText: textToProcess, // Translation not ready yet
+                                      sourceLang: currentSourceLang,
+                                      targetLang: targetLang,
+                                      timestamp: Date.now(),
+                                      hasCorrection: true,
+                                      forceFinal: true,
+                                      updateType: 'grammar',
+                                      seqId: immediateSeqIds[targetLang]
+                                    }, false, targetLang);
+                                  }
+                                }
+                              }
+                            } catch (grammarError) {
+                              console.warn(`[HostMode] Grammar correction failed (async):`, grammarError.message);
+                            }
+                          }
+                          
+                          // Translation to all target languages
+                          if (targetLanguages.length > 0) {
+                            const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                            try {
+                              const finalWorker = usePremiumTier 
+                                ? realtimeFinalTranslationWorker 
+                                : finalTranslationWorker;
+                              console.log(`[HostMode] 🔀 Using ${workerType} API for forced final translation (async, ${correctedText.length} chars) to ${targetLanguages.length} language(s)`);
+                              const translations = await finalWorker.translateToMultipleLanguages(
+                                correctedText,
+                                currentSourceLang,
+                                targetLanguages,
+                                process.env.OPENAI_API_KEY,
+                                currentSessionId
+                              );
+                              
+                              // Send translation updates to all languages with same seqId
+                              for (const targetLang of targetLanguages) {
+                                if (!immediateSeqIds[targetLang]) continue;
+                                
+                                const translatedText = translations[targetLang];
+                                const hasTranslationForLang = translatedText && 
+                                                              translatedText.trim() &&
+                                                              !translatedText.startsWith('[Translation error') &&
+                                                              translatedText !== textToProcess &&
+                                                              translatedText !== correctedText;
+                                
+                                if (hasTranslationForLang) {
+                                  broadcastWithSequence({
+                                    type: 'translation',
+                                    originalText: textToProcess,
+                                    correctedText: correctedText,
+                                    translatedText: translatedText,
+                                    sourceLang: currentSourceLang,
+                                    targetLang: targetLang,
+                                    timestamp: Date.now(),
+                                    hasTranslation: true,
+                                    hasCorrection: correctedText !== textToProcess,
+                                    forceFinal: true,
+                                    updateType: 'translation',
+                                    seqId: immediateSeqIds[targetLang]
+                                  }, false, targetLang);
+                                }
+                              }
+                              
+                              // Also update host if same language
+                              if (clientWs && clientWs.readyState === WebSocket.OPEN && immediateSeqIds[currentSourceLang]) {
+                                const hostTranslation = translations[currentSourceLang] || correctedText;
+                                broadcastWithSequence({
+                                  type: 'translation',
+                                  originalText: textToProcess,
+                                  correctedText: correctedText,
+                                  translatedText: hostTranslation,
+                                  sourceLang: currentSourceLang,
+                                  targetLang: currentSourceLang,
+                                  timestamp: Date.now(),
+                                  hasTranslation: false, // Same language = no translation
+                                  hasCorrection: correctedText !== textToProcess,
+                                  forceFinal: true,
+                                  updateType: 'translation',
+                                  seqId: immediateSeqIds[currentSourceLang]
+                                }, false);
+                              }
+                            } catch (translationError) {
+                              console.error(`[HostMode] Translation failed (async):`, translationError.message);
+                            }
+                          }
+                        } catch (error) {
+                          console.error(`[HostMode] Async update error:`, error);
+                        }
+                      })();
+                      
+                      return; // Exit early - async updates will handle the rest
+                    }
+                    
+                    // Regular finals - keep existing behavior (wait for grammar/translation)
                     const isTranscriptionOnly = false; // Host mode always translates
                     
                     // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
@@ -508,7 +718,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             timestamp: Date.now(),
                             hasTranslation: false,
                             hasCorrection: correctedText !== textToProcess,
-                            forceFinal: !!options.forceFinal
+                            forceFinal: false
                           }, false);
                         }
                         return;
@@ -607,7 +817,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           timestamp: Date.now(),
                           hasTranslation: hasTranslationForLang,
                           hasCorrection: hasCorrection,
-                          forceFinal: !!options.forceFinal
+                          forceFinal: false
                         };
                         
                         // CRITICAL: For same-language listeners, use correctedText as translatedText (like solo mode)
@@ -648,7 +858,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         timestamp: Date.now(),
                         hasTranslation: error.skipRequest,
                         hasCorrection: false,
-                        forceFinal: !!options.forceFinal
+                        forceFinal: false
                       }, false);
                       
                       // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
@@ -1887,12 +2097,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                         return;
                       }
                       
-                      console.log('[HostMode] ⏰ Phase 1: Waiting 1200ms for late partials and POST-final audio accumulation...');
+                      console.log(`[HostMode] ⏰ Phase 1: Waiting ${forcedCommitEngine.PHASE_2_WAIT_MS}ms for late partials and POST-final audio accumulation...`);
                       console.log(`[HostMode] 🎯 DUAL BUFFER SYSTEM: Phase 1 started - audio buffer active`);
                       console.log(`[HostMode] 🎯 DUAL BUFFER: Phase 1 callback EXECUTED - recovery system is running!`);
                       console.log(`[HostMode] 🔧 DEBUG: Phase 1 timeout callback FIRED - recovery code will execute`);
 
-                      // Phase 1: Wait 1200ms for late partials to arrive AND for POST-final audio to accumulate
+                      // Phase 1: Wait for late partials to arrive AND for POST-final audio to accumulate
                       // CRITICAL: Declare recoveryResolve at the start of setTimeout callback so it's accessible in catch
                       let recoveryResolve = null;
                       
@@ -1908,7 +2118,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           return;
                         }
 
-                        // Snapshot any late partials that arrived during the 1200ms wait
+                        // Snapshot any late partials that arrived during the wait period
                         syncPartialVariables();
                         const partialSnapshot = {
                           longest: longestPartialText,
@@ -1952,7 +2162,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // ⭐ CRITICAL: Capture 2200ms window that includes BOTH:
                         // - PRE-final audio (1400ms before the final) ← Contains the decoder gap!
                         // - POST-final audio (800ms after the final) ← Captures complete phrases like "self-centered"
-                        const captureWindowMs = 2200;
+                        const captureWindowMs = forcedCommitEngine.CAPTURE_WINDOW_MS;
                         console.log(`[HostMode] 🎵 Capturing PRE+POST-final audio: last ${captureWindowMs}ms`);
                         console.log(`[HostMode] 📊 Window covers: [T-${captureWindowMs - timeSinceForcedFinal}ms to T+${timeSinceForcedFinal}ms]`);
                         console.log(`[HostMode] 🎯 This INCLUDES the decoder gap at ~T-200ms where missing words exist!`);
@@ -2043,14 +2253,16 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                             // Wait for stream to be FULLY ready (not just exist)
                             console.log(`[HostMode] ⏳ Waiting for recovery stream to be ready...`);
+                            const STREAM_READY_POLL_INTERVAL_MS = 25; // Optimized for faster detection
+                            const STREAM_READY_MAX_WAIT_MS = 1500; // Optimized for latency
                             let streamReadyTimeout = 0;
-                            while (!tempStream.isStreamReady() && streamReadyTimeout < 2000) {
-                              await new Promise(resolve => setTimeout(resolve, 50));
-                              streamReadyTimeout += 50;
+                            while (!tempStream.isStreamReady() && streamReadyTimeout < STREAM_READY_MAX_WAIT_MS) {
+                              await new Promise(resolve => setTimeout(resolve, STREAM_READY_POLL_INTERVAL_MS));
+                              streamReadyTimeout += STREAM_READY_POLL_INTERVAL_MS;
                             }
 
                             if (!tempStream.isStreamReady()) {
-                              console.log(`[HostMode] ❌ Recovery stream not ready after 2000ms!`);
+                              console.log(`[HostMode] ❌ Recovery stream not ready after ${STREAM_READY_MAX_WAIT_MS}ms!`);
                               console.log(`[HostMode] Stream state:`, {
                                 exists: !!tempStream.recognizeStream,
                                 writable: tempStream.recognizeStream?.writable,
@@ -2062,8 +2274,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                             }
 
                             console.log(`[HostMode] ✅ Recovery stream ready after ${streamReadyTimeout}ms`);
-                            await new Promise(resolve => setTimeout(resolve, 100));
-                            console.log(`[HostMode] ✅ Additional 100ms wait complete`);
+                            await new Promise(resolve => setTimeout(resolve, 50)); // Optimized for latency
+                            console.log(`[HostMode] ✅ Additional 50ms wait complete`);
 
                             // CRITICAL: Create recovery promise NOW (after stream is ready) so new segments can wait for it
                             // recoveryResolve is already declared at the start of setTimeout callback
@@ -2131,12 +2343,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                             // This waits for the actual 'end' event, not a timer
                             console.log(`[HostMode] ⏳ Waiting for Google to decode and send results (stream 'end' event)...`);
 
-                            // Add timeout to prevent infinite hang
+                            // Add timeout to prevent infinite hang (optimized for latency)
+                            const RECOVERY_STREAM_TIMEOUT_MS = 4000;
                             const timeoutPromise = new Promise((resolve) => {
                               setTimeout(() => {
-                                console.warn(`[HostMode] ⚠️ Recovery stream timeout after 5000ms`);
+                                console.warn(`[HostMode] ⚠️ Recovery stream timeout after ${RECOVERY_STREAM_TIMEOUT_MS}ms`);
                                 resolve();
-                              }, 5000);
+                              }, RECOVERY_STREAM_TIMEOUT_MS);
                             });
 
                             await Promise.race([streamCompletionPromise, timeoutPromise]);
@@ -2316,7 +2529,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Reset recovery tracking after commit
                         recoveryStartTime = 0;
                         nextFinalAfterRecovery = null;
-                      }, 1200);  // Phase 2: Wait 1200ms to capture more POST-final audio (shifts window from [T-1500,T+500] to [T-800,T+1200])
+                      }, forcedCommitEngine.PHASE_2_WAIT_MS);  // Phase 2: Wait to capture POST-final audio (800ms) + late partials buffer (200ms)
                     }, 0);  // Phase 1: Start immediately
 
                   } catch (error) {

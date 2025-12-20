@@ -9,6 +9,7 @@
  * - Partial Tracker (latest/longest partial tracking)
  * - Finalization Engine (finalization timing)
  * - Forced Commit Engine (forced final buffering and recovery)
+ * - Bible Reference Engine (Bible verse reference detection)
  * 
  * CRITICAL: This must maintain exact same behavior as current solo mode logic
  */
@@ -19,6 +20,7 @@ import { TimelineOffsetTracker } from './timelineOffsetTracker.js';
 import { PartialTracker } from './partialTracker.js';
 import { FinalizationEngine } from './finalizationEngine.js';
 import { ForcedCommitEngine } from './forcedCommitEngine.js';
+import { BibleReferenceEngine } from './bibleReferenceEngine.js';
 import { EVENT_TYPES } from '../events/eventTypes.js';
 
 /**
@@ -34,6 +36,8 @@ export class CoreEngine extends EventEmitter {
    * @param {PartialTracker} [options.partialTracker] - Optional partial tracker instance
    * @param {FinalizationEngine} [options.finalizationEngine] - Optional finalization engine instance
    * @param {ForcedCommitEngine} [options.forcedCommitEngine] - Optional forced commit engine instance
+   * @param {BibleReferenceEngine} [options.bibleReferenceEngine] - Optional Bible reference engine instance
+   * @param {Object} [options.bibleConfig] - Bible reference engine configuration
    */
   constructor(options = {}) {
     super();
@@ -48,6 +52,10 @@ export class CoreEngine extends EventEmitter {
     
     // Forced commit engine
     this.forcedCommitEngine = options.forcedCommitEngine || new ForcedCommitEngine();
+    
+    // Bible reference engine
+    this.bibleReferenceEngine = options.bibleReferenceEngine || 
+      new BibleReferenceEngine(options.bibleConfig || {});
     
     // State tracking
     this.isInitialized = false;
@@ -77,6 +85,7 @@ export class CoreEngine extends EventEmitter {
     this.partialTracker.reset();
     this.finalizationEngine.clearPendingFinalization();
     this.forcedCommitEngine.clearForcedFinalBuffer();
+    this.bibleReferenceEngine.reset();
     this.emit('reset');
   }
 
@@ -303,6 +312,17 @@ export class CoreEngine extends EventEmitter {
   }
 
   /**
+   * Detect Bible references in text
+   * 
+   * @param {string} text - Transcript text to analyze
+   * @param {Object} options - Detection options
+   * @returns {Promise<Array<Object>>} Array of detected references
+   */
+  async detectReferences(text, options = {}) {
+    return this.bibleReferenceEngine.detectReferences(text, options);
+  }
+
+  /**
    * Get current engine state (for debugging)
    * 
    * @returns {Object} Current state of all engines
@@ -322,7 +342,10 @@ export class CoreEngine extends EventEmitter {
         hasPending: this.finalizationEngine.hasPendingFinalization(),
         pending: this.finalizationEngine.getPendingFinalization()
       },
-      forcedCommit: this.forcedCommitEngine.getState()
+      forcedCommit: this.forcedCommitEngine.getState(),
+      bibleReference: {
+        windowSize: this.bibleReferenceEngine.transcriptWindow.length
+      }
     };
   }
 }

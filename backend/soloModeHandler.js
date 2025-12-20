@@ -34,7 +34,16 @@ export async function handleSoloMode(clientWs) {
   
   // PHASE 7: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (replaces individual engine instances)
-  const coreEngine = new CoreEngine();
+  const coreEngine = new CoreEngine({
+    bibleConfig: {
+      confidenceThreshold: 0.85,
+      aiFallbackThreshold: 0.70,
+      enableLLMConfirmation: true,
+      llmModel: 'gpt-4o-mini',
+      openaiApiKey: process.env.OPENAI_API_KEY,
+      transcriptWindowSeconds: 10
+    }
+  });
   coreEngine.initialize();
   
   // PHASE 7: Access individual engines via coreEngine for backward compatibility
@@ -109,8 +118,27 @@ export async function handleSoloMode(clientWs) {
   // PHASE 3: Send message with sequence info (uses Timeline Offset Tracker)
   // Helper: Send message with sequence info
   const sendWithSequence = (messageData, isPartial = true) => {
-    // Use timeline tracker to create sequenced message
-    const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
+    // OPTIMIZATION: If seqId is provided in messageData (for updates), use it; otherwise generate new one
+    let seqId;
+    let message;
+    
+    if (messageData.seqId !== undefined) {
+      // Reuse existing seqId for updates (e.g., grammar/translation updates for forced finals)
+      seqId = messageData.seqId;
+      const { seqId: _, ...dataWithoutSeqId } = messageData; // Extract seqId to avoid duplication
+      message = {
+        ...dataWithoutSeqId,
+        seqId, // Add seqId back explicitly
+        serverTimestamp: Date.now(),
+        isPartial,
+        type: messageData.type || 'translation'
+      };
+    } else {
+      // Generate new seqId for new messages
+      const sequenced = timelineTracker.createSequencedMessage(messageData, isPartial);
+      message = sequenced.message;
+      seqId = sequenced.seqId;
+    }
     
     // Add transcript and translation keys for API compatibility
     if (message.type === 'translation') {
@@ -124,7 +152,8 @@ export async function handleSoloMode(clientWs) {
     }
     
     // DEBUG: Log sequence ID for verification (Phase 3)
-    console.log(`[SoloMode] 📤 Sending message (seq: ${seqId}, isPartial: ${isPartial})`);
+    const updateType = message.updateType ? ` (${message.updateType} update)` : '';
+    console.log(`[SoloMode] 📤 Sending message (seq: ${seqId}, isPartial: ${isPartial}${updateType})`);
     
     // DEBUG: Log if correctedText is present
     if (message.correctedText && message.originalText !== message.correctedText) {
@@ -573,6 +602,163 @@ export async function handleSoloMode(clientWs) {
                       }
                     }
                     
+                    // Bible reference detection (non-blocking, runs in parallel)
+                    coreEngine.detectReferences(textToProcess, {
+                      sourceLang: currentSourceLang,
+                      targetLang: currentTargetLang,
+                      seqId: timelineTracker.getCurrentSeqId(),
+                      openaiApiKey: process.env.OPENAI_API_KEY
+                    }).then(references => {
+                      if (references && references.length > 0) {
+                        // Send scripture detected events
+                        for (const ref of references) {
+                          const seqId = sendWithSequence({
+                            type: 'scriptureDetected',
+                            reference: {
+                              book: ref.book,
+                              chapter: ref.chapter,
+                              verse: ref.verse
+                            },
+                            displayText: ref.displayText,
+                            confidence: ref.confidence,
+                            method: ref.method,
+                            timestamp: Date.now()
+                          }, false);
+                          console.log(`[SoloMode] 📜 Scripture detected: ${ref.displayText} (confidence: ${ref.confidence.toFixed(2)}, method: ${ref.method})`);
+                        }
+                      }
+                    }).catch(err => {
+                      console.error('[SoloMode] Bible reference detection error:', err);
+                      // Fail silently - don't block transcript delivery
+                    });
+                    
+                    // OPTIMIZATION: For forced finals, send immediately without waiting for grammar/translation
+                    // Then update asynchronously when ready (reduces commit latency from 4-5s to ~1-1.5s)
+                    const isForcedFinal = !!options.forceFinal;
+                    
+                    if (isForcedFinal) {
+                      // Send forced final immediately with original text only
+                      console.log(`[SoloMode] ⚡ FORCED FINAL: Sending immediately (no grammar/translation wait)`);
+                      const immediateSeqId = sendWithSequence({
+                        type: 'translation',
+                        originalText: textToProcess,
+                        correctedText: textToProcess, // Will be updated asynchronously
+                        translatedText: isTranscriptionOnly ? textToProcess : textToProcess, // Will be updated asynchronously
+                        timestamp: Date.now(),
+                        hasTranslation: false, // Will be updated asynchronously
+                        hasCorrection: false, // Will be updated asynchronously
+                        isTranscriptionOnly: isTranscriptionOnly,
+                        forceFinal: true
+                      }, false);
+                      
+                      // Update tracking immediately
+                      lastSentOriginalText = textToProcess;
+                      lastSentFinalText = textToProcess;
+                      lastSentFinalTime = Date.now();
+                      
+                      // Check for extending partials
+                      checkForExtendingPartialsAfterFinal(textToProcess);
+                      
+                      // Asynchronously process grammar/translation and send updates
+                      (async () => {
+                        try {
+                          if (isTranscriptionOnly) {
+                            // Transcription mode - only grammar correction needed
+                            if (currentSourceLang === 'en') {
+                              try {
+                                const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                                if (correctedText !== textToProcess) {
+                                  // Send grammar update with same seqId
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: textToProcess,
+                                    correctedText: correctedText,
+                                    translatedText: correctedText,
+                                    timestamp: Date.now(),
+                                    hasCorrection: true,
+                                    isTranscriptionOnly: true,
+                                    forceFinal: true,
+                                    updateType: 'grammar',
+                                    seqId: immediateSeqId // Use same seqId for update
+                                  }, false);
+                                  lastSentFinalText = correctedText;
+                                }
+                              } catch (error) {
+                                console.error('[SoloMode] Grammar correction error (async):', error);
+                              }
+                            }
+                          } else {
+                            // Translation mode - grammar correction first, then translation
+                            let correctedText = textToProcess;
+                            
+                            // Grammar correction (English only)
+                            if (currentSourceLang === 'en') {
+                              try {
+                                correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
+                                rememberGrammarCorrection(textToProcess, correctedText);
+                                
+                                if (correctedText !== textToProcess) {
+                                  // Send grammar update with same seqId
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: textToProcess,
+                                    correctedText: correctedText,
+                                    translatedText: textToProcess, // Translation not ready yet
+                                    timestamp: Date.now(),
+                                    hasCorrection: true,
+                                    isTranscriptionOnly: false,
+                                    forceFinal: true,
+                                    updateType: 'grammar',
+                                    seqId: immediateSeqId // Use same seqId for update
+                                  }, false);
+                                }
+                              } catch (grammarError) {
+                                console.warn(`[SoloMode] Grammar correction failed (async):`, grammarError.message);
+                              }
+                            }
+                            
+                            // Translation
+                            const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                            try {
+                              const finalWorker = usePremiumTier 
+                                ? realtimeFinalTranslationWorker 
+                                : finalTranslationWorker;
+                              console.log(`[SoloMode] 🔀 Using ${workerType} API for forced final translation (async, ${correctedText.length} chars)`);
+                              const translatedText = await finalWorker.translateFinal(
+                                correctedText,
+                                currentSourceLang,
+                                currentTargetLang,
+                                process.env.OPENAI_API_KEY,
+                                sessionId
+                              );
+                              
+                              // Send translation update with same seqId
+                              sendWithSequence({
+                                type: 'translation',
+                                originalText: textToProcess,
+                                correctedText: correctedText,
+                                translatedText: translatedText,
+                                timestamp: Date.now(),
+                                hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
+                                hasCorrection: correctedText !== textToProcess,
+                                isTranscriptionOnly: false,
+                                forceFinal: true,
+                                updateType: 'translation',
+                                seqId: immediateSeqId // Use same seqId for update
+                              }, false);
+                            } catch (translationError) {
+                              console.error(`[SoloMode] Translation failed (async):`, translationError.message);
+                            }
+                          }
+                        } catch (error) {
+                          console.error(`[SoloMode] Async update error:`, error);
+                        }
+                      })();
+                      
+                      return; // Exit early - async updates will handle the rest
+                    }
+                    
+                    // Regular finals - keep existing behavior (wait for grammar/translation)
                     if (isTranscriptionOnly) {
                       // Same language - just send transcript with grammar correction (English only)
                       if (currentSourceLang === 'en') {
@@ -586,7 +772,7 @@ export async function handleSoloMode(clientWs) {
                             timestamp: Date.now(),
                             hasCorrection: true,
                             isTranscriptionOnly: true,
-                            forceFinal: !!options.forceFinal
+                            forceFinal: false
                           }, false);
                           
                           // CRITICAL: Update last sent FINAL tracking after sending
@@ -607,7 +793,7 @@ export async function handleSoloMode(clientWs) {
                             timestamp: Date.now(),
                             hasCorrection: false,
                             isTranscriptionOnly: true,
-                            forceFinal: !!options.forceFinal
+                            forceFinal: false
                           }, false);
                           
                           // CRITICAL: Update last sent FINAL tracking after sending (even on error)
@@ -625,7 +811,7 @@ export async function handleSoloMode(clientWs) {
                           timestamp: Date.now(),
                           hasCorrection: false,
                           isTranscriptionOnly: true,
-                          forceFinal: !!options.forceFinal
+                          forceFinal: false
                         }, false);
                         
                         // CRITICAL: Update last sent FINAL tracking after sending
@@ -711,7 +897,7 @@ export async function handleSoloMode(clientWs) {
                           hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
                           hasCorrection: hasCorrection,
                           isTranscriptionOnly: false,
-                          forceFinal: !!options.forceFinal
+                          forceFinal: false
                         }, false);
                         
                         // CRITICAL: Update last sent FINAL tracking after sending
@@ -735,7 +921,7 @@ export async function handleSoloMode(clientWs) {
                           hasTranslation: error.skipRequest, // True if skipped (we have text), false if real error
                           hasCorrection: false,
                           isTranscriptionOnly: false,
-                          forceFinal: !!options.forceFinal
+                          forceFinal: false
                         }, false);
                         
                         // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
@@ -1855,16 +2041,16 @@ export async function handleSoloMode(clientWs) {
 
                       // PHASE 6: Set up two-phase timeout using engine
                       forcedCommitEngine.setForcedFinalBufferTimeout(() => {
-                          console.log('[SoloMode] ⏰ Phase 1: Waiting 1200ms for late partials and POST-final audio accumulation...');
+                          console.log(`[SoloMode] ⏰ Phase 1: Waiting ${forcedCommitEngine.PHASE_2_WAIT_MS}ms for late partials and POST-final audio accumulation...`);
 
-                          // Phase 1: Wait 1200ms for late partials to arrive AND for POST-final audio to accumulate
+                          // Phase 1: Wait for late partials to arrive AND for POST-final audio to accumulate
                           setTimeout(async () => {
                             console.warn('[SoloMode] ⏰ Phase 2: Late partial window complete - capturing PRE+POST-final audio');
                             
                             // PHASE 6: Sync forced final buffer before accessing
                             syncForcedFinalBuffer();
 
-                          // Snapshot any late partials that arrived during the 1200ms wait
+                          // Snapshot any late partials that arrived during the wait period
                           const partialSnapshot = {
                             longest: longestPartialText,
                             latest: latestPartialText,
@@ -1907,7 +2093,7 @@ export async function handleSoloMode(clientWs) {
                           // ⭐ CRITICAL: Capture 2200ms window that includes BOTH:
                           // - PRE-final audio (1400ms before the final) ← Contains the decoder gap!
                           // - POST-final audio (800ms after the final) ← Captures complete phrases like "self-centered"
-                          const captureWindowMs = 2200;
+                          const captureWindowMs = forcedCommitEngine.CAPTURE_WINDOW_MS;
                           console.log(`[SoloMode] 🎵 Capturing PRE+POST-final audio: last ${captureWindowMs}ms`);
                           console.log(`[SoloMode] 📊 Window covers: [T-${captureWindowMs - timeSinceForcedFinal}ms to T+${timeSinceForcedFinal}ms]`);
                           console.log(`[SoloMode] 🎯 This INCLUDES the decoder gap at ~T-200ms where missing words exist!`);
@@ -2006,14 +2192,16 @@ export async function handleSoloMode(clientWs) {
 
                               // Wait for stream to be FULLY ready (not just exist)
                               console.log(`[SoloMode] ⏳ Waiting for recovery stream to be ready...`);
+                              const STREAM_READY_POLL_INTERVAL_MS = 25; // Optimized for faster detection
+                              const STREAM_READY_MAX_WAIT_MS = 1500; // Optimized for latency
                               let streamReadyTimeout = 0;
-                              while (!tempStream.isStreamReady() && streamReadyTimeout < 2000) {
-                                await new Promise(resolve => setTimeout(resolve, 50));
-                                streamReadyTimeout += 50;
+                              while (!tempStream.isStreamReady() && streamReadyTimeout < STREAM_READY_MAX_WAIT_MS) {
+                                await new Promise(resolve => setTimeout(resolve, STREAM_READY_POLL_INTERVAL_MS));
+                                streamReadyTimeout += STREAM_READY_POLL_INTERVAL_MS;
                               }
 
                               if (!tempStream.isStreamReady()) {
-                                console.log(`[SoloMode] ❌ Recovery stream not ready after 2000ms!`);
+                                console.log(`[SoloMode] ❌ Recovery stream not ready after ${STREAM_READY_MAX_WAIT_MS}ms!`);
                                 console.log(`[SoloMode] Stream state:`, {
                                   exists: !!tempStream.recognizeStream,
                                   writable: tempStream.recognizeStream?.writable,
@@ -2025,8 +2213,8 @@ export async function handleSoloMode(clientWs) {
                               }
 
                               console.log(`[SoloMode] ✅ Recovery stream ready after ${streamReadyTimeout}ms`);
-                              await new Promise(resolve => setTimeout(resolve, 100));
-                              console.log(`[SoloMode] ✅ Additional 100ms wait complete`);
+                              await new Promise(resolve => setTimeout(resolve, 50)); // Optimized for latency
+                              console.log(`[SoloMode] ✅ Additional 50ms wait complete`);
 
                               // Set up result handler and create promise to wait for stream completion
                               let recoveredText = '';
@@ -2080,12 +2268,13 @@ export async function handleSoloMode(clientWs) {
                               // This waits for the actual 'end' event, not a timer
                               console.log(`[SoloMode] ⏳ Waiting for Google to decode and send results (stream 'end' event)...`);
 
-                              // Add timeout to prevent infinite hang
+                              // Add timeout to prevent infinite hang (optimized for latency)
+                              const RECOVERY_STREAM_TIMEOUT_MS = 4000;
                               const timeoutPromise = new Promise((resolve) => {
                                 setTimeout(() => {
-                                  console.warn(`[SoloMode] ⚠️ Recovery stream timeout after 5000ms`);
+                                  console.warn(`[SoloMode] ⚠️ Recovery stream timeout after ${RECOVERY_STREAM_TIMEOUT_MS}ms`);
                                   resolve();
-                                }, 5000);
+                                }, RECOVERY_STREAM_TIMEOUT_MS);
                               });
 
                               await Promise.race([streamCompletionPromise, timeoutPromise]);
@@ -2262,7 +2451,7 @@ export async function handleSoloMode(clientWs) {
                           // Reset recovery tracking after commit
                           recoveryStartTime = 0;
                           nextFinalAfterRecovery = null;
-                        }, 1200);  // Phase 2: Wait 1200ms to capture more POST-final audio (shifts window from [T-1500,T+500] to [T-800,T+1200])
+                        }, forcedCommitEngine.PHASE_2_WAIT_MS);  // Phase 2: Wait to capture POST-final audio (800ms) + late partials buffer (200ms)
                       }, 0);  // Phase 1: Start immediately
 
                     } catch (error) {
