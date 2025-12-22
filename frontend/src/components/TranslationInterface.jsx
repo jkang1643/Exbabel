@@ -149,6 +149,10 @@ function TranslationInterface({ onBackToHome }) {
   // Pending final tracking for confirmation window
   const pendingFinalRef = useRef(null);
   
+  // Track last partial text to detect if final extends it
+  const lastPartialTextRef = useRef('');
+  const lastPartialTimeRef = useRef(0);
+  
   // Helper function to commit final to history
   // CRITICAL: Use ref to store function to avoid closure issues in timeout callbacks
   const commitFinalToHistoryRef = useRef(null);
@@ -368,6 +372,10 @@ function TranslationInterface({ onBackToHome }) {
             // Process through segmenter
             const { liveText } = segmenterRef.current.processPartial(rawText);
 
+            // Track last partial text and time for final extension detection
+            lastPartialTextRef.current = rawText;
+            lastPartialTimeRef.current = Date.now();
+
             // Update immediately with flushSync
             flushSync(() => {
               setLivePartial(liveText);
@@ -375,6 +383,12 @@ function TranslationInterface({ onBackToHome }) {
           }
         } else {
           // 📝 FINAL: Commit immediately to history (restored simple approach)
+          // CRITICAL SAFEGUARD: Double-check that this is NOT a partial (defensive programming)
+          if (message.isPartial === true) {
+            console.warn(`[TranslationInterface] ⚠️ SAFEGUARD: Received message marked as partial in FINAL handler - ignoring to prevent mid-sentence commits. Text: "${(message.translatedText || message.correctedText || message.originalText || '').substring(0, 50)}..."`);
+            return; // Skip committing partials - they should only update live text
+          }
+          
           const finalText = message.translatedText || message.correctedText || message.originalText || ''
           const finalSeqId = message.seqId
           const isForcedFinal = message.forceFinal === true
@@ -387,6 +401,38 @@ function TranslationInterface({ onBackToHome }) {
           if (pendingFinalRef.current && pendingFinalRef.current.timeout) {
             clearTimeout(pendingFinalRef.current.timeout);
             pendingFinalRef.current = null;
+          }
+          
+          // CRITICAL: Check if this final extends the last partial text
+          // If it does, we need to prevent duplication by marking the partial as already flushed
+          const lastPartialText = lastPartialTextRef.current.trim();
+          const finalTextTrimmed = finalText.trim();
+          const timeSinceLastPartial = Date.now() - lastPartialTimeRef.current;
+          const FINAL_EXTENSION_WINDOW_MS = 5000; // 5 seconds - finals typically arrive within this window
+          
+          if (lastPartialText && 
+              timeSinceLastPartial < FINAL_EXTENSION_WINDOW_MS &&
+              finalTextTrimmed.length > lastPartialText.length &&
+              (finalTextTrimmed.startsWith(lastPartialText) || 
+               (lastPartialText.length > 10 && finalTextTrimmed.substring(0, lastPartialText.length) === lastPartialText))) {
+            console.log(`[TranslationInterface] 🔁 Final extends last partial - preventing duplication`);
+            console.log(`[TranslationInterface] 📝 Last partial: "${lastPartialText.substring(0, 50)}..." → Final: "${finalTextTrimmed.substring(0, 50)}..."`);
+            
+            // Mark the partial text as already flushed in the segmenter to prevent duplication
+            // This ensures processFinal will deduplicate correctly
+            if (segmenterRef.current) {
+              // Add the partial text to flushedText so it won't be committed again
+              const partialSentences = segmenterRef.current.detectSentences(lastPartialText);
+              const completePartialSentences = partialSentences.filter(s => segmenterRef.current.isComplete(s));
+              if (completePartialSentences.length > 0) {
+                const partialTextToFlush = completePartialSentences.join(' ').trim();
+                if (partialTextToFlush && !segmenterRef.current.flushedText.includes(partialTextToFlush)) {
+                  segmenterRef.current.flushedText += ' ' + partialTextToFlush;
+                  segmenterRef.current.flushedText = segmenterRef.current.flushedText.trim();
+                  console.log(`[TranslationInterface] ✅ Marked partial as flushed: "${partialTextToFlush.substring(0, 50)}..."`);
+                }
+              }
+            }
           }
           
           // CRITICAL: Check if this is transcription-only mode (same language)

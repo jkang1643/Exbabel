@@ -66,6 +66,7 @@ export function HostPage({ onBackToHome }) {
   const [showSettings, setShowSettings] = useState(false);
   const [connectionState, setConnectionState] = useState('disconnected');
   const [transcript, setTranscript] = useState([]);
+  const transcriptRef = useRef([]); // Ref to access transcript synchronously
   const [currentTranscript, setCurrentTranscript] = useState(''); // Live partial transcription
   const [isStreaming, setIsStreaming] = useState(false);
   const [listenerCount, setListenerCount] = useState(0);
@@ -73,10 +74,22 @@ export function HostPage({ onBackToHome }) {
   const [error, setError] = useState('');
 
   const wsRef = useRef(null);
+  const isInitializedRef = useRef(false); // Prevent duplicate initialization in Strict Mode
+  const sessionCreatedRef = useRef(false); // Prevent duplicate session creation
+  const processedSeqIdsRef = useRef(new Set()); // Track processed seqIds to prevent duplicate processing
+  
+  // Keep ref in sync with state
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
   
   // Track corrected text for merging (similar to TranslationInterface.jsx)
   const longestCorrectedTextRef = useRef('');
   const longestCorrectedOriginalRef = useRef('');
+  
+  // Track last partial text to detect if final extends it
+  const lastPartialTextRef = useRef('');
+  const lastPartialTimeRef = useRef(0);
   
   // Merge text with grammar corrections (similar to TranslationInterface.jsx)
   const mergeTextWithCorrection = (newRawText, correctedOverride = null) => {
@@ -165,6 +178,9 @@ export function HostPage({ onBackToHome }) {
                   return (a.timestamp || 0) - (b.timestamp || 0);
                 });
                 
+                // Update ref immediately to keep it in sync
+                transcriptRef.current = newHistory;
+                
                 return newHistory;
               });
             });
@@ -175,17 +191,40 @@ export function HostPage({ onBackToHome }) {
     });
   }
 
-  // Create session on mount
+  // Create session on mount (only once, even in Strict Mode)
   useEffect(() => {
+    // Guard against duplicate initialization in React Strict Mode
+    if (isInitializedRef.current || sessionCreatedRef.current) {
+      return;
+    }
+    
+    isInitializedRef.current = true;
     createSession();
+    
     return () => {
+      // Cleanup: close WebSocket and reset flags
       if (wsRef.current) {
-        wsRef.current.close();
+        try {
+          wsRef.current.close();
+        } catch (e) {
+          // Ignore errors during cleanup
+        }
+        wsRef.current = null;
       }
+      // Don't reset isInitializedRef here - we want to prevent re-initialization
+      // Only reset sessionCreatedRef if we're actually unmounting (not just Strict Mode remount)
     };
   }, []);
 
   const createSession = async () => {
+    // Guard against duplicate session creation
+    if (sessionCreatedRef.current) {
+      console.log('[HostPage] ⚠️ Session creation already in progress, skipping duplicate call');
+      return;
+    }
+    
+    sessionCreatedRef.current = true;
+    
     try {
       const response = await fetch(`${API_URL}/session/start`, {
         method: 'POST',
@@ -212,18 +251,37 @@ export function HostPage({ onBackToHome }) {
         });
         setQrDataUrl(qrUrl);
         
-        // Connect WebSocket
-        connectWebSocket(data.sessionId);
+        // Connect WebSocket (only if not already connected)
+        if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED || wsRef.current.readyState === WebSocket.CLOSING) {
+          connectWebSocket(data.sessionId);
+        } else {
+          console.log('[HostPage] ⚠️ WebSocket already connected, skipping duplicate connection');
+        }
       } else {
         setError('Failed to create session');
+        sessionCreatedRef.current = false; // Allow retry on failure
       }
     } catch (err) {
       console.error('Failed to create session:', err);
       setError('Failed to create session. Please check your connection.');
+      sessionCreatedRef.current = false; // Allow retry on failure
     }
   };
 
   const connectWebSocket = (sessionId) => {
+    // Close existing WebSocket connection if any
+    if (wsRef.current) {
+      try {
+        if (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING) {
+          console.log('[HostPage] ⚠️ Closing existing WebSocket connection before creating new one');
+          wsRef.current.close();
+        }
+      } catch (e) {
+        // Ignore errors when closing
+      }
+      wsRef.current = null;
+    }
+    
     const ws = new WebSocket(`${WS_URL}/translate?role=host&sessionId=${sessionId}`);
     
     ws.onopen = () => {
@@ -241,6 +299,10 @@ export function HostPage({ onBackToHome }) {
     ws.onclose = () => {
       console.log('[Host] WebSocket disconnected');
       setConnectionState('closed');
+      // Clear ref when closed
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
     };
     
     ws.onerror = (error) => {
@@ -288,18 +350,39 @@ export function HostPage({ onBackToHome }) {
               // Process through segmenter (auto-flushes complete sentences)
               const { liveText } = segmenterRef.current.processPartial(rawText);
 
+              // Track last partial text and time for final extension detection
+              lastPartialTextRef.current = rawText;
+              lastPartialTimeRef.current = Date.now();
+
               // REAL-TIME STREAMING FIX: Update immediately on every delta for true real-time streaming
               // No throttling - let React batch updates naturally for optimal performance
               flushSync(() => {
                 setCurrentTranscript(liveText);
               });
             } else {
-              // Final transcript - add to history directly (no segmenter needed for finals, like listener mode)
+              // Final transcript - use processFinal like solo mode (handles deduplication automatically)
               // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
               // This ensures grammar corrections and recovered text are applied to finals
               const finalText = message.correctedText || message.translatedText || message.originalText;
               const finalSeqId = message.seqId;
               const isForcedFinal = message.forceFinal === true;
+              
+              // CRITICAL: Prevent duplicate processing of the same seqId
+              // This can happen if multiple WebSocket connections exist or messages are duplicated
+              if (finalSeqId !== undefined && finalSeqId !== null) {
+                if (processedSeqIdsRef.current.has(finalSeqId)) {
+                  console.log(`[HostPage] ⚠️ SKIP DUPLICATE FINAL seqId=${finalSeqId}: "${finalText.substring(0, 50)}..." (already processed)`);
+                  return; // Skip duplicate processing
+                }
+                processedSeqIdsRef.current.add(finalSeqId);
+                
+                // Clean up old seqIds to prevent memory leak (keep last 100)
+                if (processedSeqIdsRef.current.size > 100) {
+                  const seqIdsArray = Array.from(processedSeqIdsRef.current).sort((a, b) => a - b);
+                  const toRemove = seqIdsArray.slice(0, seqIdsArray.length - 100);
+                  toRemove.forEach(id => processedSeqIdsRef.current.delete(id));
+                }
+              }
               
               console.log(`[HostPage] 📝 FINAL received seqId=${finalSeqId}: "${finalText.substring(0, 50)}..."`);
               if (isForcedFinal) {
@@ -317,115 +400,237 @@ export function HostPage({ onBackToHome }) {
                 return;
               }
               
-              // Add to history with sequence ID tracking and deduplication
-              setTranscript(prev => {
-                // Check last 10 entries for duplicates (increased to catch auto-segmented items)
-                const recentEntries = prev.slice(-10);
+              // CRITICAL: Check if this final extends the last partial text (same as solo mode)
+              // If it does, we need to prevent duplication by marking the partial as already flushed
+              const lastPartialText = lastPartialTextRef.current.trim();
+              const finalTextTrimmed = fullFinalText.trim();
+              const timeSinceLastPartial = Date.now() - lastPartialTimeRef.current;
+              const FINAL_EXTENSION_WINDOW_MS = 5000; // 5 seconds - finals typically arrive within this window
+              
+              if (lastPartialText && 
+                  timeSinceLastPartial < FINAL_EXTENSION_WINDOW_MS &&
+                  finalTextTrimmed.length > lastPartialText.length &&
+                  (finalTextTrimmed.startsWith(lastPartialText) || 
+                   (lastPartialText.length > 10 && finalTextTrimmed.substring(0, lastPartialText.length) === lastPartialText))) {
+                console.log(`[HostPage] 🔁 Final extends last partial - preventing duplication`);
+                console.log(`[HostPage] 📝 Last partial: "${lastPartialText.substring(0, 50)}..." → Final: "${finalTextTrimmed.substring(0, 50)}..."`);
                 
-                // Helper function to calculate text similarity
-                const calculateSimilarity = (text1, text2) => {
-                  const words1 = text1.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-                  const words2 = text2.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-                  if (words1.length === 0 || words2.length === 0) return 0;
-                  
-                  const set1 = new Set(words1);
-                  const set2 = new Set(words2);
-                  const intersection = new Set([...set1].filter(x => set2.has(x)));
-                  const union = new Set([...set1, ...set2]);
-                  
-                  return intersection.size / union.size;
-                };
-                
-                // FIRST: Check if new final contains an existing entry (handles forced final → recovered final)
-                // This is critical for recovery scenarios where forced final is shorter than recovered final
-                const containedEntry = recentEntries.find(entry => {
-                  const entryText = entry.text.trim();
-                  const newText = fullFinalText.trim();
-                  
-                  // Case 1: New text starts with entry text (common for forced finals)
-                  if (newText.toLowerCase().startsWith(entryText.toLowerCase()) && fullFinalText.length > entry.text.length) {
-                    // Entry should be substantial (at least 30 chars) and new text should be meaningfully longer
-                    if (entry.text.length >= 30 && fullFinalText.length > entry.text.length + 10) {
-                      return true; // New text extends existing entry - replace it
+                // Mark the partial text as already flushed in the segmenter to prevent duplication
+                // This ensures processFinal will deduplicate correctly
+                if (segmenterRef.current) {
+                  // Add the partial text to flushedText so it won't be committed again
+                  const partialSentences = segmenterRef.current.detectSentences(lastPartialText);
+                  const completePartialSentences = partialSentences.filter(s => segmenterRef.current.isComplete(s));
+                  if (completePartialSentences.length > 0) {
+                    const partialTextToFlush = completePartialSentences.join(' ').trim();
+                    if (partialTextToFlush && !segmenterRef.current.flushedText.includes(partialTextToFlush)) {
+                      segmenterRef.current.flushedText += ' ' + partialTextToFlush;
+                      segmenterRef.current.flushedText = segmenterRef.current.flushedText.trim();
+                      console.log(`[HostPage] ✅ Marked partial as flushed: "${partialTextToFlush.substring(0, 50)}..."`);
                     }
                   }
+                }
+              }
+              
+              // CRITICAL: Before calling processFinal, sync segmenter's flushedText with auto-segmented items in transcript
+              // This ensures processFinal knows about auto-flushed partials and can deduplicate correctly
+              // Use ref to access transcript synchronously (React state updates are async)
+              const currentTranscript = transcriptRef.current;
+              const autoSegmentedItemsToSync = currentTranscript.filter(entry => entry.isSegmented === true);
+              
+              if (autoSegmentedItemsToSync.length > 0) {
+                console.log(`[HostPage] 🔍 Found ${autoSegmentedItemsToSync.length} auto-segmented items in transcript`);
+                console.log(`[HostPage] 🔍 Auto-segmented items:`, autoSegmentedItemsToSync.map(e => `"${e.text.substring(0, 40)}..."`));
+                
+                // Check if any auto-segmented items are contained in the final
+                const finalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                
+                for (const item of autoSegmentedItemsToSync) {
+                  const itemNormalized = item.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
                   
-                  // Case 2: New text contains entry text (for cases where recovery adds text in middle)
-                  if (newText.toLowerCase().includes(entryText.toLowerCase()) && fullFinalText.length > entry.text.length) {
-                    // Entry should be at least 40% of new text to avoid false positives
-                    const lengthRatio = entry.text.length / fullFinalText.length;
-                    if (lengthRatio >= 0.4 && entry.text.length >= 50) {
-                      return true; // New text contains and extends existing entry - replace it
+                  // If final contains the auto-segmented text, add it to segmenter's flushedText
+                  if (finalNormalized.includes(itemNormalized) && itemNormalized.length > 10) {
+                    const segmenterFlushedText = segmenterRef.current.flushedText || '';
+                    if (!segmenterFlushedText.includes(item.text)) {
+                      console.log(`[HostPage] 🔄 Syncing auto-segmented item to segmenter flushedText: "${item.text.substring(0, 50)}..."`);
+                      segmenterRef.current.flushedText = (segmenterFlushedText + ' ' + item.text).trim();
+                    } else {
+                      console.log(`[HostPage] ⏭️ Auto-segmented item already in segmenter flushedText: "${item.text.substring(0, 50)}..."`);
                     }
+                  } else {
+                    console.log(`[HostPage] ⏭️ Auto-segmented item not contained in final (or too short): "${item.text.substring(0, 50)}..." (final: "${fullFinalText.substring(0, 50)}...")`);
                   }
-                  
-                  return false;
+                }
+              } else {
+                console.log(`[HostPage] 🔍 No auto-segmented items found in transcript (total items: ${currentTranscript.length})`);
+              }
+              
+              // CRITICAL: Use processFinal like solo mode - this handles deduplication automatically
+              // processFinal checks if final contains already-flushed text and only returns NEW sentences
+              console.log(`[HostPage] 🔍 Calling processFinal with text: "${fullFinalText.substring(0, 60)}..."`);
+              console.log(`[HostPage] 🔍 Segmenter flushedText length: ${segmenterRef.current.flushedText?.length || 0}`);
+              const { flushedSentences } = segmenterRef.current.processFinal(fullFinalText, { isForced: isForcedFinal });
+              
+              console.log(`[HostPage] 📊 Segmenter returned ${flushedSentences.length} sentences:`, flushedSentences);
+              if (flushedSentences.length > 0) {
+                console.log(`[HostPage] 📊 Flushed sentences: "${flushedSentences.join(' | ').substring(0, 100)}..."`);
+              } else {
+                console.log(`[HostPage] ⚠️ Segmenter returned 0 sentences - all text was deduplicated`);
+              }
+              
+              // Add deduplicated sentences to history - use flushSync for immediate UI update (same as solo mode)
+              if (flushedSentences.length > 0) {
+                const joinedText = flushedSentences.join(' ').trim();
+                if (joinedText) {
+                  flushSync(() => {
+                    setTranscript(prev => {
+                      // CRITICAL: Remove auto-segmented items that are contained in this final
+                      // This prevents duplicates when the final extends an auto-segmented partial
+                      const finalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const filteredPrev = prev.filter(entry => {
+                        if (entry.isSegmented) {
+                          const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                          // If final contains this auto-segmented entry, remove it
+                          if (finalNormalized.includes(entryNormalized) && entryNormalized.length > 10) {
+                            console.log(`[HostPage] 🗑️ Removing auto-segmented item contained in final: "${entry.text.substring(0, 50)}..."`);
+                            return false; // Remove this entry
+                          }
+                        }
+                        return true; // Keep this entry
+                      });
+                      
+                      // CRITICAL: Check if this exact text already exists in history (prevent duplicates)
+                      // This catches cases where forced finals with different seqIds have the same text
+                      const joinedNormalized = joinedText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const isDuplicate = filteredPrev.some(entry => {
+                        if (entry.seqId === finalSeqId) {
+                          return true; // Same seqId = definitely duplicate
+                        }
+                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                        // Check if texts are the same (normalized) or one contains the other
+                        return entryNormalized === joinedNormalized || 
+                               (entryNormalized.length > 20 && joinedNormalized.includes(entryNormalized)) ||
+                               (joinedNormalized.length > 20 && entryNormalized.includes(joinedNormalized));
+                      });
+                      
+                      if (isDuplicate) {
+                        console.log(`[HostPage] ⏭️ SKIP DUPLICATE TEXT in history: "${joinedText.substring(0, 50)}..." (seqId: ${finalSeqId})`);
+                        return filteredPrev.slice(-50); // Return unchanged
+                      }
+                      
+                      const newItem = {
+                        text: joinedText,
+                        timestamp: message.timestamp || Date.now(),
+                        seqId: finalSeqId
+                      };
+                      
+                      // CRITICAL: Insert in correct position based on sequenceId to maintain chronological order
+                      // This prevents race conditions where longer translations complete after shorter ones
+                      const newHistory = [...filteredPrev, newItem].sort((a, b) => {
+                        // Sort by sequenceId first (most reliable), then by timestamp
+                        if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                          return a.seqId - b.seqId;
+                        }
+                        // Fallback to timestamp if sequenceId not available
+                        return (a.timestamp || 0) - (b.timestamp || 0);
+                      });
+                      
+                      // Update ref immediately to keep it in sync
+                      transcriptRef.current = newHistory.slice(-50);
+                      
+                      console.log(`[HostPage] ✅ STATE UPDATED - New history total: ${newHistory.length} items (sorted by seqId/timestamp)`);
+                      return newHistory.slice(-50); // Keep last 50 entries
+                    });
+                  });
+                  console.log(`[HostPage] ✅ Added to history: "${joinedText.substring(0, 50)}..."`);
+                }
+              } else {
+                // FALLBACK: If segmenter deduplicated everything, still add the final text if it's substantial
+                // OR if it's a short complete sentence (like "Oh my!" or "Yes.")
+                // This ensures history appears even if deduplication is too aggressive
+                // CRITICAL: This matches solo mode's behavior - short complete sentences should be committed
+                // even when there are extending partials that came after
+                const finalTextTrimmed = fullFinalText.trim();
+                const isCompleteSentence = /[.!?…]$/.test(finalTextTrimmed);
+                const isShortComplete = finalTextTrimmed.length < 25 && isCompleteSentence;
+                
+                // Check if this text is already in history (prevent duplicates)
+                const currentTranscript = transcriptRef.current;
+                const finalNormalized = finalTextTrimmed.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                const alreadyInHistory = currentTranscript.some(entry => {
+                  const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                  return entryNormalized === finalNormalized || 
+                         (entryNormalized.length > 5 && finalNormalized.length > 5 && 
+                          (entryNormalized.includes(finalNormalized) || finalNormalized.includes(entryNormalized)));
                 });
                 
-                // If we found an entry that's contained in the new final, replace it
-                if (containedEntry) {
-                  console.log(`[HostPage] 🔄 New final contains existing entry - replacing "${containedEntry.text.substring(0, 50)}..." with full text`);
-                  const filtered = prev.filter(entry => entry !== containedEntry);
-                  return [...filtered, {
-                    text: fullFinalText,
-                    timestamp: message.timestamp || Date.now(),
-                    seqId: finalSeqId
-                  }].slice(-50);
-                }
-                
-                // CRITICAL: Check for duplicates with auto-segmented items (grammar-corrected finals may match auto-flushed partials)
-                const similarAutoSegmented = recentEntries.find(entry => {
-                  if (!entry.isSegmented) return false; // Only check auto-segmented items
-                  
-                  const entryText = entry.text.trim();
-                  const newText = fullFinalText.trim();
-                  
-                  // Check for high similarity (80%+ word overlap) - final likely has grammar corrections
-                  const similarity = calculateSimilarity(entryText, newText);
-                  if (similarity >= 0.8) {
-                    // Also check if texts are similar in length (within 20% difference)
-                    const lengthRatio = Math.min(entryText.length, newText.length) / Math.max(entryText.length, newText.length);
-                    if (lengthRatio >= 0.8) {
-                      return true; // Very similar - replace auto-segmented with grammar-corrected final
-                    }
+                if ((fullFinalText.length > 10 || isShortComplete) && !alreadyInHistory) {
+                  if (isShortComplete) {
+                    console.log(`[HostPage] ⚠️ Segmenter deduplicated short complete sentence, using fallback: "${finalTextTrimmed}"`);
+                  } else {
+                    console.log(`[HostPage] ⚠️ Segmenter deduplicated all, using fallback`);
                   }
-                  
-                  // Also check if final contains the auto-segmented text (common case)
-                  if (newText.toLowerCase().includes(entryText.toLowerCase()) && newText.length >= entryText.length * 0.9) {
-                    return true; // Final contains auto-segmented text - replace it
-                  }
-                  
-                  return false;
-                });
-                
-                if (similarAutoSegmented) {
-                  console.log(`[HostPage] 🔄 New final matches auto-segmented item - replacing "${similarAutoSegmented.text.substring(0, 50)}..." with grammar-corrected final`);
-                  const filtered = prev.filter(entry => entry !== similarAutoSegmented);
-                  return [...filtered, {
-                    text: fullFinalText,
-                    timestamp: message.timestamp || Date.now(),
-                    seqId: finalSeqId
-                  }].slice(-50);
+                  flushSync(() => {
+                    setTranscript(prev => {
+                      // CRITICAL: Remove auto-segmented items that are contained in this final
+                      const finalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const filteredPrev = prev.filter(entry => {
+                        if (entry.isSegmented) {
+                          const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                          // If final contains this auto-segmented entry, remove it
+                          if (finalNormalized.includes(entryNormalized) && entryNormalized.length > 10) {
+                            console.log(`[HostPage] 🗑️ Removing auto-segmented item contained in final (fallback): "${entry.text.substring(0, 50)}..."`);
+                            return false; // Remove this entry
+                          }
+                        }
+                        return true; // Keep this entry
+                      });
+                      
+                      // CRITICAL: Check if this exact text already exists in history (prevent duplicates)
+                      const fullFinalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const isDuplicate = filteredPrev.some(entry => {
+                        if (entry.seqId === finalSeqId) {
+                          return true; // Same seqId = definitely duplicate
+                        }
+                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                        // Check if texts are the same (normalized) or one contains the other
+                        return entryNormalized === fullFinalNormalized || 
+                               (entryNormalized.length > 20 && fullFinalNormalized.includes(entryNormalized)) ||
+                               (fullFinalNormalized.length > 20 && entryNormalized.includes(fullFinalNormalized));
+                      });
+                      
+                      if (isDuplicate) {
+                        console.log(`[HostPage] ⏭️ SKIP DUPLICATE TEXT in history (fallback): "${fullFinalText.substring(0, 50)}..." (seqId: ${finalSeqId})`);
+                        return filteredPrev.slice(-50); // Return unchanged
+                      }
+                      
+                      const newItem = {
+                        text: fullFinalText,
+                        timestamp: message.timestamp || Date.now(),
+                        seqId: finalSeqId
+                      };
+                      
+                      // CRITICAL: Insert in correct position based on sequenceId to maintain chronological order
+                      const newHistory = [...filteredPrev, newItem].sort((a, b) => {
+                        if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                          return a.seqId - b.seqId;
+                        }
+                        return (a.timestamp || 0) - (b.timestamp || 0);
+                      });
+                      
+                      // Update ref immediately to keep it in sync
+                      transcriptRef.current = newHistory.slice(-50);
+                      
+                      return newHistory.slice(-50);
+                    });
+                  });
+                  // Log after state update completes
+                  const finalHistory = transcriptRef.current;
+                  console.log(`[HostPage] ✅ FALLBACK STATE UPDATED - New history total: ${finalHistory.length} items (sorted by seqId/timestamp)`);
+                } else {
+                  console.log('[HostPage] ⚠️ No new sentences and text too short - NOT adding to history');
                 }
-                
-                // Check for exact duplicates or same sequence ID
-                const isDuplicate = recentEntries.some(entry => 
-                  entry.text === fullFinalText || 
-                  (entry.seqId !== undefined && finalSeqId !== undefined && entry.seqId === finalSeqId)
-                );
-                
-                if (isDuplicate) {
-                  console.log('[HostPage] ⚠️ Duplicate final detected, skipping');
-                  return prev;
-                }
-                
-                // No duplicate found - add new entry
-                return [...prev, {
-                  text: fullFinalText,
-                  timestamp: message.timestamp || Date.now(),
-                  seqId: finalSeqId
-                }].slice(-50);
-              });
+              }
               
               setCurrentTranscript('');
             }

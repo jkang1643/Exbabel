@@ -461,9 +461,22 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
                     let correctedText = textToProcess; // Declare outside try for catch block access
                     try {
+                      // CRITICAL FIX: Apply cached grammar corrections FIRST before running new grammar correction
+                      // This ensures that if a final extends a partial that had grammar corrections, we use those cached corrections
+                      // This prevents cases where a partial was sent with uncorrected grammar, then a final extends it
+                      // and we send the final with uncorrected grammar for the partial portion
+                      let textWithCachedCorrections = textToProcess;
+                      if (currentSourceLang === 'en' && grammarCorrectionCache.size > 0) {
+                        textWithCachedCorrections = applyCachedCorrections(textToProcess);
+                        if (textWithCachedCorrections !== textToProcess) {
+                          console.log(`[HostMode] ✅ Applied cached grammar corrections to final: "${textToProcess.substring(0, 50)}..." → "${textWithCachedCorrections.substring(0, 50)}..."`);
+                        }
+                      }
+                      
                       // CRITICAL FIX: Get grammar correction FIRST (English only), then translate the CORRECTED text
                       // This ensures the translation matches the corrected English text
                       // Use Promise.race to prevent grammar correction from blocking too long
+                      // Use textWithCachedCorrections as input (not original textToProcess) to avoid re-correcting already-corrected portions
                       if (currentSourceLang === 'en') {
                         try {
                           // Set a timeout for grammar correction (max 2 seconds) to prevent blocking
@@ -471,23 +484,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                             setTimeout(() => reject(new Error('Grammar correction timeout')), 2000)
                           );
                           
+                          // Run grammar correction on text that already has cached corrections applied
+                          // This ensures we don't lose corrections that were already made to partial portions
                           correctedText = await Promise.race([
-                            grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY),
+                            grammarWorker.correctFinal(textWithCachedCorrections, process.env.OPENAI_API_KEY),
                             grammarTimeout
                           ]);
                           
+                          // Remember the correction mapping from original text to final corrected text
                           rememberGrammarCorrection(textToProcess, correctedText);
                         } catch (grammarError) {
                           if (grammarError.message === 'Grammar correction timeout') {
-                            console.warn(`[HostMode] Grammar correction timed out after 2s, using original text`);
+                            console.warn(`[HostMode] Grammar correction timed out after 2s, using text with cached corrections`);
+                            // Use text with cached corrections as fallback (better than original)
+                            correctedText = textWithCachedCorrections;
                           } else {
-                            console.warn(`[HostMode] Grammar correction failed, using original text:`, grammarError.message);
+                            console.warn(`[HostMode] Grammar correction failed, using text with cached corrections:`, grammarError.message);
+                            // Use text with cached corrections as fallback (better than original)
+                            correctedText = textWithCachedCorrections;
                           }
-                          correctedText = textToProcess; // Fallback to original on error/timeout
                         }
                       } else {
-                        // Non-English source - skip grammar correction
-                        correctedText = textToProcess;
+                        // Non-English source - skip grammar correction, but still apply cached corrections if any
+                        correctedText = textWithCachedCorrections;
                       }
 
                       // Get all target languages needed for listeners
@@ -882,20 +901,58 @@ export async function handleHostConnection(clientWs, sessionId) {
                     return; // Skip sending this partial
                   }
                   
-                  // Live partial transcript - send original immediately with sequence ID (solo mode style)
-                  // Note: This is the initial send before grammar/translation, so use raw text
-                  const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
-                  const seqId = broadcastWithSequence({
-                    type: 'translation',
-                    originalText: partialTextToSend, // Use deduplicated text
-                    translatedText: undefined, // Will be updated when translation arrives
-                    sourceLang: currentSourceLang,
-                    targetLang: currentSourceLang,
-                    timestamp: Date.now(),
-                    isTranscriptionOnly: false,
-                    hasTranslation: false, // Flag that translation is pending
-                    hasCorrection: false // Flag that correction is pending
-                  }, true);
+                  // CRITICAL: Check if this partial extends a pending final BEFORE sending it
+                  // If it does, we should NOT send it as a new partial to avoid duplication
+                  // PHASE 8: Sync pendingFinalization before accessing
+                  syncPendingFinalization();
+                  let shouldSkipSendingPartial = false;
+                  if (finalizationEngine.hasPendingFinalization()) {
+                    const pending = finalizationEngine.getPendingFinalization();
+                    const timeSinceFinal = Date.now() - pending.timestamp;
+                    const finalText = pending.text.trim();
+                    // CRITICAL: Check against both raw transcriptText AND partialTextToSend (what we'll actually send)
+                    // This ensures we catch cases where deduplication changed the text or where the raw text extends the final
+                    const rawPartialText = transcriptText.trim();
+                    const deduplicatedPartialText = partialTextToSend.trim();
+                    
+                    // Check if either the raw or deduplicated partial extends the final
+                    // For short finals, require exact start match. For longer finals, allow some flexibility
+                    const rawExtendsFinal = rawPartialText.length > finalText.length && 
+                                            (rawPartialText.startsWith(finalText) || 
+                                             (finalText.length > 10 && rawPartialText.substring(0, finalText.length) === finalText));
+                    const deduplicatedExtendsFinal = deduplicatedPartialText.length > finalText.length && 
+                                                      (deduplicatedPartialText.startsWith(finalText) || 
+                                                       (finalText.length > 10 && deduplicatedPartialText.substring(0, finalText.length) === finalText));
+                    const extendsFinal = rawExtendsFinal || deduplicatedExtendsFinal;
+                    
+                    // If partial extends the final and it's recent, don't send it as a new partial
+                    // Just update the pending finalization and let it be finalized later
+                    if (extendsFinal && timeSinceFinal < 2000) {
+                      console.log(`[HostMode] 🔁 Partial extends pending final - skipping send to avoid duplication`);
+                      console.log(`[HostMode] 📝 Final: "${finalText.substring(0, 50)}..." → Raw Partial: "${rawPartialText.substring(0, 50)}..." → Deduplicated: "${deduplicatedPartialText.substring(0, 50)}..."`);
+                      shouldSkipSendingPartial = true;
+                    }
+                  }
+                  
+                  // Only send partial if it doesn't extend a pending final
+                  if (!shouldSkipSendingPartial) {
+                    // Live partial transcript - send original immediately with sequence ID (solo mode style)
+                    // Note: This is the initial send before grammar/translation, so use raw text
+                    // CRITICAL: Explicitly set isPartial: true to prevent frontend from committing as FINAL
+                    const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
+                    const seqId = broadcastWithSequence({
+                      type: 'translation',
+                      originalText: partialTextToSend, // Use deduplicated text
+                      translatedText: undefined, // Will be updated when translation arrives
+                      sourceLang: currentSourceLang,
+                      targetLang: currentSourceLang,
+                      timestamp: Date.now(),
+                      isTranscriptionOnly: false,
+                      hasTranslation: false, // Flag that translation is pending
+                      hasCorrection: false, // Flag that correction is pending
+                      isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                    }, true);
+                  }
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
                   // PHASE 8: Sync pendingFinalization before accessing
@@ -1105,6 +1162,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Process final (reuse the async function logic from the main timeout)
                         processFinalText(textToProcess);
                       }, remainingWait);
+                      
+                      // CRITICAL: If we skipped sending this partial (because it extends a final), return early
+                      // to avoid processing translations for a partial we're not sending
+                      if (shouldSkipSendingPartial) {
+                        console.log(`[HostMode] ⏭️ Skipping translation processing for extending partial - will be finalized later`);
+                        return;
+                      }
                     } else if (!extendsFinal && timeSinceFinal > 600) {
                       // New segment detected - but check if final ends with complete sentence first
                       // If final doesn't end with complete sentence, wait longer before committing
@@ -1133,18 +1197,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                         let textToProcess = pendingFinalization.text;
                         const finalTrimmed = pendingFinalization.text.trim();
                         
+                        // CRITICAL: Track if we're using partial text (to check if it's mid-sentence)
+                        let usingPartialText = false;
+                        
                         // Check saved partials first - ONLY if they start with the final
                         if (savedLongestPartial && savedLongestPartial.length > pendingFinalization.text.length) {
                           const savedLongestTrimmed = savedLongestPartial.trim();
                           if (savedLongestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using SAVED LONGEST partial (${pendingFinalization.text.length} → ${savedLongestPartial.length} chars)`);
                             textToProcess = savedLongestPartial;
+                            usingPartialText = true;
                           }
                         } else if (savedLatestPartial && savedLatestPartial.length > pendingFinalization.text.length) {
                           const savedLatestTrimmed = savedLatestPartial.trim();
                           if (savedLatestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using SAVED LATEST partial (${pendingFinalization.text.length} → ${savedLatestPartial.length} chars)`);
                             textToProcess = savedLatestPartial;
+                            usingPartialText = true;
                           }
                         }
                         
@@ -1157,6 +1226,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           if (longestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using CURRENT LONGEST partial (${textToProcess.length} → ${longestPartialText.length} chars)`);
                             textToProcess = longestPartialText;
+                            usingPartialText = true;
                           } else {
                             console.log(`[HostMode] ⚠️ Ignoring CURRENT LONGEST partial - doesn't start with final (new segment detected)`);
                           }
@@ -1166,8 +1236,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                           if (latestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using CURRENT LATEST partial (${textToProcess.length} → ${latestPartialText.length} chars)`);
                             textToProcess = latestPartialText;
+                            usingPartialText = true;
                           } else {
                             console.log(`[HostMode] ⚠️ Ignoring CURRENT LATEST partial - doesn't start with final (new segment detected)`);
+                          }
+                        }
+                        
+                        // CRITICAL: If we're using partial text, verify it ends with a complete sentence
+                        // This prevents committing mid-sentence partials when a new segment is detected
+                        if (usingPartialText) {
+                          const textToProcessTrimmed = textToProcess.trim();
+                          const endsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(textToProcessTrimmed);
+                          if (!endsWithCompleteSentence && timeSinceFinal < 2000) {
+                            // Partial text is mid-sentence and not enough time has passed - wait longer
+                            console.log(`[HostMode] ⏳ Partial text is mid-sentence and new segment detected - waiting longer before committing (${timeSinceFinal}ms < 2000ms)`);
+                            console.log(`[HostMode] 📊 Text: "${textToProcessTrimmed.substring(0, 100)}..."`);
+                            // Don't commit yet - continue tracking
+                            return; // Exit early, let the partial continue to be tracked
                           }
                         }
                         
@@ -1255,7 +1340,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                             targetLang: currentSourceLang,
                             timestamp: Date.now(),
                             hasTranslation: false,
-                            hasCorrection: false
+                            hasCorrection: false,
+                            isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                           }, true);
                           
                           // CRITICAL: Still run grammar correction even with no listeners
@@ -1286,7 +1372,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   isTranscriptionOnly: true,
                                   hasTranslation: false,
                                   hasCorrection: true,
-                                  updateType: 'grammar'
+                                  updateType: 'grammar',
+                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                 }, true, currentSourceLang);
                               })
                               .catch(error => {
@@ -1328,7 +1415,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                               timestamp: Date.now(),
                               isTranscriptionOnly: true,
                               hasTranslation: false,
-                              hasCorrection: false
+                              hasCorrection: false,
+                              isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                             }, true, targetLang);
                           }
                           
@@ -1360,7 +1448,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   isTranscriptionOnly: true,
                                   hasTranslation: false,
                                   hasCorrection: true,
-                                  updateType: 'grammar'
+                                  updateType: 'grammar',
+                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                 }, true, currentSourceLang);
                                 
                                 // Send grammar update separately to same-language listeners
@@ -1376,7 +1465,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isTranscriptionOnly: true,
                                     hasTranslation: false,
                                     hasCorrection: true,
-                                    updateType: 'grammar'
+                                    updateType: 'grammar',
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, targetLang);
                                 }
                               })
@@ -1437,7 +1527,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   timestamp: Date.now(),
                                   isTranscriptionOnly: false,
                                   hasTranslation: true,
-                                  hasCorrection: false // Grammar not ready yet
+                                  hasCorrection: false, // Grammar not ready yet
+                                  isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                                 }, true, targetLang);
                               }
                             }).catch(error => {
@@ -1481,7 +1572,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 isTranscriptionOnly: true,
                                 hasTranslation: false,
                                 hasCorrection: true,
-                                updateType: 'grammar' // Flag for grammar-only update
+                                updateType: 'grammar', // Flag for grammar-only update
+                                isPartial: true // CRITICAL: Grammar updates for partials are still partials
                               }, true, currentSourceLang);
                               
                               // Broadcast grammar correction to all listener language groups
@@ -1495,7 +1587,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   timestamp: Date.now(),
                                   isTranscriptionOnly: false,
                                   hasCorrection: true,
-                                  updateType: 'grammar' // Flag for grammar-only update
+                                  updateType: 'grammar', // Flag for grammar-only update
+                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                 }, true, targetLang);
                               }
                             }).catch(error => {
@@ -1557,7 +1650,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                               targetLang: currentSourceLang,
                               timestamp: Date.now(),
                               hasTranslation: false,
-                              hasCorrection: false
+                              hasCorrection: false,
+                              isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                             }, true);
                             pendingPartialTranslation = null;
                             return;
@@ -1585,7 +1679,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 timestamp: Date.now(),
                                 isTranscriptionOnly: true,
                                 hasTranslation: false,
-                                hasCorrection: false
+                                hasCorrection: false,
+                                isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                               }, true, targetLang);
                             }
                             
@@ -1607,7 +1702,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isTranscriptionOnly: true,
                                     hasTranslation: false,
                                     hasCorrection: true,
-                                    updateType: 'grammar'
+                                    updateType: 'grammar',
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, currentSourceLang);
                                   
                                   // Send grammar update to same-language listeners
@@ -1623,7 +1719,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                       isTranscriptionOnly: true,
                                       hasTranslation: false,
                                       hasCorrection: true,
-                                      updateType: 'grammar'
+                                      updateType: 'grammar',
+                                      isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                     }, true, targetLang);
                                   }
                                 })
@@ -1698,7 +1795,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     timestamp: Date.now(),
                                     isTranscriptionOnly: false,
                                     hasTranslation: true,
-                                    hasCorrection: false // Grammar not ready yet
+                                    hasCorrection: false, // Grammar not ready yet
+                                    isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                                   }, true, targetLang);
                                 }
                               }).catch(error => {
@@ -1735,7 +1833,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isTranscriptionOnly: true,
                                     hasTranslation: false,
                                     hasCorrection: true,
-                                    updateType: 'grammar'
+                                    updateType: 'grammar',
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, currentSourceLang);
                                   
                                   // Broadcast grammar update to listener language groups - sequence IDs handle ordering
@@ -1749,7 +1848,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                       timestamp: Date.now(),
                                       isTranscriptionOnly: false,
                                       hasCorrection: true,
-                                      updateType: 'grammar'
+                                      updateType: 'grammar',
+                                      isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                     }, true, targetLang);
                                   }
                                 }
