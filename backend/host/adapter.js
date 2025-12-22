@@ -20,6 +20,7 @@ import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from
 import { grammarWorker } from '../grammarWorker.js';
 import { CoreEngine } from '../../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from '../utils/recoveryMerge.js';
+import { deduplicatePartialText } from '../../core/utils/partialDeduplicator.js';
 
 /**
  * Handle host connection using CoreEngine
@@ -324,6 +325,21 @@ export async function handleHostConnection(clientWs, sessionId) {
               const processFinalText = (textToProcess, options = {}) => {
                 // If already processing, queue this final instead of skipping
                 if (isProcessingFinal) {
+                  // CRITICAL: Before queuing, check if this is an older version of text already committed
+                  // This prevents queuing incomplete versions after recovery has committed complete versions
+                  if (lastSentFinalText) {
+                    const queuedNormalized = textToProcess.trim().replace(/\s+/g, ' ').toLowerCase();
+                    const lastSentNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                    
+                    // If this text is a prefix of what we already sent, skip queuing (older version)
+                    if (lastSentNormalized.startsWith(queuedNormalized) && lastSentNormalized.length > queuedNormalized.length) {
+                      console.log(`[HostMode] ⏭️ Skipping queued final - older version already committed (queued: ${queuedNormalized.length} chars, sent: ${lastSentNormalized.length} chars)`);
+                      console.log(`[HostMode]   Would queue: "${textToProcess.substring(0, 80)}..."`);
+                      console.log(`[HostMode]   Already sent: "${lastSentFinalText.substring(0, 80)}..."`);
+                      return; // Don't queue older version
+                    }
+                  }
+                  
                   console.log(`[HostMode] ⏳ Final already being processed, queuing: "${textToProcess.substring(0, 60)}..."`);
                   finalProcessingQueue.push({ textToProcess, options });
                   return; // Queue instead of skip
@@ -339,6 +355,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // This prevents sending grammar-corrected version of same original text twice
                     const trimmedText = textToProcess.trim();
                     const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+                    const isForcedFinal = !!options.forceFinal;
                     
                     // Always check for duplicates if we have tracking data (not just within time window)
                     // This catches duplicates even if they arrive outside the continuation window
@@ -346,6 +363,75 @@ export async function handleHostConnection(clientWs, sessionId) {
                       const lastSentOriginalNormalized = lastSentOriginalText.replace(/\s+/g, ' ').toLowerCase();
                       const lastSentFinalNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
                       const timeSinceLastFinal = Date.now() - lastSentFinalTime;
+                      
+                      // CRITICAL: For forced finals, use MORE aggressive deduplication
+                      // Forced finals can be committed multiple times (recovery + timeout) with slight variations
+                      // Check if one is a prefix/extension of another, or if they're very similar
+                      if (isForcedFinal) {
+                        // For forced finals, check within a longer window (10 seconds) since recovery can take time
+                        const FORCED_FINAL_DEDUP_WINDOW_MS = 10000;
+                        
+                        if (timeSinceLastFinal < FORCED_FINAL_DEDUP_WINDOW_MS) {
+                          // Check if texts are identical (normalized)
+                          if (textNormalized === lastSentFinalNormalized || textNormalized === lastSentOriginalNormalized) {
+                            console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (identical text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
+                            isProcessingFinal = false;
+                            return;
+                          }
+                          
+                          // CRITICAL: Check if one forced final is a prefix/extension of another
+                          // This catches cases where recovery adds words to the same base text
+                          if (textNormalized.length > 20 && lastSentFinalNormalized.length > 20) {
+                            // Check if new text starts with last sent (new is extension)
+                            if (lastSentFinalNormalized.startsWith(textNormalized.substring(0, Math.min(textNormalized.length, lastSentFinalNormalized.length - 5)))) {
+                              const prefixLen = Math.min(textNormalized.length, lastSentFinalNormalized.length - 5);
+                              if (prefixLen > 30) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (new is prefix of last sent, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
+                                console.log(`[HostMode]   New: "${trimmedText.substring(0, 80)}..."`);
+                                console.log(`[HostMode]   Last sent: "${lastSentFinalText.substring(0, 80)}..."`);
+                                isProcessingFinal = false;
+                                return;
+                              }
+                            }
+                            
+                            // Check if last sent starts with new text (last sent is extension - prefer longer one)
+                            if (textNormalized.startsWith(lastSentFinalNormalized.substring(0, Math.min(lastSentFinalNormalized.length, textNormalized.length - 5)))) {
+                              const prefixLen = Math.min(lastSentFinalNormalized.length, textNormalized.length - 5);
+                              if (prefixLen > 30 && textNormalized.length > lastSentFinalNormalized.length) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (last sent is prefix of new, ${timeSinceLastFinal}ms ago), but new is longer - will replace`);
+                                // Allow this to proceed - it's an extension, but we'll update tracking
+                              } else if (prefixLen > 30) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (last sent is prefix of new but new is not longer, ${timeSinceLastFinal}ms ago), skipping`);
+                                isProcessingFinal = false;
+                                return;
+                              }
+                            }
+                          }
+                          
+                          // Check for high word overlap (catches punctuation/capitalization/grammar differences)
+                          const textWords = textNormalized.split(/\s+/).filter(w => w.length > 2);
+                          const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
+                          
+                          if (textWords.length > 5 && lastSentWords.length > 5) {
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
+                            const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
+                            const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
+                            
+                            // For forced finals, if 75%+ words match and length difference is small, it's a duplicate
+                            // Use lower threshold (75% vs 80%) because forced finals may have recovery words added
+                            if (wordOverlapRatio >= 0.75 && lengthDiff < 30) {
+                              // But allow if new text is significantly longer (recovery found more words)
+                              if (textNormalized.length <= lastSentFinalNormalized.length + 10) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
+                                isProcessingFinal = false;
+                                return;
+                              }
+                            }
+                          }
+                        }
+                      }
                       
                       // Check if this is the same original text (even if grammar correction would change it)
                       // Use stricter matching for very recent commits (within 5 seconds)
@@ -681,11 +767,36 @@ export async function handleHostConnection(clientWs, sessionId) {
                       isProcessingFinal = false;
                       
                       // Process next queued final if any
-                      if (finalProcessingQueue.length > 0) {
+                      // CRITICAL: Filter out queued finals that are older versions of text already committed
+                      while (finalProcessingQueue.length > 0) {
                         const next = finalProcessingQueue.shift();
+                        
+                        // Check if this queued final is an older version of text we already sent
+                        // This prevents processing incomplete versions after recovery has committed a complete version
+                        if (lastSentFinalText && lastSentOriginalText) {
+                          const queuedNormalized = next.textToProcess.trim().replace(/\s+/g, ' ').toLowerCase();
+                          const lastSentNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                          const lastSentOriginalNormalized = lastSentOriginalText.replace(/\s+/g, ' ').toLowerCase();
+                          
+                          // If queued text is a prefix of what we already sent, skip it (older version)
+                          if (lastSentNormalized.startsWith(queuedNormalized) && lastSentNormalized.length > queuedNormalized.length) {
+                            console.log(`[HostMode] ⏭️ Skipping queued final - older version already committed (queued: ${queuedNormalized.length} chars, sent: ${lastSentNormalized.length} chars)`);
+                            console.log(`[HostMode]   Queued: "${next.textToProcess.substring(0, 80)}..."`);
+                            console.log(`[HostMode]   Already sent: "${lastSentFinalText.substring(0, 80)}..."`);
+                            continue; // Skip this queued final, check next one
+                          }
+                          
+                          // Also check if queued text matches original but we already sent a corrected version
+                          if (queuedNormalized === lastSentOriginalNormalized && lastSentNormalized !== lastSentOriginalNormalized) {
+                            console.log(`[HostMode] ⏭️ Skipping queued final - original version already committed as corrected version`);
+                            continue; // Skip this queued final, check next one
+                          }
+                        }
+                        
                         console.log(`[HostMode] 🔄 Processing queued final: "${next.textToProcess.substring(0, 60)}..."`);
                         // Recursively process the next queued final
                         processFinalText(next.textToProcess, next.options);
+                        break; // Only process one at a time
                       }
                     }
                   } catch (error) {
@@ -694,10 +805,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                     isProcessingFinal = false;
                     
                     // Process next queued final even on error
-                    if (finalProcessingQueue.length > 0) {
+                    // CRITICAL: Filter out queued finals that are older versions of text already committed
+                    while (finalProcessingQueue.length > 0) {
                       const next = finalProcessingQueue.shift();
+                      
+                      // Check if this queued final is an older version of text we already sent
+                      if (lastSentFinalText && lastSentOriginalText) {
+                        const queuedNormalized = next.textToProcess.trim().replace(/\s+/g, ' ').toLowerCase();
+                        const lastSentNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                        const lastSentOriginalNormalized = lastSentOriginalText.replace(/\s+/g, ' ').toLowerCase();
+                        
+                        // If queued text is a prefix of what we already sent, skip it (older version)
+                        if (lastSentNormalized.startsWith(queuedNormalized) && lastSentNormalized.length > queuedNormalized.length) {
+                          console.log(`[HostMode] ⏭️ Skipping queued final after error - older version already committed`);
+                          continue; // Skip this queued final, check next one
+                        }
+                        
+                        // Also check if queued text matches original but we already sent a corrected version
+                        if (queuedNormalized === lastSentOriginalNormalized && lastSentNormalized !== lastSentOriginalNormalized) {
+                          console.log(`[HostMode] ⏭️ Skipping queued final after error - original version already committed as corrected version`);
+                          continue; // Skip this queued final, check next one
+                        }
+                      }
+                      
                       console.log(`[HostMode] 🔄 Processing queued final after error: "${next.textToProcess.substring(0, 60)}..."`);
                       processFinalText(next.textToProcess, next.options);
+                      break; // Only process one at a time
                     }
                   }
                 })();
@@ -815,70 +948,55 @@ export async function handleHostConnection(clientWs, sessionId) {
                     }
                   }
                   
-                  // Track latest partial for correction race condition prevention
-                  latestPartialTextForCorrection = transcriptText;
-                  const translationSeedText = applyCachedCorrections(transcriptText);
+                  // CRITICAL: Check if this partial duplicates words from the previous FINAL FIRST
+                  // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
+                  // Do this BEFORE updating partial tracker so we track the deduplicated text
+                  // CRITICAL: If there's a forced final buffer, also check against it (it hasn't been committed yet)
+                  // This prevents partials like "I've been..." from being treated as new when they're actually
+                  // continuations of the forced final "Bend. Oh boy, I've been to grocery store..."
+                  syncForcedFinalBuffer();
+                  let textToCheckAgainst = lastSentFinalText;
+                  let timeToCheckAgainst = lastSentFinalTime;
+                  
+                  // If there's a forced final buffer, check against it instead (it's more recent and hasn't been committed yet)
+                  if (forcedFinalBuffer && forcedFinalBuffer.text) {
+                    // Use the forced final text - it represents the most recent final, even though it hasn't been sent yet
+                    textToCheckAgainst = forcedFinalBuffer.text;
+                    // Use the timestamp from when the forced final was received (stored in buffer)
+                    timeToCheckAgainst = forcedFinalBuffer.timestamp || Date.now();
+                    console.log(`[HostMode] 🔍 Checking partial against forced final buffer (timestamp: ${timeToCheckAgainst}): "${textToCheckAgainst.substring(0, 60)}..."`);
+                  }
+                  
+                  // Use core engine utility for deduplication
+                  const dedupResult = deduplicatePartialText({
+                    partialText: transcriptText,
+                    lastFinalText: textToCheckAgainst,
+                    lastFinalTime: timeToCheckAgainst,
+                    mode: 'HostMode',
+                    timeWindowMs: 5000,
+                    maxWordsToCheck: 3
+                  });
+                  
+                  let partialTextToSend = dedupResult.deduplicatedText;
+                  
+                  // If all words were duplicates, skip sending this partial entirely
+                  if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
+                    console.log(`[HostMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
+                    return; // Skip this partial entirely
+                  }
+                  
+                  // Track latest partial for correction race condition prevention (use deduplicated text)
+                  latestPartialTextForCorrection = partialTextToSend;
+                  const translationSeedText = applyCachedCorrections(partialTextToSend);
                   
                   // PHASE 8: Update partial tracking using CoreEngine Partial Tracker
-                  partialTracker.updatePartial(transcriptText);
+                  // Use deduplicated text for tracking to ensure consistency
+                  partialTracker.updatePartial(partialTextToSend);
                   syncPartialVariables(); // Sync variables for compatibility
                   
                   const snapshot = partialTracker.getSnapshot();
                   if (snapshot.longest && snapshot.longest.length > (longestPartialText?.length || 0)) {
                     console.log(`[HostMode] 📏 New longest partial: ${snapshot.longest.length} chars`);
-                  }
-                  
-                  // CRITICAL: Check if this partial duplicates words from the previous FINAL
-                  // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
-                  let partialTextToSend = transcriptText;
-                  if (lastSentFinalText && lastSentFinalTime) {
-                    const timeSinceLastFinal = Date.now() - lastSentFinalTime;
-                    // Only check if FINAL was sent recently (within 5 seconds)
-                    if (timeSinceLastFinal < 5000) {
-                      const lastSentFinalNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
-                      const partialNormalized = transcriptText.replace(/\s+/g, ' ').toLowerCase();
-                      
-                      // Get last few words from previous FINAL (check last 3-5 words)
-                      const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
-                      const partialWords = partialNormalized.split(/\s+/).filter(w => w.length > 2);
-                      
-                      // Check if partial starts with words that are related to the end of previous FINAL
-                      if (lastSentWords.length > 0 && partialWords.length > 0) {
-                        const lastWordsFromFinal = lastSentWords.slice(-3); // Last 3 words from FINAL
-                        const firstWordsFromPartial = partialWords.slice(0, 3); // First 3 words from PARTIAL
-                        
-                        // Check if the first word(s) of partial match the last word(s) of final
-                        // This catches cases like "desires" at end of FINAL followed by "Desires" at start of PARTIAL
-                        let wordsToSkip = 0;
-                        
-                        // Check backwards: first word of partial vs last word of final, second vs second-to-last, etc.
-                        for (let i = 0; i < Math.min(firstWordsFromPartial.length, lastWordsFromFinal.length); i++) {
-                          const partialWord = firstWordsFromPartial[i];
-                          const finalWord = lastWordsFromFinal[lastWordsFromFinal.length - 1 - i];
-                          
-                          if (wordsAreRelated(partialWord, finalWord)) {
-                            wordsToSkip++;
-                            console.log(`[HostMode] ⚠️ Partial word "${partialWord}" (position ${i}) matches final word "${finalWord}" (position ${lastWordsFromFinal.length - 1 - i})`);
-                          } else {
-                            // Stop checking once we find a non-match
-                            break;
-                          }
-                        }
-                        
-                        if (wordsToSkip > 0) {
-                          // Skip the duplicate words
-                          const partialWordsArray = transcriptText.split(/\s+/);
-                          partialTextToSend = partialWordsArray.slice(wordsToSkip).join(' ').trim();
-                          console.log(`[HostMode] ✂️ Trimmed ${wordsToSkip} duplicate word(s) from partial: "${transcriptText.substring(0, 50)}..." → "${partialTextToSend.substring(0, 50)}..."`);
-                          
-                          // If nothing left after trimming, skip sending this partial entirely
-                          if (!partialTextToSend || partialTextToSend.length < 3) {
-                            console.log(`[HostMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
-                            return; // Skip this partial entirely
-                          }
-                        }
-                      }
-                    }
                   }
                   
                   // CRITICAL: Don't send very short partials at the start of a new segment
@@ -910,20 +1028,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const pending = finalizationEngine.getPendingFinalization();
                     const timeSinceFinal = Date.now() - pending.timestamp;
                     const finalText = pending.text.trim();
-                    // CRITICAL: Check against both raw transcriptText AND partialTextToSend (what we'll actually send)
-                    // This ensures we catch cases where deduplication changed the text or where the raw text extends the final
-                    const rawPartialText = transcriptText.trim();
-                    const deduplicatedPartialText = partialTextToSend.trim();
+                    // CRITICAL: Use deduplicated text for all checks to ensure consistency
+                    // The deduplicated text is what we'll actually send, so use it for extension checks
+                    const partialText = partialTextToSend.trim(); // Use deduplicated text, not original
                     
-                    // Check if either the raw or deduplicated partial extends the final
+                    // Check if the deduplicated partial extends the final
                     // For short finals, require exact start match. For longer finals, allow some flexibility
-                    const rawExtendsFinal = rawPartialText.length > finalText.length && 
-                                            (rawPartialText.startsWith(finalText) || 
-                                             (finalText.length > 10 && rawPartialText.substring(0, finalText.length) === finalText));
-                    const deduplicatedExtendsFinal = deduplicatedPartialText.length > finalText.length && 
-                                                      (deduplicatedPartialText.startsWith(finalText) || 
-                                                       (finalText.length > 10 && deduplicatedPartialText.substring(0, finalText.length) === finalText));
-                    const extendsFinal = rawExtendsFinal || deduplicatedExtendsFinal;
+                    const extendsFinal = partialText.length > finalText.length && 
+                                         (partialText.startsWith(finalText) || 
+                                          (finalText.length > 10 && partialText.substring(0, finalText.length) === finalText));
                     
                     // If partial extends the final and it's recent, don't send it as a new partial
                     // Just update the pending finalization and let it be finalized later
@@ -956,12 +1069,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
                   // PHASE 8: Sync pendingFinalization before accessing
+                  // Use deduplicated text for all checks to ensure consistency
                   syncPendingFinalization();
                   if (finalizationEngine.hasPendingFinalization()) {
                     const pending = finalizationEngine.getPendingFinalization();
                     const timeSinceFinal = Date.now() - pending.timestamp;
                     const finalText = pending.text.trim();
-                    const partialText = transcriptText.trim();
+                    const partialText = partialTextToSend.trim(); // Use deduplicated text, not original
                     
                     // Check if this partial actually extends the final (starts with it or has significant overlap)
                     // For short finals, require exact start match. For longer finals, allow some flexibility
@@ -1085,7 +1199,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log(`[HostMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
                         processFinalText(textToProcess);
                       }, remainingWait);
-                      // Continue tracking this partial (don't return - let it be tracked normally below)
+                      // CRITICAL: Return early to prevent the code below from committing the final
+                      // We're waiting for the partial to grow into a continuation, so don't treat it as a new segment yet
+                      return; // Continue tracking this partial, but don't commit final or process as new segment
                     }
                     
                       // If partials are still arriving and extending the final, update the pending text and extend the timeout
@@ -1901,15 +2017,52 @@ export async function handleHostConnection(clientWs, sessionId) {
                   if (longestPartialSnapshot && longestPartialSnapshot.length > transcriptText.length && timeSinceLongestForced < 5000) {
                     const forcedTrimmed = transcriptText.trim();
                     const longestTrimmed = longestPartialSnapshot.trim();
+                    
+                    // Helper function to normalize text for comparison (remove punctuation, lowercase, collapse whitespace)
+                    const normalizeForComparison = (text) => {
+                      return text.toLowerCase()
+                        .replace(/[.,!?;:'"\-()]/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    };
+                    
                     // Verify it actually extends the forced final (not from a previous segment)
-                    if (longestTrimmed.startsWith(forcedTrimmed) ||
-                        (forcedTrimmed.length > 10 && longestTrimmed.substring(0, forcedTrimmed.length) === forcedTrimmed)) {
+                    // Use lenient comparison that ignores punctuation differences
+                    const forcedNormalized = normalizeForComparison(forcedTrimmed);
+                    const longestNormalized = normalizeForComparison(longestTrimmed);
+                    
+                    // Check if longest normalized starts with forced normalized (ignoring punctuation)
+                    // This handles cases where punctuation differs but the words are the same
+                    const extendsForced = longestNormalized.startsWith(forcedNormalized);
+                    
+                    // Also check word-by-word comparison (more robust for punctuation differences)
+                    const forcedWords = forcedNormalized.split(/\s+/).filter(w => w.length > 0);
+                    const longestWords = longestNormalized.split(/\s+/).filter(w => w.length > 0);
+                    const minWords = Math.min(forcedWords.length, longestWords.length);
+                    let matchingWords = 0;
+                    for (let i = 0; i < minWords; i++) {
+                      if (forcedWords[i] === longestWords[i]) {
+                        matchingWords++;
+                      } else {
+                        break;
+                      }
+                    }
+                    // If > 80% of words match and longest is longer, consider it an extension
+                    const hasWordOverlap = forcedWords.length > 0 && 
+                                          matchingWords >= forcedWords.length * 0.8 &&
+                                          longestNormalized.length > forcedNormalized.length;
+                    
+                    const extendsForcedFinal = extendsForced || hasWordOverlap;
+                    
+                    if (extendsForcedFinal) {
                       const missingWords = longestPartialSnapshot.substring(transcriptText.length).trim();
                       console.log(`[HostMode] ⚠️ Forced FINAL using LONGEST partial SNAPSHOT (${transcriptText.length} → ${longestPartialSnapshot.length} chars)`);
                       console.log(`[HostMode] 📊 Recovered (forced): "${missingWords}"`);
                       transcriptText = longestPartialSnapshot;
                     } else {
-                      console.log(`[HostMode] ⚠️ Ignoring LONGEST partial snapshot - doesn't extend forced final`);
+                      console.log(`[HostMode] ⚠️ Ignoring LONGEST partial snapshot - doesn't extend forced final (normalized comparison failed)`);
+                      console.log(`[HostMode]   Forced normalized: "${forcedNormalized.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   Longest normalized: "${longestNormalized.substring(0, 60)}..."`);
                     }
                   }
                   
@@ -1966,8 +2119,24 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         // CRITICAL: Check if buffer still exists (might have been committed by new segment)
                         if (!forcedCommitEngine.hasForcedFinalBuffer()) {
-                          console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new segment) - skipping recovery commit');
+                          console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new segment or recovery) - skipping recovery commit');
                           return;
+                        }
+                        
+                        // CRITICAL: If recovery is in progress, wait for it to complete before proceeding
+                        // This prevents race conditions where timeout fires while recovery is still processing
+                        syncForcedFinalBuffer();
+                        const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                        if (buffer?.recoveryInProgress && buffer?.recoveryPromise) {
+                          console.log('[HostMode] ⏳ Recovery still in progress - waiting for completion before timeout commit...');
+                          try {
+                            await buffer.recoveryPromise;
+                            console.log('[HostMode] ✅ Recovery completed - will check if it already committed before timeout commit');
+                          } catch (error) {
+                            console.error('[HostMode] ❌ Error waiting for recovery:', error.message);
+                          }
+                          // Re-sync buffer after recovery completes (it may have been cleared)
+                          syncForcedFinalBuffer();
                         }
 
                         // Snapshot any late partials that arrived during the 1200ms wait
@@ -2084,237 +2253,31 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // This audio includes the decoder gap at T-200ms where "spent" exists!
                         
                         if (recoveryAudio.length > 0) {
-                          console.log(`[HostMode] 🎵 Starting decoder gap recovery with PRE+POST-final audio: ${recoveryAudio.length} bytes`);
-
-                          try {
-                            console.log(`[HostMode] 🔄 ENTERED recovery try block - about to import GoogleSpeechStream...`);
-                            console.log(`[HostMode] 🔄 Importing GoogleSpeechStream...`);
-                            const { GoogleSpeechStream } = await import('../googleSpeechStream.js');
-
-                            const tempStream = new GoogleSpeechStream();
-                            await tempStream.initialize(currentSourceLang, { 
-                              disablePunctuation: true,
-                              forceEnhanced: true  // Always use enhanced model for recovery streams
-                            });
-
-                            // CRITICAL: Disable auto-restart for recovery stream
-                            // We want it to end naturally after processing our audio
-                            tempStream.shouldAutoRestart = false;
-
-                            console.log(`[HostMode] ✅ Temporary recovery stream initialized (auto-restart disabled)`);
-
-                            // Wait for stream to be FULLY ready (not just exist)
-                            console.log(`[HostMode] ⏳ Waiting for recovery stream to be ready...`);
-                            let streamReadyTimeout = 0;
-                            while (!tempStream.isStreamReady() && streamReadyTimeout < 2000) {
-                              await new Promise(resolve => setTimeout(resolve, 50));
-                              streamReadyTimeout += 50;
-                            }
-
-                            if (!tempStream.isStreamReady()) {
-                              console.log(`[HostMode] ❌ Recovery stream not ready after 2000ms!`);
-                              console.log(`[HostMode] Stream state:`, {
-                                exists: !!tempStream.recognizeStream,
-                                writable: tempStream.recognizeStream?.writable,
-                                destroyed: tempStream.recognizeStream?.destroyed,
-                                isActive: tempStream.isActive,
-                                isRestarting: tempStream.isRestarting
-                              });
-                              throw new Error('Recognition stream not ready');
-                            }
-
-                            console.log(`[HostMode] ✅ Recovery stream ready after ${streamReadyTimeout}ms`);
-                            await new Promise(resolve => setTimeout(resolve, 100));
-                            console.log(`[HostMode] ✅ Additional 100ms wait complete`);
-
-                            // CRITICAL: Create recovery promise NOW (after stream is ready) so new segments can wait for it
-                            // recoveryResolve is already declared at the start of setTimeout callback
-                            const recoveryPromise = new Promise((resolve) => {
-                              recoveryResolve = resolve;
-                            });
-                            
-                            // Store recovery promise in buffer
-                            syncForcedFinalBuffer();
-                            if (forcedFinalBuffer) {
-                              forcedCommitEngine.setRecoveryInProgress(true, recoveryPromise);
-                              syncForcedFinalBuffer();
-                              console.log('[HostMode] 🔄 Recovery promise created and stored in buffer');
-                            }
-
-                            // Set up result handler and create promise to wait for stream completion
-                            let recoveredText = '';
-                            let lastPartialText = '';
-                            let allPartials = [];
-
-                            // CRITICAL: Create promise that waits for Google's 'end' event
-                            const streamCompletionPromise = new Promise((resolve) => {
-                              tempStream.onResult((text, isPartial) => {
-                                console.log(`[HostMode] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'}: "${text}"`);
-                                if (!isPartial) {
-                                  recoveredText = text;
-                                } else {
-                                  allPartials.push(text);
-                                  lastPartialText = text;
-                                }
-                              });
-
-                              // Wait for Google to finish processing (stream 'end' event)
-                              tempStream.recognizeStream.on('end', () => {
-                                console.log(`[HostMode] 🏁 Recovery stream 'end' event received from Google`);
-                                resolve();
-                              });
-
-                              // Also handle errors
-                              tempStream.recognizeStream.on('error', (err) => {
-                                console.error(`[HostMode] ❌ Recovery stream error:`, err);
-                                resolve(); // Resolve anyway to prevent hanging
-                              });
-                            });
-
-                            // Send the PRE+POST-final audio DIRECTLY to recognition stream
-                            // BYPASS jitter buffer - send entire audio as one write for recovery
-                            console.log(`[HostMode] 📤 Sending ${recoveryAudio.length} bytes directly to recovery stream (bypassing jitter buffer)...`);
-
-                            // Write directly to the recognition stream
-                            if (tempStream.recognizeStream && tempStream.isStreamReady()) {
-                              tempStream.recognizeStream.write(recoveryAudio);
-                              console.log(`[HostMode] ✅ Audio written directly to recognition stream`);
-
-                              // CRITICAL: End write side IMMEDIATELY after writing
-                              // This tells Google "no more audio coming, finalize what you have"
-                              tempStream.recognizeStream.end();
-                              console.log(`[HostMode] ✅ Write side closed - waiting for Google to process and send results...`);
-                            } else {
-                              console.error(`[HostMode] ❌ Recovery stream not ready for direct write!`);
-                              throw new Error('Recovery stream not ready');
-                            }
-
-                            // Wait for Google to process and send back results
-                            // This waits for the actual 'end' event, not a timer
-                            console.log(`[HostMode] ⏳ Waiting for Google to decode and send results (stream 'end' event)...`);
-
-                            // Add timeout to prevent infinite hang
-                            const timeoutPromise = new Promise((resolve) => {
-                              setTimeout(() => {
-                                console.warn(`[HostMode] ⚠️ Recovery stream timeout after 5000ms`);
-                                resolve();
-                              }, 5000);
-                            });
-
-                            await Promise.race([streamCompletionPromise, timeoutPromise]);
-                            console.log(`[HostMode] ✅ Google decode wait complete`);
-
-                            // Use last partial if no final
-                            if (!recoveredText && lastPartialText) {
-                              recoveredText = lastPartialText;
-                            }
-
-                            console.log(`[HostMode] 📊 === DECODER GAP RECOVERY RESULTS ===`);
-                            console.log(`[HostMode]   Total partials: ${allPartials.length}`);
-                            console.log(`[HostMode]   All partials: ${JSON.stringify(allPartials)}`);
-                            console.log(`[HostMode]   Final text: "${recoveredText}"`);
-                            console.log(`[HostMode]   Audio sent: ${recoveryAudio.length} bytes`);
-
-                            // Clean up
-                            tempStream.destroy();
-
-                            // Find the missing words by comparing recovered vs buffered
-                            // Update finalTextToCommit (declared at line 1642) with recovered text
-                            let finalRecoveredText = '';
-                            if (recoveredText && recoveredText.length > 0) {
-                              console.log(`[HostMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
-
-                              // Use shared merge utility for improved merge logic
-                              syncPartialVariables();
-                              const mergeResult = mergeRecoveryText(
-                                finalWithPartials,
-                                recoveredText,
-                                {
-                                  nextPartialText: latestPartialText,
-                                  nextFinalText: nextFinalAfterRecovery?.text,
-                                  mode: 'HostMode'
-                                }
-                              );
-
-                              // Use merge result
-                              if (mergeResult.merged) {
-                                finalTextToCommit = mergeResult.mergedText;
-                                finalRecoveredText = mergeResult.mergedText; // Store for promise resolution
-                              } else {
-                                // Fallback to buffered text if merge failed
-                                finalTextToCommit = finalWithPartials;
-                                console.log(`[HostMode] ⚠️ Merge failed: ${mergeResult.reason}`);
-                              }
-                            } else {
-                              console.log(`[HostMode] ⚠️ Recovery stream returned no text`);
-                            }
-
-                            // CRITICAL: If recovery found additional words, commit them as an update
-                            // The forced final was already committed immediately when detected
-                            // Recovery just adds the missing words we found
-                            const originalBufferedText = finalWithPartials;
-                            if (finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length) {
-                              // Check if buffer still exists before committing recovery update
-                              syncForcedFinalBuffer();
-                              if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                                const additionalWords = finalTextToCommit.substring(originalBufferedText.length).trim();
-                                console.log(`[HostMode] ✅ Recovery found additional words: "${additionalWords}"`);
-                                console.log(`[HostMode] 📊 Committing recovery update: "${finalTextToCommit.substring(0, 80)}..."`);
-                                
-                                // Mark as committed by recovery BEFORE clearing buffer
-                                syncForcedFinalBuffer();
-                                if (forcedFinalBuffer) {
-                                  forcedFinalBuffer.committedByRecovery = true;
-                                }
-                                
-                                // Commit the full recovered text (forced final + recovery words)
-                                processFinalText(finalTextToCommit, { forceFinal: true });
-                                forcedCommitEngine.clearForcedFinalBuffer();
-                                syncForcedFinalBuffer();
-                                
-                                // Reset recovery tracking after commit
-                                recoveryStartTime = 0;
-                                nextFinalAfterRecovery = null;
-                                
-                                // Mark that we've already committed, so timeout callback can skip
-                                console.log(`[HostMode] ✅ Recovery commit completed - timeout callback will skip`);
-                              } else {
-                                console.log(`[HostMode] ⚠️ Buffer already cleared - recovery found words but cannot commit update`);
-                              }
-                            } else {
-                              console.log(`[HostMode] ⚠️ No new text recovered - will commit forced final with grammar correction via timeout`);
-                              // Don't clear buffer - let timeout callback commit the forced final (with grammar correction)
-                              // The timeout will handle committing the original forced final text
-                            }
-
-                            // CRITICAL: Resolve recovery promise with recovered text (or empty if nothing found)
-                            // This allows other code (like new FINALs) to wait for recovery to complete
-                            if (recoveryResolve) {
-                              console.log(`[HostMode] ✅ Resolving recovery promise with recovered text: "${finalRecoveredText || ''}"`);
-                              recoveryResolve(finalRecoveredText || '');
-                            }
-
-                          } catch (error) {
-                            console.error(`[HostMode] ❌ Decoder gap recovery failed:`, error.message);
-                            console.error(`[HostMode] ❌ Error stack:`, error.stack);
-                            console.error(`[HostMode] ❌ Full error object:`, error);
-                            
-                            // CRITICAL: Resolve recovery promise even on error (with empty string)
-                            // This prevents other code from hanging while waiting for recovery
-                            if (recoveryResolve) {
-                              console.log(`[HostMode] ⚠️ Resolving recovery promise with empty text due to error`);
-                              recoveryResolve('');
-                            } else {
-                              console.warn('[HostMode] ⚠️ recoveryResolve not available in catch block - this should not happen');
-                            }
-                          } finally {
-                            // Mark recovery as complete
-                            syncForcedFinalBuffer();
-                            if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                              forcedCommitEngine.setRecoveryInProgress(false, null);
-                              syncForcedFinalBuffer();
-                            }
-                          }
+                          // Use RecoveryStreamEngine to handle recovery stream operations
+                          // Wrap recoveryStartTime and nextFinalAfterRecovery in objects so they can be modified
+                          const recoveryStartTimeRef = { value: recoveryStartTime };
+                          const nextFinalAfterRecoveryRef = { value: nextFinalAfterRecovery };
+                          
+                          await coreEngine.recoveryStreamEngine.performRecoveryStream({
+                            speechStream,
+                            sourceLang: currentSourceLang,
+                            forcedCommitEngine,
+                            finalWithPartials,
+                            latestPartialText,
+                            nextFinalAfterRecovery,
+                            bufferedText,
+                            processFinalText,
+                            syncForcedFinalBuffer,
+                            syncPartialVariables,
+                            mode: 'HostMode',
+                            recoveryStartTime: recoveryStartTimeRef,
+                            nextFinalAfterRecovery: nextFinalAfterRecoveryRef,
+                            recoveryAudio
+                          });
+                          
+                          // Update the original variables from the refs
+                          recoveryStartTime = recoveryStartTimeRef.value;
+                          nextFinalAfterRecovery = nextFinalAfterRecoveryRef.value;
                         } else {
                           // No recovery audio available
                           console.log(`[HostMode] ⚠️ No recovery audio available (${recoveryAudio.length} bytes) - committing without recovery`);
@@ -2323,7 +2286,33 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // CRITICAL: Check if recovery already committed before committing from timeout
                         syncForcedFinalBuffer();
                         const bufferStillExists = forcedCommitEngine.hasForcedFinalBuffer();
-                        const wasCommittedByRecovery = forcedFinalBuffer?.committedByRecovery === true;
+                        
+                        // Check if recovery already committed by checking the buffer's committedByRecovery flag
+                        // OR if buffer was cleared but recovery was in progress (recovery clears buffer after committing)
+                        let wasCommittedByRecovery = false;
+                        if (bufferStillExists) {
+                          // Buffer still exists - check its flag
+                          const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                          wasCommittedByRecovery = buffer?.committedByRecovery === true;
+                        } else {
+                          // Buffer doesn't exist - check if recovery was in progress
+                          // If recovery was in progress and buffer is now cleared, recovery must have committed it
+                          // We can't directly check if recovery completed, but we can infer:
+                          // - If buffer was cleared AND we're in the timeout callback, recovery likely committed it
+                          // - However, buffer could also be cleared by new FINAL or extending partial
+                          // So we need a more reliable check: look for recovery promise completion
+                          // For now, if buffer doesn't exist, we'll check if there's any indication recovery ran
+                          // The safest approach: if buffer doesn't exist, don't commit (recovery or new FINAL already handled it)
+                          console.log('[HostMode] ⚠️ Forced final buffer already cleared - checking if recovery already committed...');
+                          
+                          // If we reach here and buffer is cleared, it means either:
+                          // 1. Recovery committed it (and cleared buffer) - DON'T commit again
+                          // 2. New FINAL arrived and merged with it - DON'T commit again  
+                          // 3. Extending partial cleared it - DON'T commit again
+                          // In all cases, we should NOT commit from timeout if buffer is cleared
+                          console.log('[HostMode] ⏭️ Skipping timeout commit - buffer already cleared (likely committed by recovery, new FINAL, or extending partial)');
+                          return; // Skip commit - something else already handled it
+                        }
                         
                         if (wasCommittedByRecovery) {
                           console.log('[HostMode] ⏭️ Skipping timeout commit - recovery already committed this forced final');
@@ -2347,12 +2336,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                             syncForcedFinalBuffer();
                           }
                           return;
-                        }
-                        
-                        if (!bufferStillExists) {
-                          console.log('[HostMode] ⚠️ Forced final buffer already cleared - but committing forced final to ensure it is not lost');
-                          // Buffer was cleared (likely by extending partial or new FINAL), but we should still commit
-                          // the forced final text to ensure it's not lost (recovery didn't commit it, so timeout must)
                         }
                         
                         // Commit the forced final (with grammar correction via processFinalText)

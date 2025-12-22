@@ -61,6 +61,8 @@ graph TB
     SoloHandler -->|JSON Response| Frontend
 ```
 
+
+
 ## Security Requirements
 
 ### 1. API Key Authentication
@@ -201,6 +203,8 @@ graph TB
 }
 ```
 
+
+
 ### Outgoing (Server → Client)
 
 ```json
@@ -215,6 +219,8 @@ graph TB
 }
 ```
 
+
+
 ### Error Messages
 
 ```json
@@ -225,6 +231,8 @@ graph TB
   "retryAfter": 5
 }
 ```
+
+
 
 ## Security Features
 
@@ -251,4 +259,3 @@ graph TB
 ### CORS
 
 - API endpoint: No CORS (WebSocket doesn't use CORS)
-- HTTP endpo

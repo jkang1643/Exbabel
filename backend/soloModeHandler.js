@@ -16,6 +16,7 @@ import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from
 import { grammarWorker } from './grammarWorker.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
+import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -1056,63 +1057,32 @@ export async function handleSoloMode(clientWs) {
                       // NOTE: Partial tracker reset will happen in the timeout callback after recovery
                     }
                   }
-                  // PHASE 4: Update partial tracking using Partial Tracker
-                  partialTracker.updatePartial(transcriptText);
-                  syncPartialVariables(); // Sync variables for compatibility
-                  const translationSeedText = applyCachedCorrections(transcriptText);
-                  
-                  // CRITICAL: Check if this partial duplicates words from the previous FINAL
+                  // CRITICAL: Check if this partial duplicates words from the previous FINAL FIRST
                   // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
-                  let partialTextToSend = transcriptText;
-                  if (lastSentFinalText && lastSentFinalTime) {
-                    const timeSinceLastFinal = Date.now() - lastSentFinalTime;
-                    // Only check if FINAL was sent recently (within 5 seconds)
-                    if (timeSinceLastFinal < 5000) {
-                      const lastSentFinalNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
-                      const partialNormalized = transcriptText.replace(/\s+/g, ' ').toLowerCase();
-                      
-                      // Get last few words from previous FINAL (check last 3-5 words)
-                      const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
-                      const partialWords = partialNormalized.split(/\s+/).filter(w => w.length > 2);
-                      
-                      // Check if partial starts with words that are related to the end of previous FINAL
-                      if (lastSentWords.length > 0 && partialWords.length > 0) {
-                        const lastWordsFromFinal = lastSentWords.slice(-3); // Last 3 words from FINAL
-                        const firstWordsFromPartial = partialWords.slice(0, 3); // First 3 words from PARTIAL
-                        
-                        // Check if the first word(s) of partial match the last word(s) of final
-                        // This catches cases like "desires" at end of FINAL followed by "Desires" at start of PARTIAL
-                        let wordsToSkip = 0;
-                        
-                        // Check backwards: first word of partial vs last word of final, second vs second-to-last, etc.
-                        for (let i = 0; i < Math.min(firstWordsFromPartial.length, lastWordsFromFinal.length); i++) {
-                          const partialWord = firstWordsFromPartial[i];
-                          const finalWord = lastWordsFromFinal[lastWordsFromFinal.length - 1 - i];
-                          
-                          if (wordsAreRelated(partialWord, finalWord)) {
-                            wordsToSkip++;
-                            console.log(`[SoloMode] ⚠️ Partial word "${partialWord}" (position ${i}) matches final word "${finalWord}" (position ${lastWordsFromFinal.length - 1 - i})`);
-                          } else {
-                            // Stop checking once we find a non-match
-                            break;
-                          }
-                        }
-                        
-                        if (wordsToSkip > 0) {
-                          // Skip the duplicate words
-                          const partialWordsArray = transcriptText.split(/\s+/);
-                          partialTextToSend = partialWordsArray.slice(wordsToSkip).join(' ').trim();
-                          console.log(`[SoloMode] ✂️ Trimmed ${wordsToSkip} duplicate word(s) from partial: "${transcriptText.substring(0, 50)}..." → "${partialTextToSend.substring(0, 50)}..."`);
-                          
-                          // If nothing left after trimming, skip sending this partial entirely
-                          if (!partialTextToSend || partialTextToSend.length < 3) {
-                            console.log(`[SoloMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
-                            return; // Skip this partial entirely
-                          }
-                        }
-                      }
-                    }
+                  // Do this BEFORE updating partial tracker so we track the deduplicated text
+                  // Use core engine utility for deduplication
+                  const dedupResult = deduplicatePartialText({
+                    partialText: transcriptText,
+                    lastFinalText: lastSentFinalText,
+                    lastFinalTime: lastSentFinalTime,
+                    mode: 'SoloMode',
+                    timeWindowMs: 5000,
+                    maxWordsToCheck: 3
+                  });
+                  
+                  let partialTextToSend = dedupResult.deduplicatedText;
+                  
+                  // If all words were duplicates, skip sending this partial entirely
+                  if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
+                    console.log(`[SoloMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
+                    return; // Skip this partial entirely
                   }
+                  
+                  // PHASE 4: Update partial tracking using Partial Tracker
+                  // Use deduplicated text for tracking to ensure consistency
+                  partialTracker.updatePartial(partialTextToSend);
+                  syncPartialVariables(); // Sync variables for compatibility
+                  const translationSeedText = applyCachedCorrections(partialTextToSend);
                   
                   // CRITICAL: Don't send very short partials at the start of a new segment
                   // Google Speech needs time to refine the transcription, especially for the first word
@@ -1147,10 +1117,11 @@ export async function handleSoloMode(clientWs) {
                   }, true);
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
+                  // Use deduplicated text for all checks to ensure consistency
                   if (pendingFinalization) {
                     const timeSinceFinal = Date.now() - pendingFinalization.timestamp;
                     const finalText = pendingFinalization.text.trim();
-                    const partialText = transcriptText.trim();
+                    const partialText = partialTextToSend.trim(); // Use deduplicated text, not original
                     
                     // Check if this partial actually extends the final (starts with it or has significant overlap)
                     // For short finals, require exact start match. For longer finals, allow some flexibility
@@ -2156,247 +2127,31 @@ export async function handleSoloMode(clientWs) {
                           // ⭐ NOW: Send the PRE+POST-final audio to recovery stream
                           // This audio includes the decoder gap at T-200ms where "spent" exists!
                           if (recoveryAudio.length > 0) {
-                            console.log(`[SoloMode] 🎵 Starting decoder gap recovery with PRE+POST-final audio: ${recoveryAudio.length} bytes`);
-
-                            // CRITICAL: Create recovery promise BEFORE starting recovery
-                            // This allows other code (like new FINALs) to wait for recovery to complete
-                            let recoveryResolve = null;
-                            const recoveryPromise = new Promise((resolve) => {
-                              recoveryResolve = resolve;
+                            // Use RecoveryStreamEngine to handle recovery stream operations
+                            // Wrap recoveryStartTime and nextFinalAfterRecovery in objects so they can be modified
+                            const recoveryStartTimeRef = { value: recoveryStartTime };
+                            const nextFinalAfterRecoveryRef = { value: nextFinalAfterRecovery };
+                            
+                            await coreEngine.recoveryStreamEngine.performRecoveryStream({
+                              speechStream,
+                              sourceLang: currentSourceLang,
+                              forcedCommitEngine,
+                              finalWithPartials,
+                              latestPartialText,
+                              nextFinalAfterRecovery,
+                              bufferedText,
+                              processFinalText,
+                              syncForcedFinalBuffer,
+                              syncPartialVariables,
+                              mode: 'SoloMode',
+                              recoveryStartTime: recoveryStartTimeRef,
+                              nextFinalAfterRecovery: nextFinalAfterRecoveryRef,
+                              recoveryAudio
                             });
-
-                            // Store recovery promise in buffer so other code can await it
-                            syncForcedFinalBuffer();
-                            if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                              forcedCommitEngine.setRecoveryInProgress(true, recoveryPromise);
-                              syncForcedFinalBuffer();
-                              console.log('[SoloMode] ✅ Recovery promise created and stored in buffer');
-                            }
-
-                            try {
-                              console.log(`[SoloMode] 🔄 ENTERED recovery try block - about to import GoogleSpeechStream...`);
-                              console.log(`[SoloMode] 🔄 Importing GoogleSpeechStream...`);
-                              const { GoogleSpeechStream } = await import('./googleSpeechStream.js');
-
-                              const tempStream = new GoogleSpeechStream();
-                              await tempStream.initialize(currentSourceLang, { 
-                                disablePunctuation: true,
-                                forceEnhanced: true  // Always use enhanced model for recovery streams
-                              });
-
-                              // CRITICAL: Disable auto-restart for recovery stream
-                              // We want it to end naturally after processing our audio
-                              tempStream.shouldAutoRestart = false;
-
-                              console.log(`[SoloMode] ✅ Temporary recovery stream initialized (auto-restart disabled)`);
-
-                              // Wait for stream to be FULLY ready (not just exist)
-                              console.log(`[SoloMode] ⏳ Waiting for recovery stream to be ready...`);
-                              const STREAM_READY_POLL_INTERVAL_MS = 25; // Optimized for faster detection
-                              const STREAM_READY_MAX_WAIT_MS = 1500; // Optimized for latency
-                              let streamReadyTimeout = 0;
-                              while (!tempStream.isStreamReady() && streamReadyTimeout < STREAM_READY_MAX_WAIT_MS) {
-                                await new Promise(resolve => setTimeout(resolve, STREAM_READY_POLL_INTERVAL_MS));
-                                streamReadyTimeout += STREAM_READY_POLL_INTERVAL_MS;
-                              }
-
-                              if (!tempStream.isStreamReady()) {
-                                console.log(`[SoloMode] ❌ Recovery stream not ready after ${STREAM_READY_MAX_WAIT_MS}ms!`);
-                                console.log(`[SoloMode] Stream state:`, {
-                                  exists: !!tempStream.recognizeStream,
-                                  writable: tempStream.recognizeStream?.writable,
-                                  destroyed: tempStream.recognizeStream?.destroyed,
-                                  isActive: tempStream.isActive,
-                                  isRestarting: tempStream.isRestarting
-                                });
-                                throw new Error('Recognition stream not ready');
-                              }
-
-                              console.log(`[SoloMode] ✅ Recovery stream ready after ${streamReadyTimeout}ms`);
-                              await new Promise(resolve => setTimeout(resolve, 50)); // Optimized for latency
-                              console.log(`[SoloMode] ✅ Additional 50ms wait complete`);
-
-                              // Set up result handler and create promise to wait for stream completion
-                              let recoveredText = '';
-                              let lastPartialText = '';
-                              let allPartials = [];
-
-                              // CRITICAL: Create promise that waits for Google's 'end' event
-                              const streamCompletionPromise = new Promise((resolve) => {
-                                tempStream.onResult((text, isPartial) => {
-                                  console.log(`[SoloMode] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'}: "${text}"`);
-                                  if (!isPartial) {
-                                    recoveredText = text;
-                                  } else {
-                                    allPartials.push(text);
-                                    lastPartialText = text;
-                                  }
-                                });
-
-                                // Wait for Google to finish processing (stream 'end' event)
-                                tempStream.recognizeStream.on('end', () => {
-                                  console.log(`[SoloMode] 🏁 Recovery stream 'end' event received from Google`);
-                                  resolve();
-                                });
-
-                                // Also handle errors
-                                tempStream.recognizeStream.on('error', (err) => {
-                                  console.error(`[SoloMode] ❌ Recovery stream error:`, err);
-                                  resolve(); // Resolve anyway to prevent hanging
-                                });
-                              });
-
-                              // Send the PRE+POST-final audio DIRECTLY to recognition stream
-                              // BYPASS jitter buffer - send entire audio as one write for recovery
-                              console.log(`[SoloMode] 📤 Sending ${recoveryAudio.length} bytes directly to recovery stream (bypassing jitter buffer)...`);
-
-                              // Write directly to the recognition stream
-                              if (tempStream.recognizeStream && tempStream.isStreamReady()) {
-                                tempStream.recognizeStream.write(recoveryAudio);
-                                console.log(`[SoloMode] ✅ Audio written directly to recognition stream`);
-
-                                // CRITICAL: End write side IMMEDIATELY after writing
-                                // This tells Google "no more audio coming, finalize what you have"
-                                tempStream.recognizeStream.end();
-                                console.log(`[SoloMode] ✅ Write side closed - waiting for Google to process and send results...`);
-                              } else {
-                                console.error(`[SoloMode] ❌ Recovery stream not ready for direct write!`);
-                                throw new Error('Recovery stream not ready');
-                              }
-
-                              // Wait for Google to process and send back results
-                              // This waits for the actual 'end' event, not a timer
-                              console.log(`[SoloMode] ⏳ Waiting for Google to decode and send results (stream 'end' event)...`);
-
-                              // Add timeout to prevent infinite hang (optimized for latency)
-                              const RECOVERY_STREAM_TIMEOUT_MS = 4000;
-                              const timeoutPromise = new Promise((resolve) => {
-                                setTimeout(() => {
-                                  console.warn(`[SoloMode] ⚠️ Recovery stream timeout after ${RECOVERY_STREAM_TIMEOUT_MS}ms`);
-                                  resolve();
-                                }, RECOVERY_STREAM_TIMEOUT_MS);
-                              });
-
-                              await Promise.race([streamCompletionPromise, timeoutPromise]);
-                              console.log(`[SoloMode] ✅ Google decode wait complete`);
-
-                              // Use last partial if no final
-                              if (!recoveredText && lastPartialText) {
-                                recoveredText = lastPartialText;
-                              }
-
-                              console.log(`[SoloMode] 📊 === DECODER GAP RECOVERY RESULTS ===`);
-                              console.log(`[SoloMode]   Total partials: ${allPartials.length}`);
-                              console.log(`[SoloMode]   All partials: ${JSON.stringify(allPartials)}`);
-                              console.log(`[SoloMode]   Final text: "${recoveredText}"`);
-                              console.log(`[SoloMode]   Audio sent: ${recoveryAudio.length} bytes`);
-
-                              // Clean up
-                              tempStream.destroy();
-
-                              // Find the missing words by comparing recovered vs buffered
-                              let finalRecoveredText = '';
-                              let mergeResult = null;
-                              if (recoveredText && recoveredText.length > 0) {
-                                console.log(`[SoloMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
-
-                                // Use shared merge utility for improved merge logic
-                                syncPartialVariables();
-                                mergeResult = mergeRecoveryText(
-                                  finalWithPartials,
-                                  recoveredText,
-                                  {
-                                    nextPartialText: latestPartialText,
-                                    nextFinalText: nextFinalAfterRecovery?.text,
-                                    mode: 'SoloMode'
-                                  }
-                                );
-
-                                // Use merge result - update finalTextToCommit (declared at line 1560)
-                                const originalBufferedText = finalWithPartials;
-                                if (mergeResult.merged) {
-                                  finalTextToCommit = mergeResult.mergedText;
-                                  finalRecoveredText = mergeResult.mergedText; // Store for promise resolution
-                                  console.log(`[SoloMode] 📋 Merge result: ${mergeResult.reason}`);
-                                } else {
-                                  // Fallback to buffered text if merge failed
-                                  finalTextToCommit = finalWithPartials;
-                                  console.log(`[SoloMode] ⚠️ Merge failed: ${mergeResult.reason}`);
-                                }
-                                
-                                // CRITICAL: If recovery found additional words, commit them as an update
-                                // The forced final was already committed immediately when detected
-                                // Recovery just adds the missing words we found
-                                // Special handling for "full append" case (no overlap - entire recovery appended)
-                                const isFullAppend = mergeResult?.reason?.startsWith('No overlap - full append');
-                                const hasAdditionalWords = finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length;
-                                
-                                if (isFullAppend || hasAdditionalWords) {
-                                  // Check if buffer still exists before committing recovery update
-                                  syncForcedFinalBuffer();
-                                  if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                                    const additionalWords = finalTextToCommit.substring(originalBufferedText.length).trim();
-                                    if (isFullAppend) {
-                                      console.log(`[SoloMode] 📎 Full append case detected - appending entire recovery text`);
-                                    }
-                                    console.log(`[SoloMode] ✅ Recovery found additional words: "${additionalWords}"`);
-                                    console.log(`[SoloMode] 📊 Committing recovery update: "${finalTextToCommit.substring(0, 80)}..."`);
-                                    
-                                    // Mark as committed by recovery BEFORE clearing buffer
-                                    syncForcedFinalBuffer();
-                                    if (forcedFinalBuffer) {
-                                      forcedFinalBuffer.committedByRecovery = true;
-                                    }
-                                    
-                                    // Commit the full recovered text (forced final + recovery words)
-                                    processFinalText(finalTextToCommit, { forceFinal: true });
-                                    forcedCommitEngine.clearForcedFinalBuffer();
-                                    syncForcedFinalBuffer();
-                                    
-                                    // Reset recovery tracking after commit
-                                    recoveryStartTime = 0;
-                                    nextFinalAfterRecovery = null;
-                                    
-                                    // Mark that we've already committed, so timeout callback can skip
-                                    console.log(`[SoloMode] ✅ Recovery commit completed - timeout callback will skip`);
-                                  } else {
-                                    console.log(`[SoloMode] ⚠️ Buffer already cleared - recovery found words but cannot commit update`);
-                                  }
-                                } else {
-                                  console.log(`[SoloMode] ⚠️ No new text recovered - will commit forced final with grammar correction via timeout`);
-                                  // Don't clear buffer - let timeout callback commit the forced final (with grammar correction)
-                                  // The timeout will handle committing the original forced final text
-                                }
-                              } else {
-                                console.log(`[SoloMode] ⚠️ Recovery stream returned no text`);
-                              }
-
-                              // CRITICAL: Resolve recovery promise with recovered text (or empty if nothing found)
-                              // This allows other code (like new FINALs) to wait for recovery to complete
-                              if (recoveryResolve) {
-                                console.log(`[SoloMode] ✅ Resolving recovery promise with recovered text: "${finalRecoveredText || ''}"`);
-                                recoveryResolve(finalRecoveredText || '');
-                              }
-
-                            } catch (error) {
-                              console.error(`[SoloMode] ❌ Decoder gap recovery failed:`, error.message);
-                              console.error(`[SoloMode] ❌ Error stack:`, error.stack);
-                              console.error(`[SoloMode] ❌ Full error object:`, error);
-                              
-                              // CRITICAL: Resolve recovery promise even on error (with empty string)
-                              // This prevents other code from hanging while waiting for recovery
-                              if (recoveryResolve) {
-                                console.log(`[SoloMode] ⚠️ Resolving recovery promise with empty text due to error`);
-                                recoveryResolve('');
-                              }
-                            } finally {
-                              // Mark recovery as complete
-                              syncForcedFinalBuffer();
-                              if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                                forcedCommitEngine.setRecoveryInProgress(false, null);
-                                syncForcedFinalBuffer();
-                              }
-                            }
+                            
+                            // Update the original variables from the refs
+                            recoveryStartTime = recoveryStartTimeRef.value;
+                            nextFinalAfterRecovery = nextFinalAfterRecoveryRef.value;
                           } else {
                             // No recovery audio available
                             console.log(`[SoloMode] ⚠️ No recovery audio available (${recoveryAudio.length} bytes) - committing without recovery`);

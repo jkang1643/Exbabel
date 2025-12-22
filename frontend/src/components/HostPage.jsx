@@ -500,22 +500,100 @@ export function HostPage({ onBackToHome }) {
                       });
                       
                       // CRITICAL: Check if this exact text already exists in history (prevent duplicates)
-                      // This catches cases where forced finals with different seqIds have the same text
-                      const joinedNormalized = joinedText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
-                      const isDuplicate = filteredPrev.some(entry => {
+                      // Also check if this is a newer version of an existing entry (replace older with newer)
+                      // This catches cases where forced finals with different seqIds have similar text
+                      // Use more comprehensive normalization including quotes and apostrophes for forced finals
+                      const joinedNormalized = joinedText.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                      
+                      // First pass: Find and remove older versions of similar text
+                      let updatedPrev = filteredPrev.filter(entry => {
+                        if (entry.seqId === finalSeqId) {
+                          console.log(`[HostPage] 🗑️ Removing duplicate entry with same seqId: ${finalSeqId}`);
+                          return false; // Remove exact duplicate
+                        }
+                        
+                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                        
+                        // For forced finals, use more lenient matching since they may have punctuation variations
+                        if (isForcedFinal) {
+                          // Check if texts are the same (normalized)
+                          if (entryNormalized === joinedNormalized) {
+                            // Same text - keep newer one (higher seqId or later timestamp)
+                            if (finalSeqId !== undefined && entry.seqId !== undefined && finalSeqId > entry.seqId) {
+                              console.log(`[HostPage] 🔄 Replacing older duplicate (seqId ${entry.seqId} → ${finalSeqId}): "${entry.text.substring(0, 50)}..."`);
+                              return false; // Remove older version
+                            }
+                            return true; // Keep existing if it's newer
+                          }
+                          
+                          // Check if one contains the other (for partial matches)
+                          if (entryNormalized.length > 15 && joinedNormalized.length > 15) {
+                            const entryContainsNew = entryNormalized.includes(joinedNormalized);
+                            const newContainsEntry = joinedNormalized.includes(entryNormalized);
+                            
+                            if (entryContainsNew || newContainsEntry) {
+                              // One contains the other - keep the longer/newer one
+                              if (finalSeqId !== undefined && entry.seqId !== undefined && finalSeqId > entry.seqId) {
+                                console.log(`[HostPage] 🔄 Replacing older similar entry (seqId ${entry.seqId} → ${finalSeqId}): "${entry.text.substring(0, 50)}..."`);
+                                return false; // Remove older version
+                              }
+                              if (joinedNormalized.length > entryNormalized.length) {
+                                console.log(`[HostPage] 🔄 Replacing shorter entry with longer version (seqId ${entry.seqId} → ${finalSeqId}): "${entry.text.substring(0, 50)}..."`);
+                                return false; // Remove shorter version
+                              }
+                            }
+                            
+                            // Check if significant prefixes match (first 80 chars) - catches minor variations
+                            const prefixLen = Math.min(80, Math.min(entryNormalized.length, joinedNormalized.length));
+                            if (prefixLen > 30 && entryNormalized.substring(0, prefixLen) === joinedNormalized.substring(0, prefixLen)) {
+                              // Similar prefixes - keep newer/longer one
+                              if (finalSeqId !== undefined && entry.seqId !== undefined && finalSeqId > entry.seqId) {
+                                console.log(`[HostPage] 🔄 Replacing older entry with similar prefix (seqId ${entry.seqId} → ${finalSeqId}): "${entry.text.substring(0, 50)}..."`);
+                                return false; // Remove older version
+                              }
+                              if (joinedNormalized.length > entryNormalized.length) {
+                                console.log(`[HostPage] 🔄 Replacing shorter entry with longer similar prefix (seqId ${entry.seqId} → ${finalSeqId}): "${entry.text.substring(0, 50)}..."`);
+                                return false; // Remove shorter version
+                              }
+                            }
+                          }
+                        } else {
+                          // For regular finals, use stricter matching
+                          if (entryNormalized === joinedNormalized) {
+                            // Exact match - keep newer one
+                            if (finalSeqId !== undefined && entry.seqId !== undefined && finalSeqId > entry.seqId) {
+                              console.log(`[HostPage] 🔄 Replacing older exact duplicate (seqId ${entry.seqId} → ${finalSeqId})`);
+                              return false; // Remove older version
+                            }
+                            return true; // Keep existing if it's newer
+                          }
+                          if (entryNormalized.length > 20 && joinedNormalized.includes(entryNormalized)) {
+                            // New text contains old - replace old with new
+                            if (finalSeqId !== undefined && entry.seqId !== undefined && finalSeqId > entry.seqId) {
+                              console.log(`[HostPage] 🔄 Replacing older contained entry (seqId ${entry.seqId} → ${finalSeqId})`);
+                              return false;
+                            }
+                          }
+                          if (joinedNormalized.length > 20 && entryNormalized.includes(joinedNormalized)) {
+                            // Old text contains new - keep old (it's more complete)
+                            return true;
+                          }
+                        }
+                        return true; // Keep this entry
+                      });
+                      
+                      // Second pass: Check if this exact text still exists after filtering
+                      const stillDuplicate = updatedPrev.some(entry => {
                         if (entry.seqId === finalSeqId) {
                           return true; // Same seqId = definitely duplicate
                         }
-                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
-                        // Check if texts are the same (normalized) or one contains the other
-                        return entryNormalized === joinedNormalized || 
-                               (entryNormalized.length > 20 && joinedNormalized.includes(entryNormalized)) ||
-                               (joinedNormalized.length > 20 && entryNormalized.includes(joinedNormalized));
+                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                        return entryNormalized === joinedNormalized;
                       });
                       
-                      if (isDuplicate) {
+                      if (stillDuplicate) {
                         console.log(`[HostPage] ⏭️ SKIP DUPLICATE TEXT in history: "${joinedText.substring(0, 50)}..." (seqId: ${finalSeqId})`);
-                        return filteredPrev.slice(-50); // Return unchanged
+                        return updatedPrev.slice(-50); // Return filtered list
                       }
                       
                       const newItem = {
@@ -526,7 +604,7 @@ export function HostPage({ onBackToHome }) {
                       
                       // CRITICAL: Insert in correct position based on sequenceId to maintain chronological order
                       // This prevents race conditions where longer translations complete after shorter ones
-                      const newHistory = [...filteredPrev, newItem].sort((a, b) => {
+                      const newHistory = [...updatedPrev, newItem].sort((a, b) => {
                         // Sort by sequenceId first (most reliable), then by timestamp
                         if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
                           return a.seqId - b.seqId;
@@ -546,37 +624,44 @@ export function HostPage({ onBackToHome }) {
                 }
               } else {
                 // FALLBACK: If segmenter deduplicated everything, still add the final text if it's substantial
-                // OR if it's a short complete sentence (like "Oh my!" or "Yes.")
                 // This ensures history appears even if deduplication is too aggressive
-                // CRITICAL: This matches solo mode's behavior - short complete sentences should be committed
-                // even when there are extending partials that came after
+                // CRITICAL: Match solo mode's behavior - simple length check (segmenter already handles short complete sentences)
                 const finalTextTrimmed = fullFinalText.trim();
-                const isCompleteSentence = /[.!?…]$/.test(finalTextTrimmed);
-                const isShortComplete = finalTextTrimmed.length < 25 && isCompleteSentence;
                 
                 // Check if this text is already in history (prevent duplicates)
                 const currentTranscript = transcriptRef.current;
-                const finalNormalized = finalTextTrimmed.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                // Use more comprehensive normalization including quotes for forced finals
+                const normalizeForComparison = (text) => text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                const finalNormalized = normalizeForComparison(finalTextTrimmed);
                 const alreadyInHistory = currentTranscript.some(entry => {
-                  const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
-                  return entryNormalized === finalNormalized || 
-                         (entryNormalized.length > 5 && finalNormalized.length > 5 && 
-                          (entryNormalized.includes(finalNormalized) || finalNormalized.includes(entryNormalized)));
+                  const entryNormalized = normalizeForComparison(entry.text);
+                  if (entryNormalized === finalNormalized) {
+                    return true;
+                  }
+                  // For forced finals, use more lenient matching
+                  if (isForcedFinal && entryNormalized.length > 15 && finalNormalized.length > 15) {
+                    return entryNormalized.includes(finalNormalized) || 
+                           finalNormalized.includes(entryNormalized) ||
+                           (entryNormalized.substring(0, Math.min(80, entryNormalized.length)) === 
+                            finalNormalized.substring(0, Math.min(80, finalNormalized.length)));
+                  }
+                  // For regular finals, use standard matching
+                  return entryNormalized.length > 5 && finalNormalized.length > 5 && 
+                         (entryNormalized.includes(finalNormalized) || finalNormalized.includes(entryNormalized));
                 });
                 
-                if ((fullFinalText.length > 10 || isShortComplete) && !alreadyInHistory) {
-                  if (isShortComplete) {
-                    console.log(`[HostPage] ⚠️ Segmenter deduplicated short complete sentence, using fallback: "${finalTextTrimmed}"`);
-                  } else {
-                    console.log(`[HostPage] ⚠️ Segmenter deduplicated all, using fallback`);
-                  }
+                // Match solo mode: simple length check (segmenter already handles short complete sentences internally)
+                if (finalTextTrimmed.length > 10 && !alreadyInHistory) {
+                  console.log(`[HostPage] ⚠️ Segmenter deduplicated all, using fallback`);
                   flushSync(() => {
                     setTranscript(prev => {
                       // CRITICAL: Remove auto-segmented items that are contained in this final
-                      const finalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                      // Use more comprehensive normalization including quotes for forced finals
+                      const normalizeForFallback = (text) => text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const finalNormalized = normalizeForFallback(fullFinalText);
                       const filteredPrev = prev.filter(entry => {
                         if (entry.isSegmented) {
-                          const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                          const entryNormalized = normalizeForFallback(entry.text);
                           // If final contains this auto-segmented entry, remove it
                           if (finalNormalized.includes(entryNormalized) && entryNormalized.length > 10) {
                             console.log(`[HostPage] 🗑️ Removing auto-segmented item contained in final (fallback): "${entry.text.substring(0, 50)}..."`);
@@ -587,16 +672,37 @@ export function HostPage({ onBackToHome }) {
                       });
                       
                       // CRITICAL: Check if this exact text already exists in history (prevent duplicates)
-                      const fullFinalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                      const fullFinalNormalized = normalizeForFallback(fullFinalText);
                       const isDuplicate = filteredPrev.some(entry => {
                         if (entry.seqId === finalSeqId) {
                           return true; // Same seqId = definitely duplicate
                         }
-                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
-                        // Check if texts are the same (normalized) or one contains the other
-                        return entryNormalized === fullFinalNormalized || 
-                               (entryNormalized.length > 20 && fullFinalNormalized.includes(entryNormalized)) ||
-                               (fullFinalNormalized.length > 20 && entryNormalized.includes(fullFinalNormalized));
+                        const entryNormalized = normalizeForFallback(entry.text);
+                        
+                        // For forced finals, use more lenient matching since they may have punctuation variations
+                        if (isForcedFinal) {
+                          // Check if texts are the same (normalized)
+                          if (entryNormalized === fullFinalNormalized) {
+                            return true;
+                          }
+                          // Check if one contains the other (for partial matches)
+                          if (entryNormalized.length > 15 && fullFinalNormalized.length > 15) {
+                            if (entryNormalized.includes(fullFinalNormalized) || fullFinalNormalized.includes(entryNormalized)) {
+                              return true;
+                            }
+                            // Check if significant prefixes match (first 80 chars) - catches minor variations
+                            const prefixLen = Math.min(80, Math.min(entryNormalized.length, fullFinalNormalized.length));
+                            if (prefixLen > 30 && entryNormalized.substring(0, prefixLen) === fullFinalNormalized.substring(0, prefixLen)) {
+                              return true;
+                            }
+                          }
+                        } else {
+                          // For regular finals, use stricter matching
+                          return entryNormalized === fullFinalNormalized || 
+                                 (entryNormalized.length > 20 && fullFinalNormalized.includes(entryNormalized)) ||
+                                 (fullFinalNormalized.length > 20 && entryNormalized.includes(fullFinalNormalized));
+                        }
+                        return false;
                       });
                       
                       if (isDuplicate) {

@@ -20,6 +20,7 @@ import { TimelineOffsetTracker } from './timelineOffsetTracker.js';
 import { PartialTracker } from './partialTracker.js';
 import { FinalizationEngine } from './finalizationEngine.js';
 import { ForcedCommitEngine } from './forcedCommitEngine.js';
+import { RecoveryStreamEngine } from './recoveryStreamEngine.js';
 import { BibleReferenceEngine } from './bibleReferenceEngine.js';
 import { EVENT_TYPES } from '../events/eventTypes.js';
 
@@ -52,6 +53,9 @@ export class CoreEngine extends EventEmitter {
     
     // Forced commit engine
     this.forcedCommitEngine = options.forcedCommitEngine || new ForcedCommitEngine();
+    
+    // Recovery stream engine
+    this.recoveryStreamEngine = options.recoveryStreamEngine || new RecoveryStreamEngine();
     
     // Bible reference engine
     this.bibleReferenceEngine = options.bibleReferenceEngine || 

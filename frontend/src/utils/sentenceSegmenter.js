@@ -443,45 +443,83 @@ export class SentenceSegmenter {
     
     let newSentences;
     if (isForced) {
-      // For forced finals, still check for duplicates but update flushedText afterward
-      // This allows future forced finals to be deduplicated
-      newSentences = sentences.filter(s => {
-        const trimmed = s.trim();
-        // Only include if not already in flushedText OR if flushedText is empty (first final)
-        return trimmed.length > 0 && (!this.flushedText || !this.flushedText.includes(trimmed));
-      });
-      
-      // If no new sentences but we have text, check if it's truly new before adding
-      // CRITICAL: Don't add if the full text is already in flushedText (exact duplicate)
-      // Also allow short complete sentences (like "Oh my!" or "Yes.")
+      // For forced finals, use normalized comparison to catch punctuation differences
+      // This is critical because forced finals may have slight punctuation variations
       const textToFlushTrimmed = textToFlush ? textToFlush.trim() : '';
-      const isCompleteSentence = textToFlushTrimmed ? this.isComplete(textToFlushTrimmed) : false;
-      const isShortComplete = textToFlushTrimmed.length < 25 && isCompleteSentence;
-      const isSubstantial = textToFlushTrimmed.length > 10;
+      const textNormalized = textToFlushTrimmed.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+      const flushedNormalized = this.flushedText ? this.flushedText.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim() : '';
       
-      if (newSentences.length === 0 && textToFlush && (isSubstantial || isShortComplete)) {
-        // Normalize for comparison (remove punctuation differences, normalize whitespace)
-        const textNormalized = textToFlushTrimmed.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
-        const flushedNormalized = this.flushedText ? this.flushedText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim() : '';
-        
-        // Check if this exact text (or normalized version) is already in flushedText
-        const isAlreadyFlushed = flushedNormalized && (
+      // Helper function to normalize a sentence
+      const normalizeSentence = (s) => s.trim().toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+      
+      // Check if the full text is already in flushedText (using normalized comparison)
+      // For short sentences (< 25 chars), use exact normalized match
+      // For longer sentences, use more lenient matching
+      const isFullTextDuplicate = flushedNormalized && (
+        flushedNormalized === textNormalized ||
+        (textNormalized.length <= 25 && flushedNormalized.includes(textNormalized)) ||
+        (textNormalized.length > 10 && (
           flushedNormalized.includes(textNormalized) ||
           textNormalized.includes(flushedNormalized) ||
           (textNormalized.length > 20 && flushedNormalized.length > 20 && 
-           (textNormalized.substring(0, Math.min(50, textNormalized.length)) === 
-            flushedNormalized.substring(0, Math.min(50, flushedNormalized.length))))
-        );
-        
-        if (!isAlreadyFlushed) {
-          newSentences = [textToFlush];
-          if (isShortComplete) {
-            console.log(`[Segmenter] ✅ Adding short complete sentence as forced final fallback: "${textToFlushTrimmed}"`);
-          } else {
-            console.log(`[Segmenter] ✅ Adding forced final as fallback (not in flushedText): "${textToFlushTrimmed.substring(0, 50)}..."`);
+           textNormalized.substring(0, Math.min(80, textNormalized.length)) === 
+           flushedNormalized.substring(0, Math.min(80, flushedNormalized.length)))
+        ))
+      );
+      
+      if (isFullTextDuplicate) {
+        console.log(`[Segmenter] ⏭️ SKIP DUPLICATE FORCED FINAL (normalized match): "${textToFlushTrimmed.substring(0, 50)}..." (already in flushedText)`);
+        newSentences = [];
+      } else {
+        // Filter sentences using normalized comparison
+        newSentences = sentences.filter(s => {
+          const trimmed = s.trim();
+          if (trimmed.length === 0) return false;
+          
+          // Check against flushedText using normalized comparison
+          if (flushedNormalized) {
+            const sentenceNormalized = normalizeSentence(trimmed);
+            // Skip if this sentence (normalized) is already in flushedText
+            // For short sentences, check exact match; for longer, use includes
+            if ((sentenceNormalized.length <= 25 && flushedNormalized.includes(sentenceNormalized)) ||
+                (sentenceNormalized.length > 10 && (
+                  flushedNormalized.includes(sentenceNormalized) ||
+                  sentenceNormalized.includes(flushedNormalized.substring(0, Math.min(100, flushedNormalized.length)))
+                ))) {
+              return false;
+            }
           }
-        } else {
-          console.log(`[Segmenter] ⏭️ SKIP DUPLICATE FORCED FINAL: "${textToFlushTrimmed.substring(0, 50)}..." (already in flushedText)`);
+          return true;
+        });
+        
+        // If no new sentences but we have substantial text, check if it's truly new
+        // Also allow short complete sentences (like "Oh my!" or "Yes.")
+        const isCompleteSentence = textToFlushTrimmed ? this.isComplete(textToFlushTrimmed) : false;
+        const isShortComplete = textToFlushTrimmed.length < 25 && isCompleteSentence;
+        const isSubstantial = textToFlushTrimmed.length > 10;
+        
+        if (newSentences.length === 0 && textToFlush && (isSubstantial || isShortComplete)) {
+          // Double-check for duplicates before adding as fallback
+          // (important for short sentences that might have been missed in earlier checks)
+          const isDuplicate = flushedNormalized && (
+            flushedNormalized === textNormalized ||
+            (textNormalized.length <= 25 && flushedNormalized.includes(textNormalized)) ||
+            (textNormalized.length > 10 && (
+              flushedNormalized.includes(textNormalized) || 
+              textNormalized.includes(flushedNormalized)
+            ))
+          );
+          
+          if (!isDuplicate) {
+            newSentences = [textToFlush];
+            if (isShortComplete) {
+              console.log(`[Segmenter] ✅ Adding short complete sentence as forced final fallback: "${textToFlushTrimmed}"`);
+            } else {
+              console.log(`[Segmenter] ✅ Adding forced final as fallback (not in flushedText): "${textToFlushTrimmed.substring(0, 50)}..."`);
+            }
+          } else {
+            console.log(`[Segmenter] ⏭️ SKIP DUPLICATE FORCED FINAL (fallback check): "${textToFlushTrimmed.substring(0, 50)}..." (already in flushedText)`);
+          }
         }
       }
       
