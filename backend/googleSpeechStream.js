@@ -323,6 +323,32 @@ export class GoogleSpeechStream {
             if (!this.isRestarting) {
               this.restartStream();
             }
+          } else if (error.code === 14 || (error.details && error.details.includes('ECONNRESET'))) {
+            // Handle UNAVAILABLE (code 14) and connection reset errors
+            console.log('[GoogleSpeech] Connection reset/unavailable (code 14) - cleaning up and restarting stream...');
+            console.log('[GoogleSpeech] Error details:', error.details || error.message);
+            
+            // Clean up the stream immediately
+            this.isActive = false;
+            if (this.recognizeStream) {
+              try {
+                this.recognizeStream.removeAllListeners();
+                this.recognizeStream.destroy();
+              } catch (cleanupError) {
+                console.warn('[GoogleSpeech] Error during stream cleanup:', cleanupError);
+              }
+              this.recognizeStream = null;
+            }
+            
+            // Restart after a brief delay to allow cleanup
+            if (!this.isRestarting && this.shouldAutoRestart) {
+              setTimeout(() => {
+                if (!this.isRestarting) {
+                  console.log('[GoogleSpeech] Restarting stream after connection reset...');
+                  this.restartStream();
+                }
+              }, 1000);
+            }
           } else if (error.code === 2 || (error.details && (error.details.includes('408') || error.details.includes('Request Timeout')))) {
             // Handle 408 Request Timeout (code 2 UNKNOWN with 408 details)
             console.log('[GoogleSpeech] Request timeout (408) detected - restarting stream...');

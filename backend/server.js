@@ -520,11 +520,34 @@ console.log("[Backend] =====================================");
 process.on('uncaughtException', (error) => {
   console.error('[Backend] 🚨 Uncaught Exception:', error);
   console.error('[Backend] Stack:', error.stack);
-  // Don't exit - keep server running
+  
+  // Handle Google Speech gRPC connection errors specifically
+  if (error.code === 14 || (error.details && error.details.includes('ECONNRESET'))) {
+    console.error('[Backend] ⚠️ Google Speech connection reset detected - this is usually recoverable');
+    console.error('[Backend]    The stream should auto-restart. If issues persist, check network connectivity.');
+    // Don't exit - let the stream restart mechanism handle it
+    return;
+  }
+  
+  // For other errors, log but don't exit - keep server running
+  console.error('[Backend]    Error type:', error.constructor.name);
+  if (error.code) {
+    console.error('[Backend]    Error code:', error.code);
+  }
+  if (error.details) {
+    console.error('[Backend]    Error details:', error.details);
+  }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[Backend] 🚨 Unhandled Rejection at:', promise);
   console.error('[Backend] Reason:', reason);
+  
+  // Handle Google Speech gRPC connection errors in promises
+  if (reason && (reason.code === 14 || (reason.details && reason.details.includes('ECONNRESET')))) {
+    console.error('[Backend] ⚠️ Google Speech connection reset in promise - this is usually recoverable');
+    return;
+  }
+  
   // Don't exit - keep server running
 });
