@@ -133,8 +133,7 @@ export function HostPage({ onBackToHome }) {
   const systemAudioSupported = isSystemAudioSupported();
 
   // Sentence segmenter for smart text management
-  // Note: For host mode, we disable auto-flush to history since backend sends finals
-  // Partials should only update live display, not history
+  // Enable auto-flush to history (same as solo mode) - partials that accumulate into complete sentences are committed
   const segmenterRef = useRef(null);
   if (!segmenterRef.current) {
     segmenterRef.current = new SentenceSegmenter({
@@ -142,9 +141,36 @@ export function HostPage({ onBackToHome }) {
       maxChars: 2000,       // Increased to handle longer text (prevents premature flushing)
       maxTimeMs: 15000,
       onFlush: (flushedSentences) => {
-        // DO NOT add to history in host mode - finals come from backend
-        // Just log for debugging (like listener mode)
-        console.log('[HostPage] Segmenter auto-flushed (ignored):', flushedSentences.join(' ').substring(0, 50));
+        // Move flushed sentences to history with forced paint (same as solo mode)
+        // NOTE: Grammar corrections will be applied when finals arrive from backend
+        // The deduplication logic will replace auto-segmented items with grammar-corrected finals
+        const joinedText = flushedSentences.join(' ').trim();
+        if (joinedText) {
+          // Schedule flush for next tick to allow browser paint between flushes
+          setTimeout(() => {
+            flushSync(() => {
+              setTranscript(prev => {
+                const newItem = {
+                  text: joinedText,
+                  timestamp: Date.now(),
+                  seqId: -1, // Auto-segmented partials don't have seqId
+                  isSegmented: true  // Flag to indicate this was auto-segmented (will be replaced by final if similar)
+                };
+                
+                // CRITICAL: Insert in correct position based on timestamp (sequenceId is -1 for auto-segmented)
+                const newHistory = [...prev, newItem].sort((a, b) => {
+                  if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                    return a.seqId - b.seqId;
+                  }
+                  return (a.timestamp || 0) - (b.timestamp || 0);
+                });
+                
+                return newHistory;
+              });
+            });
+            console.log(`[HostPage] ✅ Flushed to history with paint: "${joinedText.substring(0, 40)}..."`);
+          }, 0);
+        }
       }
     });
   }
@@ -293,8 +319,22 @@ export function HostPage({ onBackToHome }) {
               
               // Add to history with sequence ID tracking and deduplication
               setTranscript(prev => {
-                // Check last 5 entries for duplicates
-                const recentEntries = prev.slice(-5);
+                // Check last 10 entries for duplicates (increased to catch auto-segmented items)
+                const recentEntries = prev.slice(-10);
+                
+                // Helper function to calculate text similarity
+                const calculateSimilarity = (text1, text2) => {
+                  const words1 = text1.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                  const words2 = text2.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                  if (words1.length === 0 || words2.length === 0) return 0;
+                  
+                  const set1 = new Set(words1);
+                  const set2 = new Set(words2);
+                  const intersection = new Set([...set1].filter(x => set2.has(x)));
+                  const union = new Set([...set1, ...set2]);
+                  
+                  return intersection.size / union.size;
+                };
                 
                 // FIRST: Check if new final contains an existing entry (handles forced final → recovered final)
                 // This is critical for recovery scenarios where forced final is shorter than recovered final
@@ -326,6 +366,41 @@ export function HostPage({ onBackToHome }) {
                 if (containedEntry) {
                   console.log(`[HostPage] 🔄 New final contains existing entry - replacing "${containedEntry.text.substring(0, 50)}..." with full text`);
                   const filtered = prev.filter(entry => entry !== containedEntry);
+                  return [...filtered, {
+                    text: fullFinalText,
+                    timestamp: message.timestamp || Date.now(),
+                    seqId: finalSeqId
+                  }].slice(-50);
+                }
+                
+                // CRITICAL: Check for duplicates with auto-segmented items (grammar-corrected finals may match auto-flushed partials)
+                const similarAutoSegmented = recentEntries.find(entry => {
+                  if (!entry.isSegmented) return false; // Only check auto-segmented items
+                  
+                  const entryText = entry.text.trim();
+                  const newText = fullFinalText.trim();
+                  
+                  // Check for high similarity (80%+ word overlap) - final likely has grammar corrections
+                  const similarity = calculateSimilarity(entryText, newText);
+                  if (similarity >= 0.8) {
+                    // Also check if texts are similar in length (within 20% difference)
+                    const lengthRatio = Math.min(entryText.length, newText.length) / Math.max(entryText.length, newText.length);
+                    if (lengthRatio >= 0.8) {
+                      return true; // Very similar - replace auto-segmented with grammar-corrected final
+                    }
+                  }
+                  
+                  // Also check if final contains the auto-segmented text (common case)
+                  if (newText.toLowerCase().includes(entryText.toLowerCase()) && newText.length >= entryText.length * 0.9) {
+                    return true; // Final contains auto-segmented text - replace it
+                  }
+                  
+                  return false;
+                });
+                
+                if (similarAutoSegmented) {
+                  console.log(`[HostPage] 🔄 New final matches auto-segmented item - replacing "${similarAutoSegmented.text.substring(0, 50)}..." with grammar-corrected final`);
+                  const filtered = prev.filter(entry => entry !== similarAutoSegmented);
                   return [...filtered, {
                     text: fullFinalText,
                     timestamp: message.timestamp || Date.now(),

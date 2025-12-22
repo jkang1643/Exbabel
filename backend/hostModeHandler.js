@@ -979,13 +979,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                   
                   // Live partial transcript - send original immediately with sequence ID (solo mode style)
                   // Note: This is the initial send before grammar/translation, so use raw text
+                  // CRITICAL: Don't set targetLang here - this message is for ALL listeners to see the original text
+                  // Translations will come later with specific targetLang values
                   const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
                   const seqId = broadcastWithSequence({
                     type: 'translation',
                     originalText: transcriptText, // Raw STT text (shown immediately)
                     translatedText: undefined, // Will be updated when translation arrives
                     sourceLang: currentSourceLang,
-                    targetLang: currentSourceLang,
+                    targetLang: null, // No target language yet - this is the original text for all listeners
                     timestamp: Date.now(),
                     isTranscriptionOnly: false,
                     hasTranslation: false, // Flag that translation is pending

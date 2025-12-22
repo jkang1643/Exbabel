@@ -63,7 +63,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const translationsEndRef = useRef(null);
 
   // Sentence segmenter for smart text management
-  // Note: For listener mode, we disable auto-flush to history since backend sends finals
+  // Enable auto-flush to history (same as solo mode) - partials that accumulate into complete sentences are committed
   const segmenterRef = useRef(null);
   if (!segmenterRef.current) {
     segmenterRef.current = new SentenceSegmenter({
@@ -71,9 +71,35 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       maxChars: 2000,       // Increased to handle longer text (prevents premature flushing)
       maxTimeMs: 15000,
       onFlush: (flushedSentences) => {
-        // DO NOT add to history in listener mode - finals come from backend
-        // Just log for debugging
-        console.log('[ListenerPage] Segmenter auto-flushed (ignored):', flushedSentences.join(' ').substring(0, 50));
+        // Move flushed sentences to history with forced paint (same as solo mode)
+        const joinedText = flushedSentences.join(' ').trim();
+        if (joinedText) {
+          // Schedule flush for next tick to allow browser paint between flushes
+          setTimeout(() => {
+            flushSync(() => {
+              setTranslations(prev => {
+                const newItem = {
+                  original: '', // Auto-segmented partials don't have original text (will be available in finals)
+                  translated: joinedText,
+                  timestamp: Date.now(),
+                  seqId: -1, // Auto-segmented partials don't have seqId
+                  isSegmented: true  // Flag to indicate this was auto-segmented
+                };
+                
+                // CRITICAL: Insert in correct position based on timestamp (sequenceId is -1 for auto-segmented)
+                const newHistory = [...prev, newItem].sort((a, b) => {
+                  if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                    return a.seqId - b.seqId;
+                  }
+                  return (a.timestamp || 0) - (b.timestamp || 0);
+                });
+                
+                return newHistory;
+              });
+            });
+            console.log(`[ListenerPage] ✅ Flushed to history with paint: "${joinedText.substring(0, 40)}..."`);
+          }, 0);
+        }
       }
     });
   }
