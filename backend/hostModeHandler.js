@@ -490,8 +490,76 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Flag to prevent concurrent final processing
               let isProcessingFinal = false;
               
-              // PHASE 8: Removed deprecated checkForExtendingPartialsAfterFinal and cleanupRecentlyFinalized functions
-              // These were part of the old backpatching system, now replaced by dual buffer recovery
+              // Helper function to check for partials that extend a just-sent FINAL
+              // This should ALWAYS be called after a FINAL is sent to catch any partials that arrived
+              // CRITICAL: This ensures no partials are missed when they arrive after a FINAL is sent
+              const checkForExtendingPartialsAfterFinal = (sentFinalText) => {
+                if (!sentFinalText) return;
+                
+                // Sync partial variables to get latest values
+                syncPartialVariables();
+                
+                const sentFinalTrimmed = sentFinalText.trim();
+                const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                
+                // Check if any partials extend the just-sent FINAL
+                let foundExtension = false;
+                
+                if (longestPartialText && longestPartialText.length > sentFinalTrimmed.length && timeSinceLongest < 5000) {
+                  const longestTrimmed = longestPartialText.trim();
+                  const sentNormalized = sentFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const extendsFinal = longestNormalized.startsWith(sentNormalized) || 
+                      (sentFinalTrimmed.length > 5 && longestNormalized.substring(0, sentNormalized.length) === sentNormalized) ||
+                      longestTrimmed.startsWith(sentFinalTrimmed) ||
+                      (sentFinalTrimmed.length > 5 && longestTrimmed.substring(0, sentFinalTrimmed.length) === sentFinalTrimmed);
+                  
+                  if (extendsFinal) {
+                    const missingWords = longestPartialText.substring(sentFinalTrimmed.length).trim();
+                    console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                    foundExtension = true;
+                  } else {
+                    // Check for overlap
+                    const merged = partialTracker.mergeWithOverlap(sentFinalTrimmed, longestTrimmed);
+                    if (merged && merged.length > sentFinalTrimmed.length + 3) {
+                      const missingWords = merged.substring(sentFinalTrimmed.length).trim();
+                      console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL via overlap - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                      foundExtension = true;
+                    }
+                  }
+                } else if (latestPartialText && latestPartialText.length > sentFinalTrimmed.length && timeSinceLatest < 5000) {
+                  const latestTrimmed = latestPartialText.trim();
+                  const sentNormalized = sentFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const latestNormalized = latestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const extendsFinal = latestNormalized.startsWith(sentNormalized) || 
+                      (sentFinalTrimmed.length > 5 && latestNormalized.substring(0, sentNormalized.length) === sentNormalized) ||
+                      latestTrimmed.startsWith(sentFinalTrimmed) ||
+                      (sentFinalTrimmed.length > 5 && latestTrimmed.substring(0, sentFinalTrimmed.length) === sentFinalTrimmed);
+                  
+                  if (extendsFinal) {
+                    const missingWords = latestPartialText.substring(sentFinalTrimmed.length).trim();
+                    console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                    foundExtension = true;
+                  } else {
+                    // Check for overlap
+                    const merged = partialTracker.mergeWithOverlap(sentFinalTrimmed, latestTrimmed);
+                    if (merged && merged.length > sentFinalTrimmed.length + 3) {
+                      const missingWords = merged.substring(sentFinalTrimmed.length).trim();
+                      console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL via overlap - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                      foundExtension = true;
+                    }
+                  }
+                }
+                
+                if (!foundExtension) {
+                  // Still log that we checked (for debugging)
+                  const finalEndsWithCompleteSentence = endsWithCompleteSentence(sentFinalTrimmed);
+                  if (!finalEndsWithCompleteSentence) {
+                    console.log(`[HostMode] ✓ Checked for extending partials after FINAL (none found): "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}"`);
+                  }
+                }
+              };
               
               // Function to commit a pending final (after delay)
               const commitPendingFinal = async () => {
@@ -578,9 +646,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // PHASE 8: Removed deprecated backpatching logic (recentlyFinalized tracking)
                 // Dual buffer recovery system handles word recovery now
                 
-                // PHASE 8: Reset partial tracking using CoreEngine
-                partialTracker.reset();
-                syncPartialVariables(); // Sync variables after reset
+                // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
+                // Resetting here causes data loss when FINAL handler needs the snapshot
                 
                 // Clear pending final
                 const finalToProcess = finalTextToProcess;
@@ -913,6 +980,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                       } else {
                         lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
                         lastSentFinalTime = Date.now();
+                        
+                        // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
+                        checkForExtendingPartialsAfterFinal(textToProcess);
+                      }
+                      
+                      // CRITICAL: Reset partial tracking AFTER final is sent (not before)
+                      // This prevents race conditions where new partials from next segment arrive between snapshot and reset
+                      // Only reset if this is not a forced final (forced finals reset separately)
+                      if (!isForcedFinal) {
+                        partialTracker.reset();
+                        syncPartialVariables();
+                        console.log('[HostMode] 🧹 Reset partial tracking after final sent');
                       }
                       
                       // Add to recently finalized window for backpatching (Delayed Final Reconciliation System)
@@ -947,6 +1026,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         } else {
                           lastSentFinalText = textToProcess;
                           lastSentFinalTime = Date.now();
+                          
+                          // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
+                          checkForExtendingPartialsAfterFinal(textToProcess);
                         }
                         
                         // PHASE 8: Removed deprecated backpatching check
@@ -1196,9 +1278,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // PHASE 8: Clear using engine
                       finalizationEngine.clearPendingFinalization();
                       syncPendingFinalization();
-                      // PHASE 8: Reset partial tracking using tracker
-                      partialTracker.reset();
-                      syncPartialVariables();
+                      // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                       processFinalText(textToCommit);
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
                     }
@@ -1283,9 +1363,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // The final text might be incomplete, but we need to commit it to prevent loss
                         
                         const textToProcess = finalTextToUse;
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables();
+                        // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
@@ -1359,9 +1437,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
                         
                         const textToProcess = finalTextToUse;
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables();
+                        // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
@@ -1436,9 +1512,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           }
                         }
                         
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables();
+                        // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
@@ -2088,6 +2162,17 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // This prevents word loss when Google Speech sends incomplete finals
                 // Google Speech may send final signal but still have partials for the last few words in flight
                 
+                // CRITICAL: Take snapshot BEFORE processing to prevent race conditions
+                // New partials from next segment could arrive between check and reset, mixing segments
+                syncPartialVariables(); // Sync to get latest values before snapshot
+                const partialSnapshot = partialTracker.getSnapshot();
+                const longestPartialSnapshot = partialSnapshot.longest;
+                const latestPartialSnapshot = partialSnapshot.latest;
+                const longestPartialTimeSnapshot = partialSnapshot.longestTime;
+                const latestPartialTimeSnapshot = partialSnapshot.latestTime;
+                
+                console.log(`[HostMode] 📸 SNAPSHOT: longest=${longestPartialSnapshot?.length || 0} chars, latest=${latestPartialSnapshot?.length || 0} chars`);
+                
                 // For long text, wait proportionally longer before processing final
                 const BASE_WAIT_MS = 1000; // Base wait to catch partials
                 const LONG_TEXT_THRESHOLD = 200;
@@ -2121,15 +2206,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                   }
                 }
                 
-                // Check if we have longer partials that extend this final
+                // CRITICAL: Use SNAPSHOT (not live values) when checking for extending partials
+                // This prevents race conditions where new partials from next segment arrive between check and reset
                 let finalTextToUse = transcriptText;
                 const finalTrimmed = transcriptText.trim();
-                const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
-                const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                const timeSinceLongest = longestPartialTimeSnapshot ? (Date.now() - longestPartialTimeSnapshot) : Infinity;
+                const timeSinceLatest = latestPartialTimeSnapshot ? (Date.now() - latestPartialTimeSnapshot) : Infinity;
                 
-                // Check if longest partial extends the final
-                if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 10000) {
-                  const longestTrimmed = longestPartialText.trim();
+                // Check if longest partial extends the final (using snapshot)
+                if (longestPartialSnapshot && longestPartialSnapshot.length > transcriptText.length && timeSinceLongest < 10000) {
+                  const longestTrimmed = longestPartialSnapshot.trim();
                   const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
                   const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
                   const extendsFinal = longestNormalized.startsWith(finalNormalized) || 
@@ -2138,22 +2224,22 @@ export async function handleHostConnection(clientWs, sessionId) {
                       (finalTrimmed.length > 5 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
                   
                   if (extendsFinal) {
-                    const missingWords = longestPartialText.substring(transcriptText.length).trim();
-                    console.log(`[HostMode] ⚠️ FINAL extended by LONGEST partial (${transcriptText.length} → ${longestPartialText.length} chars)`);
+                    const missingWords = longestPartialSnapshot.substring(transcriptText.length).trim();
+                    console.log(`[HostMode] ⚠️ FINAL extended by LONGEST partial SNAPSHOT (${transcriptText.length} → ${longestPartialSnapshot.length} chars)`);
                     console.log(`[HostMode] 📊 Recovered from partial: "${missingWords}"`);
-                    finalTextToUse = longestPartialText;
+                    finalTextToUse = longestPartialSnapshot;
                   } else {
                     // Check for overlap
                     const merged = mergeWithOverlap(finalTrimmed, longestTrimmed);
                     if (merged && merged.length > finalTrimmed.length + 3) {
-                      console.log(`[HostMode] ⚠️ FINAL merged with LONGEST partial via overlap (${transcriptText.length} → ${merged.length} chars)`);
+                      console.log(`[HostMode] ⚠️ FINAL merged with LONGEST partial SNAPSHOT via overlap (${transcriptText.length} → ${merged.length} chars)`);
                       console.log(`[HostMode] 📊 Recovered via overlap: "${merged.substring(finalTrimmed.length)}"`);
                       finalTextToUse = merged;
                     }
                   }
-                } else if (latestPartialText && latestPartialText.length > transcriptText.length && timeSinceLatest < 5000) {
-                  // Fallback to latest partial
-                  const latestTrimmed = latestPartialText.trim();
+                } else if (latestPartialSnapshot && latestPartialSnapshot.length > transcriptText.length && timeSinceLatest < 5000) {
+                  // Fallback to latest partial (using snapshot)
+                  const latestTrimmed = latestPartialSnapshot.trim();
                   const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
                   const latestNormalized = latestTrimmed.replace(/\s+/g, ' ').toLowerCase();
                   const extendsFinal = latestNormalized.startsWith(finalNormalized) || 
@@ -2162,15 +2248,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                       (finalTrimmed.length > 5 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
                   
                   if (extendsFinal) {
-                    const missingWords = latestPartialText.substring(transcriptText.length).trim();
-                    console.log(`[HostMode] ⚠️ FINAL extended by LATEST partial (${transcriptText.length} → ${latestPartialText.length} chars)`);
+                    const missingWords = latestPartialSnapshot.substring(transcriptText.length).trim();
+                    console.log(`[HostMode] ⚠️ FINAL extended by LATEST partial SNAPSHOT (${transcriptText.length} → ${latestPartialSnapshot.length} chars)`);
                     console.log(`[HostMode] 📊 Recovered from partial: "${missingWords}"`);
-                    finalTextToUse = latestPartialText;
+                    finalTextToUse = latestPartialSnapshot;
                   } else {
                     // Check for overlap
                     const merged = partialTracker.mergeWithOverlap(finalTrimmed, latestTrimmed);
                     if (merged && merged.length > finalTrimmed.length + 3) {
-                      console.log(`[HostMode] ⚠️ FINAL merged with LATEST partial via overlap (${transcriptText.length} → ${merged.length} chars)`);
+                      console.log(`[HostMode] ⚠️ FINAL merged with LATEST partial SNAPSHOT via overlap (${transcriptText.length} → ${merged.length} chars)`);
                       console.log(`[HostMode] 📊 Recovered via overlap: "${merged.substring(finalTrimmed.length)}"`);
                       finalTextToUse = merged;
                     }
@@ -2248,8 +2334,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   const waitTime = Date.now() - pendingFinalization.timestamp;
                   finalizationEngine.clearPendingFinalization();
                   syncPendingFinalization();
-                  partialTracker.reset();
-                  syncPartialVariables();
+                  // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                   console.log(`[HostMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                   processFinalText(textToProcess);
                 }, WAIT_FOR_PARTIALS_MS);
