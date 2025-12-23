@@ -595,6 +595,43 @@ export function deduplicatePartialText({
     return { deduplicatedText, wordsSkipped, wasDeduplicated };
   }
 
+  // CRITICAL FIX: Check if partial is clearly a new segment before deduplicating
+  // If forced final ends with sentence punctuation and partial starts with capital letter,
+  // it's almost certainly a new segment - skip deduplication
+  const finalTrimmed = lastFinalText.trim();
+  const partialTrimmed = partialText.trim();
+  const finalEndsWithPunctuation = /[.!?]$/.test(finalTrimmed);
+  const partialStartsWithCapital = /^[A-Z]/.test(partialTrimmed);
+  const finalLower = finalTrimmed.toLowerCase();
+  const partialLower = partialTrimmed.toLowerCase();
+  
+  // If final ends with punctuation and partial starts with capital, it's a new segment
+  if (finalEndsWithPunctuation && partialStartsWithCapital) {
+    // Additional check: verify partial doesn't start with final text (case-insensitive)
+    // If partial doesn't start with final (even partially), it's a new segment
+    if (!partialLower.startsWith(finalLower.substring(0, Math.min(20, finalLower.length)))) {
+      return { deduplicatedText, wordsSkipped, wasDeduplicated: false };
+    }
+  }
+  
+  // Check if partial extends the final (is a continuation)
+  // If partial is longer and starts with final text, it's a continuation - proceed with deduplication
+  const partialExtendsFinal = partialTrimmed.length > finalTrimmed.length && 
+                               (partialLower.startsWith(finalLower) || 
+                                (finalTrimmed.length > 10 && partialLower.substring(0, finalTrimmed.length) === finalLower));
+  
+  // If partial doesn't extend final and starts with a capital letter (new sentence),
+  // check if first word is in the final - if not, it's likely a new segment
+  if (!partialExtendsFinal && partialStartsWithCapital) {
+    const finalWordsList = finalTrimmed.split(/\s+/).map(w => w.toLowerCase().replace(/[.!?,]/g, ''));
+    const partialFirstWord = partialTrimmed.split(/\s+/)[0]?.toLowerCase().replace(/[.!?,]/g, '');
+    
+    // If first word of partial doesn't appear anywhere in final, it's a new segment
+    if (partialFirstWord && !finalWordsList.includes(partialFirstWord)) {
+      return { deduplicatedText, wordsSkipped, wasDeduplicated: false };
+    }
+  }
+
   // Extract words with metadata (preserving original case and structure)
   const finalWords = extractWords(lastFinalText);
   const partialWords = extractWords(partialText);

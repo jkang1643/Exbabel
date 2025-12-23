@@ -624,14 +624,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Should become "self-centered desires..." (removing "Own")
                     // IMPORTANT: Use lastSentOriginalText for comparison (raw text from Google Speech)
                     // This ensures we compare against what was actually transcribed, not grammar-corrected version
-                    // CRITICAL: Also check forced final buffer if lastSentFinalText is not available yet
-                    // This handles cases where recovery just committed a final but async processing hasn't finished
+                    // CRITICAL FIX: For forced finals, NEVER use the forced final buffer for deduplication
+                    // The forced final buffer contains the SAME text being committed, so it would incorrectly
+                    // identify it as a duplicate. Only use lastSentFinalText/lastSentOriginalText for forced finals.
+                    // For regular finals, we can check the forced final buffer if lastSentFinalText is not available
+                    // (handles cases where recovery just committed a final but async processing hasn't finished)
                     let finalTextToProcess = trimmedText;
                     let textToCompareAgainst = lastSentOriginalText || lastSentFinalText; // Prefer original, fallback to corrected
                     let timeToCompareAgainst = lastSentFinalTime;
                     
                     // If no previous final text available, check if there's a forced final buffer (recovery in progress)
-                    if (!textToCompareAgainst) {
+                    // BUT: Only for REGULAR finals, NOT forced finals (forced final buffer is the same text being committed)
+                    if (!textToCompareAgainst && !isForcedFinal) {
                       syncForcedFinalBuffer();
                       if (forcedCommitEngine.hasForcedFinalBuffer()) {
                         const buffer = forcedCommitEngine.getForcedFinalBuffer();
@@ -641,6 +645,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                           console.log(`[HostMode] 🔍 Using forced final buffer text for deduplication (recovery in progress): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 60))}"`);
                         }
                       }
+                    } else if (!textToCompareAgainst && isForcedFinal) {
+                      // For forced finals, don't use forced final buffer - it's the same text!
+                      console.log(`[HostMode] ℹ️ Forced final - skipping forced final buffer deduplication (would compare against itself)`);
                     }
                     
                     if (textToCompareAgainst && timeToCompareAgainst) {
@@ -1108,6 +1115,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   syncForcedFinalBuffer();
                   let textToCheckAgainst = lastSentFinalText;
                   let timeToCheckAgainst = lastSentFinalTime;
+                  let shouldDeduplicate = true; // Default to deduplicating
                   
                   // If there's a forced final buffer, check against it instead (it's more recent and hasn't been committed yet)
                   if (forcedFinalBuffer && forcedFinalBuffer.text) {
@@ -1116,24 +1124,66 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Use the timestamp from when the forced final was received (stored in buffer)
                     timeToCheckAgainst = forcedFinalBuffer.timestamp || Date.now();
                     console.log(`[HostMode] 🔍 Checking partial against forced final buffer (timestamp: ${timeToCheckAgainst}): "${textToCheckAgainst.substring(0, 60)}..."`);
+                    
+                    // CRITICAL FIX: Check if partial is actually a continuation before deduplicating
+                    // If partial is clearly a new segment (doesn't start with or extend forced final), skip deduplication
+                    const forcedText = forcedFinalBuffer.text.trim();
+                    const partialText = transcriptText.trim();
+                    
+                    // Check if partial extends the forced final (is a continuation)
+                    const extendsForcedFinal = partialText.length > forcedText.length && 
+                                             (partialText.toLowerCase().startsWith(forcedText.toLowerCase()) || 
+                                              (forcedText.length > 10 && partialText.toLowerCase().substring(0, forcedText.length) === forcedText.toLowerCase()));
+                    
+                    // Check if partial starts with forced final (case-insensitive, allowing for minor variations)
+                    const startsWithForcedFinal = partialText.toLowerCase().startsWith(forcedText.toLowerCase().substring(0, Math.min(20, forcedText.length)));
+                    
+                    // If partial is clearly a new segment (doesn't extend or start with forced final), skip deduplication
+                    // This prevents false deduplication of new segments that happen to share common words
+                    if (!extendsForcedFinal && !startsWithForcedFinal) {
+                      // Additional check: if forced final ends with sentence punctuation and partial starts with capital letter,
+                      // it's almost certainly a new segment
+                      const forcedEndsWithPunctuation = /[.!?]$/.test(forcedText);
+                      const partialStartsWithCapital = /^[A-Z]/.test(partialText);
+                      
+                      if (forcedEndsWithPunctuation && partialStartsWithCapital) {
+                        console.log(`[HostMode] 🆕 New segment detected - skipping deduplication (forced final ends with punctuation, partial starts with capital)`);
+                        shouldDeduplicate = false;
+                      } else {
+                        // Check if first word of partial is significantly different from last words of forced final
+                        const partialFirstWord = partialText.split(/\s+/)[0]?.toLowerCase();
+                        const forcedLastWords = forcedText.split(/\s+/).slice(-3).map(w => w.toLowerCase().replace(/[.!?,]/g, ''));
+                        
+                        // If first word of partial doesn't appear in last 3 words of forced final, it's likely a new segment
+                        if (partialFirstWord && !forcedLastWords.includes(partialFirstWord)) {
+                          console.log(`[HostMode] 🆕 New segment detected - skipping deduplication (first word "${partialFirstWord}" not in last words of forced final)`);
+                          shouldDeduplicate = false;
+                        }
+                      }
+                    }
                   }
                   
-                  // Use core engine utility for deduplication
-                  const dedupResult = deduplicatePartialText({
-                    partialText: transcriptText,
-                    lastFinalText: textToCheckAgainst,
-                    lastFinalTime: timeToCheckAgainst,
-                    mode: 'HostMode',
-                    timeWindowMs: 5000,
-                    maxWordsToCheck: 3
-                  });
+                  let partialTextToSend = transcriptText;
                   
-                  let partialTextToSend = dedupResult.deduplicatedText;
-                  
-                  // If all words were duplicates, skip sending this partial entirely
-                  if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
-                    console.log(`[HostMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
-                    return; // Skip this partial entirely
+                  // Only deduplicate if we determined it's safe to do so
+                  if (shouldDeduplicate && textToCheckAgainst) {
+                    // Use core engine utility for deduplication
+                    const dedupResult = deduplicatePartialText({
+                      partialText: transcriptText,
+                      lastFinalText: textToCheckAgainst,
+                      lastFinalTime: timeToCheckAgainst,
+                      mode: 'HostMode',
+                      timeWindowMs: 5000,
+                      maxWordsToCheck: 3
+                    });
+                    
+                    partialTextToSend = dedupResult.deduplicatedText;
+                    
+                    // If all words were duplicates, skip sending this partial entirely
+                    if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
+                      console.log(`[HostMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
+                      return; // Skip this partial entirely
+                    }
                   }
                   
                   // Track latest partial for correction race condition prevention (use deduplicated text)
@@ -2730,18 +2780,57 @@ export async function handleHostConnection(clientWs, sessionId) {
                     }
                     } // End if (mightBeRelated) - if not related, skip wait and continue processing below
                   } else {
-                    // No recovery in progress - merge immediately as before
+                    // No recovery in progress - CRITICAL FIX: Commit forced final FIRST before merging
+                    // This ensures forced final is not lost if merge fails
                     console.log('[HostMode] 🔁 Merging buffered forced final with new FINAL transcript');
                     forcedCommitEngine.clearForcedFinalBufferTimeout();
-                    const merged = partialTracker.mergeWithOverlap(buffer.text, transcriptText);
-                    if (merged) {
+                    
+                    // CRITICAL FIX: Check if new FINAL is actually a continuation of forced final
+                    const forcedFinalText = buffer.text.trim();
+                    const newFinalText = transcriptText.trim();
+                    const forcedNormalized = forcedFinalText.toLowerCase();
+                    const newNormalized = newFinalText.toLowerCase();
+                    
+                    // Check if new FINAL extends forced final (is a continuation)
+                    const isExtension = newNormalized.length > forcedNormalized.length && 
+                                       newNormalized.startsWith(forcedNormalized);
+                    
+                    // Check if they're the same text (duplicate)
+                    const isDuplicate = forcedNormalized === newNormalized;
+                    
+                    // Check if merge would succeed
+                    const merged = partialTracker.mergeWithOverlap(forcedFinalText, newFinalText);
+                    
+                    if (isDuplicate) {
+                      // Same text - commit forced final and skip new FINAL (it's a duplicate)
+                      console.log('[HostMode] ⚠️ New FINAL is duplicate of forced final - committing forced final and skipping new FINAL');
+                      processFinalText(forcedFinalText, { forceFinal: true });
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
+                      // Skip processing the new FINAL (it's a duplicate)
+                      return;
+                    } else if (merged && merged.length > forcedFinalText.length) {
+                      // Merge succeeded and adds new content - use merged text
+                      console.log('[HostMode] ✅ Merge succeeded - using merged text');
                       transcriptText = merged;
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
+                    } else if (isExtension) {
+                      // New FINAL extends forced final - use new FINAL (it's longer)
+                      console.log('[HostMode] ✅ New FINAL extends forced final - using new FINAL');
+                      transcriptText = newFinalText;
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
                     } else {
-                      // Merge failed - use the new FINAL transcript as-is
-                      console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
+                      // Merge failed - they're different segments
+                      // CRITICAL FIX: Commit forced final FIRST, then process new FINAL separately
+                      console.log('[HostMode] ⚠️ Merge failed - new FINAL is different segment');
+                      console.log('[HostMode] 📝 Committing forced final FIRST, then processing new FINAL separately');
+                      processFinalText(forcedFinalText, { forceFinal: true });
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
+                      // Continue processing the new FINAL below (don't return - let it be processed)
                     }
-                    forcedCommitEngine.clearForcedFinalBuffer();
-                    syncForcedFinalBuffer();
                     
                     // Reset recovery tracking since recovery was cancelled by new final
                     recoveryStartTime = 0;
