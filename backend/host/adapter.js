@@ -1202,8 +1202,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                   
                   // CRITICAL: Don't send very short partials at the start of a new segment
                   // Google Speech needs time to refine the transcription, especially for the first word
-                  // Very short partials (< 5 chars) at segment start are often inaccurate
-                  // REDUCED from 15 to 5 chars to prevent dropping short phrases like "oh my"
+                  // Very short partials (< 4 chars) at segment start are often inaccurate
+                  // REDUCED from 5 to 4 chars to ensure short phrases like "Oh my!" (5-6 chars) are always sent
                   // CRITICAL FIX: Check if partial extends a final BEFORE dropping it
                   // If partial extends a final, it should ALWAYS be sent (even if short) to prevent word loss
                   syncPendingFinalization();
@@ -1228,7 +1228,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                                       (forcedText.length > 10 && partialText.substring(0, forcedText.length) === forcedText));
                   }
                   
-                  const isVeryShortPartial = partialTextToSend.trim().length < 5;
+                  const isVeryShortPartial = partialTextToSend.trim().length < 4;
                   const timeSinceLastFinal = lastSentFinalTime ? (Date.now() - lastSentFinalTime) : Infinity;
                   // New segment start if: no pending final AND (no forced final buffer OR forced final recovery not in progress) AND recent final (< 2 seconds)
                   const isNewSegmentStart = !hasPendingFinal && 
@@ -1237,7 +1237,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   
                   // CRITICAL FIX: Only skip if it's extremely short AND at segment start AND very recent AND does NOT extend any final
                   // If partial extends a final, it should ALWAYS be sent to prevent word loss
-                  // This allows short phrases like "oh my" to be sent after a brief moment
+                  // This ensures short phrases like "Oh my!" (5-6 chars) are always sent, only filtering truly tiny partials like "O", "Oh", "Oh m"
                   // But if partial extends a final, send it immediately (even if short) to prevent dropping words
                   if (isVeryShortPartial && isNewSegmentStart && timeSinceLastFinal < 500 && !extendsAnyFinal) {
                     console.log(`[HostMode] ⏳ Delaying very short partial at segment start (${partialTextToSend.trim().length} chars, ${timeSinceLastFinal}ms since last final): "${partialTextToSend.substring(0, 30)}..." - waiting for transcription to stabilize`);
