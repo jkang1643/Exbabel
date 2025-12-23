@@ -515,13 +515,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (timeSinceLastFinal < 5000) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same original text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
                           isProcessingFinal = false; // Clear flag before returning
-                          // CRITICAL: Process queued finals even when skipping duplicates
-                          if (finalProcessingQueue.length > 0) {
-                            const next = finalProcessingQueue.shift();
-                            setImmediate(() => {
-                              processFinalText(next.textToProcess, next.options);
-                            });
-                          }
                           return; // Skip processing duplicate
                         }
                       }
@@ -532,13 +525,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (textNormalized === lastSentFinalNormalized) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                           isProcessingFinal = false; // Clear flag before returning
-                          // CRITICAL: Process queued finals even when skipping duplicates
-                          if (finalProcessingQueue.length > 0) {
-                            const next = finalProcessingQueue.shift();
-                            setImmediate(() => {
-                              processFinalText(next.textToProcess, next.options);
-                            });
-                          }
                           return; // Skip processing duplicate
                         }
                         
@@ -551,13 +537,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                           if (similarity && lengthDiff < 10 && lengthDiff < Math.min(textNormalized.length, lastSentFinalNormalized.length) * 0.1) {
                             console.log(`[HostMode] ⚠️ Duplicate final detected (very similar text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                             isProcessingFinal = false; // Clear flag before returning
-                            // CRITICAL: Process queued finals even when skipping duplicates
-                            if (finalProcessingQueue.length > 0) {
-                              const next = finalProcessingQueue.shift();
-                              setImmediate(() => {
-                                processFinalText(next.textToProcess, next.options);
-                              });
-                            }
                             return; // Skip processing duplicate
                           }
                           
@@ -577,13 +556,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.8 && lengthDiff < 20) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
-                              // CRITICAL: Process queued finals even when skipping duplicates
-                              if (finalProcessingQueue.length > 0) {
-                                const next = finalProcessingQueue.shift();
-                                setImmediate(() => {
-                                  processFinalText(next.textToProcess, next.options);
-                                });
-                              }
                               return; // Skip processing duplicate
                             }
                           }
@@ -596,13 +568,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                              Math.abs(textNormalized.length - lastSentFinalNormalized.length) < 5)) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                           isProcessingFinal = false; // Clear flag before returning
-                          // CRITICAL: Process queued finals even when skipping duplicates
-                          if (finalProcessingQueue.length > 0) {
-                            const next = finalProcessingQueue.shift();
-                            setImmediate(() => {
-                              processFinalText(next.textToProcess, next.options);
-                            });
-                          }
                           return; // Skip processing duplicate
                         }
                         
@@ -623,13 +588,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.85 && lengthDiff < 15) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% in continuation window), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
-                              // CRITICAL: Process queued finals even when skipping duplicates
-                              if (finalProcessingQueue.length > 0) {
-                                const next = finalProcessingQueue.shift();
-                                setImmediate(() => {
-                                  processFinalText(next.textToProcess, next.options);
-                                });
-                              }
                               return; // Skip processing duplicate
                             }
                           }
@@ -653,13 +611,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.9 && lengthDiff < 25) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (very high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% outside time window, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
-                              // CRITICAL: Process queued finals even when skipping duplicates
-                              if (finalProcessingQueue.length > 0) {
-                                const next = finalProcessingQueue.shift();
-                                setImmediate(() => {
-                                  processFinalText(next.textToProcess, next.options);
-                                });
-                              }
                               return; // Skip processing duplicate
                             }
                           }
@@ -680,24 +631,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                     let timeToCompareAgainst = lastSentFinalTime;
                     
                     // If no previous final text available, check if there's a forced final buffer (recovery in progress)
-                    // CRITICAL: Do NOT use forced final buffer for deduplication when committing a recovery update
-                    // because we're committing the recovery update itself (which includes the forced final)
-                    // The forced final buffer will be cleared after recovery commits, so we should only check it
-                    // for regular finals that arrive while recovery is in progress
-                    // Recovery commits are marked with forceFinal: true, but we need to distinguish them
-                    // from regular forced finals. We can check if the buffer is about to be cleared (recovery just committed)
                     if (!textToCompareAgainst) {
                       syncForcedFinalBuffer();
                       if (forcedCommitEngine.hasForcedFinalBuffer()) {
                         const buffer = forcedCommitEngine.getForcedFinalBuffer();
-                        // CRITICAL: Skip deduplication against forced final buffer if it's marked as committed by recovery
-                        // This means recovery is about to commit, and we shouldn't deduplicate against the buffer
-                        if (buffer && buffer.text && !buffer.committedByRecovery) {
+                        if (buffer && buffer.text) {
                           textToCompareAgainst = buffer.text;
                           timeToCompareAgainst = buffer.timestamp || Date.now();
                           console.log(`[HostMode] 🔍 Using forced final buffer text for deduplication (recovery in progress): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 60))}"`);
-                        } else if (buffer?.committedByRecovery) {
-                          console.log(`[HostMode] ⏭️ Skipping forced final buffer deduplication - recovery commit in progress`);
                         }
                       }
                     }
@@ -722,16 +663,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // If all words were duplicates, skip processing this final entirely
                         if (!finalTextToProcess || finalTextToProcess.length === 0) {
                           console.log(`[HostMode] ⏭️ Skipping final - all words are duplicates of previous FINAL`);
-                          // CRITICAL: Still update tracking variables even when skipping (for queued final deduplication)
-                          // The previous final's text is already tracked, but we need to ensure the flag is cleared
                           isProcessingFinal = false;
-                          // Process queued finals even when skipping
-                          if (finalProcessingQueue.length > 0) {
-                            const next = finalProcessingQueue.shift();
-                            setImmediate(() => {
-                              processFinalText(next.textToProcess, next.options);
-                            });
-                          }
                           return;
                         }
                         
@@ -828,11 +760,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                             forceFinal: !!options.forceFinal
                           }, false);
                         }
-                        // CRITICAL: Update tracking variables even when no listeners (for queued final deduplication)
-                        lastSentOriginalText = originalTextToProcess;
-                        lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
-                        lastSentFinalTime = Date.now();
-                        checkForExtendingPartialsAfterFinal(lastSentFinalText);
                         return;
                       }
 
@@ -1018,11 +945,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
                         
                         console.log(`[HostMode] 🔄 Processing queued final: "${next.textToProcess.substring(0, 60)}..."`);
-                        // CRITICAL: Process queued final asynchronously to ensure previous final's tracking variables are updated
-                        // This prevents queued finals from losing deduplication context
-                        setImmediate(() => {
-                          processFinalText(next.textToProcess, next.options);
-                        });
+                        // Recursively process the next queued final
+                        processFinalText(next.textToProcess, next.options);
                         break; // Only process one at a time
                       }
                     }
@@ -1056,11 +980,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       
                       console.log(`[HostMode] 🔄 Processing queued final after error: "${next.textToProcess.substring(0, 60)}..."`);
-                      // CRITICAL: Process queued final asynchronously to ensure previous final's tracking variables are updated
-                      // This prevents queued finals from losing deduplication context
-                      setImmediate(() => {
-                        processFinalText(next.textToProcess, next.options);
-                      });
+                      processFinalText(next.textToProcess, next.options);
                       break; // Only process one at a time
                     }
                   }
