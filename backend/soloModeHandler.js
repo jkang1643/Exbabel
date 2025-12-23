@@ -17,6 +17,7 @@ import { grammarWorker } from './grammarWorker.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';
+import { deduplicateFinalText } from '../core/utils/finalDeduplicator.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -603,8 +604,54 @@ export async function handleSoloMode(clientWs) {
                       }
                     }
                     
+                    // CRITICAL: Remove duplicate words from new final that overlap with previous final
+                    // This handles cases where Google Speech sends overlapping finals
+                    // Example: "...our own selves." followed by "Own self-centered desires..." 
+                    // Should become "self-centered desires..." (removing "Own")
+                    // IMPORTANT: Use lastSentOriginalText for comparison (raw text from Google Speech)
+                    // This ensures we compare against what was actually transcribed, not grammar-corrected version
+                    let finalTextToProcess = trimmedText;
+                    const textToCompareAgainst = lastSentOriginalText || lastSentFinalText; // Prefer original, fallback to corrected
+                    if (textToCompareAgainst && lastSentFinalTime) {
+                      const timeSinceLastFinal = Date.now() - lastSentFinalTime;
+                      console.log(`[SoloMode] 🔍 Checking for word overlap: previous="${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 60))}", new="${trimmedText.substring(0, 60)}", timeSince=${timeSinceLastFinal}ms`);
+                      
+                      const dedupResult = deduplicateFinalText({
+                        newFinalText: trimmedText,
+                        previousFinalText: textToCompareAgainst,
+                        previousFinalTime: lastSentFinalTime,
+                        mode: 'SoloMode',
+                        timeWindowMs: 5000,
+                        maxWordsToCheck: 10
+                      });
+                      
+                      if (dedupResult.wasDeduplicated) {
+                        finalTextToProcess = dedupResult.deduplicatedText;
+                        console.log(`[SoloMode] ✂️ Deduplicated final: "${trimmedText.substring(0, 60)}..." → "${finalTextToProcess.substring(0, 60)}..." (removed ${dedupResult.wordsSkipped} words)`);
+                        
+                        // If all words were duplicates, skip processing this final entirely
+                        if (!finalTextToProcess || finalTextToProcess.length === 0) {
+                          console.log(`[SoloMode] ⏭️ Skipping final - all words are duplicates of previous FINAL`);
+                          isProcessingFinal = false;
+                          return;
+                        }
+                        
+                        // Update textNormalized for subsequent processing
+                        textNormalized = finalTextToProcess.replace(/\s+/g, ' ').toLowerCase();
+                      } else {
+                        console.log(`[SoloMode] ℹ️ No word overlap detected between previous and new final`);
+                      }
+                    } else {
+                      if (!textToCompareAgainst) {
+                        console.log(`[SoloMode] ℹ️ No previous final text to compare against`);
+                      }
+                      if (!lastSentFinalTime) {
+                        console.log(`[SoloMode] ℹ️ No previous final time to compare against`);
+                      }
+                    }
+                    
                     // Bible reference detection (non-blocking, runs in parallel)
-                    coreEngine.detectReferences(textToProcess, {
+                    coreEngine.detectReferences(finalTextToProcess, {
                       sourceLang: currentSourceLang,
                       targetLang: currentTargetLang,
                       seqId: timelineTracker.getCurrentSeqId(),
@@ -633,6 +680,11 @@ export async function handleSoloMode(clientWs) {
                       // Fail silently - don't block transcript delivery
                     });
                     
+                    // Use deduplicated text for all subsequent processing
+                    // Keep original textToProcess for tracking purposes (to detect duplicates)
+                    const originalTextToProcess = textToProcess;
+                    textToProcess = finalTextToProcess;
+                    
                     // OPTIMIZATION: For forced finals, send immediately without waiting for grammar/translation
                     // Then update asynchronously when ready (reduces commit latency from 4-5s to ~1-1.5s)
                     const isForcedFinal = !!options.forceFinal;
@@ -652,9 +704,9 @@ export async function handleSoloMode(clientWs) {
                         forceFinal: true
                       }, false);
                       
-                      // Update tracking immediately
-                      lastSentOriginalText = textToProcess;
-                      lastSentFinalText = textToProcess;
+                      // Update tracking immediately (use deduplicated text)
+                      lastSentOriginalText = originalTextToProcess; // Track original for duplicate detection
+                      lastSentFinalText = textToProcess; // Track deduplicated text that was sent
                       lastSentFinalTime = Date.now();
                       
                       // Check for extending partials
@@ -696,7 +748,7 @@ export async function handleSoloMode(clientWs) {
                             if (currentSourceLang === 'en') {
                               try {
                                 correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
-                                rememberGrammarCorrection(textToProcess, correctedText);
+                                rememberGrammarCorrection(originalTextToProcess, correctedText);
                                 
                                 if (correctedText !== textToProcess) {
                                   // Send grammar update with same seqId
@@ -778,7 +830,7 @@ export async function handleSoloMode(clientWs) {
                           
                           // CRITICAL: Update last sent FINAL tracking after sending
                           // Track both original and corrected text to prevent duplicates
-                          lastSentOriginalText = textToProcess; // Always track the original
+                          lastSentOriginalText = originalTextToProcess; // Always track the original
                           lastSentFinalText = correctedText; // Track the corrected text that was sent
                           lastSentFinalTime = Date.now();
                           
@@ -798,8 +850,8 @@ export async function handleSoloMode(clientWs) {
                           }, false);
                           
                           // CRITICAL: Update last sent FINAL tracking after sending (even on error)
-                          lastSentOriginalText = textToProcess; // Track original
-                          lastSentFinalText = textToProcess; // No correction, so same as original
+                          lastSentOriginalText = originalTextToProcess; // Track original
+                          lastSentFinalText = textToProcess; // No correction, so same as deduplicated
                           lastSentFinalTime = Date.now();
                         }
                       } else {
@@ -831,7 +883,7 @@ export async function handleSoloMode(clientWs) {
                         if (currentSourceLang === 'en') {
                           try {
                             correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
-                            rememberGrammarCorrection(textToProcess, correctedText);
+                            rememberGrammarCorrection(originalTextToProcess, correctedText);
                           } catch (grammarError) {
                             console.warn(`[SoloMode] Grammar correction failed, using original text:`, grammarError.message);
                             correctedText = textToProcess; // Fallback to original on error
@@ -903,7 +955,7 @@ export async function handleSoloMode(clientWs) {
                         
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates
-                        lastSentOriginalText = textToProcess; // Always track the original
+                        lastSentOriginalText = originalTextToProcess; // Always track the original (before deduplication)
                         lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess; // Track corrected if different
                         lastSentFinalTime = Date.now();
                         
@@ -915,7 +967,7 @@ export async function handleSoloMode(clientWs) {
                         const finalText = error.skipRequest ? (correctedText || textToProcess) : `[Translation error: ${error.message}]`;
                         sendWithSequence({
                           type: 'translation',
-                          originalText: textToProcess, // Use final text (may include recovered words)
+                          originalText: textToProcess, // Use deduplicated final text (may include recovered words)
                           correctedText: correctedText || textToProcess, // Use corrected if available, otherwise final text
                           translatedText: finalText,
                           timestamp: Date.now(),
@@ -927,7 +979,7 @@ export async function handleSoloMode(clientWs) {
                         
                         // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
                         if (error.skipRequest || finalText !== `[Translation error: ${error.message}]`) {
-                          lastSentOriginalText = textToProcess; // Track original
+                          lastSentOriginalText = originalTextToProcess; // Track original (before deduplication)
                           lastSentFinalText = textToProcess;
                           lastSentFinalTime = Date.now();
                           

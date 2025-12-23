@@ -423,6 +423,93 @@ function mergeRecoveryText(bufferedText, recoveredText, options = {}) {
   console.log(`[${mode}]   Buffered (${bufferedWords.length} words): "${bufferedNormalized.substring(Math.max(0, bufferedNormalized.length - 60))}"`);
   console.log(`[${mode}]   Recovered (${recoveredWords.length} words): "${recoveredNormalized}"`);
   
+  // Step 0: Check for prefix overlap (buffered text is a suffix of recovered text)
+  // This handles cases where words are missing at the START of the phrase
+  // Example: buffered="are gathered together", recovered="Where two or three are gathered together"
+  // We need to detect that buffered is a suffix of recovered and prepend the missing prefix
+  let prefixWords = [];
+  let hasPrefixOverlap = false;
+  
+  // Check if buffered text (normalized) is a suffix of recovered text (normalized)
+  const bufferedNormalizedLower = bufferedNormalized.toLowerCase();
+  const recoveredNormalizedLower = recoveredNormalized.toLowerCase();
+  
+  // Try to find where buffered text starts in recovered text
+  const suffixIndex = recoveredNormalizedLower.indexOf(bufferedNormalizedLower);
+  if (suffixIndex === 0) {
+    // Exact match - no prefix missing
+    hasPrefixOverlap = false;
+  } else if (suffixIndex > 0) {
+    // Buffered text found at suffixIndex - there are prefix words before it
+    // Extract the prefix part before the buffered text
+    const prefixText = recoveredNormalized.substring(0, suffixIndex).trim();
+    if (prefixText.length > 0) {
+      // Check if it's a valid word boundary (starts with space or is at start)
+      // Also ensure the prefix doesn't overlap with buffered text
+      const prefixWordsTemp = prefixText.split(/\s+/).filter(w => w.length > 0);
+      
+      // Verify that buffered words match the suffix of recovered words
+      const recoveredWordsLower = recoveredWords.map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+      const bufferedWordsLower = bufferedWords.map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+      
+      // Check if the last N words of recovered match buffered words (where N = bufferedWords.length)
+      if (recoveredWordsLower.length >= bufferedWordsLower.length) {
+        const recoveredSuffix = recoveredWordsLower.slice(-bufferedWordsLower.length);
+        const matches = recoveredSuffix.every((word, idx) => word === bufferedWordsLower[idx]);
+        
+        if (matches) {
+          // Buffered text is indeed a suffix - extract prefix words
+          prefixWords = recoveredWords.slice(0, recoveredWords.length - bufferedWords.length);
+          hasPrefixOverlap = prefixWords.length > 0;
+          
+          if (hasPrefixOverlap) {
+            console.log(`[${mode}] 🔍 Found prefix overlap: buffered text is a suffix of recovered text`);
+            console.log(`[${mode}]   Missing prefix words: "${prefixWords.join(' ')}"`);
+          }
+        }
+      }
+    }
+  } else {
+    // Not found as substring - check if buffered words match end of recovered words
+    // This handles cases with punctuation differences
+    if (recoveredWords.length > bufferedWords.length) {
+      const recoveredWordsLower = recoveredWords.map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+      const bufferedWordsLower = bufferedWords.map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+      
+      // Check if last N words of recovered match buffered (where N = bufferedWords.length)
+      if (recoveredWordsLower.length >= bufferedWordsLower.length) {
+        const recoveredSuffix = recoveredWordsLower.slice(-bufferedWordsLower.length);
+        const matches = recoveredSuffix.every((word, idx) => word === bufferedWordsLower[idx]);
+        
+        if (matches) {
+          // Buffered text is a suffix - extract prefix words
+          prefixWords = recoveredWords.slice(0, recoveredWords.length - bufferedWords.length);
+          hasPrefixOverlap = prefixWords.length > 0;
+          
+          if (hasPrefixOverlap) {
+            console.log(`[${mode}] 🔍 Found prefix overlap (word-level match): buffered text is a suffix of recovered text`);
+            console.log(`[${mode}]   Missing prefix words: "${prefixWords.join(' ')}"`);
+          }
+        }
+      }
+    }
+  }
+  
+  // If we found prefix overlap, use the full recovered text (or prepend prefix to buffered)
+  if (hasPrefixOverlap) {
+    const mergedText = recoveredNormalized; // Use the complete recovered text
+    console.log(`[${mode}] 🎯 Prefix merge successful`);
+    console.log(`[${mode}]   Prefix words to prepend: "${prefixWords.join(' ')}"`);
+    console.log(`[${mode}]   Before: "${bufferedNormalized.substring(Math.max(0, bufferedNormalized.length - 60))}"`);
+    console.log(`[${mode}]   After:  "${mergedText.substring(Math.max(0, mergedText.length - 60))}"`);
+    
+    return {
+      merged: true,
+      mergedText: mergedText.trim(),
+      reason: `prefix overlap - prepended ${prefixWords.length} word(s)`
+    };
+  }
+  
   // Step 1: Try phrase-level overlap (most reliable)
   const phraseOverlap = findPhraseOverlap(bufferedWords, recoveredWords);
   
@@ -438,6 +525,34 @@ function mergeRecoveryText(bufferedText, recoveredText, options = {}) {
       matchIndex: phraseOverlap.matchIndex
     };
     console.log(`[${mode}] 🔍 Found phrase overlap: "${phraseOverlap.phrase}" (${phraseOverlap.phraseLen} words)`);
+    
+    // CRITICAL: If no tail but recovered text is longer, check if buffered is a suffix
+    // This handles prefix overlap cases that might have been detected as phrase overlap
+    if (tail.length === 0 && recoveredWords.length > bufferedWords.length) {
+      // Check if buffered words match the end of recovered words
+      const recoveredWordsLower = recoveredWords.map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+      const bufferedWordsLower = bufferedWords.map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+      
+      if (recoveredWordsLower.length >= bufferedWordsLower.length) {
+        const recoveredSuffix = recoveredWordsLower.slice(-bufferedWordsLower.length);
+        const matches = recoveredSuffix.every((word, idx) => word === bufferedWordsLower[idx]);
+        
+        if (matches) {
+          // Buffered text is a suffix - this is actually a prefix overlap case
+          // Use the complete recovered text instead
+          const mergedText = recoveredNormalized;
+          console.log(`[${mode}] 🎯 Prefix overlap detected via phrase match - using complete recovered text`);
+          console.log(`[${mode}]   Before: "${bufferedNormalized.substring(Math.max(0, bufferedNormalized.length - 60))}"`);
+          console.log(`[${mode}]   After:  "${mergedText.substring(Math.max(0, mergedText.length - 60))}"`);
+          
+          return {
+            merged: true,
+            mergedText: mergedText.trim(),
+            reason: `prefix overlap (detected via phrase match) - using complete recovered text`
+          };
+        }
+      }
+    }
   } else {
     // Step 2: Try single-word overlap with compound word protection
     const wordOverlap = findWordOverlap(bufferedWords, recoveredWords);

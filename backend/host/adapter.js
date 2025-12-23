@@ -21,6 +21,7 @@ import { grammarWorker } from '../grammarWorker.js';
 import { CoreEngine } from '../../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from '../utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../../core/utils/partialDeduplicator.js';
+import { deduplicateFinalText } from '../../core/utils/finalDeduplicator.js';
 
 /**
  * Handle host connection using CoreEngine
@@ -429,7 +430,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // CRITICAL: Duplicate prevention - check against both original and corrected text
                     // This prevents sending grammar-corrected version of same original text twice
                     const trimmedText = textToProcess.trim();
-                    const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+                    let textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
                     const isForcedFinal = !!options.forceFinal;
                     
                     // Always check for duplicates if we have tracking data (not just within time window)
@@ -514,6 +515,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (timeSinceLastFinal < 5000) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same original text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
                           isProcessingFinal = false; // Clear flag before returning
+                          // CRITICAL: Process queued finals even when skipping duplicates
+                          if (finalProcessingQueue.length > 0) {
+                            const next = finalProcessingQueue.shift();
+                            setImmediate(() => {
+                              processFinalText(next.textToProcess, next.options);
+                            });
+                          }
                           return; // Skip processing duplicate
                         }
                       }
@@ -524,6 +532,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (textNormalized === lastSentFinalNormalized) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                           isProcessingFinal = false; // Clear flag before returning
+                          // CRITICAL: Process queued finals even when skipping duplicates
+                          if (finalProcessingQueue.length > 0) {
+                            const next = finalProcessingQueue.shift();
+                            setImmediate(() => {
+                              processFinalText(next.textToProcess, next.options);
+                            });
+                          }
                           return; // Skip processing duplicate
                         }
                         
@@ -536,6 +551,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                           if (similarity && lengthDiff < 10 && lengthDiff < Math.min(textNormalized.length, lastSentFinalNormalized.length) * 0.1) {
                             console.log(`[HostMode] ⚠️ Duplicate final detected (very similar text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                             isProcessingFinal = false; // Clear flag before returning
+                            // CRITICAL: Process queued finals even when skipping duplicates
+                            if (finalProcessingQueue.length > 0) {
+                              const next = finalProcessingQueue.shift();
+                              setImmediate(() => {
+                                processFinalText(next.textToProcess, next.options);
+                              });
+                            }
                             return; // Skip processing duplicate
                           }
                           
@@ -555,6 +577,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.8 && lengthDiff < 20) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
+                              // CRITICAL: Process queued finals even when skipping duplicates
+                              if (finalProcessingQueue.length > 0) {
+                                const next = finalProcessingQueue.shift();
+                                setImmediate(() => {
+                                  processFinalText(next.textToProcess, next.options);
+                                });
+                              }
                               return; // Skip processing duplicate
                             }
                           }
@@ -567,6 +596,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                              Math.abs(textNormalized.length - lastSentFinalNormalized.length) < 5)) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                           isProcessingFinal = false; // Clear flag before returning
+                          // CRITICAL: Process queued finals even when skipping duplicates
+                          if (finalProcessingQueue.length > 0) {
+                            const next = finalProcessingQueue.shift();
+                            setImmediate(() => {
+                              processFinalText(next.textToProcess, next.options);
+                            });
+                          }
                           return; // Skip processing duplicate
                         }
                         
@@ -587,6 +623,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.85 && lengthDiff < 15) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% in continuation window), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
+                              // CRITICAL: Process queued finals even when skipping duplicates
+                              if (finalProcessingQueue.length > 0) {
+                                const next = finalProcessingQueue.shift();
+                                setImmediate(() => {
+                                  processFinalText(next.textToProcess, next.options);
+                                });
+                              }
                               return; // Skip processing duplicate
                             }
                           }
@@ -610,12 +653,106 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.9 && lengthDiff < 25) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (very high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% outside time window, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
+                              // CRITICAL: Process queued finals even when skipping duplicates
+                              if (finalProcessingQueue.length > 0) {
+                                const next = finalProcessingQueue.shift();
+                                setImmediate(() => {
+                                  processFinalText(next.textToProcess, next.options);
+                                });
+                              }
                               return; // Skip processing duplicate
                             }
                           }
                         }
                       }
                     }
+                    
+                    // CRITICAL: Remove duplicate words from new final that overlap with previous final
+                    // This handles cases where Google Speech sends overlapping finals
+                    // Example: "...our own selves." followed by "Own self-centered desires..." 
+                    // Should become "self-centered desires..." (removing "Own")
+                    // IMPORTANT: Use lastSentOriginalText for comparison (raw text from Google Speech)
+                    // This ensures we compare against what was actually transcribed, not grammar-corrected version
+                    // CRITICAL: Also check forced final buffer if lastSentFinalText is not available yet
+                    // This handles cases where recovery just committed a final but async processing hasn't finished
+                    let finalTextToProcess = trimmedText;
+                    let textToCompareAgainst = lastSentOriginalText || lastSentFinalText; // Prefer original, fallback to corrected
+                    let timeToCompareAgainst = lastSentFinalTime;
+                    
+                    // If no previous final text available, check if there's a forced final buffer (recovery in progress)
+                    // CRITICAL: Do NOT use forced final buffer for deduplication when committing a recovery update
+                    // because we're committing the recovery update itself (which includes the forced final)
+                    // The forced final buffer will be cleared after recovery commits, so we should only check it
+                    // for regular finals that arrive while recovery is in progress
+                    // Recovery commits are marked with forceFinal: true, but we need to distinguish them
+                    // from regular forced finals. We can check if the buffer is about to be cleared (recovery just committed)
+                    if (!textToCompareAgainst) {
+                      syncForcedFinalBuffer();
+                      if (forcedCommitEngine.hasForcedFinalBuffer()) {
+                        const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                        // CRITICAL: Skip deduplication against forced final buffer if it's marked as committed by recovery
+                        // This means recovery is about to commit, and we shouldn't deduplicate against the buffer
+                        if (buffer && buffer.text && !buffer.committedByRecovery) {
+                          textToCompareAgainst = buffer.text;
+                          timeToCompareAgainst = buffer.timestamp || Date.now();
+                          console.log(`[HostMode] 🔍 Using forced final buffer text for deduplication (recovery in progress): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 60))}"`);
+                        } else if (buffer?.committedByRecovery) {
+                          console.log(`[HostMode] ⏭️ Skipping forced final buffer deduplication - recovery commit in progress`);
+                        }
+                      }
+                    }
+                    
+                    if (textToCompareAgainst && timeToCompareAgainst) {
+                      const timeSinceLastFinal = Date.now() - timeToCompareAgainst;
+                      console.log(`[HostMode] 🔍 Checking for word overlap: previous="${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 60))}", new="${trimmedText.substring(0, 60)}", timeSince=${timeSinceLastFinal}ms`);
+                      
+                      const dedupResult = deduplicateFinalText({
+                        newFinalText: trimmedText,
+                        previousFinalText: textToCompareAgainst,
+                        previousFinalTime: timeToCompareAgainst,
+                        mode: 'HostMode',
+                        timeWindowMs: 5000,
+                        maxWordsToCheck: 10
+                      });
+                      
+                      if (dedupResult.wasDeduplicated) {
+                        finalTextToProcess = dedupResult.deduplicatedText;
+                        console.log(`[HostMode] ✂️ Deduplicated final: "${trimmedText.substring(0, 60)}..." → "${finalTextToProcess.substring(0, 60)}..." (removed ${dedupResult.wordsSkipped} words)`);
+                        
+                        // If all words were duplicates, skip processing this final entirely
+                        if (!finalTextToProcess || finalTextToProcess.length === 0) {
+                          console.log(`[HostMode] ⏭️ Skipping final - all words are duplicates of previous FINAL`);
+                          // CRITICAL: Still update tracking variables even when skipping (for queued final deduplication)
+                          // The previous final's text is already tracked, but we need to ensure the flag is cleared
+                          isProcessingFinal = false;
+                          // Process queued finals even when skipping
+                          if (finalProcessingQueue.length > 0) {
+                            const next = finalProcessingQueue.shift();
+                            setImmediate(() => {
+                              processFinalText(next.textToProcess, next.options);
+                            });
+                          }
+                          return;
+                        }
+                        
+                        // Update textNormalized for subsequent processing
+                        textNormalized = finalTextToProcess.replace(/\s+/g, ' ').toLowerCase();
+                      } else {
+                        console.log(`[HostMode] ℹ️ No word overlap detected between previous and new final`);
+                      }
+                    } else {
+                      if (!textToCompareAgainst) {
+                        console.log(`[HostMode] ℹ️ No previous final text to compare against`);
+                      }
+                      if (!timeToCompareAgainst) {
+                        console.log(`[HostMode] ℹ️ No previous final time to compare against`);
+                      }
+                    }
+                    
+                    // Use deduplicated text for all subsequent processing
+                    // Keep original textToProcess for tracking purposes (to detect duplicates)
+                    const originalTextToProcess = textToProcess;
+                    textToProcess = finalTextToProcess;
                     
                     const isTranscriptionOnly = false; // Host mode always translates
                     
@@ -653,7 +790,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           ]);
                           
                           // Remember the correction mapping from original text to final corrected text
-                          rememberGrammarCorrection(textToProcess, correctedText);
+                          rememberGrammarCorrection(originalTextToProcess, correctedText);
                         } catch (grammarError) {
                           if (grammarError.message === 'Grammar correction timeout') {
                             console.warn(`[HostMode] Grammar correction timed out after 2s, using text with cached corrections`);
@@ -691,6 +828,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                             forceFinal: !!options.forceFinal
                           }, false);
                         }
+                        // CRITICAL: Update tracking variables even when no listeners (for queued final deduplication)
+                        lastSentOriginalText = originalTextToProcess;
+                        lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
+                        lastSentFinalTime = Date.now();
+                        checkForExtendingPartialsAfterFinal(lastSentFinalText);
                         return;
                       }
 
@@ -811,7 +953,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       // CRITICAL: Update last sent FINAL tracking after sending
                       // Track both original and corrected text to prevent duplicates
-                      lastSentOriginalText = textToProcess; // Always track the original
+                      lastSentOriginalText = originalTextToProcess; // Always track the original (before deduplication)
                       lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
                       lastSentFinalTime = Date.now();
                       
@@ -837,7 +979,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
                       if (error.skipRequest || finalText !== `[Translation error: ${error.message}]`) {
-                        lastSentOriginalText = textToProcess; // Track original
+                        lastSentOriginalText = originalTextToProcess; // Track original (before deduplication)
                         lastSentFinalText = textToProcess;
                         lastSentFinalTime = Date.now();
                         
@@ -876,8 +1018,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
                         
                         console.log(`[HostMode] 🔄 Processing queued final: "${next.textToProcess.substring(0, 60)}..."`);
-                        // Recursively process the next queued final
-                        processFinalText(next.textToProcess, next.options);
+                        // CRITICAL: Process queued final asynchronously to ensure previous final's tracking variables are updated
+                        // This prevents queued finals from losing deduplication context
+                        setImmediate(() => {
+                          processFinalText(next.textToProcess, next.options);
+                        });
                         break; // Only process one at a time
                       }
                     }
@@ -911,7 +1056,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       
                       console.log(`[HostMode] 🔄 Processing queued final after error: "${next.textToProcess.substring(0, 60)}..."`);
-                      processFinalText(next.textToProcess, next.options);
+                      // CRITICAL: Process queued final asynchronously to ensure previous final's tracking variables are updated
+                      // This prevents queued finals from losing deduplication context
+                      setImmediate(() => {
+                        processFinalText(next.textToProcess, next.options);
+                      });
                       break; // Only process one at a time
                     }
                   }
@@ -1085,23 +1234,51 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // Google Speech needs time to refine the transcription, especially for the first word
                   // Very short partials (< 5 chars) at segment start are often inaccurate
                   // REDUCED from 15 to 5 chars to prevent dropping short phrases like "oh my"
-                  const isVeryShortPartial = partialTextToSend.trim().length < 5;
+                  // CRITICAL FIX: Check if partial extends a final BEFORE dropping it
+                  // If partial extends a final, it should ALWAYS be sent (even if short) to prevent word loss
                   syncPendingFinalization();
                   const hasPendingFinal = finalizationEngine.hasPendingFinalization();
                   syncForcedFinalBuffer();
+                  
+                  // Check if this partial extends a final (either pending or forced)
+                  let extendsAnyFinal = false;
+                  if (hasPendingFinal) {
+                    const pending = finalizationEngine.getPendingFinalization();
+                    const pendingText = pending.text.trim();
+                    const partialText = partialTextToSend.trim();
+                    extendsAnyFinal = partialText.length > pendingText.length && 
+                                     (partialText.startsWith(pendingText) || 
+                                      (pendingText.length > 10 && partialText.substring(0, pendingText.length) === pendingText));
+                  }
+                  if (!extendsAnyFinal && forcedFinalBuffer && forcedFinalBuffer.text) {
+                    const forcedText = forcedFinalBuffer.text.trim();
+                    const partialText = partialTextToSend.trim();
+                    extendsAnyFinal = partialText.length > forcedText.length && 
+                                     (partialText.startsWith(forcedText) || 
+                                      (forcedText.length > 10 && partialText.substring(0, forcedText.length) === forcedText));
+                  }
+                  
+                  const isVeryShortPartial = partialTextToSend.trim().length < 5;
                   const timeSinceLastFinal = lastSentFinalTime ? (Date.now() - lastSentFinalTime) : Infinity;
                   // New segment start if: no pending final AND (no forced final buffer OR forced final recovery not in progress) AND recent final (< 2 seconds)
                   const isNewSegmentStart = !hasPendingFinal && 
                                             (!forcedFinalBuffer || !forcedFinalBuffer.recoveryInProgress) &&
                                             timeSinceLastFinal < 2000;
                   
-                  // Only skip if it's extremely short (< 5 chars) AND at segment start AND very recent (< 500ms)
+                  // CRITICAL FIX: Only skip if it's extremely short AND at segment start AND very recent AND does NOT extend any final
+                  // If partial extends a final, it should ALWAYS be sent to prevent word loss
                   // This allows short phrases like "oh my" to be sent after a brief moment
-                  if (isVeryShortPartial && isNewSegmentStart && timeSinceLastFinal < 500) {
+                  // But if partial extends a final, send it immediately (even if short) to prevent dropping words
+                  if (isVeryShortPartial && isNewSegmentStart && timeSinceLastFinal < 500 && !extendsAnyFinal) {
                     console.log(`[HostMode] ⏳ Delaying very short partial at segment start (${partialTextToSend.trim().length} chars, ${timeSinceLastFinal}ms since last final): "${partialTextToSend.substring(0, 30)}..." - waiting for transcription to stabilize`);
                     // Don't send yet - wait for partial to grow
                     // Continue tracking so we can send it once it's longer
                     return; // Skip sending this partial
+                  }
+                  
+                  // CRITICAL FIX: If partial extends a final, always send it (even if short) to prevent word loss
+                  if (extendsAnyFinal && isVeryShortPartial) {
+                    console.log(`[HostMode] ✅ Sending short partial that extends final (${partialTextToSend.trim().length} chars) - preventing word loss`);
                   }
                   
                   // CRITICAL: Check if this partial extends a pending final BEFORE sending it
@@ -2843,18 +3020,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                 
                 // CRITICAL: Check if FINAL is incomplete - if so, wait briefly for extending partials
                 // This prevents committing incomplete phrases like "you just," when they should continue
+                const finalTrimmed = transcriptText.trim();
                 const finalEndsWithCompleteSentence = endsWithCompleteSentence(transcriptText);
-                const finalEndsWithSentencePunctuation = /[.!?…]$/.test(transcriptText.trim());
+                const finalEndsWithSentencePunctuation = /[.!?…]$/.test(finalTrimmed);
                 // Incomplete if: doesn't end with sentence punctuation (period, exclamation, question mark)
                 // Commas, semicolons, colons are NOT sentence-ending, so text ending with them is incomplete
                 const isIncomplete = !finalEndsWithSentencePunctuation;
                 
-                if (isIncomplete) {
-                  console.log(`[HostMode] 📝 FINAL is incomplete (ends with "${transcriptText.trim().slice(-1)}" not sentence punctuation) - will wait briefly for extending partials`);
+                // CRITICAL FIX: Also detect false finals - short finals with periods that are clearly incomplete
+                // Examples: "I've been.", "You just can't.", "We have." - these have periods but are incomplete
+                const isShort = finalTrimmed.length < 25;
+                const isCommonIncompletePattern = /^(I've|I've been|You|You just|You just can't|We|We have|They|They have|It|It has)\s/i.test(finalTrimmed);
+                const isFalseFinal = finalEndsWithSentencePunctuation && isShort && isCommonIncompletePattern;
+                
+                if (isIncomplete || isFalseFinal) {
+                  if (isFalseFinal) {
+                    console.log(`[HostMode] ⚠️ FALSE FINAL DETECTED: "${finalTrimmed.substring(0, 50)}..." - short final with period but clearly incomplete (common pattern)`);
+                  } else {
+                    console.log(`[HostMode] 📝 FINAL is incomplete (ends with "${finalTrimmed.slice(-1)}" not sentence punctuation) - will wait briefly for extending partials`);
+                  }
                   console.log(`[HostMode] 📝 Current text: "${transcriptText.substring(Math.max(0, transcriptText.length - 60))}"`);
                   // For incomplete finals, extend wait time to catch extending partials
                   // Short incomplete finals (< 50 chars) likely need more words - wait longer
-                  if (transcriptText.length < 50) {
+                  // False finals (short with period) need even longer wait
+                  if (isFalseFinal) {
+                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 3000); // 3 seconds for false finals
+                  } else if (transcriptText.length < 50) {
                     WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 2000); // At least 2 seconds for short incomplete phrases
                   } else {
                     WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1500); // 1.5 seconds for longer incomplete text
@@ -2867,7 +3058,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // CRITICAL: Before setting up finalization, check if we have longer partials that extend this final
                 // This ensures we don't lose words like "gathered" that might be in a partial but not in the FINAL
                 let finalTextToUse = transcriptText;
-                const finalTrimmed = transcriptText.trim();
+                // finalTrimmed is already declared above at line 2874
                 const finalEndsCompleteWord = endsWithCompleteWord(finalTrimmed);
                 const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                 const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
@@ -2981,6 +3172,59 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // Schedule final processing after a delay to catch any remaining partials
                 // If pendingFinalization exists and was extended, we'll reschedule it below
                 if (!finalizationEngine.hasPendingFinalization()) {
+                  // CRITICAL: Detect false finals - short finals with periods that are clearly incomplete
+                  // Examples: "I've been.", "You just can't.", "We have."
+                  // These should wait longer for extending partials even if they have periods
+                  const finalTrimmed = finalTextToUse.trim();
+                  const endsWithPeriod = finalTrimmed.endsWith('.');
+                  const isShort = finalTrimmed.length < 25;
+                  const endsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(finalTrimmed);
+                  
+                  // Check for common incomplete patterns (even with periods)
+                  const isCommonIncompletePattern = /^(I've|I've been|You|You just|You just can't|We|We have|They|They have|It|It has)\s/i.test(finalTrimmed);
+                  
+                  // CRITICAL FIX: If final is short, has period, but matches incomplete pattern, treat as false final
+                  // This catches cases like "You just can't." which should wait for "beat people up with doctrine"
+                  const isFalseFinal = endsWithPeriod && isShort && isCommonIncompletePattern && 
+                                      (!endsWithCompleteSentence || (endsWithCompleteSentence && isShort));
+                  
+                  if (isFalseFinal) {
+                    console.log(`[HostMode] ⚠️ FALSE FINAL DETECTED: "${finalTrimmed.substring(0, 50)}..." - short final with period but clearly incomplete, will wait longer for extending partials`);
+                    // Use longer wait time for false finals
+                    const FALSE_FINAL_WAIT_MS = 3000; // Wait 3 seconds for false finals
+                    // Still create pending finalization, but with longer timeout
+                    finalizationEngine.createPendingFinalization(finalTextToUse, null);
+                    syncPendingFinalization();
+                    // Schedule timeout with longer wait
+                    finalizationEngine.setPendingFinalizationTimeout(() => {
+                      syncPendingFinalization();
+                      syncPartialVariables();
+                      if (!pendingFinalization) {
+                        console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
+                        return;
+                      }
+                      // Check for extending partials before committing
+                      const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
+                      const latestExtends = partialTracker.checkLatestExtends(pendingFinalization.text, 5000);
+                      let textToCommit = pendingFinalization.text;
+                      
+                      if (longestExtends) {
+                        console.log(`[HostMode] ✅ False final extended by longest partial: "${longestExtends.missingWords}"`);
+                        textToCommit = longestExtends.extendedText;
+                      } else if (latestExtends) {
+                        console.log(`[HostMode] ✅ False final extended by latest partial: "${latestExtends.missingWords}"`);
+                        textToCommit = latestExtends.extendedText;
+                      }
+                      
+                      partialTracker.reset();
+                      syncPartialVariables();
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      processFinalText(textToCommit);
+                    }, FALSE_FINAL_WAIT_MS);
+                    return; // Exit early - timeout scheduled
+                  }
+                  
                   // CRITICAL: Don't reset partials here - they're needed during timeout check
                   // Both BASIC and PREMIUM tiers need partials available during the wait period
                   // Partials will be reset AFTER final processing completes (see timeout callback)
