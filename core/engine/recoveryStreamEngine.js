@@ -281,12 +281,73 @@ export class RecoveryStreamEngine {
             console.log(`[${mode}] ⚠️ Buffer already cleared - recovery found words but cannot commit update`);
           }
         } else {
-          console.log(`[${mode}] ⚠️ No new text recovered - will commit forced final with grammar correction via timeout`);
-          // Don't clear buffer - let timeout callback commit the forced final (with grammar correction)
-          // The timeout will handle committing the original forced final text
+          // CRITICAL FIX: Even if recovery didn't find additional words, we must still commit the forced final
+          // Don't wait for timeout - commit immediately to ensure it's never lost
+          // The timeout might skip if buffer is cleared by new FINAL or extending partial
+          syncForcedFinalBuffer();
+          if (forcedCommitEngine.hasForcedFinalBuffer()) {
+            const forcedFinalBuffer = forcedCommitEngine.getForcedFinalBuffer();
+            const forcedFinalText = forcedFinalBuffer.text;
+            
+            console.log(`[${mode}] ✅ No new text recovered - committing forced final immediately to prevent loss`);
+            console.log(`[${mode}] 📊 Committing forced final: "${forcedFinalText.substring(0, 80)}..."`);
+            
+            // Mark as committed by recovery BEFORE clearing buffer
+            if (forcedFinalBuffer) {
+              forcedFinalBuffer.committedByRecovery = true;
+            }
+            
+            // Commit the forced final (with grammar correction via processFinalText)
+            processFinalText(forcedFinalText, { forceFinal: true });
+            forcedCommitEngine.clearForcedFinalBuffer();
+            syncForcedFinalBuffer();
+            
+            // Reset recovery tracking after commit
+            if (recoveryStartTime && typeof recoveryStartTime === 'object' && 'value' in recoveryStartTime) {
+              recoveryStartTime.value = 0;
+            }
+            if (nextFinalRef && typeof nextFinalRef === 'object' && 'value' in nextFinalRef) {
+              nextFinalRef.value = null;
+            }
+            
+            console.log(`[${mode}] ✅ Forced final committed - timeout callback will skip`);
+          } else {
+            console.log(`[${mode}] ⚠️ Buffer already cleared - forced final was likely committed by new FINAL or extending partial`);
+          }
         }
       } else {
-        console.log(`[${mode}] ⚠️ Recovery stream returned no text`);
+        // CRITICAL FIX: Even if recovery stream returned no text, we must still commit the forced final
+        // Don't wait for timeout - commit immediately to ensure it's never lost
+        console.log(`[${mode}] ⚠️ Recovery stream returned no text - committing forced final immediately to prevent loss`);
+        syncForcedFinalBuffer();
+        if (forcedCommitEngine.hasForcedFinalBuffer()) {
+          const forcedFinalBuffer = forcedCommitEngine.getForcedFinalBuffer();
+          const forcedFinalText = forcedFinalBuffer.text;
+          
+          console.log(`[${mode}] 📊 Committing forced final: "${forcedFinalText.substring(0, 80)}..."`);
+          
+          // Mark as committed by recovery BEFORE clearing buffer
+          if (forcedFinalBuffer) {
+            forcedFinalBuffer.committedByRecovery = true;
+          }
+          
+          // Commit the forced final (with grammar correction via processFinalText)
+          processFinalText(forcedFinalText, { forceFinal: true });
+          forcedCommitEngine.clearForcedFinalBuffer();
+          syncForcedFinalBuffer();
+          
+          // Reset recovery tracking after commit
+          if (recoveryStartTime && typeof recoveryStartTime === 'object' && 'value' in recoveryStartTime) {
+            recoveryStartTime.value = 0;
+          }
+          if (nextFinalRef && typeof nextFinalRef === 'object' && 'value' in nextFinalRef) {
+            nextFinalRef.value = null;
+          }
+          
+          console.log(`[${mode}] ✅ Forced final committed - timeout callback will skip`);
+        } else {
+          console.log(`[${mode}] ⚠️ Buffer already cleared - forced final was likely committed by new FINAL or extending partial`);
+        }
       }
 
       // CRITICAL: Resolve recovery promise with recovered text (or empty if nothing found)

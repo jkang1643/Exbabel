@@ -1179,10 +1179,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                     
                     partialTextToSend = dedupResult.deduplicatedText;
                     
-                    // If all words were duplicates, skip sending this partial entirely
-                    if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
-                      console.log(`[HostMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
-                      return; // Skip this partial entirely
+                    // CRITICAL FIX: Only skip if ALL text was removed (completely empty after deduplication)
+                    // Even if most words are duplicates, we should still track and send the partial
+                    // to ensure we don't lose any words that might have been incorrectly identified as duplicates
+                    // Only skip if the entire partial was removed (empty string or just whitespace)
+                    const trimmedDeduped = partialTextToSend ? partialTextToSend.trim() : '';
+                    if (dedupResult.wasDeduplicated && trimmedDeduped.length === 0) {
+                      console.log(`[HostMode] ⏭️ Skipping partial - completely removed by deduplication (all words were duplicates)`);
+                      return; // Skip this partial entirely - it was completely duplicate
                     }
                   }
                   
