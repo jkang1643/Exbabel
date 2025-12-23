@@ -54,14 +54,16 @@ export class ForcedCommitEngine {
    * @param {number} timestamp - Timestamp when forced final occurred
    * @returns {Object} Forced final buffer object
    */
-  createForcedFinalBuffer(text, timestamp = Date.now()) {
+  createForcedFinalBuffer(text, timestamp = Date.now(), lastSentFinalText = null, lastSentFinalTime = null) {
     this.forcedFinalBuffer = {
       text,
       timestamp,
       timeout: null,
       recoveryInProgress: false,
       recoveryPromise: null,
-      committedByRecovery: false  // Track if recovery already committed this
+      committedByRecovery: false,  // Track if recovery already committed this
+      lastSentFinalTextBeforeBuffer: lastSentFinalText || null,  // Capture lastSentFinalText at buffer creation for deduplication
+      lastSentFinalTimeBeforeBuffer: lastSentFinalTime || null   // Capture lastSentFinalTime at buffer creation for deduplication
     };
     return this.forcedFinalBuffer;
   }

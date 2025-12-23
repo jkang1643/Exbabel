@@ -646,8 +646,22 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
                       }
                     } else if (!textToCompareAgainst && isForcedFinal) {
-                      // For forced finals, don't use forced final buffer - it's the same text!
-                      console.log(`[HostMode] ℹ️ Forced final - skipping forced final buffer deduplication (would compare against itself)`);
+                      // For forced finals, don't use forced final buffer text - it's the same text being committed!
+                      // BUT: We can use lastSentFinalTextBeforeBuffer that was captured when the buffer was created
+                      // This contains the previous final that was sent BEFORE the forced final was buffered
+                      syncForcedFinalBuffer();
+                      if (forcedCommitEngine.hasForcedFinalBuffer()) {
+                        const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                        if (buffer && buffer.lastSentFinalTextBeforeBuffer) {
+                          textToCompareAgainst = buffer.lastSentFinalTextBeforeBuffer;
+                          // Use the captured timestamp if available, otherwise estimate
+                          timeToCompareAgainst = buffer.lastSentFinalTimeBeforeBuffer || (buffer.timestamp - 1000);
+                          console.log(`[HostMode] 🔍 Using lastSentFinalTextBeforeBuffer for deduplication: "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
+                        }
+                      }
+                      if (!textToCompareAgainst) {
+                        console.log(`[HostMode] ℹ️ Forced final - no previous final text available for deduplication (lastSentFinalText="${lastSentFinalText ? lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 80)) : '(empty)'}")`);
+                      }
                     }
                     
                     if (textToCompareAgainst && timeToCompareAgainst) {
@@ -2321,9 +2335,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                     nextFinalAfterRecovery = null; // Reset
                     
                     // PHASE 8: Create forced final buffer using engine (for recovery tracking)
-                    // Note: We've already committed the forced final above, so this buffer is just for recovery
-                    forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp);
+                    // CRITICAL: Capture lastSentFinalText and lastSentFinalTime BEFORE creating buffer so recovery can use it for deduplication
+                    // When recovery commits, lastSentFinalText may have been updated, so we need to preserve the previous final
+                    // that was sent before this forced final was detected
+                    const lastSentFinalTextBeforeForcedFinal = lastSentFinalText;
+                    const lastSentFinalTimeBeforeForcedFinal = lastSentFinalTime;
+                    forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp, lastSentFinalTextBeforeForcedFinal, lastSentFinalTimeBeforeForcedFinal);
                     syncForcedFinalBuffer();
+                    console.log(`[HostMode] 📌 Captured lastSentFinalText before forced final buffer: "${lastSentFinalTextBeforeForcedFinal ? lastSentFinalTextBeforeForcedFinal.substring(Math.max(0, lastSentFinalTextBeforeForcedFinal.length - 80)) : '(empty)'}"`);
                     console.log(`[HostMode] ✅ Forced final buffer created for recovery - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
                     console.log(`[HostMode] 🎯 DUAL BUFFER: Setting up Phase 1 timeout (delay: 0ms) - recovery system initializing`);
                     
