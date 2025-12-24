@@ -1119,7 +1119,7 @@ export async function handleSoloMode(clientWs) {
                     lastFinalTime: lastSentFinalTime,
                     mode: 'SoloMode',
                     timeWindowMs: 5000,
-                    maxWordsToCheck: 3
+                    maxWordsToCheck: 5  // Increased from 3 to 5 for better phrase matching
                   });
                   
                   let partialTextToSend = dedupResult.deduplicatedText;

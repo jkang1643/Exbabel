@@ -378,8 +378,34 @@ export async function handleHostConnection(clientWs, sessionId) {
                     updated = corrected;
                     break;
                   }
+                  // CRITICAL FIX: When text starts with original, apply correction but handle punctuation correctly
+                  // Don't add periods when appending - only use cached correction if it matches exactly
+                  // or if the remaining text doesn't create awkward punctuation
                   if (updated.startsWith(original)) {
-                    updated = corrected + updated.substring(original.length);
+                    const remaining = updated.substring(original.length);
+                    const correctedTrimmed = corrected.trim();
+                    const originalTrimmed = original.trim();
+                    
+                    // CRITICAL: If there's remaining text, we're extending the cached correction
+                    // Check if the correction ONLY adds punctuation (period, comma, etc.) at the end
+                    // If so, don't apply the punctuation when extending (it would create awkward spacing)
+                    if (remaining.trim().length > 0) {
+                      // We're extending the text - check if correction only adds punctuation
+                      const correctedNoPunct = correctedTrimmed.replace(/[.!?,:;]$/, '');
+                      const originalNoPunct = originalTrimmed.replace(/[.!?,:;]$/, '');
+                      
+                      // If the only difference is punctuation at the end, skip applying it when extending
+                      if (correctedNoPunct === originalNoPunct) {
+                        // Correction only added punctuation - don't apply it when text extends
+                        // Use original text + remaining to avoid awkward "word. nextword" patterns
+                        updated = originalTrimmed + remaining;
+                        console.log(`[HostMode] ⚠️ Skipping punctuation from cached correction when text extends: "${originalTrimmed}" + "${remaining}"`);
+                        break;
+                      }
+                    }
+                    
+                    // Normal replacement (no extension or correction has substantive changes)
+                    updated = corrected + remaining;
                     break;
                   }
                 }
@@ -1131,6 +1157,92 @@ export async function handleHostConnection(clientWs, sessionId) {
                   let timeToCheckAgainst = lastSentFinalTime;
                   let shouldDeduplicate = true; // Default to deduplicating
                   
+                  // Helper function to detect if partial is a new segment
+                  // Works generically for ANY words, not just a hardcoded list
+                  const isNewSegment = (partialText, finalText) => {
+                    const partialTrimmed = partialText.trim();
+                    const finalTrimmed = finalText.trim();
+                    
+                    if (!partialTrimmed || !finalTrimmed) {
+                      return false; // Can't determine without both texts
+                    }
+                    
+                    // Check if partial extends the final (is a continuation)
+                    const partialExtendsFinal = partialTrimmed.length > finalTrimmed.length && 
+                                               (partialTrimmed.toLowerCase().startsWith(finalTrimmed.toLowerCase()) || 
+                                                (finalTrimmed.length > 10 && partialTrimmed.toLowerCase().substring(0, finalTrimmed.length) === finalTrimmed.toLowerCase()));
+                    
+                    // Check if partial starts with final (case-insensitive)
+                    const startsWithFinal = partialTrimmed.toLowerCase().startsWith(finalTrimmed.toLowerCase().substring(0, Math.min(20, finalTrimmed.length)));
+                    
+                    // If partial extends or starts with final, it's a continuation (not new segment)
+                    if (partialExtendsFinal || startsWithFinal) {
+                      return false;
+                    }
+                    
+                    // Extract words for comparison
+                    const partialWords = partialTrimmed.toLowerCase().split(/\s+/).filter(w => w.length > 0).map(w => w.replace(/[.!?,:;]/g, ''));
+                    const finalWords = finalTrimmed.toLowerCase().split(/\s+/).filter(w => w.length > 0).map(w => w.replace(/[.!?,]/g, ''));
+                    
+                    if (partialWords.length === 0 || finalWords.length === 0) {
+                      return false; // Can't determine without words
+                    }
+                    
+                    const partialFirstWord = partialWords[0];
+                    const finalLastWords = finalWords.slice(-5); // Check last 5 words of final
+                    
+                    // Check if first word of partial appears in last words of final
+                    // If it does, it's likely a continuation
+                    const firstWordInFinal = finalLastWords.includes(partialFirstWord);
+                    
+                    // Check if partial starts with any of the last words of final (handles cases like "unplug" -> "unplugged")
+                    // CRITICAL: Only match if the final word is at least 3 characters to avoid false matches (e.g., "a" matching "anyrandomword")
+                    const startsWithFinalWord = finalLastWords.some(finalWord => 
+                      (finalWord.length >= 3 && partialFirstWord.startsWith(finalWord)) || 
+                      (partialFirstWord.length >= 3 && finalWord.startsWith(partialFirstWord))
+                    );
+                    
+                    // If first word appears in final or starts with a final word, it's likely a continuation
+                    if (firstWordInFinal || startsWithFinalWord) {
+                      return false;
+                    }
+                    
+                    // Check for punctuation + capital letter pattern (strong indicator of new segment)
+                    const finalEndsWithPunctuation = /[.!?]$/.test(finalTrimmed);
+                    const partialStartsWithCapital = /^[A-Z]/.test(partialTrimmed);
+                    
+                    if (finalEndsWithPunctuation && partialStartsWithCapital) {
+                      return true; // Strong indicator: punctuation + capital = new segment
+                    }
+                    
+                    // Check if partial shares ANY words with the end of final
+                    // If no shared words, it's likely a new segment
+                    const sharedWords = partialWords.filter(w => finalLastWords.includes(w));
+                    
+                    // If no shared words AND final ends with punctuation, likely new segment
+                    // This works for ANY words, not just a hardcoded list
+                    if (sharedWords.length === 0 && finalEndsWithPunctuation) {
+                      return true;
+                    }
+                    
+                    // If partial is very short and doesn't share words with final, likely new segment
+                    // This works for ANY words, not just a hardcoded list
+                    if (partialWords.length <= 2 && sharedWords.length === 0) {
+                      return true;
+                    }
+                    
+                    // If no shared words at all (even if no punctuation), likely new segment
+                    // This is the most generic check - works for ANY words
+                    if (sharedWords.length === 0) {
+                      return true;
+                    }
+                    
+                    // Default: if no clear continuation indicators, treat as new segment
+                    // This is safer than defaulting to continuation, which can cause missed commits
+                    // Works generically for ANY words, not just specific ones
+                    return true;
+                  };
+                  
                   // If there's a forced final buffer, check against it instead (it's more recent and hasn't been committed yet)
                   if (forcedFinalBuffer && forcedFinalBuffer.text) {
                     // Use the forced final text - it represents the most recent final, even though it hasn't been sent yet
@@ -1140,40 +1252,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] 🔍 Checking partial against forced final buffer (timestamp: ${timeToCheckAgainst}): "${textToCheckAgainst.substring(0, 60)}..."`);
                     
                     // CRITICAL FIX: Check if partial is actually a continuation before deduplicating
-                    // If partial is clearly a new segment (doesn't start with or extend forced final), skip deduplication
-                    const forcedText = forcedFinalBuffer.text.trim();
-                    const partialText = transcriptText.trim();
-                    
-                    // Check if partial extends the forced final (is a continuation)
-                    const extendsForcedFinal = partialText.length > forcedText.length && 
-                                             (partialText.toLowerCase().startsWith(forcedText.toLowerCase()) || 
-                                              (forcedText.length > 10 && partialText.toLowerCase().substring(0, forcedText.length) === forcedText.toLowerCase()));
-                    
-                    // Check if partial starts with forced final (case-insensitive, allowing for minor variations)
-                    const startsWithForcedFinal = partialText.toLowerCase().startsWith(forcedText.toLowerCase().substring(0, Math.min(20, forcedText.length)));
-                    
-                    // If partial is clearly a new segment (doesn't extend or start with forced final), skip deduplication
-                    // This prevents false deduplication of new segments that happen to share common words
-                    if (!extendsForcedFinal && !startsWithForcedFinal) {
-                      // Additional check: if forced final ends with sentence punctuation and partial starts with capital letter,
-                      // it's almost certainly a new segment
-                      const forcedEndsWithPunctuation = /[.!?]$/.test(forcedText);
-                      const partialStartsWithCapital = /^[A-Z]/.test(partialText);
-                      
-                      if (forcedEndsWithPunctuation && partialStartsWithCapital) {
-                        console.log(`[HostMode] 🆕 New segment detected - skipping deduplication (forced final ends with punctuation, partial starts with capital)`);
-                        shouldDeduplicate = false;
-                      } else {
-                        // Check if first word of partial is significantly different from last words of forced final
-                        const partialFirstWord = partialText.split(/\s+/)[0]?.toLowerCase();
-                        const forcedLastWords = forcedText.split(/\s+/).slice(-3).map(w => w.toLowerCase().replace(/[.!?,]/g, ''));
-                        
-                        // If first word of partial doesn't appear in last 3 words of forced final, it's likely a new segment
-                        if (partialFirstWord && !forcedLastWords.includes(partialFirstWord)) {
-                          console.log(`[HostMode] 🆕 New segment detected - skipping deduplication (first word "${partialFirstWord}" not in last words of forced final)`);
-                          shouldDeduplicate = false;
-                        }
-                      }
+                    if (isNewSegment(transcriptText, forcedFinalBuffer.text)) {
+                      console.log(`[HostMode] 🆕 New segment detected (forced final) - skipping deduplication`);
+                      shouldDeduplicate = false;
+                    }
+                  } else if (lastSentFinalText) {
+                    // CRITICAL FIX: Also check for new segments when using lastSentFinalText
+                    // This prevents "and," and "And go" from being incorrectly deduplicated
+                    if (isNewSegment(transcriptText, lastSentFinalText)) {
+                      console.log(`[HostMode] 🆕 New segment detected (last sent final) - skipping deduplication`);
+                      shouldDeduplicate = false;
                     }
                   }
                   
@@ -1188,29 +1276,59 @@ export async function handleHostConnection(clientWs, sessionId) {
                       lastFinalTime: timeToCheckAgainst,
                       mode: 'HostMode',
                       timeWindowMs: 5000,
-                      maxWordsToCheck: 3
+                      maxWordsToCheck: 5  // Increased from 3 to 5 for better phrase matching
                     });
                     
                     partialTextToSend = dedupResult.deduplicatedText;
                     
-                    // CRITICAL FIX: Only skip if ALL text was removed (completely empty after deduplication)
-                    // Even if most words are duplicates, we should still track and send the partial
-                    // to ensure we don't lose any words that might have been incorrectly identified as duplicates
-                    // Only skip if the entire partial was removed (empty string or just whitespace)
+                    // CRITICAL FIX: Only skip if ALL text was removed AND it doesn't extend any final
+                    // Check if original extends lastSentFinalText before dropping
+                    let originalExtendsFinal = false;
+                    if (lastSentFinalText && transcriptText) {
+                      const lastSentText = lastSentFinalText.trim();
+                      const originalPartialText = transcriptText.trim();
+                      const lastSentNormalized = lastSentText.toLowerCase();
+                      const originalNormalized = originalPartialText.toLowerCase();
+                      
+                      originalExtendsFinal = originalPartialText.length > lastSentText.length && 
+                                           (originalNormalized.startsWith(lastSentNormalized) || 
+                                            originalPartialText.startsWith(lastSentText));
+                    }
+                    
                     const trimmedDeduped = partialTextToSend ? partialTextToSend.trim() : '';
+                    
+                    // CRITICAL FIX: If deduplication removed all text, check if original extends final
+                    // If original extends final, ALWAYS use original to preserve extending words
+                    // This ensures forced final recovery works correctly - extending partials are never lost
                     if (dedupResult.wasDeduplicated && trimmedDeduped.length === 0) {
-                      console.log(`[HostMode] ⏭️ Skipping partial - completely removed by deduplication (all words were duplicates)`);
-                      return; // Skip this partial entirely - it was completely duplicate
+                      if (originalExtendsFinal) {
+                        console.log(`[HostMode] ⚠️ Deduplication removed all text but original extends final - using original to preserve words`);
+                        partialTextToSend = transcriptText; // Use original to preserve extending words
+                      } else {
+                        // Original doesn't extend final - this is truly duplicate, but STILL track it
+                        // User requirement: ALL partials must be tracked, even if not sent
+                        console.log(`[HostMode] ⚠️ Deduplication removed all text (all duplicates) - still tracking but not sending to avoid spam`);
+                        // Continue to tracking step - partial will be tracked but not sent
+                        partialTextToSend = ''; // Empty, but will still be tracked
+                      }
                     }
                   }
                   
-                  // Track latest partial for correction race condition prevention (use deduplicated text)
-                  latestPartialTextForCorrection = partialTextToSend;
-                  const translationSeedText = applyCachedCorrections(partialTextToSend);
+                  // CRITICAL: Track ALL partials using ORIGINAL transcriptText for forced final recovery
+                  // Even if we send deduplicated text, we track original so recovery can use extending partials
+                  // This ensures forced final recovery works correctly - extending partials are always available
+                  
+                  // Track latest partial for correction race condition prevention (use text to send)
+                  const textToSendForCorrection = (partialTextToSend && partialTextToSend.trim().length > 0) 
+                                                    ? partialTextToSend 
+                                                    : transcriptText; // Fallback to original if empty
+                  latestPartialTextForCorrection = textToSendForCorrection;
+                  const translationSeedText = applyCachedCorrections(textToSendForCorrection);
                   
                   // PHASE 8: Update partial tracking using CoreEngine Partial Tracker
-                  // Use deduplicated text for tracking to ensure consistency
-                  partialTracker.updatePartial(partialTextToSend);
+                  // CRITICAL: Always track the ORIGINAL transcriptText, not deduplicated
+                  // This ensures forced final recovery can use extending partials even if deduplication removed text
+                  partialTracker.updatePartial(transcriptText); // Track ORIGINAL for recovery
                   syncPartialVariables(); // Sync variables for compatibility
                   
                   const snapshot = partialTracker.getSnapshot();
@@ -1228,45 +1346,119 @@ export async function handleHostConnection(clientWs, sessionId) {
                   const hasPendingFinal = finalizationEngine.hasPendingFinalization();
                   syncForcedFinalBuffer();
                   
-                  // Check if this partial extends a final (either pending or forced)
+                  // Check if this partial extends a final (either pending, forced, or last sent)
+                  // CRITICAL: We must check the ORIGINAL transcriptText (before deduplication) FIRST
+                  // because deduplication may remove words that make it look like it doesn't extend the final
+                  // Then also check the deduplicated text as a fallback
                   let extendsAnyFinal = false;
-                  if (hasPendingFinal) {
+                  const originalPartialText = transcriptText.trim();
+                  
+                  // CRITICAL FIX: Check ORIGINAL text first - this catches cases where deduplication
+                  // removes words but the original partial still extends the final
+                  // Check if original extends lastSentFinalText (most common case)
+                  if (lastSentFinalText && originalPartialText) {
+                    const lastSentText = lastSentFinalText.trim();
+                    const lastSentNormalized = lastSentText.toLowerCase();
+                    const originalNormalized = originalPartialText.toLowerCase();
+                    
+                    // Check if original partial extends last sent final (case-insensitive, lenient matching)
+                    if (originalPartialText.length > lastSentText.length && 
+                        (originalNormalized.startsWith(lastSentNormalized) || 
+                         (lastSentText.length > 10 && originalNormalized.substring(0, lastSentNormalized.length) === lastSentNormalized) ||
+                         originalPartialText.startsWith(lastSentText))) {
+                      extendsAnyFinal = true;
+                      console.log(`[HostMode] ✅ Original partial extends lastSentFinal (original: "${originalPartialText.substring(0, 30)}...", deduplicated: "${partialTextToSend.substring(0, 30)}...") - will send to preserve words`);
+                    }
+                  }
+                  
+                  // Check if original extends pending final
+                  if (!extendsAnyFinal && hasPendingFinal) {
                     const pending = finalizationEngine.getPendingFinalization();
                     const pendingText = pending.text.trim();
-                    const partialText = partialTextToSend.trim();
-                    extendsAnyFinal = partialText.length > pendingText.length && 
-                                     (partialText.startsWith(pendingText) || 
-                                      (pendingText.length > 10 && partialText.substring(0, pendingText.length) === pendingText));
+                    const pendingNormalized = pendingText.toLowerCase();
+                    const originalNormalized = originalPartialText.toLowerCase();
+                    
+                    if (originalPartialText.length > pendingText.length && 
+                        (originalNormalized.startsWith(pendingNormalized) || 
+                         (pendingText.length > 10 && originalNormalized.substring(0, pendingNormalized.length) === pendingNormalized) ||
+                         originalPartialText.startsWith(pendingText))) {
+                      extendsAnyFinal = true;
+                      console.log(`[HostMode] ✅ Original partial extends pending final (original: "${originalPartialText.substring(0, 30)}...") - will send to preserve words`);
+                    }
                   }
+                  
+                  // Check if original extends forced final buffer
                   if (!extendsAnyFinal && forcedFinalBuffer && forcedFinalBuffer.text) {
                     const forcedText = forcedFinalBuffer.text.trim();
+                    const forcedNormalized = forcedText.toLowerCase();
+                    const originalNormalized = originalPartialText.toLowerCase();
+                    
+                    if (originalPartialText.length > forcedText.length && 
+                        (originalNormalized.startsWith(forcedNormalized) || 
+                         (forcedText.length > 10 && originalNormalized.substring(0, forcedNormalized.length) === forcedNormalized) ||
+                         originalPartialText.startsWith(forcedText))) {
+                      extendsAnyFinal = true;
+                      console.log(`[HostMode] ✅ Original partial extends forced final (original: "${originalPartialText.substring(0, 30)}...") - will send to preserve words`);
+                    }
+                  }
+                  
+                  // FALLBACK: Also check deduplicated text (in case original didn't extend but deduplicated does)
+                  // This is less common but can happen if deduplication actually improves the match
+                  if (!extendsAnyFinal) {
                     const partialText = partialTextToSend.trim();
-                    extendsAnyFinal = partialText.length > forcedText.length && 
-                                     (partialText.startsWith(forcedText) || 
-                                      (forcedText.length > 10 && partialText.substring(0, forcedText.length) === forcedText));
+                    
+                    // Check deduplicated text extends pending final
+                    if (hasPendingFinal) {
+                      const pending = finalizationEngine.getPendingFinalization();
+                      const pendingText = pending.text.trim();
+                      if (partialText.length > pendingText.length && 
+                          (partialText.startsWith(pendingText) || 
+                           (pendingText.length > 10 && partialText.substring(0, pendingText.length) === pendingText))) {
+                        extendsAnyFinal = true;
+                      }
+                    }
+                    
+                    // Check deduplicated text extends forced final
+                    if (!extendsAnyFinal && forcedFinalBuffer && forcedFinalBuffer.text) {
+                      const forcedText = forcedFinalBuffer.text.trim();
+                      if (partialText.length > forcedText.length && 
+                          (partialText.startsWith(forcedText) || 
+                           (forcedText.length > 10 && partialText.substring(0, forcedText.length) === forcedText))) {
+                        extendsAnyFinal = true;
+                      }
+                    }
+                    
+                    // Check deduplicated text extends lastSentFinalText
+                    if (!extendsAnyFinal && lastSentFinalText) {
+                      const lastSentText = lastSentFinalText.trim();
+                      const lastSentNormalized = lastSentText.toLowerCase();
+                      const partialNormalized = partialText.toLowerCase();
+                      
+                      if (partialText.length > lastSentText.length && 
+                          (partialNormalized.startsWith(lastSentNormalized) || 
+                           (lastSentText.length > 10 && partialNormalized.substring(0, lastSentNormalized.length) === lastSentNormalized) ||
+                           partialText.startsWith(lastSentText))) {
+                        extendsAnyFinal = true;
+                      }
+                    }
                   }
                   
-                  const isVeryShortPartial = partialTextToSend.trim().length < 4;
+                  // CRITICAL: Send ALL partials - do not filter or skip ANY partial
+                  // User requirement: EVERY single partial must be on the transcript and finalized
+                  // Only skip if deduplication removed ALL text AND it doesn't extend any final (handled above)
+                  // Do NOT filter based on length - send everything to ensure no words are lost
+                  
                   const timeSinceLastFinal = lastSentFinalTime ? (Date.now() - lastSentFinalTime) : Infinity;
-                  // New segment start if: no pending final AND (no forced final buffer OR forced final recovery not in progress) AND recent final (< 2 seconds)
-                  const isNewSegmentStart = !hasPendingFinal && 
-                                            (!forcedFinalBuffer || !forcedFinalBuffer.recoveryInProgress) &&
-                                            timeSinceLastFinal < 2000;
                   
-                  // CRITICAL FIX: Only skip if it's extremely short AND at segment start AND very recent AND does NOT extend any final
-                  // If partial extends a final, it should ALWAYS be sent to prevent word loss
-                  // This ensures short phrases like "Oh my!" (5-6 chars) are always sent, only filtering truly tiny partials like "O", "Oh", "Oh m"
-                  // But if partial extends a final, send it immediately (even if short) to prevent dropping words
-                  if (isVeryShortPartial && isNewSegmentStart && timeSinceLastFinal < 500 && !extendsAnyFinal) {
-                    console.log(`[HostMode] ⏳ Delaying very short partial at segment start (${partialTextToSend.trim().length} chars, ${timeSinceLastFinal}ms since last final): "${partialTextToSend.substring(0, 30)}..." - waiting for transcription to stabilize`);
-                    // Don't send yet - wait for partial to grow
-                    // Continue tracking so we can send it once it's longer
-                    return; // Skip sending this partial
+                  // Log if this is a short partial for debugging, but always send it
+                  const isShortPartial = partialTextToSend.trim().length < 4;
+                  if (isShortPartial) {
+                    console.log(`[HostMode] 📤 Sending short partial (${partialTextToSend.trim().length} chars): "${partialTextToSend.substring(0, 30)}..." - ensuring no words are lost`);
                   }
                   
-                  // CRITICAL FIX: If partial extends a final, always send it (even if short) to prevent word loss
-                  if (extendsAnyFinal && isVeryShortPartial) {
-                    console.log(`[HostMode] ✅ Sending short partial that extends final (${partialTextToSend.trim().length} chars) - preventing word loss`);
+                  // If partial extends a final, log it
+                  if (extendsAnyFinal) {
+                    console.log(`[HostMode] ✅ Sending partial that extends final (${partialTextToSend.trim().length} chars) - preventing word loss`);
                   }
                   
                   // CRITICAL: Check if this partial extends a pending final BEFORE sending it
@@ -1299,15 +1491,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                     }
                   }
                   
-                  // Only send partial if it doesn't extend a pending final
-                  if (!shouldSkipSendingPartial) {
-                    // Live partial transcript - send original immediately with sequence ID (solo mode style)
-                    // Note: This is the initial send before grammar/translation, so use raw text
+                  // CRITICAL: Send ALL partials (unless completely duplicate and doesn't extend)
+                  // Only skip if partialTextToSend is empty (all text removed by deduplication and doesn't extend)
+                  const shouldSend = partialTextToSend && partialTextToSend.trim().length > 0;
+                  
+                  if (shouldSend && !shouldSkipSendingPartial) {
+                    // Live partial transcript - send text immediately with sequence ID (solo mode style)
+                    // Note: This is the initial send before grammar/translation, so use deduplicated text (or original if dedup was skipped)
                     // CRITICAL: Explicitly set isPartial: true to prevent frontend from committing as FINAL
                     const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
                     const seqId = broadcastWithSequence({
                       type: 'translation',
-                      originalText: partialTextToSend, // Use deduplicated text
+                      originalText: partialTextToSend, // Use deduplicated text (or original if deduplication was skipped)
                       translatedText: undefined, // Will be updated when translation arrives
                       sourceLang: currentSourceLang,
                       targetLang: currentSourceLang,
@@ -1317,6 +1512,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       hasCorrection: false, // Flag that correction is pending
                       isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                     }, true);
+                  } else if (!shouldSend) {
+                    console.log(`[HostMode] ⚠️ Partial was completely removed by deduplication and doesn't extend - tracked (original: "${transcriptText.substring(0, 30)}...") but not sent`);
                   }
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
@@ -1363,19 +1560,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                                                 timeSinceFinal < 5000 &&
                                                 (hasWordOverlap || startsWithFinalWord || extendsFinal);
                     
+                    // CRITICAL: Check if the FINAL itself was a false final (short with period and incomplete pattern)
+                    // This helps us be more conservative about committing it even when unrelated partials arrive
+                    const finalIsShort = finalText.length < 25;
+                    const finalEndsWithPeriod = finalText.endsWith('.');
+                    const finalMatchesIncompletePattern = /^(I've|I've been|You|You just|You just can't|We|We have|They|They have|It|It has)\s/i.test(finalText);
+                    const finalWasFalseFinal = finalEndsWithPeriod && finalIsShort && finalMatchesIncompletePattern;
+                    
                     // CRITICAL: Even if FINAL ends with period, Google Speech may have incorrectly finalized mid-sentence
-                    // If a very short partial arrives very soon after (< 1.5 seconds), wait briefly to see if it's a continuation
+                    // If a very short partial arrives soon after, wait briefly to see if it's a continuation
                     // This catches cases like "You just can't." followed by "People...." which should be "You just can't beat people..."
+                    // EXTENDED: Use longer time window (5000ms) for false finals to catch partials that arrive later
                     const mightBeFalseFinal = finalEndsWithCompleteSentence && 
                                              isVeryShortPartial && 
-                                             timeSinceFinal < 1500 && 
+                                             timeSinceFinal < (finalWasFalseFinal ? 5000 : 3000) && 
                                              !hasWordOverlap && 
                                              !startsWithFinalWord && 
                                              !extendsFinal;
                     
                     // If partial is clearly a new segment (no relationship to final), commit the pending final immediately
-                    // BUT: If it might be a false final (period added incorrectly), wait a bit longer
-                    if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord && timeSinceFinal > 500 && !mightBeFalseFinal) {
+                    // BUT: If it might be a false final (period added incorrectly) OR the final itself was a false final, wait longer
+                    // CRITICAL: For false finals, use longer time window (5000ms) before committing
+                    if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord && 
+                        timeSinceFinal > (finalWasFalseFinal ? 5000 : 500) && !mightBeFalseFinal) {
                       console.log(`[HostMode] 🔀 New segment detected - partial "${partialText}" has no relationship to pending FINAL "${finalText.substring(0, 50)}..."`);
                       console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
                       // PHASE 8: Clear timeout using engine
@@ -1535,110 +1742,131 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // The frontend will handle deduplication when the final arrives
                       // No need to skip translation processing - process all partials
                     } else if (!extendsFinal && timeSinceFinal > 600) {
-                      // New segment detected - but check if final ends with complete sentence first
-                      // If final doesn't end with complete sentence, wait longer before committing
+                      // New segment detected - check if it's CLEARLY a new segment using isNewSegment helper
+                      // If clearly new segment, commit final IMMEDIATELY regardless of whether it's "incomplete"
                       syncPendingFinalization();
-                      const finalEndsWithCompleteSentence = pendingFinalization ? finalizationEngine.endsWithCompleteSentence(pendingFinalization.text) : false;
-                      if (!finalEndsWithCompleteSentence && timeSinceFinal < 3000) {
-                        // Final doesn't end with complete sentence and not enough time has passed - wait more
-                        console.log(`[HostMode] ⏳ New segment detected but final incomplete - waiting longer (${timeSinceFinal}ms < 3000ms)`);
-                        // Continue tracking - don't commit yet
-                      } else {
-                        // Commit FINAL immediately using longest partial that extends it
-                        // CRITICAL: Only use partials that DIRECTLY extend the final (start with it) to prevent mixing segments
-                        console.log(`[HostMode] 🔀 New segment detected during finalization (${timeSinceFinal}ms since final) - committing FINAL`);
-                        console.log(`[HostMode] 📊 Pending final: "${pendingFinalization.text.substring(0, 100)}..."`);
-                        console.log(`[HostMode] 📊 Longest partial: "${longestPartialText?.substring(0, 100) || 'none'}..."`);
-                        
+                      const clearlyNewSegment = isNewSegment(transcriptText, pendingFinalization.text);
+                      
+                      if (clearlyNewSegment) {
+                        // CRITICAL FIX: If partial is CLEARLY a new segment, commit final IMMEDIATELY
+                        // Don't wait for "incomplete" final - new segment means final should commit
+                        console.log(`[HostMode] 🔀 CLEARLY new segment detected - committing pending FINAL immediately (partial: "${partialText.substring(0, 30)}...")`);
+                        console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
                         // PHASE 8: Clear timeout using engine
-                      finalizationEngine.clearPendingFinalizationTimeout();
-                        
-                        // Save current partials before new segment overwrites them
-                        const savedLongestPartial = longestPartialText;
-                        const savedLatestPartial = latestPartialText;
-                        
-                        // Use longest available partial ONLY if it DIRECTLY extends the final (starts with it)
-                        // This prevents mixing segments and inaccurate text
-                        let textToProcess = pendingFinalization.text;
-                        const finalTrimmed = pendingFinalization.text.trim();
-                        
-                        // CRITICAL: Track if we're using partial text (to check if it's mid-sentence)
-                        let usingPartialText = false;
-                        
-                        // Check saved partials first - ONLY if they start with the final
-                        if (savedLongestPartial && savedLongestPartial.length > pendingFinalization.text.length) {
-                          const savedLongestTrimmed = savedLongestPartial.trim();
-                          if (savedLongestTrimmed.startsWith(finalTrimmed)) {
-                            console.log(`[HostMode] ⚠️ Using SAVED LONGEST partial (${pendingFinalization.text.length} → ${savedLongestPartial.length} chars)`);
-                            textToProcess = savedLongestPartial;
-                            usingPartialText = true;
-                          }
-                        } else if (savedLatestPartial && savedLatestPartial.length > pendingFinalization.text.length) {
-                          const savedLatestTrimmed = savedLatestPartial.trim();
-                          if (savedLatestTrimmed.startsWith(finalTrimmed)) {
-                            console.log(`[HostMode] ⚠️ Using SAVED LATEST partial (${pendingFinalization.text.length} → ${savedLatestPartial.length} chars)`);
-                            textToProcess = savedLatestPartial;
-                            usingPartialText = true;
-                          }
-                        }
-                        
-                        // Also check current partials - ONLY if they start with the final
-                        // CRITICAL: Don't use current partials if they're from a new segment (don't start with final)
-                        // This prevents wayward partials like "Important of." from being finalized
-                        if (longestPartialText && longestPartialText.length > textToProcess.length) {
-                          const longestTrimmed = longestPartialText.trim();
-                          // CRITICAL: Must start with final to prevent mixing segments
-                          if (longestTrimmed.startsWith(finalTrimmed)) {
-                            console.log(`[HostMode] ⚠️ Using CURRENT LONGEST partial (${textToProcess.length} → ${longestPartialText.length} chars)`);
-                            textToProcess = longestPartialText;
-                            usingPartialText = true;
-                          } else {
-                            console.log(`[HostMode] ⚠️ Ignoring CURRENT LONGEST partial - doesn't start with final (new segment detected)`);
-                          }
-                        } else if (latestPartialText && latestPartialText.length > textToProcess.length) {
-                          const latestTrimmed = latestPartialText.trim();
-                          // CRITICAL: Must start with final to prevent mixing segments
-                          if (latestTrimmed.startsWith(finalTrimmed)) {
-                            console.log(`[HostMode] ⚠️ Using CURRENT LATEST partial (${textToProcess.length} → ${latestPartialText.length} chars)`);
-                            textToProcess = latestPartialText;
-                            usingPartialText = true;
-                          } else {
-                            console.log(`[HostMode] ⚠️ Ignoring CURRENT LATEST partial - doesn't start with final (new segment detected)`);
-                          }
-                        }
-                        
-                        // CRITICAL: If we're using partial text, verify it ends with a complete sentence
-                        // This prevents committing mid-sentence partials when a new segment is detected
-                        if (usingPartialText) {
-                          const textToProcessTrimmed = textToProcess.trim();
-                          const endsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(textToProcessTrimmed);
-                          if (!endsWithCompleteSentence && timeSinceFinal < 2000) {
-                            // Partial text is mid-sentence and not enough time has passed - wait longer
-                            console.log(`[HostMode] ⏳ Partial text is mid-sentence and new segment detected - waiting longer before committing (${timeSinceFinal}ms < 2000ms)`);
-                            console.log(`[HostMode] 📊 Text: "${textToProcessTrimmed.substring(0, 100)}..."`);
-                            // Don't commit yet - continue tracking
-                            return; // Exit early, let the partial continue to be tracked
-                          }
-                        }
-                        
-                        // CRITICAL: Check if forced final recovery is in progress before resetting
-                        // If recovery is in progress, defer reset until recovery completes
-                        syncForcedFinalBuffer();
-                        const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
-                        if (recoveryInProgress) {
-                          console.log('[HostMode] ⏳ Recovery in progress - deferring partial tracker reset until recovery completes');
-                          // Reset will happen in recovery completion callback
-                        } else {
-                          // PHASE 8: Reset partial tracking using tracker
-                          partialTracker.reset();
-                          syncPartialVariables();
-                        }
+                        finalizationEngine.clearPendingFinalizationTimeout();
+                        const textToCommit = pendingFinalization.text;
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
-                        console.log(`[HostMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
-                        processFinalText(textToProcess);
-                        // Continue processing the new partial as a new segment
+                        // PHASE 8: Reset partial tracking using tracker
+                        partialTracker.reset();
+                        syncPartialVariables();
+                        processFinalText(textToCommit);
+                        // Continue processing the new partial as a new segment (don't return - let it be processed below)
+                      } else {
+                        // Not clearly a new segment - check if final ends with complete sentence
+                        const finalEndsWithCompleteSentence = pendingFinalization ? finalizationEngine.endsWithCompleteSentence(pendingFinalization.text) : false;
+                        if (!finalEndsWithCompleteSentence && timeSinceFinal < 3000) {
+                          // Final doesn't end with complete sentence and not enough time has passed - wait more
+                          console.log(`[HostMode] ⏳ New segment detected but final incomplete - waiting longer (${timeSinceFinal}ms < 3000ms)`);
+                          // Continue tracking - don't commit yet
+                        } else {
+                          // Commit FINAL immediately using longest partial that extends it
+                          // CRITICAL: Only use partials that DIRECTLY extend the final (start with it) to prevent mixing segments
+                          console.log(`[HostMode] 🔀 New segment detected during finalization (${timeSinceFinal}ms since final) - committing FINAL`);
+                          console.log(`[HostMode] 📊 Pending final: "${pendingFinalization.text.substring(0, 100)}..."`);
+                          console.log(`[HostMode] 📊 Longest partial: "${longestPartialText?.substring(0, 100) || 'none'}..."`);
+                          
+                          // PHASE 8: Clear timeout using engine
+                          finalizationEngine.clearPendingFinalizationTimeout();
+                          
+                          // Save current partials before new segment overwrites them
+                          const savedLongestPartial = longestPartialText;
+                          const savedLatestPartial = latestPartialText;
+                          
+                          // Use longest available partial ONLY if it DIRECTLY extends the final (starts with it)
+                          // This prevents mixing segments and inaccurate text
+                          let textToProcess = pendingFinalization.text;
+                          const finalTrimmed = pendingFinalization.text.trim();
+                          
+                          // CRITICAL: Track if we're using partial text (to check if it's mid-sentence)
+                          let usingPartialText = false;
+                          
+                          // Check saved partials first - ONLY if they start with the final
+                          if (savedLongestPartial && savedLongestPartial.length > pendingFinalization.text.length) {
+                            const savedLongestTrimmed = savedLongestPartial.trim();
+                            if (savedLongestTrimmed.startsWith(finalTrimmed)) {
+                              console.log(`[HostMode] ⚠️ Using SAVED LONGEST partial (${pendingFinalization.text.length} → ${savedLongestPartial.length} chars)`);
+                              textToProcess = savedLongestPartial;
+                              usingPartialText = true;
+                            }
+                          } else if (savedLatestPartial && savedLatestPartial.length > pendingFinalization.text.length) {
+                            const savedLatestTrimmed = savedLatestPartial.trim();
+                            if (savedLatestTrimmed.startsWith(finalTrimmed)) {
+                              console.log(`[HostMode] ⚠️ Using SAVED LATEST partial (${pendingFinalization.text.length} → ${savedLatestPartial.length} chars)`);
+                              textToProcess = savedLatestPartial;
+                              usingPartialText = true;
+                            }
+                          }
+                          
+                          // Also check current partials - ONLY if they start with the final
+                          // CRITICAL: Don't use current partials if they're from a new segment (don't start with final)
+                          // This prevents wayward partials like "Important of." from being finalized
+                          if (longestPartialText && longestPartialText.length > textToProcess.length) {
+                            const longestTrimmed = longestPartialText.trim();
+                            // CRITICAL: Must start with final to prevent mixing segments
+                            if (longestTrimmed.startsWith(finalTrimmed)) {
+                              console.log(`[HostMode] ⚠️ Using CURRENT LONGEST partial (${textToProcess.length} → ${longestPartialText.length} chars)`);
+                              textToProcess = longestPartialText;
+                              usingPartialText = true;
+                            } else {
+                              console.log(`[HostMode] ⚠️ Ignoring CURRENT LONGEST partial - doesn't start with final (new segment detected)`);
+                            }
+                          } else if (latestPartialText && latestPartialText.length > textToProcess.length) {
+                            const latestTrimmed = latestPartialText.trim();
+                            // CRITICAL: Must start with final to prevent mixing segments
+                            if (latestTrimmed.startsWith(finalTrimmed)) {
+                              console.log(`[HostMode] ⚠️ Using CURRENT LATEST partial (${textToProcess.length} → ${latestPartialText.length} chars)`);
+                              textToProcess = latestPartialText;
+                              usingPartialText = true;
+                            } else {
+                              console.log(`[HostMode] ⚠️ Ignoring CURRENT LATEST partial - doesn't start with final (new segment detected)`);
+                            }
+                          }
+                          
+                          // CRITICAL: If we're using partial text, verify it ends with a complete sentence
+                          // This prevents committing mid-sentence partials when a new segment is detected
+                          if (usingPartialText) {
+                            const textToProcessTrimmed = textToProcess.trim();
+                            const endsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(textToProcessTrimmed);
+                            if (!endsWithCompleteSentence && timeSinceFinal < 2000) {
+                              // Partial text is mid-sentence and not enough time has passed - wait longer
+                              console.log(`[HostMode] ⏳ Partial text is mid-sentence and new segment detected - waiting longer before committing (${timeSinceFinal}ms < 2000ms)`);
+                              console.log(`[HostMode] 📊 Text: "${textToProcessTrimmed.substring(0, 100)}..."`);
+                              // Don't commit yet - continue tracking
+                              return; // Exit early, let the partial continue to be tracked
+                            }
+                          }
+                          
+                          // CRITICAL: Check if forced final recovery is in progress before resetting
+                          // If recovery is in progress, defer reset until recovery completes
+                          syncForcedFinalBuffer();
+                          const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
+                          if (recoveryInProgress) {
+                            console.log('[HostMode] ⏳ Recovery in progress - deferring partial tracker reset until recovery completes');
+                            // Reset will happen in recovery completion callback
+                          } else {
+                            // PHASE 8: Reset partial tracking using tracker
+                            partialTracker.reset();
+                            syncPartialVariables();
+                          }
+                          // PHASE 8: Clear using engine
+                          finalizationEngine.clearPendingFinalization();
+                          syncPendingFinalization();
+                          console.log(`[HostMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
+                          processFinalText(textToProcess);
+                          // Continue processing the new partial as a new segment
+                        }
                       }
                     } else {
                       // Partials are still arriving - update tracking but don't extend timeout
@@ -3217,8 +3445,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                   
                   // CRITICAL FIX: If final is short, has period, but matches incomplete pattern, treat as false final
                   // This catches cases like "You just can't." which should wait for "beat people up with doctrine"
-                  const isFalseFinal = endsWithPeriod && isShort && isCommonIncompletePattern && 
-                                      (!endsWithCompleteSentence || (endsWithCompleteSentence && isShort));
+                  // Simplified: If it matches the pattern and is short, it's always a false final (regardless of endsWithCompleteSentence)
+                  const isFalseFinal = endsWithPeriod && isShort && isCommonIncompletePattern;
                   
                   if (isFalseFinal) {
                     console.log(`[HostMode] ⚠️ FALSE FINAL DETECTED: "${finalTrimmed.substring(0, 50)}..." - short final with period but clearly incomplete, will wait longer for extending partials`);
