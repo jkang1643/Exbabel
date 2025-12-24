@@ -163,4 +163,3 @@ All test cases must pass:
 
 - ✅ Basic duplicates detected
 - ✅ Case insensitive matching
-- ✅ Punctuation handled correctly

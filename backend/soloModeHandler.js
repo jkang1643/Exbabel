@@ -493,7 +493,7 @@ export async function handleSoloMode(clientWs) {
                     // CRITICAL: Duplicate prevention - check against both original and corrected text
                     // This prevents sending grammar-corrected version of same original text twice
                     const trimmedText = textToProcess.trim();
-                    const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+                    let textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
                     
                     // Always check for duplicates if we have tracking data (not just within time window)
                     // This catches duplicates even if they arrive outside the continuation window

@@ -2125,7 +2125,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     wasContinuationMerged = true;
                   } else {
                     // Check for overlap - last FINAL might end mid-sentence and new FINAL continues it
-                    const merged = mergeWithOverlap(lastSentTrimmed, newFinalTrimmed);
+                    const merged = partialTracker.mergeWithOverlap(lastSentTrimmed, newFinalTrimmed);
                     if (merged && merged.length > lastSentTrimmed.length + 3) {
                       // Overlap detected - merge them
                       const continuation = merged.substring(lastSentTrimmed.length).trim();
@@ -2230,7 +2230,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     finalTextToUse = longestPartialSnapshot;
                   } else {
                     // Check for overlap
-                    const merged = mergeWithOverlap(finalTrimmed, longestTrimmed);
+                    const merged = partialTracker.mergeWithOverlap(finalTrimmed, longestTrimmed);
                     if (merged && merged.length > finalTrimmed.length + 3) {
                       console.log(`[HostMode] ⚠️ FINAL merged with LONGEST partial SNAPSHOT via overlap (${transcriptText.length} → ${merged.length} chars)`);
                       console.log(`[HostMode] 📊 Recovered via overlap: "${merged.substring(finalTrimmed.length)}"`);

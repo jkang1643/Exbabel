@@ -53,13 +53,14 @@ export class FinalizationEngine {
    * @param {number} seqId - Optional sequence ID
    * @returns {Object} Pending finalization state
    */
-  createPendingFinalization(text, seqId = null) {
+  createPendingFinalization(text, seqId = null, isFalseFinal = false) {
     this.pendingFinalization = {
       seqId,
       text,
       timestamp: Date.now(),
       maxWaitTimestamp: Date.now(), // Track when FINAL was first received
-      timeout: null
+      timeout: null,
+      isFalseFinal: isFalseFinal // Track if this is a false final that needs longer wait
     };
     return this.pendingFinalization;
   }

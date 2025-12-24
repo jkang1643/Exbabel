@@ -1836,14 +1836,33 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // No need to skip translation processing - process all partials
                     } else if (!extendsFinal && timeSinceFinal > 600) {
                       // New segment detected - check if it's CLEARLY a new segment using isNewSegment helper
-                      // If clearly new segment, commit final IMMEDIATELY regardless of whether it's "incomplete"
+                      // CRITICAL: If pending final is a false final, be more cautious about committing early
                       syncPendingFinalization();
-                      const clearlyNewSegment = isNewSegment(transcriptText, pendingFinalization.text);
-                      
-                      if (clearlyNewSegment) {
+                      if (!pendingFinalization) {
+                        console.warn('[HostMode] ⚠️ pendingFinalization is null after sync - skipping new segment check');
+                        // Continue processing the partial as a new segment since there's no pending final
+                      } else {
+                        const isFalseFinal = pendingFinalization.isFalseFinal || false;
+                        const clearlyNewSegment = isNewSegment(transcriptText, pendingFinalization.text);
+                        
+                        // CRITICAL FIX: For false finals, require more time before committing on new segment
+                        // False finals like "You just can't." need time for extending partials like "beat people up with doctrine"
+                        // Only commit false final early if:
+                        // 1. It's clearly a new segment AND
+                        // 2. Enough time has passed (at least 2 seconds for false finals) OR
+                        // 3. The partial is very long and clearly unrelated (safety check)
+                        const shouldCommitFalseFinalEarly = isFalseFinal && 
+                                                           clearlyNewSegment && 
+                                                           (timeSinceFinal >= 2000 || transcriptText.length > 30);
+                        
+                        if (clearlyNewSegment && (!isFalseFinal || shouldCommitFalseFinalEarly)) {
                         // CRITICAL FIX: If partial is CLEARLY a new segment, commit final IMMEDIATELY
-                        // Don't wait for "incomplete" final - new segment means final should commit
-                        console.log(`[HostMode] 🔀 CLEARLY new segment detected - committing pending FINAL immediately (partial: "${partialText.substring(0, 30)}...")`);
+                        // BUT: For false finals, only commit if enough time has passed or partial is clearly unrelated
+                        if (isFalseFinal) {
+                          console.log(`[HostMode] ⚠️ False final detected but committing early - new segment confirmed after ${timeSinceFinal}ms (partial: "${partialText.substring(0, 30)}...")`);
+                        } else {
+                          console.log(`[HostMode] 🔀 CLEARLY new segment detected - committing pending FINAL immediately (partial: "${partialText.substring(0, 30)}...")`);
+                        }
                         console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
                         // PHASE 8: Clear timeout using engine
                         finalizationEngine.clearPendingFinalizationTimeout();
@@ -1856,6 +1875,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                         syncPartialVariables();
                         processFinalText(textToCommit);
                         // Continue processing the new partial as a new segment (don't return - let it be processed below)
+                      } else if (isFalseFinal && clearlyNewSegment) {
+                        // False final with new segment detected, but not enough time has passed
+                        // Wait longer - the partial might actually extend the false final
+                        console.log(`[HostMode] ⏳ False final detected with new segment - waiting longer (${timeSinceFinal}ms < 2000ms) to check if partial extends final`);
+                        console.log(`[HostMode]   Pending final: "${pendingFinalization.text.substring(0, 50)}..."`);
+                        console.log(`[HostMode]   New partial: "${transcriptText.substring(0, 50)}..."`);
+                        // Continue tracking - don't commit yet, let the timeout handle it
                       } else {
                         // Not clearly a new segment - check if final ends with complete sentence
                         const finalEndsWithCompleteSentence = pendingFinalization ? finalizationEngine.endsWithCompleteSentence(pendingFinalization.text) : false;
@@ -1960,6 +1986,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           processFinalText(textToProcess);
                           // Continue processing the new partial as a new segment
                         }
+                      }
                       }
                     } else {
                       // Partials are still arriving - update tracking but don't extend timeout
@@ -2563,6 +2590,96 @@ export async function handleHostConnection(clientWs, sessionId) {
                 console.log(`[HostMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
                 console.log(`[HostMode] 🔍 FINAL meta: ${JSON.stringify(meta)} - isForcedFinal: ${isForcedFinal}`);
                 
+                // CRITICAL FIX: Check if there's a pending partial that extends beyond lastSentFinalText
+                // If so, finalize that partial FIRST before processing the new FINAL
+                // This prevents losing partial transcripts when a new FINAL arrives
+                syncPartialVariables();
+                syncPendingFinalization();
+                
+                // Use lastSentOriginalText if available (it has the complete text), otherwise use lastSentFinalText
+                const lastSentTextForComparison = lastSentOriginalText || lastSentFinalText;
+                
+                if (lastSentTextForComparison && (longestPartialText || latestPartialText)) {
+                  const lastSentTrimmed = lastSentTextForComparison.trim();
+                  const lastSentNormalized = lastSentTrimmed.toLowerCase();
+                  
+                  // Check longest partial first
+                  if (longestPartialText && longestPartialText.length > lastSentTrimmed.length) {
+                    const longestTrimmed = longestPartialText.trim();
+                    const longestNormalized = longestTrimmed.toLowerCase();
+                    const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                    
+                    // Check if longest partial extends lastSentText and is recent
+                    const extendsLastSent = longestNormalized.startsWith(lastSentNormalized) || 
+                                           (lastSentTrimmed.length > 5 && longestNormalized.substring(0, lastSentNormalized.length) === lastSentNormalized) ||
+                                           longestTrimmed.startsWith(lastSentTrimmed);
+                    
+                    if (extendsLastSent && timeSinceLongest < 5000) {
+                      const missingWords = longestPartialText.substring(lastSentTrimmed.length).trim();
+                      console.log(`[HostMode] 🔔 CRITICAL: Finalizing pending partial BEFORE processing new FINAL`);
+                      console.log(`[HostMode]   Last sent: "${lastSentTrimmed.substring(Math.max(0, lastSentTrimmed.length - 60))}"`);
+                      console.log(`[HostMode]   Longest partial: "${longestTrimmed.substring(Math.max(0, longestTrimmed.length - 60))}"`);
+                      console.log(`[HostMode]   Missing words: "${missingWords}"`);
+                      console.log(`[HostMode]   New FINAL will be processed after this partial is finalized`);
+                      
+                      // Finalize the pending partial FIRST
+                      processFinalText(longestPartialText, { previousFinalTextForDeduplication: lastSentTextForComparison });
+                      
+                      // Reset partial tracking after finalizing
+                      partialTracker.reset();
+                      syncPartialVariables();
+                      
+                      // Continue processing the new FINAL below (don't return)
+                    }
+                  } else if (latestPartialText && latestPartialText.length > lastSentTrimmed.length) {
+                    // Fallback to latest partial if longest doesn't extend
+                    const latestTrimmed = latestPartialText.trim();
+                    const latestNormalized = latestTrimmed.toLowerCase();
+                    const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                    
+                    const extendsLastSent = latestNormalized.startsWith(lastSentNormalized) || 
+                                           (lastSentTrimmed.length > 5 && latestNormalized.substring(0, lastSentNormalized.length) === lastSentNormalized) ||
+                                           latestTrimmed.startsWith(lastSentTrimmed);
+                    
+                    if (extendsLastSent && timeSinceLatest < 5000) {
+                      const missingWords = latestPartialText.substring(lastSentTrimmed.length).trim();
+                      console.log(`[HostMode] 🔔 CRITICAL: Finalizing pending partial BEFORE processing new FINAL`);
+                      console.log(`[HostMode]   Last sent: "${lastSentTrimmed.substring(Math.max(0, lastSentTrimmed.length - 60))}"`);
+                      console.log(`[HostMode]   Latest partial: "${latestTrimmed.substring(Math.max(0, latestTrimmed.length - 60))}"`);
+                      console.log(`[HostMode]   Missing words: "${missingWords}"`);
+                      console.log(`[HostMode]   New FINAL will be processed after this partial is finalized`);
+                      
+                      // Finalize the pending partial FIRST
+                      processFinalText(latestPartialText, { previousFinalTextForDeduplication: lastSentTextForComparison });
+                      
+                      // Reset partial tracking after finalizing
+                      partialTracker.reset();
+                      syncPartialVariables();
+                      
+                      // Continue processing the new FINAL below (don't return)
+                    }
+                  }
+                }
+                
+                // Also check if there's a pending finalization that should be processed first
+                if (finalizationEngine.hasPendingFinalization() && !isForcedFinal) {
+                  const pending = finalizationEngine.getPendingFinalization();
+                  console.log(`[HostMode] 🔔 CRITICAL: Pending finalization exists (${pending.text.length} chars) - processing it BEFORE new FINAL`);
+                  console.log(`[HostMode]   Pending: "${pending.text.substring(0, 80)}..."`);
+                  console.log(`[HostMode]   New FINAL: "${transcriptText.substring(0, 80)}..."`);
+                  
+                  // Clear the timeout and process the pending finalization immediately
+                  finalizationEngine.clearPendingFinalizationTimeout();
+                  const pendingText = pending.text;
+                  finalizationEngine.clearPendingFinalization();
+                  syncPendingFinalization();
+                  
+                  // Process the pending finalization
+                  processFinalText(pendingText);
+                  
+                  // Continue processing the new FINAL below (don't return)
+                }
+                
                 if (isForcedFinal) {
                   console.warn(`[HostMode] ⚠️ Forced FINAL due to stream restart (${transcriptText.length} chars)`);
                   console.log(`[HostMode] 🎯 FORCED FINAL DETECTED - Setting up dual buffer audio recovery system`);
@@ -2570,7 +2687,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                   realtimeTranslationCooldownUntil = Date.now() + TRANSLATION_RESTART_COOLDOWN_MS;
                   
                   // PHASE 8: Use Forced Commit Engine to clear existing buffer
+                  // CRITICAL: Check if buffer exists and is recent - if so, this might be a duplicate forced final
+                  syncForcedFinalBuffer();
                   if (forcedCommitEngine.hasForcedFinalBuffer()) {
+                    const existingBuffer = forcedCommitEngine.getForcedFinalBuffer();
+                    const timeSinceExistingBuffer = existingBuffer?.timestamp ? (Date.now() - existingBuffer.timestamp) : Infinity;
+                    
+                    // If buffer is very recent (< 2 seconds), this is likely a duplicate forced final from rapid stream restarts
+                    // In this case, we should check if the new forced final is actually different or just a duplicate
+                    if (timeSinceExistingBuffer < 2000) {
+                      const existingText = existingBuffer.text?.trim().toLowerCase() || '';
+                      const newText = transcriptText.trim().toLowerCase();
+                      
+                      // Check if new forced final is similar to existing one (likely a duplicate)
+                      if (existingText === newText || 
+                          (existingText.length > 10 && newText.startsWith(existingText.substring(0, Math.min(50, existingText.length))))) {
+                        console.warn(`[HostMode] ⚠️ Duplicate forced final detected (${timeSinceExistingBuffer}ms since last) - IGNORING`);
+                        console.warn(`[HostMode]   Existing: "${existingBuffer.text?.substring(0, 80) || ''}..."`);
+                        console.warn(`[HostMode]   New: "${transcriptText.substring(0, 80)}..."`);
+                        return; // Skip processing this duplicate forced final
+                      } else {
+                        console.warn(`[HostMode] ⚠️ Different forced final detected while buffer exists (${timeSinceExistingBuffer}ms since last) - CLEARING old buffer`);
+                        console.warn(`[HostMode]   Old: "${existingBuffer.text?.substring(0, 80) || ''}..."`);
+                        console.warn(`[HostMode]   New: "${transcriptText.substring(0, 80)}..."`);
+                      }
+                    }
+                    
                     console.log(`[HostMode] 🧹 Clearing existing forced final buffer before creating new one`);
                     forcedCommitEngine.clearForcedFinalBufferTimeout();
                     forcedCommitEngine.clearForcedFinalBuffer();
@@ -2674,8 +2816,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode]   ⚠️ CRITICAL: It will be used for deduplication when recovery commits this forced final`);
                     console.log(`[HostMode]   ⚠️ CRITICAL: This ensures recovery uses the CORRECT previous segment, not a different one`);
                     
-                    forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp, lastSentFinalTextBeforeForcedFinal, lastSentFinalTimeBeforeForcedFinal);
-                    syncForcedFinalBuffer();
+                    // NOTE: Buffer was already created above at line 2669 - no need to create it again
                     
                     // Verify the buffer was created correctly
                     const buffer = forcedCommitEngine.getForcedFinalBuffer();
@@ -3565,8 +3706,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] ⚠️ FALSE FINAL DETECTED: "${finalTrimmed.substring(0, 50)}..." - short final with period but clearly incomplete, will wait longer for extending partials`);
                     // Use longer wait time for false finals
                     const FALSE_FINAL_WAIT_MS = 3000; // Wait 3 seconds for false finals
-                    // Still create pending finalization, but with longer timeout
-                    finalizationEngine.createPendingFinalization(finalTextToUse, null);
+                    // Still create pending finalization, but with longer timeout and isFalseFinal flag
+                    finalizationEngine.createPendingFinalization(finalTextToUse, null, true);
                     syncPendingFinalization();
                     // Schedule timeout with longer wait
                     finalizationEngine.setPendingFinalizationTimeout(() => {

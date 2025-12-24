@@ -312,23 +312,62 @@ export class PartialTracker {
       // Current extends previous (with normalization) - use current
       return curr;
     }
-    // CRITICAL: Prevent cross-segment merging
-    // If current text is significantly longer and doesn't start with previous, it's likely a different segment
-    // Only merge if there's a clear overlap AND the texts are similar in structure
-    if (curr.length > prev.length * 1.5) {
-      // Current is much longer - check if it contains the previous text in a way that suggests same segment
-      const prevWords = prev.split(/\s+/).filter(w => w.length > 2); // Words longer than 2 chars (more lenient)
-      const currWords = curr.split(/\s+/).filter(w => w.length > 2);
-      // If current doesn't share significant words with previous, don't merge
-      const sharedWords = prevWords.filter(w => currWords.includes(w));
-      if (sharedWords.length < Math.min(2, prevWords.length * 0.3)) {
-        // Not enough shared words - likely different segment
-        return null; // Don't merge
+    
+    // NEW: Try to find longest common substring anywhere in both texts (handles middle overlaps)
+    // This handles cases like: prev=", let's pray right now", curr="And you know...let's pray right now"
+    const commonSubstring = this.findLongestCommonSubstring(prevNormalized, currNormalized);
+    if (commonSubstring && commonSubstring.length >= 10) {
+      // Found significant common substring
+      const prevIndex = prevNormalized.indexOf(commonSubstring);
+      const currIndex = currNormalized.indexOf(commonSubstring);
+      
+      if (prevIndex >= 0 && currIndex >= 0) {
+        // Case 1: prev starts with common, curr has prefix before common - prepend curr's prefix to prev
+        // Example: prev=", let's pray", curr="And you know...let's pray"
+        if (prevIndex === 0 && currIndex > 0) {
+          // Find where the common substring appears in original curr (case-insensitive)
+          const commonLower = commonSubstring.toLowerCase();
+          const currLower = curr.toLowerCase();
+          const matchIndex = currLower.indexOf(commonLower);
+          if (matchIndex > 0) {
+            const currPrefix = curr.substring(0, matchIndex);
+            return (currPrefix + ' ' + prev).trim();
+          }
+        }
+        // Case 2: curr starts with common, prev has prefix - use curr (it's more complete at start)
+        if (currIndex === 0 && prevIndex > 0) {
+          return curr;
+        }
+        // Case 3: prev ends with common, curr continues after common - append curr's suffix to prev
+        if (prevIndex + commonSubstring.length === prevNormalized.length && currIndex + commonSubstring.length < currNormalized.length) {
+          // Find where the common substring ends in original curr
+          const commonLower = commonSubstring.toLowerCase();
+          const currLower = curr.toLowerCase();
+          const matchIndex = currLower.indexOf(commonLower);
+          if (matchIndex >= 0) {
+            const currSuffix = curr.substring(matchIndex + commonLower.length);
+            return (prev + ' ' + currSuffix).trim();
+          }
+        }
+        // Case 4: curr ends with common, prev continues after common - use prev (it's more complete)
+        if (currIndex + commonSubstring.length === currNormalized.length && prevIndex + commonSubstring.length < prevNormalized.length) {
+          return prev;
+        }
       }
     }
+    
+    // NEW: Check if current contains previous's content (handles cases where final starts with punctuation)
+    // Example: prev=", let's pray right now", curr="And you know...let's pray right now"
+    if (currNormalized.includes(prevNormalized)) {
+      const index = currNormalized.indexOf(prevNormalized);
+      if (index > 0) {
+        // Previous appears in the middle/end of current - use current (it has the prefix we need)
+        return curr;
+      }
+    }
+    
+    // Check for suffix-prefix overlap (existing logic)
     const maxOverlap = Math.min(prev.length, curr.length, 200);
-    // More lenient: Require overlap (at least 3 chars) to catch more cases, including short words
-    // Also try case-insensitive matching
     for (let overlap = maxOverlap; overlap >= 3; overlap--) {
       const prevSuffix = prev.slice(-overlap).toLowerCase();
       const currPrefix = curr.slice(0, overlap).toLowerCase();
@@ -349,10 +388,60 @@ export class PartialTracker {
         return (prev + curr.slice(overlap)).trim();
       }
     }
+    
+    // CRITICAL: Prevent cross-segment merging
+    // If current text is significantly longer and doesn't start with previous, it's likely a different segment
+    // Only merge if there's a clear overlap AND the texts are similar in structure
+    if (curr.length > prev.length * 1.5) {
+      // Current is much longer - check if it contains the previous text in a way that suggests same segment
+      const prevWords = prev.split(/\s+/).filter(w => w.length > 2); // Words longer than 2 chars (more lenient)
+      const currWords = curr.split(/\s+/).filter(w => w.length > 2);
+      // If current doesn't share significant words with previous, don't merge
+      const sharedWords = prevWords.filter(w => currWords.includes(w));
+      if (sharedWords.length < Math.min(2, prevWords.length * 0.3)) {
+        // Not enough shared words - likely different segment
+        return null; // Don't merge
+      }
+    }
+    
     // No significant overlap found - don't merge (return null to indicate failure)
     return null;
   }
+
+  /**
+   * Find longest common substring between two strings
+   * Used for detecting overlaps in the middle of strings
+   * 
+   * @param {string} str1 - First string (normalized)
+   * @param {string} str2 - Second string (normalized)
+   * @returns {string} Longest common substring, or empty string if none found
+   */
+  findLongestCommonSubstring(str1, str2) {
+    if (!str1 || !str2) return '';
+    
+    let longest = '';
+    const len1 = str1.length;
+    const len2 = str2.length;
+    
+    // Use dynamic programming approach for efficiency
+    // But for typical text lengths, a simpler approach is fine
+    for (let i = 0; i < len1; i++) {
+      for (let j = 0; j < len2; j++) {
+        let k = 0;
+        while (i + k < len1 && j + k < len2 && str1[i + k] === str2[j + k]) {
+          k++;
+        }
+        if (k > longest.length && k >= 10) { // Require at least 10 chars for significant overlap
+          longest = str1.substring(i, i + k);
+        }
+      }
+    }
+    
+    return longest;
+  }
+
 }
 
 export default PartialTracker;
+
 
