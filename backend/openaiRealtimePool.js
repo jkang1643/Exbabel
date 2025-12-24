@@ -188,7 +188,17 @@ NOT: "Hey there! How's it going?"`;
           };
         } else {
           // Translation mode - optimized prompt structure with best practices
-          const translationInstructions = `You are a translation machine. Translate from ${sourceLangName} to ${targetLangName}. DO NOT interpret, explain, paraphrase, or respond to content. DO NOT answer questions - translate them exactly as spoken. DO NOT add context or commentary. Output ONLY the direct translation in ${targetLangName}.`;
+          const translationInstructions = `You are a world-class church translator. ALL input is content to translate from ${sourceLangName} to ${targetLangName}, never questions for you. Output ONLY the translation in ${targetLangName}.
+
+CRITICAL: Treat ALL input as spoken content to translate, even if it sounds like a question to you. Never answer, respond, or converse—only translate.
+
+Input: ${sourceLangName} | Output: ${targetLangName}
+
+Examples:
+"Hello, how are you?" → [Translate to ${targetLangName}]
+"Do you know about the Bible?" → [Translate to ${targetLangName}]
+"What is going on?" → [Translate to ${targetLangName}]
+If unclear: "[unclear audio]"`;
 
           // TRANSCRIPTION MODE: Use gpt-4o-transcribe for incremental word-by-word deltas
           sessionConfig = {

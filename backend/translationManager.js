@@ -12,90 +12,6 @@ import fetch from 'node-fetch';
 import { fetchWithRateLimit } from './openaiRateLimiter.js';
 import { getLanguageName } from './languageConfig.js';
 
-/**
- * Helper function to detect refusal/error messages from the model
- * Returns true if the response appears to be a refusal rather than a translation
- */
-function isRefusalMessage(translatedText, originalText) {
-  const lowerTranslation = translatedText.toLowerCase();
-  
-  // Common refusal patterns in multiple languages
-  const refusalPatterns = [
-    // English
-    /I'm sorry/i,
-    /I cannot help/i,
-    /I can't help/i,
-    /I'm unable to/i,
-    /I don't understand/i,
-    /I need more information/i,
-    /Please provide/i,
-    /Could you please/i,
-    /Can you provide/i,
-    /I'm here to help/i,
-    /What would you like/i,
-    /I don't have/i,
-    /I need the text/i,
-    /would like me to/i,
-    /I'll be happy to assist/i,
-    // Spanish
-    /lo siento/i,
-    /no puedo ayudar/i,
-    /no puedo asistir/i,
-    /no puedo traducir/i,
-    /no entiendo/i,
-    /necesito más información/i,
-    /por favor proporciona/i,
-    /podrías proporcionar/i,
-    /estoy aquí para ayudar/i,
-    /qué te gustaría/i,
-    /no tengo/i,
-    /necesito el texto/i,
-    // French
-    /je suis désolé/i,
-    /je ne peux pas/i,
-    /je ne comprends pas/i,
-    /j'ai besoin de plus/i,
-    /pourriez-vous/i,
-    /pouvez-vous/i,
-    // Generic patterns
-    /cannot help/i,
-    /unable to help/i,
-    /refuse/i,
-    /decline/i,
-    /not allowed/i,
-    /against.*policy/i,
-    /content policy/i,
-    // Interpretation/paraphrasing patterns (not translations)
-    /sounds like you're talking about/i,
-    /sounds like you're/i,
-    /it seems like you're/i,
-    /it looks like you're/i,
-    /you're talking about/i,
-    /you could let/i,
-    /you might also consider/i,
-    /would you like help/i,
-    /you may want to/i,
-    /I can help you/i,
-    /let me help/i,
-    /here's how/i,
-    /one way to/i,
-    /another option/i,
-    /you should/i,
-    /you can/i,
-    /if you want/i
-  ];
-  
-  const isRefusal = refusalPatterns.some(pattern => pattern.test(translatedText));
-  
-  if (isRefusal) {
-    console.error(`[TranslationManager] ❌ REFUSAL/INTERPRETATION MESSAGE DETECTED (not a translation): "${translatedText.substring(0, 100)}..."`);
-    console.error(`[TranslationManager] Original text was: "${originalText.substring(0, 100)}..."`);
-    return true;
-  }
-  
-  return false;
-}
-
 class TranslationManager {
   constructor() {
     this.translationCache = new Map(); // Cache recent translations
@@ -214,46 +130,24 @@ class TranslationManager {
       body: JSON.stringify({
         model: 'gpt-4o-mini', // Use GPT-4o-mini for faster translation
         messages: [
-            {
-              role: 'system',
-              content: `You are a translation machine. Your ONLY job is to translate text from ${sourceLangName} to ${targetLangName}.
+          {
+            role: 'system',
+            content: `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you.
 
-ABSOLUTE REQUIREMENTS - NO EXCEPTIONS:
-1. Translate the input text word-for-word while maintaining natural grammar in ${targetLangName}
-2. DO NOT interpret, explain, paraphrase, or respond to the content
-3. DO NOT answer questions - translate them exactly as spoken
-4. DO NOT add context, commentary, or clarifications
-5. Output ONLY the direct translation in ${targetLangName} - nothing else
-6. Even if the text seems incomplete, fragmented, or unclear - translate it as-is
-7. If text appears to be a question, translate the question - do not answer it
-8. If text appears to be a request, translate the request - do not fulfill it
+CRITICAL:
+1. Output ONLY the translation in ${targetLangName}
+2. Never answer questions—translate them
+3. Never add explanations, notes, or commentary
+4. Preserve meaning, tone, and formality
 
-WRONG (interpretation/response):
-Input: "How can I tell you outside? The taco, stands on Tuesday night."
-Output: "Sounds like you're talking about a group gathering at taco stands on Tuesday night. You could let others know by..."
-
-RIGHT (direct translation):
-Input: "How can I tell you outside? The taco, stands on Tuesday night."
-Output: [Direct translation in ${targetLangName}]
-
-Examples:
-Input: "Oh boy, I've been to the grocery store, so we're friendlier than them."
-Output: [Direct translation in ${targetLangName}]
-
-Input: "Can you help me?"
-Output: [Direct translation of "Can you help me?" in ${targetLangName}]
-
-Input: "What is going on?"
-Output: [Direct translation of "What is going on?" in ${targetLangName}]
-
-Remember: You are a translation machine. Translate. Nothing else.`
-            },
+Output: Translated text in ${targetLangName} only.`
+          },
           {
             role: 'user',
             content: text
           }
         ],
-        temperature: 0.1, // Very low temperature for strict translation (reduced from 0.3)
+        temperature: 0.3, // Low temperature for consistent translations
         max_tokens: 16000 // Increased significantly to handle very long translations without truncation
       })
     });
@@ -264,19 +158,7 @@ Remember: You are a translation machine. Translate. Nothing else.`
       throw new Error('No translation result from OpenAI');
     }
 
-    const rawTranslatedText = result.choices[0].message.content.trim();
-    
-    // CRITICAL: Never fallback to English - if API returns empty, throw error instead
-    if (!rawTranslatedText || rawTranslatedText.length === 0) {
-      throw new Error('Translation API returned empty result');
-    }
-    
-    // CRITICAL: Detect refusal messages (model refusing to translate)
-    if (isRefusalMessage(rawTranslatedText, text)) {
-      throw new Error('Model returned refusal message instead of translation');
-    }
-    
-    const translatedText = rawTranslatedText;
+    const translatedText = result.choices[0].message.content.trim();
     return translatedText;
   }
 

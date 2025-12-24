@@ -100,46 +100,6 @@ const BOOK_ALIASES = {
 };
 
 /**
- * Calculate Levenshtein distance (edit distance) between two strings
- * 
- * @param {string} a - First string
- * @param {string} b - Second string
- * @returns {number} Edit distance
- */
-function levenshteinDistance(a, b) {
-  const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
-  for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
-  for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
-  for (let j = 1; j <= b.length; j++) {
-    for (let i = 1; i <= a.length; i++) {
-      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[j][i] = Math.min(
-        matrix[j][i - 1] + 1,      // insertion
-        matrix[j - 1][i] + 1,      // deletion
-        matrix[j - 1][i - 1] + indicator // substitution
-      );
-    }
-  }
-  return matrix[b.length][a.length];
-}
-
-/**
- * Calculate similarity score between two strings (0.0 to 1.0)
- * 
- * @param {string} str1 - First string
- * @param {string} str2 - Second string
- * @returns {number} Similarity score (1.0 = identical, 0.0 = completely different)
- */
-function calculateSimilarity(str1, str2) {
-  if (str1 === str2) return 1.0;
-  if (str1.length === 0 || str2.length === 0) return 0.0;
-  
-  const distance = levenshteinDistance(str1, str2);
-  const maxLen = Math.max(str1.length, str2.length);
-  return 1.0 - (distance / maxLen);
-}
-
-/**
  * Ordinal number words to numbers
  */
 const ORDINAL_MAP = {
@@ -208,31 +168,18 @@ export function detectBookName(tokens, startIndex = 0) {
     }
   }
   
-  // Fuzzy match: check if any token closely matches a book name using Levenshtein distance
-  // Only allow very close matches (similarity >= 0.85) to prevent false positives
-  // Examples that should pass: "lets" vs "let us" (close variations)
-  // Examples that should NOT pass: "thi" vs "first" (substring match, not similar)
-  const FUZZY_SIMILARITY_THRESHOLD = 0.85; // Require 85% similarity for fuzzy matches
-  
+  // Fuzzy match: check if any token closely matches a book name
   for (const token of tokens.slice(startIndex, Math.min(startIndex + 3, tokens.length))) {
     const lower = token.toLowerCase();
-    
-    // Skip very short tokens (less than 3 chars) - too prone to false matches
-    if (lower.length < 3) continue;
-    
     for (const [alias, canonical] of Object.entries(BOOK_ALIASES)) {
-      // Skip if alias is too short (less than 3 chars) - too prone to false matches
-      if (alias.length < 3) continue;
-      
-      // Calculate similarity using Levenshtein distance
-      const similarity = calculateSimilarity(lower, alias);
-      
-      if (similarity >= FUZZY_SIMILARITY_THRESHOLD) {
-        return {
-          book: canonical,
-          confidence: 0.4, // Lower confidence for fuzzy match
-          tokenCount: 1
-        };
+      if (lower.includes(alias) || alias.includes(lower)) {
+        if (lower.length >= 3) { // Minimum length for confidence
+          return {
+            book: canonical,
+            confidence: 0.4, // Lower confidence for fuzzy match
+            tokenCount: 1
+          };
+        }
       }
     }
   }

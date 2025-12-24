@@ -79,7 +79,7 @@ export class RealtimePartialTranslationWorker {
     // MAX_CONCURRENT = 1 caused timeouts with frequent transcription requests
     // Increased to 5 (like Chat API) to allow parallel response processing per connection
     this.MAX_CONCURRENT = 5; // INCREASED to 5 like Chat API (was 2, which still serializes)
-    this.MAX_PENDING_REQUESTS = 10; // CRITICAL FIX: Reduced from 30 to prevent buildup (only 1 per connection should be pending)
+    this.MAX_PENDING_REQUESTS = 30; // Increased to handle concurrent translations
 
     // Periodic cleanup to prevent memory leaks
     setInterval(() => this._cleanupStalePendingRequests(), 5000); // Every 5 seconds
@@ -209,7 +209,7 @@ export class RealtimePartialTranslationWorker {
         
         // Configure session for text-to-text translation
         // Use SHORT instructions like Chat API - verbose instructions waste token budget
-        const translationInstructions = `You are a translation machine. Translate from ${sourceLangName} to ${targetLangName}. DO NOT interpret, explain, or respond - only translate. DO NOT answer questions - translate them. Output ONLY the direct translation in ${targetLangName}.`;
+        const translationInstructions = `You are a world-class church translator. Translate from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Translate literally. Do not complete, rephrase, or extend. Output ONLY the translation.`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -430,7 +430,6 @@ export class RealtimePartialTranslationWorker {
                     // CRITICAL: Validate translation is different from original (prevent English leak)
                     // SMART CHECK: Detect conversational responses like "I'm sorry but I can't assist..."
                     const conversationalPatterns = [
-                      // English
                       /^i\s+(am|'m)\s+(sorry|apologize|afraid)/i,
                       /^i\s+(cannot|can't|don't|cannot)\s+/i,
                       /^i\s+can\s+help/i,
@@ -440,29 +439,7 @@ export class RealtimePartialTranslationWorker {
                       /^how\s+can\s+i\s+help/i,
                       /^here\s+to\s+(help|assist)/i,
                       /^respectful\s+and\s+meaningful/i,
-                      /^i\s+appreciate/i,
-                      /cannot\s+help/i,
-                      /unable\s+to\s+help/i,
-                      /refuse/i,
-                      /decline/i,
-                      // Spanish
-                      /^lo\s+siento/i,
-                      /no\s+puedo\s+(ayudar|asistir|traducir)/i,
-                      /no\s+entiendo/i,
-                      /necesito\s+más\s+información/i,
-                      /por\s+favor\s+proporciona/i,
-                      /podrías\s+proporcionar/i,
-                      /estoy\s+aquí\s+para\s+ayudar/i,
-                      /qué\s+te\s+gustaría/i,
-                      /no\s+tengo/i,
-                      /necesito\s+el\s+texto/i,
-                      // French
-                      /^je\s+suis\s+désolé/i,
-                      /je\s+ne\s+peux\s+pas/i,
-                      /je\s+ne\s+comprends\s+pas/i,
-                      /j'ai\s+besoin\s+de\s+plus/i,
-                      /pourriez-vous/i,
-                      /pouvez-vous/i
+                      /^i\s+appreciate/i
                     ];
 
                     const lowerTranslation = translatedText.toLowerCase().trim();
@@ -782,36 +759,17 @@ export class RealtimePartialTranslationWorker {
     const requestId = `req_${Date.now()}_${++this.requestCounter}`;
 
     return new Promise(async (resolve, reject) => {
-      // CRITICAL FIX: Check global pending limit BEFORE processing to prevent system overload
-      // If too many requests are pending globally, reject this one immediately
-      if (this.pendingResponses.size >= this.MAX_PENDING_REQUESTS) {
-        console.warn(`[RealtimePartialWorker] ⚠️ MAX_PENDING_REQUESTS (${this.MAX_PENDING_REQUESTS}) reached - rejecting new request to prevent freeze`);
-        reject(new Error(`Too many pending requests (${this.pendingResponses.size}/${this.MAX_PENDING_REQUESTS}) - system overloaded`));
-        return;
-      }
-
-      // CRITICAL FIX: Aggressively reject ALL pending requests for same connection BEFORE adding new one
-      // This prevents accumulation that causes lag and timeouts
+      // CRITICAL: Clean up any orphaned pending requests from same connection BEFORE adding new one
+      // This prevents accumulation of unmatchable requests
       const baseConnectionKey = connectionKey.split(':').slice(0, 2).join(':');
-      let rejectedCount = 0;
       for (const [key, value] of this.pendingResponses.entries()) {
         const pendingBaseKey = value.connectionKey.split(':').slice(0, 2).join(':');
-        if (pendingBaseKey === baseConnectionKey) {
-          // CRITICAL: Reject ALL pending requests for this connection, regardless of age or itemId
-          // Only keep the most recent request to prevent buildup
-          console.log(`[RealtimePartialWorker] 🚫 Rejecting pending request ${key} (replaced by newer request)`);
-          if (value.timeoutId) {
-            clearTimeout(value.timeoutId);
-          }
-          if (value.reject) {
-            value.reject(new Error('Replaced by newer request'));
-          }
+        if (pendingBaseKey === baseConnectionKey && !value.itemId && Date.now() - (value._createdAt || 0) > 1000) {
+          // This request has been pending for >1s without getting an itemId - it's orphaned
+          console.log(`[RealtimePartialWorker] 🧹 Cleaning orphaned pending request before new one: ${key}`);
+          value.reject(new Error('Replaced by newer request'));
           this.pendingResponses.delete(key);
-          rejectedCount++;
         }
-      }
-      if (rejectedCount > 0) {
-        console.log(`[RealtimePartialWorker] 🧹 Cleaned up ${rejectedCount} pending request(s) for ${baseConnectionKey} before new request`);
       }
 
       const pendingRecord = {
@@ -829,8 +787,7 @@ export class RealtimePartialTranslationWorker {
       this.pendingResponses.set(requestId, pendingRecord);
 
       try {
-        // CRITICAL: Cancel active response but DON'T wait if we just rejected pending requests
-        // This prevents blocking when rapid partials arrive
+        // CRITICAL: Cancel active response and WAIT for response.done event
         if (session.activeResponseId) {
           const activeId = session.activeResponseId;
           console.log(`[RealtimePartialWorker] 🚫 Cancelling active response ${activeId}`);
@@ -857,38 +814,28 @@ export class RealtimePartialTranslationWorker {
           const cancelEvent = { type: 'response.cancel' };
           session.ws.send(JSON.stringify(cancelEvent));
 
-          // CRITICAL FIX: Reduced wait time and don't block if we just rejected requests
-          // If we just cleaned up pending requests, it means rapid partials are arriving
-          // In that case, don't wait - just clear and proceed to avoid blocking
-          const CANCEL_TIMEOUT_MS = rejectedCount > 0 ? 200 : 1000; // Shorter timeout if we just rejected requests
+          // Wait for response.done with longer timeout (1 second - API may take time)
+          const CANCEL_TIMEOUT_MS = 1000;
           const cancelCompleted = await Promise.race([
             cancelPromise,
             new Promise(resolve => setTimeout(() => resolve(false), CANCEL_TIMEOUT_MS))
           ]);
 
           if (!cancelCompleted || session.activeResponseId === activeId) {
-            // CRITICAL: If we just rejected requests, don't reset session - just clear and proceed
-            // Session reset is expensive and causes more delays
-            if (rejectedCount > 0) {
-              console.log(`[RealtimePartialWorker] ⚡ Fast path: Clearing active response without reset (rapid partials detected)`);
-              session.activeResponseId = null;
-              session.activeRequestId = null;
-            } else {
-              console.warn(`[RealtimePartialWorker] ⚠️ Cancel timeout after ${CANCEL_TIMEOUT_MS}ms for ${session.connectionKey} (response ${activeId})`);
-              console.warn(`[RealtimePartialWorker] ⚠️ Forcing session reset due to stuck response`);
-              // Force clear the stuck response
-              session.activeResponseId = null;
-              session.activeRequestId = null;
-              // Remove pending entry temporarily so reset doesn't reject this new request
-              const pendingCopy = pendingRecord;
-              this.pendingResponses.delete(requestId);
-              this._resetSession(session, 'cancel timeout (partial)');
-              // Acquire a fresh session
-              session = await this.getConnection(sourceLang, targetLang, apiKey);
-              // Update the stored pending record to use the new session
-              pendingCopy.session = session;
-              this.pendingResponses.set(requestId, pendingCopy);
-            }
+            console.warn(`[RealtimePartialWorker] ⚠️ Cancel timeout after ${CANCEL_TIMEOUT_MS}ms for ${session.connectionKey} (response ${activeId})`);
+            console.warn(`[RealtimePartialWorker] ⚠️ Forcing session reset due to stuck response`);
+            // Force clear the stuck response
+            session.activeResponseId = null;
+            session.activeRequestId = null;
+            // Remove pending entry temporarily so reset doesn't reject this new request
+            const pendingCopy = pendingRecord;
+            this.pendingResponses.delete(requestId);
+            this._resetSession(session, 'cancel timeout (partial)');
+            // Acquire a fresh session
+            session = await this.getConnection(sourceLang, targetLang, apiKey);
+            // Update the stored pending record to use the new session
+            pendingCopy.session = session;
+            this.pendingResponses.set(requestId, pendingCopy);
           }
         }
 
@@ -1519,9 +1466,23 @@ export class RealtimeFinalTranslationWorker {
                     session.pendingItems.delete(pending.itemId);
                     session.activeRequestId = null;
 
-                    // NOTE: Connection will be closed asynchronously in response.done handler
-                    // Do NOT close here - closing synchronously interrupts stream processing
-                    // and causes timeouts for pending partials
+                    // CRITICAL: Close connection immediately after final to prevent context accumulation
+                    // This ensures next translation gets a fresh connection with empty conversation
+                    console.log(`[RealtimeFinalWorker] 🔌 Closing connection after final to prevent context accumulation`);
+                    try {
+                      if (session.ws && session.ws.readyState === WebSocket.OPEN) {
+                        session.ws.close();
+                      }
+                    } catch (err) {
+                      console.warn(`[RealtimeFinalWorker] Error closing connection: ${err.message}`);
+                    }
+                    // Remove from pool immediately
+                    for (const [key, sess] of this.connectionPool.entries()) {
+                      if (sess === session) {
+                        this.connectionPool.delete(key);
+                        break;
+                      }
+                    }
                   }
                 } else {
                   console.warn(`[RealtimeFinalWorker] ⚠️ Response done but active request not found`);

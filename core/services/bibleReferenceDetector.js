@@ -113,12 +113,7 @@ export class BibleReferenceDetector {
     // Find all book names
     const bookDetections = findAllBookNames(tokens);
     
-    // Filter out low-confidence book matches to prevent false positives
-    // Low-confidence matches (typically < 0.7) are from fuzzy matching and are unreliable
-    // Only use book detections with confidence >= 0.7 for explicit reference detection
-    const reliableBookDetections = bookDetections.filter(det => det.confidence >= 0.7);
-    
-    for (const bookDetection of reliableBookDetections) {
+    for (const bookDetection of bookDetections) {
       const startIndex = bookDetection.startIndex;
       
       // Look for chapter/verse patterns after book name
