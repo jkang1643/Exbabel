@@ -229,6 +229,46 @@ function wordsMatch(word1, word2, finalWords = []) {
     }
   }
   
+  // CRITICAL: Check if word2 (from partial) matches the suffix of any compound word in final
+  // If so, don't match it with word1 (from final) - they're different words
+  // Example: "self-centered person" (final) vs "centered person" (partial)
+  // "centered" from partial should NOT match "centered" standalone in final if "self-centered" exists
+  if (!word2.isCompound && finalWords.length > 0) {
+    // Check if word2 matches the suffix of any compound word in the final
+    for (const finalWord of finalWords) {
+      if (finalWord.isCompound) {
+        const compoundParts = finalWord.original.toLowerCase().split('-');
+        const lastPart = compoundParts[compoundParts.length - 1].replace(/[.,!?;:\-'"()]/g, '');
+        
+        // If word2 matches the suffix of a compound word, don't match it
+        // This prevents "centered" (standalone) from matching "centered" (suffix of "self-centered")
+        if (lastPart === word2.clean && lastPart.length >= 2 && compoundParts.length > 1) {
+          return false; // Don't match - word2 is just the suffix of a compound word in final
+        }
+      }
+    }
+  }
+  
+  // CRITICAL: Check if word1 (from final) is part of a compound word
+  // If word1 is the suffix of a compound word in final, don't match it with word2 (from partial)
+  // Example: "self-centered person" (final) vs "centered person" (partial)
+  // "centered" from partial should NOT match "centered" from "self-centered" in final
+  if (!word1.isCompound && finalWords.length > 0) {
+    // Check if word1 is the suffix of any compound word in the final
+    for (const finalWord of finalWords) {
+      if (finalWord.isCompound && finalWord.clean.includes(word1.clean)) {
+        const compoundParts = finalWord.original.toLowerCase().split('-');
+        const lastPart = compoundParts[compoundParts.length - 1].replace(/[.,!?;:\-'"()]/g, '');
+        
+        // If word1 matches the suffix of a compound word, don't match it
+        // This prevents "centered" (from partial) from matching "centered" (suffix of "self-centered")
+        if (lastPart === word1.clean && lastPart.length >= 2 && compoundParts.length > 1) {
+          return false; // Don't match - word1 is just the suffix of a compound word in final
+        }
+      }
+    }
+  }
+  
   // Don't match numbers with text words
   // Numbers should only match other numbers, and only if they're the same
   if (/^\d+$/.test(word1.clean) || /^\d+$/.test(word2.clean)) {
@@ -596,23 +636,13 @@ export function deduplicatePartialText({
   }
 
   // CRITICAL FIX: Check if partial is clearly a new segment before deduplicating
-  // If forced final ends with sentence punctuation and partial starts with capital letter,
-  // it's almost certainly a new segment - skip deduplication
+  // But don't be too aggressive - still allow phrase matching to run
   const finalTrimmed = lastFinalText.trim();
   const partialTrimmed = partialText.trim();
   const finalEndsWithPunctuation = /[.!?]$/.test(finalTrimmed);
   const partialStartsWithCapital = /^[A-Z]/.test(partialTrimmed);
   const finalLower = finalTrimmed.toLowerCase();
   const partialLower = partialTrimmed.toLowerCase();
-  
-  // If final ends with punctuation and partial starts with capital, it's a new segment
-  if (finalEndsWithPunctuation && partialStartsWithCapital) {
-    // Additional check: verify partial doesn't start with final text (case-insensitive)
-    // If partial doesn't start with final (even partially), it's a new segment
-    if (!partialLower.startsWith(finalLower.substring(0, Math.min(20, finalLower.length)))) {
-      return { deduplicatedText, wordsSkipped, wasDeduplicated: false };
-    }
-  }
   
   // Check if partial extends the final (is a continuation)
   // If partial is longer and starts with final text, it's a continuation - proceed with deduplication
@@ -621,14 +651,36 @@ export function deduplicatePartialText({
                                 (finalTrimmed.length > 10 && partialLower.substring(0, finalTrimmed.length) === finalLower));
   
   // If partial doesn't extend final and starts with a capital letter (new sentence),
-  // check if first word is in the final - if not, it's likely a new segment
-  if (!partialExtendsFinal && partialStartsWithCapital) {
+  // check if first word or any words match - but still allow phrase matching to run
+  // Only skip if we're VERY certain it's a completely new segment
+  let likelyNewSegment = false;
+  if (!partialExtendsFinal && partialStartsWithCapital && finalEndsWithPunctuation) {
     const finalWordsList = finalTrimmed.split(/\s+/).map(w => w.toLowerCase().replace(/[.!?,]/g, ''));
     const partialFirstWord = partialTrimmed.split(/\s+/)[0]?.toLowerCase().replace(/[.!?,]/g, '');
     
-    // If first word of partial doesn't appear anywhere in final, it's a new segment
-    if (partialFirstWord && !finalWordsList.includes(partialFirstWord)) {
-      return { deduplicatedText, wordsSkipped, wasDeduplicated: false };
+    // Check if first word appears anywhere in final (exact match or as part of a word)
+    let firstWordMatches = false;
+    if (partialFirstWord) {
+      // Exact match
+      if (finalWordsList.includes(partialFirstWord)) {
+        firstWordMatches = true;
+      } else {
+        // Check if first word is a stem of any word in final (e.g., "gather" matches "gathered")
+        // Or if any word in final contains the first word as a stem
+        for (const finalWord of finalWordsList) {
+          if (finalWord.startsWith(partialFirstWord) || partialFirstWord.startsWith(finalWord)) {
+            firstWordMatches = true;
+            break;
+          }
+        }
+      }
+    }
+    
+    // Only skip if first word doesn't match AND partial doesn't start with any part of final
+    // This is a conservative check - we'll still run phrase matching below
+    if (partialFirstWord && !firstWordMatches && !partialLower.startsWith(finalLower.substring(0, Math.min(30, finalLower.length)))) {
+      likelyNewSegment = true;
+      // Don't return early - still allow phrase matching to run
     }
   }
 
@@ -650,54 +702,62 @@ export function deduplicatePartialText({
   let overlapInfo = findPhraseOverlapWithInfo(lastWordsFromFinal, partialWords, maxWordsToCheck, finalWords);
   
   // CRITICAL: General pattern matching - check windows of words at end of previous and start of new
-  // Rule of thumb: Check last 3 words of previous final and first 3 words of new final
-  // This is sufficient for most test cases and reduces false positives
-  // Strategy: If ANY words from the start of new final match words in the end of previous final,
-  // remove ALL words from the start up to and including the last matching word
+  // Algorithm:
+  // 1. Check last 5 words of previous final
+  // 2. Check first 5 words of next segment
+  // 3. Find ANY matching word (not requiring consecutive from start)
+  // 4. When a matching word is found, deduplicate all words from start up to and including the match
   if (!overlapInfo && partialWords.length > 0) {
-    // Define windows: check last 3 words of previous final and first 3 words of new final
-    // This conservative approach catches real overlaps while avoiding false positives
-    const WINDOW_SIZE_PREVIOUS = Math.min(3, finalWords.length); // Check last 3 words of previous
-    const WINDOW_SIZE_NEW = Math.min(3, partialWords.length); // Check first 3 words of new
+    // Define windows: check last 5 words of previous and first 5 words of new
+    const WINDOW_SIZE_PREVIOUS = Math.min(5, finalWords.length); // Check last 5 words of previous
+    const WINDOW_SIZE_NEW = Math.min(5, partialWords.length); // Check first 5 words of new
     
     const previousWindow = finalWords.slice(-WINDOW_SIZE_PREVIOUS);
     const newWindow = partialWords.slice(0, WINDOW_SIZE_NEW);
     
-    // Strategy: Find the rightmost (last) word in the new window that matches any word in the previous window
-    // Then remove all words from the start up to and including that matching word
+    // Strategy: Find ALL matching words in the new window, then deduplicate up to the LAST match
+    // This handles cases like "Our desires" where both "Our" and "desires" match
+    // We want to deduplicate all words from start up to and including the LAST matching word
     let lastMatchingIndex = -1;
-    let bestMatchDistance = Infinity; // Distance from end of previous (lower is better)
+    let matchedWords = [];
     
     // Check each word in the new window (from start to end)
+    // We need to find ALL matches, then use the LAST (rightmost) one
     for (let newIdx = 0; newIdx < newWindow.length; newIdx++) {
       const newWord = newWindow[newIdx];
       
-      // Check if this word matches any word in the previous window (last 3 words)
+      // Check if this word matches any word in the previous window
+      // Check from end of previous window (most recent words first)
       for (let prevIdx = previousWindow.length - 1; prevIdx >= 0; prevIdx--) {
         const prevWord = previousWindow[prevIdx];
         
         if (wordsMatch(prevWord, newWord, finalWords)) {
-          // Found a match! Calculate distance from end
-          const distanceFromEnd = previousWindow.length - 1 - prevIdx;
-          
-          // Update if this is a better match (closer to end) or if we haven't found a match yet
-          if (lastMatchingIndex === -1 || distanceFromEnd < bestMatchDistance) {
-            lastMatchingIndex = newIdx;
-            bestMatchDistance = distanceFromEnd;
-          }
-          break; // Found a match for this word, move to next word in new window
+          // Found a match! Track it (we want the LAST match, so keep updating)
+          lastMatchingIndex = newIdx;
+          matchedWords.push({
+            newIndex: newIdx,
+            newWord: newWord,
+            prevIndex: prevIdx,
+            prevWord: prevWord
+          });
+          break; // Found match for this word, move to next
         }
       }
     }
     
-    // If we found at least one matching word, remove all words from start up to and including that word
+    // If we found matching words, deduplicate all words from start up to and including the LAST match
     if (lastMatchingIndex >= 0) {
-      const wordsToRemove = lastMatchingIndex + 1; // +1 because index is 0-based
+      // skipCount = number of words to skip from start (lastMatchingIndex + 1 because index is 0-based)
+      const skipCount = lastMatchingIndex + 1;
+      
       overlapInfo = {
-        phraseLen: wordsToRemove,
+        phraseLen: matchedWords.length, // Number of matching words found
         partialStart: 0,
-        skipCount: wordsToRemove
+        skipCount: skipCount
       };
+      
+      const matchedWordsStr = matchedWords.map(m => `"${m.newWord.original}"`).join(', ');
+      console.log(`[${mode}] 🔍 Found ${matchedWords.length} word match(es): ${matchedWordsStr} - will skip ${skipCount} word(s) from start (up to and including last match)`);
     }
   }
   
