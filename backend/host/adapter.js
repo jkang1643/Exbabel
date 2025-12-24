@@ -656,8 +656,42 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // For regular finals, we can check the forced final buffer if lastSentFinalText is not available
                     // (handles cases where recovery just committed a final but async processing hasn't finished)
                     let finalTextToProcess = trimmedText;
-                    let textToCompareAgainst = lastSentOriginalText || lastSentFinalText; // Prefer original, fallback to corrected
-                    let timeToCompareAgainst = lastSentFinalTime;
+                    
+                    console.log(`[HostMode] 🔍 DEDUPLICATION START - Analyzing text for deduplication:`);
+                    console.log(`[HostMode]   New final text: "${trimmedText.substring(0, 80)}..."`);
+                    console.log(`[HostMode]   Is forced final: ${isForcedFinal}`);
+                    console.log(`[HostMode]   Current lastSentFinalText: "${lastSentFinalText ? lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 60)) : '(empty)'}"`);
+                    console.log(`[HostMode]   Current lastSentOriginalText: "${lastSentOriginalText ? lastSentOriginalText.substring(Math.max(0, lastSentOriginalText.length - 60)) : '(empty)'}"`);
+                    console.log(`[HostMode]   Options.previousFinalTextForDeduplication: "${options.previousFinalTextForDeduplication ? options.previousFinalTextForDeduplication.substring(Math.max(0, options.previousFinalTextForDeduplication.length - 60)) : '(not provided)'}"`);
+                    
+                    // CRITICAL FIX: For recovery commits, use the previous final text that was passed in options
+                    // This ensures recovery commits use the correct previous final (from before the forced final was buffered)
+                    // instead of the current lastSentFinalText which might be from a different segment
+                    let textToCompareAgainst = null;
+                    let timeToCompareAgainst = null;
+                    let deduplicationSource = 'unknown';
+                    
+                    if (options.previousFinalTextForDeduplication) {
+                      // Recovery is committing - use the captured previous final text
+                      textToCompareAgainst = options.previousFinalTextForDeduplication;
+                      timeToCompareAgainst = options.previousFinalTimeForDeduplication || Date.now();
+                      deduplicationSource = 'recovery_passed_previous_final';
+                      console.log(`[HostMode] ✅ Recovery commit detected - using passed previous final for deduplication`);
+                      console.log(`[HostMode]   Source: ${deduplicationSource}`);
+                      console.log(`[HostMode]   Previous final (from recovery): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
+                      console.log(`[HostMode]   Previous final time: ${timeToCompareAgainst} (${Date.now() - timeToCompareAgainst}ms ago)`);
+                    } else {
+                      // Normal flow - use lastSentOriginalText or lastSentFinalText
+                      textToCompareAgainst = lastSentOriginalText || lastSentFinalText; // Prefer original, fallback to corrected
+                      timeToCompareAgainst = lastSentFinalTime;
+                      deduplicationSource = lastSentOriginalText ? 'lastSentOriginalText' : (lastSentFinalText ? 'lastSentFinalText' : 'none');
+                      console.log(`[HostMode] ✅ Normal flow - using current lastSentFinalText/lastSentOriginalText`);
+                      console.log(`[HostMode]   Source: ${deduplicationSource}`);
+                      if (textToCompareAgainst) {
+                        console.log(`[HostMode]   Previous final: "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
+                        console.log(`[HostMode]   Previous final time: ${timeToCompareAgainst} (${Date.now() - timeToCompareAgainst}ms ago)`);
+                      }
+                    }
                     
                     // If no previous final text available, check if there's a forced final buffer (recovery in progress)
                     // BUT: Only for REGULAR finals, NOT forced finals (forced final buffer is the same text being committed)
@@ -685,14 +719,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                           console.log(`[HostMode] 🔍 Using lastSentFinalTextBeforeBuffer for deduplication: "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
                         }
                       }
+                      
+                      // If still no text to compare against, check if lastSentOriginalText exists
+                      // This handles cases where lastSentFinalText was empty but lastSentOriginalText has the previous final
+                      if (!textToCompareAgainst && lastSentOriginalText) {
+                        textToCompareAgainst = lastSentOriginalText;
+                        timeToCompareAgainst = lastSentFinalTime;
+                        console.log(`[HostMode] 🔍 Using lastSentOriginalText as fallback for forced final deduplication: "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
+                      }
+                      
                       if (!textToCompareAgainst) {
-                        console.log(`[HostMode] ℹ️ Forced final - no previous final text available for deduplication (lastSentFinalText="${lastSentFinalText ? lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 80)) : '(empty)'}")`);
+                        console.log(`[HostMode] ℹ️ Forced final - no previous final text available for deduplication (lastSentFinalText="${lastSentFinalText ? lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 80)) : '(empty)'}", lastSentOriginalText="${lastSentOriginalText ? lastSentOriginalText.substring(Math.max(0, lastSentOriginalText.length - 80)) : '(empty)'}")`);
                       }
                     }
                     
                     if (textToCompareAgainst && timeToCompareAgainst) {
                       const timeSinceLastFinal = Date.now() - timeToCompareAgainst;
-                      console.log(`[HostMode] 🔍 Checking for word overlap: previous="${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 60))}", new="${trimmedText.substring(0, 60)}", timeSince=${timeSinceLastFinal}ms`);
+                      console.log(`[HostMode] 🔍 DEDUPLICATION CHECK:`);
+                      console.log(`[HostMode]   Previous final (${deduplicationSource}): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
+                      console.log(`[HostMode]   New final: "${trimmedText.substring(0, 80)}..."`);
+                      console.log(`[HostMode]   Time since previous: ${timeSinceLastFinal}ms (window: 5000ms)`);
+                      console.log(`[HostMode]   Will check last 10 words of previous against first 10 words of new`);
                       
                       const dedupResult = deduplicateFinalText({
                         newFinalText: trimmedText,
@@ -703,9 +750,17 @@ export async function handleHostConnection(clientWs, sessionId) {
                         maxWordsToCheck: 10
                       });
                       
+                      console.log(`[HostMode] 🔍 DEDUPLICATION RESULT:`);
+                      console.log(`[HostMode]   Was deduplicated: ${dedupResult.wasDeduplicated}`);
+                      console.log(`[HostMode]   Words skipped: ${dedupResult.wordsSkipped}`);
+                      console.log(`[HostMode]   Original text: "${trimmedText.substring(0, 80)}..."`);
+                      console.log(`[HostMode]   Deduplicated text: "${dedupResult.deduplicatedText.substring(0, 80)}..."`);
+                      
                       if (dedupResult.wasDeduplicated) {
                         finalTextToProcess = dedupResult.deduplicatedText;
-                        console.log(`[HostMode] ✂️ Deduplicated final: "${trimmedText.substring(0, 60)}..." → "${finalTextToProcess.substring(0, 60)}..." (removed ${dedupResult.wordsSkipped} words)`);
+                        console.log(`[HostMode] ✂️ DEDUPLICATION SUCCESS: Removed ${dedupResult.wordsSkipped} word(s)`);
+                        console.log(`[HostMode]   Before: "${trimmedText.substring(0, 80)}..."`);
+                        console.log(`[HostMode]   After:  "${finalTextToProcess.substring(0, 80)}..."`);
                         
                         // If all words were duplicates, skip processing this final entirely
                         if (!finalTextToProcess || finalTextToProcess.length === 0) {
@@ -732,6 +787,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Keep original textToProcess for tracking purposes (to detect duplicates)
                     const originalTextToProcess = textToProcess;
                     textToProcess = finalTextToProcess;
+                    
+                    // CRITICAL FIX: Set lastSentFinalText IMMEDIATELY before async operations
+                    // This ensures that if a forced final arrives during async processing (grammar/translation),
+                    // it will have the previous final text available for deduplication
+                    // We set it to the deduplicated text that will be processed
+                    console.log(`[HostMode] 📌 UPDATING lastSentFinalText (before async ops):`);
+                    console.log(`[HostMode]   Previous lastSentFinalText: "${lastSentFinalText ? lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 60)) : '(empty)'}"`);
+                    console.log(`[HostMode]   Previous lastSentOriginalText: "${lastSentOriginalText ? lastSentOriginalText.substring(Math.max(0, lastSentOriginalText.length - 60)) : '(empty)'}"`);
+                    
+                    lastSentOriginalText = originalTextToProcess; // Track original (before deduplication)
+                    lastSentFinalText = textToProcess; // Track the text that will be processed (after deduplication)
+                    lastSentFinalTime = Date.now();
+                    
+                    console.log(`[HostMode]   New lastSentFinalText: "${lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 60))}"`);
+                    console.log(`[HostMode]   New lastSentOriginalText: "${lastSentOriginalText.substring(Math.max(0, lastSentOriginalText.length - 60))}"`);
+                    console.log(`[HostMode]   New lastSentFinalTime: ${lastSentFinalTime}`);
+                    console.log(`[HostMode]   ✅ This ensures next final/forced final will have correct previous text for deduplication`);
                     
                     const isTranscriptionOnly = false; // Host mode always translates
                     
@@ -926,10 +998,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       
                       // CRITICAL: Update last sent FINAL tracking after sending
-                      // Track both original and corrected text to prevent duplicates
-                      lastSentOriginalText = originalTextToProcess; // Always track the original (before deduplication)
-                      lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
-                      lastSentFinalTime = Date.now();
+                      // Note: We already set lastSentFinalText before async operations, but update it here
+                      // with the grammar-corrected version if it changed
+                      if (correctedText !== textToProcess) {
+                        lastSentFinalText = correctedText;
+                        lastSentFinalTime = Date.now();
+                        console.log(`[HostMode] 📌 Updated lastSentFinalText with grammar correction: "${lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 60))}"`);
+                      }
+                      // lastSentOriginalText was already set before async operations
                       
                       // CRITICAL: Check for partials that arrived during async processing (grammar correction, translation)
                       // This catches words that were spoken while the final was being processed
@@ -952,10 +1028,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }, false);
                       
                       // CRITICAL: Update last sent FINAL tracking after sending (even on error, if we have text)
+                      // Note: We already set lastSentFinalText before async operations, but update it here if needed
                       if (error.skipRequest || finalText !== `[Translation error: ${error.message}]`) {
-                        lastSentOriginalText = originalTextToProcess; // Track original (before deduplication)
-                        lastSentFinalText = textToProcess;
-                        lastSentFinalTime = Date.now();
+                        // Only update if we haven't already set it (shouldn't happen, but safety check)
+                        if (!lastSentFinalText || lastSentFinalText !== textToProcess) {
+                          lastSentOriginalText = originalTextToProcess; // Track original (before deduplication)
+                          lastSentFinalText = textToProcess;
+                          lastSentFinalTime = Date.now();
+                          console.log(`[HostMode] 📌 Set lastSentFinalText on error path: "${lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 60))}"`);
+                        }
                         
                         // CRITICAL: Check for partials that arrived during async processing
                         checkForExtendingPartialsAfterFinal(lastSentFinalText);
@@ -1305,11 +1386,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log(`[HostMode] ⚠️ Deduplication removed all text but original extends final - using original to preserve words`);
                         partialTextToSend = transcriptText; // Use original to preserve extending words
                       } else {
-                        // Original doesn't extend final - this is truly duplicate, but STILL track it
-                        // User requirement: ALL partials must be tracked, even if not sent
-                        console.log(`[HostMode] ⚠️ Deduplication removed all text (all duplicates) - still tracking but not sending to avoid spam`);
-                        // Continue to tracking step - partial will be tracked but not sent
-                        partialTextToSend = ''; // Empty, but will still be tracked
+                        // CRITICAL: Check if this is a NEW SEGMENT (not a continuation/duplicate)
+                        // If it's a new segment, we MUST send it to preserve history completeness
+                        // User requirement: EVERY single partial segment must be committed to history
+                        const isNewSegmentCheck = isNewSegment(transcriptText, textToCheckAgainst);
+                        
+                        if (isNewSegmentCheck) {
+                          // This is a new segment - send original to ensure history completeness
+                          // Even though deduplication removed all text, we need to preserve the segment in history
+                          console.log(`[HostMode] 📝 Deduplication removed all text but NEW SEGMENT detected - sending original to preserve history: "${transcriptText.substring(0, 30)}..."`);
+                          partialTextToSend = transcriptText; // Send original to ensure history completeness
+                        } else {
+                          // Original doesn't extend final and it's not a new segment - this is truly duplicate
+                          // User requirement: ALL partials must be tracked, even if not sent
+                          console.log(`[HostMode] ⚠️ Deduplication removed all text (all duplicates, not new segment) - still tracking but not sending to avoid spam`);
+                          // Continue to tracking step - partial will be tracked but not sent
+                          partialTextToSend = ''; // Empty, but will still be tracked
+                        }
                       }
                     }
                   }
@@ -2570,7 +2663,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const lastSentFinalTimeBeforeForcedFinal = lastSentFinalTime;
                     forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp, lastSentFinalTextBeforeForcedFinal, lastSentFinalTimeBeforeForcedFinal);
                     syncForcedFinalBuffer();
-                    console.log(`[HostMode] 📌 Captured lastSentFinalText before forced final buffer: "${lastSentFinalTextBeforeForcedFinal ? lastSentFinalTextBeforeForcedFinal.substring(Math.max(0, lastSentFinalTextBeforeForcedFinal.length - 80)) : '(empty)'}"`);
+                    console.log(`[HostMode] 📌 CREATING FORCED FINAL BUFFER:`);
+                    console.log(`[HostMode]   Forced final text: "${transcriptText.substring(0, 80)}..."`);
+                    console.log(`[HostMode]   Forced final timestamp: ${forcedFinalTimestamp}`);
+                    console.log(`[HostMode]   Capturing lastSentFinalText BEFORE buffer creation:`);
+                    console.log(`[HostMode]     lastSentFinalText: "${lastSentFinalTextBeforeForcedFinal ? lastSentFinalTextBeforeForcedFinal.substring(Math.max(0, lastSentFinalTextBeforeForcedFinal.length - 80)) : '(empty)'}"`);
+                    console.log(`[HostMode]     lastSentOriginalText: "${lastSentOriginalText ? lastSentOriginalText.substring(Math.max(0, lastSentOriginalText.length - 80)) : '(empty)'}"`);
+                    console.log(`[HostMode]     lastSentFinalTime: ${lastSentFinalTimeBeforeForcedFinal || '(not set)'}`);
+                    console.log(`[HostMode]   ⚠️ CRITICAL: This previous final will be stored in buffer.lastSentFinalTextBeforeBuffer`);
+                    console.log(`[HostMode]   ⚠️ CRITICAL: It will be used for deduplication when recovery commits this forced final`);
+                    console.log(`[HostMode]   ⚠️ CRITICAL: This ensures recovery uses the CORRECT previous segment, not a different one`);
+                    
+                    forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp, lastSentFinalTextBeforeForcedFinal, lastSentFinalTimeBeforeForcedFinal);
+                    syncForcedFinalBuffer();
+                    
+                    // Verify the buffer was created correctly
+                    const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                    console.log(`[HostMode] ✅ Forced final buffer created and verified:`);
+                    console.log(`[HostMode]   Buffer.text: "${buffer?.text ? buffer.text.substring(0, 80) : '(none)'}..."`);
+                    console.log(`[HostMode]   Buffer.lastSentFinalTextBeforeBuffer: "${buffer?.lastSentFinalTextBeforeBuffer ? buffer.lastSentFinalTextBeforeBuffer.substring(Math.max(0, buffer.lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+                    console.log(`[HostMode]   Buffer.lastSentFinalTimeBeforeBuffer: ${buffer?.lastSentFinalTimeBeforeBuffer || '(not set)'}`);
+                    console.log(`[HostMode]   Buffer.timestamp: ${buffer?.timestamp || '(not set)'}`);
                     console.log(`[HostMode] ✅ Forced final buffer created for recovery - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
                     console.log(`[HostMode] 🎯 DUAL BUFFER: Setting up Phase 1 timeout (delay: 0ms) - recovery system initializing`);
                     

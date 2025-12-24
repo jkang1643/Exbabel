@@ -253,17 +253,42 @@ export class RecoveryStreamEngine {
               console.log(`[${mode}] 📎 Full append case detected - appending entire recovery text`);
             }
             console.log(`[${mode}] ✅ Recovery found additional words: "${additionalWords}"`);
-            console.log(`[${mode}] 📊 Committing recovery update: "${finalTextToCommit.substring(0, 80)}..."`);
+            console.log(`[${mode}] 📊 RECOVERY COMMIT - Committing recovery update:`);
+            console.log(`[${mode}]   Merged text: "${finalTextToCommit.substring(0, 80)}..."`);
+            console.log(`[${mode}]   Original buffered: "${originalBufferedText.substring(0, 80)}..."`);
+            console.log(`[${mode}]   Additional words: "${additionalWords}"`);
             
             // Mark as committed by recovery BEFORE clearing buffer
             syncForcedFinalBuffer();
             const forcedFinalBuffer = forcedCommitEngine.getForcedFinalBuffer();
+            
+            // CRITICAL: Capture lastSentFinalTextBeforeBuffer BEFORE clearing buffer
+            // This is the previous final that was sent BEFORE this forced final was buffered
+            // We need to pass this to processFinalText so it can use it for deduplication
+            const lastSentFinalTextBeforeBuffer = forcedFinalBuffer?.lastSentFinalTextBeforeBuffer || null;
+            const lastSentFinalTimeBeforeBuffer = forcedFinalBuffer?.lastSentFinalTimeBeforeBuffer || null;
+            
+            console.log(`[${mode}] 🔍 RECOVERY COMMIT - Previous final text for deduplication:`);
+            console.log(`[${mode}]   lastSentFinalTextBeforeBuffer: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+            console.log(`[${mode}]   lastSentFinalTimeBeforeBuffer: ${lastSentFinalTimeBeforeBuffer || '(not set)'}`);
+            console.log(`[${mode}]   This is the final that was sent BEFORE the forced final was buffered`);
+            console.log(`[${mode}]   Will be used for deduplication to ensure correct previous segment comparison`);
+            
             if (forcedFinalBuffer) {
               forcedFinalBuffer.committedByRecovery = true;
             }
             
             // Commit the full recovered text (forced final + recovery words)
-            processFinalText(finalTextToCommit, { forceFinal: true });
+            // Pass the captured previous final text so deduplication uses the correct previous segment
+            console.log(`[${mode}] 📤 Calling processFinalText with recovery context:`);
+            console.log(`[${mode}]   Text to commit: "${finalTextToCommit.substring(0, 80)}..."`);
+            console.log(`[${mode}]   Previous final for deduplication: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(none)'}"`);
+            
+            processFinalText(finalTextToCommit, { 
+              forceFinal: true,
+              previousFinalTextForDeduplication: lastSentFinalTextBeforeBuffer,
+              previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+            });
             forcedCommitEngine.clearForcedFinalBuffer();
             syncForcedFinalBuffer();
             
@@ -290,15 +315,35 @@ export class RecoveryStreamEngine {
             const forcedFinalText = forcedFinalBuffer.text;
             
             console.log(`[${mode}] ✅ No new text recovered - committing forced final immediately to prevent loss`);
-            console.log(`[${mode}] 📊 Committing forced final: "${forcedFinalText.substring(0, 80)}..."`);
+            console.log(`[${mode}] 📊 RECOVERY COMMIT (no new words) - Committing forced final:`);
+            console.log(`[${mode}]   Forced final text: "${forcedFinalText.substring(0, 80)}..."`);
             
             // Mark as committed by recovery BEFORE clearing buffer
+            // CRITICAL: Capture lastSentFinalTextBeforeBuffer BEFORE clearing buffer
+            const lastSentFinalTextBeforeBuffer = forcedFinalBuffer?.lastSentFinalTextBeforeBuffer || null;
+            const lastSentFinalTimeBeforeBuffer = forcedFinalBuffer?.lastSentFinalTimeBeforeBuffer || null;
+            
+            console.log(`[${mode}] 🔍 RECOVERY COMMIT - Previous final text for deduplication:`);
+            console.log(`[${mode}]   lastSentFinalTextBeforeBuffer: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+            console.log(`[${mode}]   lastSentFinalTimeBeforeBuffer: ${lastSentFinalTimeBeforeBuffer || '(not set)'}`);
+            console.log(`[${mode}]   This is the final that was sent BEFORE the forced final was buffered`);
+            console.log(`[${mode}]   Will be used for deduplication to ensure correct previous segment comparison`);
+            
             if (forcedFinalBuffer) {
               forcedFinalBuffer.committedByRecovery = true;
             }
             
             // Commit the forced final (with grammar correction via processFinalText)
-            processFinalText(forcedFinalText, { forceFinal: true });
+            // Pass the captured previous final text so deduplication uses the correct previous segment
+            console.log(`[${mode}] 📤 Calling processFinalText with recovery context:`);
+            console.log(`[${mode}]   Text to commit: "${forcedFinalText.substring(0, 80)}..."`);
+            console.log(`[${mode}]   Previous final for deduplication: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(none)'}"`);
+            
+            processFinalText(forcedFinalText, { 
+              forceFinal: true,
+              previousFinalTextForDeduplication: lastSentFinalTextBeforeBuffer,
+              previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+            });
             forcedCommitEngine.clearForcedFinalBuffer();
             syncForcedFinalBuffer();
             
@@ -318,21 +363,41 @@ export class RecoveryStreamEngine {
       } else {
         // CRITICAL FIX: Even if recovery stream returned no text, we must still commit the forced final
         // Don't wait for timeout - commit immediately to ensure it's never lost
-        console.log(`[${mode}] ⚠️ Recovery stream returned no text - committing forced final immediately to prevent loss`);
+          console.log(`[${mode}] ⚠️ Recovery stream returned no text - committing forced final immediately to prevent loss`);
         syncForcedFinalBuffer();
         if (forcedCommitEngine.hasForcedFinalBuffer()) {
           const forcedFinalBuffer = forcedCommitEngine.getForcedFinalBuffer();
           const forcedFinalText = forcedFinalBuffer.text;
           
-          console.log(`[${mode}] 📊 Committing forced final: "${forcedFinalText.substring(0, 80)}..."`);
+          console.log(`[${mode}] 📊 RECOVERY COMMIT (no recovery text) - Committing forced final:`);
+          console.log(`[${mode}]   Forced final text: "${forcedFinalText.substring(0, 80)}..."`);
           
           // Mark as committed by recovery BEFORE clearing buffer
+          // CRITICAL: Capture lastSentFinalTextBeforeBuffer BEFORE clearing buffer
+          const lastSentFinalTextBeforeBuffer = forcedFinalBuffer?.lastSentFinalTextBeforeBuffer || null;
+          const lastSentFinalTimeBeforeBuffer = forcedFinalBuffer?.lastSentFinalTimeBeforeBuffer || null;
+          
+          console.log(`[${mode}] 🔍 RECOVERY COMMIT - Previous final text for deduplication:`);
+          console.log(`[${mode}]   lastSentFinalTextBeforeBuffer: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+          console.log(`[${mode}]   lastSentFinalTimeBeforeBuffer: ${lastSentFinalTimeBeforeBuffer || '(not set)'}`);
+          console.log(`[${mode}]   This is the final that was sent BEFORE the forced final was buffered`);
+          console.log(`[${mode}]   Will be used for deduplication to ensure correct previous segment comparison`);
+          
           if (forcedFinalBuffer) {
             forcedFinalBuffer.committedByRecovery = true;
           }
           
           // Commit the forced final (with grammar correction via processFinalText)
-          processFinalText(forcedFinalText, { forceFinal: true });
+          // Pass the captured previous final text so deduplication uses the correct previous segment
+          console.log(`[${mode}] 📤 Calling processFinalText with recovery context:`);
+          console.log(`[${mode}]   Text to commit: "${forcedFinalText.substring(0, 80)}..."`);
+          console.log(`[${mode}]   Previous final for deduplication: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(none)'}"`);
+          
+          processFinalText(forcedFinalText, { 
+            forceFinal: true,
+            previousFinalTextForDeduplication: lastSentFinalTextBeforeBuffer,
+            previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+          });
           forcedCommitEngine.clearForcedFinalBuffer();
           syncForcedFinalBuffer();
           

@@ -715,6 +715,11 @@ export function deduplicatePartialText({
     const previousWindow = finalWords.slice(-WINDOW_SIZE_PREVIOUS);
     const newWindow = partialWords.slice(0, WINDOW_SIZE_NEW);
     
+    console.log(`[${mode}] 🔍 WORD-BY-WORD MATCHING (fallback strategy):`);
+    console.log(`[${mode}]   Previous window (last ${WINDOW_SIZE_PREVIOUS} words): ${previousWindow.map(w => `"${w.original}"`).join(', ')}`);
+    console.log(`[${mode}]   New window (first ${WINDOW_SIZE_NEW} words): ${newWindow.map(w => `"${w.original}"`).join(', ')}`);
+    console.log(`[${mode}]   Strategy: Find ALL matching words, then deduplicate up to LAST match`);
+    
     // Strategy: Find ALL matching words in the new window, then deduplicate up to the LAST match
     // This handles cases like "Our desires" where both "Our" and "desires" match
     // We want to deduplicate all words from start up to and including the LAST matching word
@@ -740,6 +745,7 @@ export function deduplicatePartialText({
             prevIndex: prevIdx,
             prevWord: prevWord
           });
+          console.log(`[${mode}]   ✅ Match found: "${newWord.original}" (position ${newIdx} in new) matches "${prevWord.original}" (position ${prevIdx} in previous)`);
           break; // Found match for this word, move to next
         }
       }
@@ -757,13 +763,20 @@ export function deduplicatePartialText({
       };
       
       const matchedWordsStr = matchedWords.map(m => `"${m.newWord.original}"`).join(', ');
-      console.log(`[${mode}] 🔍 Found ${matchedWords.length} word match(es): ${matchedWordsStr} - will skip ${skipCount} word(s) from start (up to and including last match)`);
+      const matchedPreviousWordsStr = matchedWords.map(m => `"${m.prevWord.original}"`).join(', ');
+      console.log(`[${mode}] 🔍 WORD MATCHING RESULT:`);
+      console.log(`[${mode}]   Found ${matchedWords.length} word match(es) in first 5 words of new segment`);
+      console.log(`[${mode}]   Matched words in new: ${matchedWordsStr}`);
+      console.log(`[${mode}]   Matched words in previous: ${matchedPreviousWordsStr}`);
+      console.log(`[${mode}]   Last matching word position in new: ${lastMatchingIndex} (0-based)`);
+      console.log(`[${mode}]   Will skip ${skipCount} word(s) from start (all words up to and including last match)`);
+      console.log(`[${mode}]   Algorithm: Check last 5 words of previous → Check first 5 words of new → Find ALL matches → Deduplicate up to LAST match`);
     }
   }
   
   const wordsToSkip = overlapInfo ? overlapInfo.skipCount : 0;
 
-    if (wordsToSkip > 0 && overlapInfo) {
+  if (wordsToSkip > 0 && overlapInfo) {
       // Reconstruct deduplicated text by removing overlapping words
       // Preserve original case and spacing
       const partialWordsArray = partialText.trim().split(/\s+/);
@@ -804,11 +817,8 @@ export function deduplicatePartialText({
       if (!deduplicatedText || deduplicatedText.length === 0) {
         console.log(`[${mode}] ⏭️ All words are duplicates of previous FINAL - text would be empty after deduplication`);
         return { deduplicatedText: '', wordsSkipped, wasDeduplicated: true };
-    }
+      }
   }
 
   return { deduplicatedText, wordsSkipped, wasDeduplicated };
 }
-
-export default { deduplicatePartialText };
-
