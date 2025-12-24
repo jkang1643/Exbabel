@@ -456,16 +456,6 @@ export async function handleSoloMode(clientWs) {
               
               // Ultra-low throttle for real-time feel - updates every 1-2 chars
               const THROTTLE_MS = 0; // No throttle - instant translation on every character
-              // CRITICAL FIX: Centralized partial tracking reset function
-              // This ensures partials are always reset after final processing, preventing buildup
-              // Similar to HOST mode's partialTracker.reset() - ensures consistent cleanup
-              const resetPartialTracking = () => {
-                latestPartialText = '';
-                longestPartialText = '';
-                latestPartialTime = 0;
-                longestPartialTime = 0;
-                console.log('[SoloMode] 🧹 Reset partial tracking for next segment');
-              };
               
               // Helper function to check for partials that extend a just-sent FINAL
               // This should ALWAYS be called after a FINAL is sent to catch any partials that arrived
@@ -532,10 +522,6 @@ export async function handleSoloMode(clientWs) {
                     console.log(`[SoloMode] ✓ Checked for extending partials after FINAL (none found): "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}"`);
                   }
                 }
-                
-                // CRITICAL FIX: Reset partial tracking AFTER checking for extensions
-                // This prevents partials from building up and causing connection/timeout issues
-                resetPartialTracking();
               };
               
               // Helper function to process final text (defined here so it can access closure variables)
@@ -1772,9 +1758,6 @@ export async function handleSoloMode(clientWs) {
                   }
                   
                   // Schedule or reschedule the timeout
-                  // Capture WAIT_FOR_PARTIALS_MS in a const to ensure it's in scope for setTimeout
-                  const waitTimeMs = WAIT_FOR_PARTIALS_MS;
-
                   pendingFinalization.timeout = setTimeout(() => {
                       // After waiting, check again for longer partials
                       // CRITICAL: Google Speech may send FINALs that are incomplete (missing words)
@@ -1958,7 +1941,8 @@ export async function handleSoloMode(clientWs) {
                       
                       // Process final - translate and send to client
                       processFinalText(textToProcess);
-                    }, waitTimeMs);
+                    }, WAIT_FOR_PARTIALS_MS);
+                }
               });
               
               console.log('[SoloMode] ✅ Google Speech stream initialized and ready');

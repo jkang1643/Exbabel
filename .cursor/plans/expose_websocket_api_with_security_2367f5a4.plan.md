@@ -257,5 +257,3 @@ graph TB
 - Invalid/missing key: Close connection with error
 
 ### CORS
-
-- API endpoint: No CORS (WebSocket doesn't use CORS)
