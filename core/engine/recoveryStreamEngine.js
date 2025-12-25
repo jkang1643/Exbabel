@@ -311,7 +311,20 @@ export class RecoveryStreamEngine {
             // Mark that we've already committed, so timeout callback can skip
             console.log(`[${mode}] ✅ Recovery commit completed - timeout callback will skip`);
           } else {
-            console.log(`[${mode}] ⚠️ Buffer already cleared - recovery found words but cannot commit update`);
+            // CRITICAL FIX: Buffer was cleared but recovery found words - still commit the merged text
+            // This prevents word loss when buffer is cleared by new segment but recovery found missing words
+            console.log(`[${mode}] ⚠️ Buffer already cleared but recovery found words - committing merged text anyway to prevent word loss`);
+            console.log(`[${mode}] 📤 Committing recovery update (buffer was cleared): "${finalTextToCommit.substring(0, 80)}..."`);
+
+            // Try to get deduplication context from the merge result or use null (processFinalText will handle it)
+            // We don't have access to lastSentOriginalTextBeforeBuffer if buffer was cleared, so use null
+            processFinalText(finalTextToCommit, { 
+              forceFinal: true,
+              previousFinalTextForDeduplication: null, // Will use last sent final for deduplication
+              previousFinalTimeForDeduplication: null
+            });
+
+            console.log(`[${mode}] ✅ Recovery commit completed (buffer was cleared) - timeout callback will skip`);
           }
         } else {
           // CRITICAL FIX: Even if recovery didn't find additional words, we must still commit the forced final

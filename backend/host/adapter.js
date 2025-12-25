@@ -1181,14 +1181,84 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log('[HostMode] ⏳ Recovery in progress - waiting for completion before committing extended partial...');
                         try {
                           const recoveredText = await forcedFinalBuffer.recoveryPromise;
+                          
+                          // CRITICAL: Check if recovery already committed before committing again
+                          syncForcedFinalBuffer();
+                          const bufferAfterRecovery = forcedCommitEngine.hasForcedFinalBuffer() ? forcedCommitEngine.getForcedFinalBuffer() : null;
+                          const alreadyCommittedByRecovery = bufferAfterRecovery?.committedByRecovery === true;
+                          
                           if (recoveredText && recoveredText.length > 0) {
                             console.log(`[HostMode] ✅ Recovery completed with text: "${recoveredText.substring(0, 60)}..."`);
-                            // Recovery found words - merge recovered text with extending partial
-                            const recoveredMerged = partialTracker.mergeWithOverlap(recoveredText, transcriptText);
+                            
+                            if (alreadyCommittedByRecovery) {
+                              // Recovery already committed the merged text - merge the already-committed text with extending partial
+                              console.log('[HostMode] 🔁 Recovery already committed - merging committed text with extending partial');
+                              // Use the recovered text (which is the merged forced final + recovery words that was already committed)
+                              const recoveredMerged = partialTracker.mergeWithOverlap(recoveredText, transcriptText);
+                              if (recoveredMerged) {
+                                console.log('[HostMode] 🔁 Merging already-committed recovered text with extending partial and committing');
+                                forcedCommitEngine.clearForcedFinalBufferTimeout();
+                                
+                                // Get the previous final text for deduplication from the buffer
+                                const lastSentOriginalTextBeforeBuffer = bufferAfterRecovery?.lastSentOriginalTextBeforeBuffer || null;
+                                const lastSentFinalTextBeforeBuffer = bufferAfterRecovery?.lastSentFinalTextBeforeBuffer || null;
+                                const lastSentFinalTimeBeforeBuffer = bufferAfterRecovery?.lastSentFinalTimeBeforeBuffer || null;
+                                const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+                                
+                                processFinalText(recoveredMerged, { 
+                                  forceFinal: true,
+                                  previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                                  previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+                                });
+                                forcedCommitEngine.clearForcedFinalBuffer();
+                                syncForcedFinalBuffer();
+                                // Continue processing the extended partial normally
+                                return; // Exit early - already committed
+                              }
+                            } else {
+                              // Recovery found words but didn't commit yet - merge recovered text with extending partial
+                              const recoveredMerged = partialTracker.mergeWithOverlap(recoveredText, transcriptText);
+                              if (recoveredMerged) {
+                                console.log('[HostMode] 🔁 Merging recovered text with extending partial and committing');
+                                forcedCommitEngine.clearForcedFinalBufferTimeout();
+                                
+                                // Get the previous final text for deduplication from the buffer
+                                const lastSentOriginalTextBeforeBuffer = bufferAfterRecovery?.lastSentOriginalTextBeforeBuffer || null;
+                                const lastSentFinalTextBeforeBuffer = bufferAfterRecovery?.lastSentFinalTextBeforeBuffer || null;
+                                const lastSentFinalTimeBeforeBuffer = bufferAfterRecovery?.lastSentFinalTimeBeforeBuffer || null;
+                                const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+                                
+                                processFinalText(recoveredMerged, { 
+                                  forceFinal: true,
+                                  previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                                  previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+                                });
+                                forcedCommitEngine.clearForcedFinalBuffer();
+                                syncForcedFinalBuffer();
+                                // Continue processing the extended partial normally
+                                return; // Exit early - already committed
+                              }
+                            }
+                          } else if (alreadyCommittedByRecovery) {
+                            // Recovery already committed the forced final (no additional words found) - merge with extending partial
+                            console.log('[HostMode] 🔁 Recovery already committed forced final - merging with extending partial');
+                            const forcedFinalText = bufferAfterRecovery?.text || forcedCommitEngine.getForcedFinalBuffer()?.text;
+                            const recoveredMerged = partialTracker.mergeWithOverlap(forcedFinalText, transcriptText);
                             if (recoveredMerged) {
-                              console.log('[HostMode] 🔁 Merging recovered text with extending partial and committing');
+                              console.log('[HostMode] 🔁 Merging already-committed forced final with extending partial and committing');
                               forcedCommitEngine.clearForcedFinalBufferTimeout();
-                              processFinalText(recoveredMerged, { forceFinal: true });
+                              
+                              // Get the previous final text for deduplication from the buffer
+                              const lastSentOriginalTextBeforeBuffer = bufferAfterRecovery?.lastSentOriginalTextBeforeBuffer || null;
+                              const lastSentFinalTextBeforeBuffer = bufferAfterRecovery?.lastSentFinalTextBeforeBuffer || null;
+                              const lastSentFinalTimeBeforeBuffer = bufferAfterRecovery?.lastSentFinalTimeBeforeBuffer || null;
+                              const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+                              
+                              processFinalText(recoveredMerged, { 
+                                forceFinal: true,
+                                previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                                previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+                              });
                               forcedCommitEngine.clearForcedFinalBuffer();
                               syncForcedFinalBuffer();
                               // Continue processing the extended partial normally
@@ -3258,20 +3328,46 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // Only wait if FINALs are related
                     try {
                       const recoveredText = await buffer.recoveryPromise;
+                      
+                      // CRITICAL: Check if recovery already committed before committing again
+                      // Recovery stream engine commits the merged text (forced final + recovered words) if it finds additional words
+                      // We should only commit here if recovery didn't already commit
+                      syncForcedFinalBuffer();
+                      const bufferAfterRecovery = forcedCommitEngine.hasForcedFinalBuffer() ? forcedCommitEngine.getForcedFinalBuffer() : null;
+                      const alreadyCommittedByRecovery = bufferAfterRecovery?.committedByRecovery === true;
+                      
                       if (recoveredText && recoveredText.length > 0) {
                         console.log(`[HostMode] ✅ Forced final recovery completed with text: "${recoveredText.substring(0, 60)}..."`);
-                        // Recovery found words - commit the forced final first
-                        console.log('[HostMode] 📝 Committing forced final first (maintaining chronological order)');
                         
-                        // Mark as committed by recovery BEFORE clearing buffer
-                        syncForcedFinalBuffer();
-                        if (forcedFinalBuffer) {
-                          forcedFinalBuffer.committedByRecovery = true;
+                        if (alreadyCommittedByRecovery) {
+                          // Recovery already committed the merged text - don't commit again
+                          console.log('[HostMode] ⏭️ Recovery already committed the merged text - skipping duplicate commit');
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
+                        } else {
+                          // Recovery found words but didn't commit yet - commit the merged text
+                          console.log('[HostMode] 📝 Committing forced final with recovered words (maintaining chronological order)');
+                          
+                          // Mark as committed by recovery BEFORE clearing buffer
+                          syncForcedFinalBuffer();
+                          if (forcedFinalBuffer) {
+                            forcedFinalBuffer.committedByRecovery = true;
+                          }
+                          
+                          // Get the previous final text for deduplication from the buffer
+                          const lastSentOriginalTextBeforeBuffer = bufferAfterRecovery?.lastSentOriginalTextBeforeBuffer || null;
+                          const lastSentFinalTextBeforeBuffer = bufferAfterRecovery?.lastSentFinalTextBeforeBuffer || null;
+                          const lastSentFinalTimeBeforeBuffer = bufferAfterRecovery?.lastSentFinalTimeBeforeBuffer || null;
+                          const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+                          
+                          processFinalText(recoveredText, { 
+                            forceFinal: true,
+                            previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                            previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+                          });
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
                         }
-                        
-                        processFinalText(recoveredText, { forceFinal: true });
-                        forcedCommitEngine.clearForcedFinalBuffer();
-                        syncForcedFinalBuffer();
                         
                         // CRITICAL: If we didn't reset the partial tracker earlier (because new segment partials were detected),
                         // reset it now after committing the forced final
@@ -3296,19 +3392,43 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Continue with transcriptText processing below
                       } else {
                         console.log('[HostMode] ⚠️ Forced final recovery completed but no text was recovered');
-                        // Recovery found nothing - need to commit the forced final first, then process new FINAL
-                        console.log('[HostMode] 📝 Committing forced final first (recovery found nothing, but forced final must be committed)');
                         
-                        // CRITICAL: Mark as committed BEFORE clearing buffer so timeout callback can skip
-                        // Even though recovery found nothing, we're committing it here due to new FINAL arriving
+                        // CRITICAL: Check if recovery already committed the forced final
+                        // Recovery stream engine commits the forced final even if it didn't find additional words
                         syncForcedFinalBuffer();
-                        if (forcedFinalBuffer) {
-                          forcedFinalBuffer.committedByRecovery = true; // Mark as committed to prevent timeout from also committing
-                        }
+                        const bufferAfterRecovery = forcedCommitEngine.hasForcedFinalBuffer() ? forcedCommitEngine.getForcedFinalBuffer() : null;
+                        const alreadyCommittedByRecovery = bufferAfterRecovery?.committedByRecovery === true;
                         
-                        // Commit the forced final (from buffer, since recovery found nothing)
-                        const forcedFinalText = buffer.text;
-                        processFinalText(forcedFinalText, { forceFinal: true });
+                        if (alreadyCommittedByRecovery) {
+                          // Recovery already committed the forced final - don't commit again
+                          console.log('[HostMode] ⏭️ Recovery already committed the forced final - skipping duplicate commit');
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
+                        } else {
+                          // Recovery found nothing and didn't commit - commit the forced final first, then process new FINAL
+                          console.log('[HostMode] 📝 Committing forced final first (recovery found nothing, but forced final must be committed)');
+                          
+                          // CRITICAL: Mark as committed BEFORE clearing buffer so timeout callback can skip
+                          // Even though recovery found nothing, we're committing it here due to new FINAL arriving
+                          syncForcedFinalBuffer();
+                          if (forcedFinalBuffer) {
+                            forcedFinalBuffer.committedByRecovery = true; // Mark as committed to prevent timeout from also committing
+                          }
+                          
+                          // Get the previous final text for deduplication from the buffer
+                          const lastSentOriginalTextBeforeBuffer = bufferAfterRecovery?.lastSentOriginalTextBeforeBuffer || null;
+                          const lastSentFinalTextBeforeBuffer = bufferAfterRecovery?.lastSentFinalTextBeforeBuffer || null;
+                          const lastSentFinalTimeBeforeBuffer = bufferAfterRecovery?.lastSentFinalTimeBeforeBuffer || null;
+                          const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+                          
+                          // Commit the forced final (from buffer, since recovery found nothing)
+                          const forcedFinalText = buffer.text;
+                          processFinalText(forcedFinalText, { 
+                            forceFinal: true,
+                            previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                            previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+                          });
+                        }
                         
                         // CRITICAL: If we didn't reset the partial tracker earlier (because new segment partials were detected),
                         // reset it now after committing the forced final
