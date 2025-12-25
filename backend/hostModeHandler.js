@@ -1100,17 +1100,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                       const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
                       
                       if (recoveryInProgress || mightBeRelated) {
-                        // CRITICAL: Don't send partials when recovery is in progress OR if partial might be related to forced final
-                        // The partial might be part of the forced final that's being recovered
-                        // Wait for recovery to complete before sending this partial
+                        // CRITICAL: Even during recovery, we MUST send partials to prevent word loss
+                        // The partial might be part of the forced final that's being recovered, but we still need to show it
+                        // Recovery will handle merging, but users need to see the live transcription
                         if (recoveryInProgress) {
-                          console.log('[HostMode] 🔀 New segment detected but recovery in progress - deferring partial send');
+                          console.log('[HostMode] 🔀 New segment detected but recovery in progress - sending partial anyway to prevent word loss');
                         } else {
-                          console.log('[HostMode] 🔀 Partial might be related to forced final - deferring partial send');
+                          console.log('[HostMode] 🔀 Partial might be related to forced final - sending partial anyway to prevent word loss');
                         }
-                        console.log('[HostMode] ⏳ Will send partial after recovery/forced final completes');
-                        // Continue tracking the partial but don't send it yet
-                        // The recovery timeout will handle committing the forced final
                         // Track latest partial for correction race condition prevention
                         latestPartialTextForCorrection = transcriptText;
                         const translationSeedText = applyCachedCorrections(transcriptText);
@@ -1118,7 +1115,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // PHASE 8: Update partial tracking using CoreEngine Partial Tracker
                         partialTracker.updatePartial(transcriptText);
                         syncPartialVariables(); // Sync variables for compatibility
-                        return; // Skip sending this partial - wait for recovery/forced final
+                        // DO NOT return - continue to send the partial below
                       } else {
                         // No recovery in progress and partial is clearly unrelated - commit forced final separately
                         console.log('[HostMode] 🔀 New segment detected - committing forced final separately');
@@ -1185,14 +1182,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                                                    (endsWithIncompleteWord && hasRecentActivity && partialTrimmed.length < 100) || // Recent activity + incomplete word = likely continuation
                                                    (endsWithIncompleteWord && partialTrimmed.length < 80); // Partials ending with incomplete word and < 80 chars are likely incomplete (even with punctuation)
                   
+                  // CRITICAL: Send ALL partials - do not filter or skip ANY partial
+                  // User requirement: EVERY single partial must be on the transcript and finalized
+                  // Even very short or incomplete-looking partials must be sent to prevent word loss
+                  // The frontend can handle displaying them appropriately
                   if ((isVeryShortPartial && isNewSegmentStart) || mightBeIncompletePhrase) {
                     const reason = isVeryShortPartial && isNewSegmentStart 
                       ? `very short partial at segment start (${transcriptText.trim().length} chars)`
                       : `incomplete phrase detected - ends with "${lastWord}" (${transcriptText.trim().length} chars)`;
-                    console.log(`[HostMode] ⏳ Delaying ${reason}: "${transcriptText.substring(0, 40)}..." - waiting for transcription to complete`);
-                    // Don't send yet - wait for partial to grow
-                    // Continue tracking so we can send it once it's longer
-                    return; // Skip sending this partial
+                    console.log(`[HostMode] ⚠️ ${reason}: "${transcriptText.substring(0, 40)}..." - sending anyway to prevent word loss`);
+                    // Continue to send the partial below - do not return
                   }
                   
                   // Live partial transcript - send original immediately with sequence ID (solo mode style)
@@ -1258,20 +1257,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                                                 (hasWordOverlap || startsWithFinalWord || extendsFinal);
                     
                     // CRITICAL: Even if FINAL ends with period, Google Speech may have incorrectly finalized mid-sentence
-                    // If a very short partial arrives very soon after (< 1.5 seconds), wait briefly to see if it's a continuation
+                    // If a very short partial arrives soon after, wait longer to see if it's a continuation
                     // This catches cases like "You just can't." followed by "People...." which should be "You just can't beat people..."
+                    // Extended time window: up to 5 seconds for short finals (< 50 chars) to catch false finals
+                    const isShortFinal = finalText.length < 50;
+                    const falseFinalTimeWindow = isShortFinal ? 5000 : 1500; // Longer window for short finals
                     const mightBeFalseFinal = finalEndsWithCompleteSentence && 
                                              isVeryShortPartial && 
-                                             timeSinceFinal < 1500 && 
+                                             timeSinceFinal < falseFinalTimeWindow && 
                                              !hasWordOverlap && 
                                              !startsWithFinalWord && 
                                              !extendsFinal;
                     
-                    // If partial is clearly a new segment (no relationship to final), commit the pending final immediately
-                    // BUT: If it might be a false final (period added incorrectly), wait a bit longer
-                    if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord && timeSinceFinal > 500 && !mightBeFalseFinal) {
-                      console.log(`[HostMode] 🔀 New segment detected - partial "${partialText}" has no relationship to pending FINAL "${finalText.substring(0, 50)}..."`);
-                      console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
+                    // CRITICAL: Do NOT commit pending final when new partial arrives - this causes premature commits
+                    // Even if partial seems unrelated, it might be a continuation of an incomplete final
+                    // Only commit if we're CERTAIN it's a new segment AND the final is complete
+                    // For false finals (short finals with periods), wait much longer before committing
+                    const isShortIncompleteFinal = finalText.length < 50 && finalEndsWithCompleteSentence && timeSinceFinal < 5000;
+                    const shouldCommitNow = !extendsFinal && !hasWordOverlap && !startsWithFinalWord && 
+                                           timeSinceFinal > 2000 && // Wait at least 2 seconds
+                                           !mightBeFalseFinal && 
+                                           !isShortIncompleteFinal && // Don't commit short incomplete finals
+                                           finalEndsWithCompleteSentence; // Only commit if final is actually complete
+                    
+                    if (shouldCommitNow) {
+                      console.log(`[HostMode] 🔀 New segment confirmed - partial "${partialText}" has no relationship to pending FINAL "${finalText.substring(0, 50)}..."`);
+                      console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment (${timeSinceFinal}ms since final)`);
                       // PHASE 8: Clear timeout using engine
                       finalizationEngine.clearPendingFinalizationTimeout();
                       const textToCommit = pendingFinalization.text;
@@ -1281,6 +1292,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                       processFinalText(textToCommit);
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
+                    } else if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord) {
+                      // New partial arrived but we're not ready to commit yet - log for debugging
+                      console.log(`[HostMode] ⏳ New partial "${partialText}" arrived but waiting to commit final (${timeSinceFinal}ms, mightBeFalseFinal: ${mightBeFalseFinal}, isShortIncomplete: ${isShortIncompleteFinal})`);
                     }
                     
                     // If partial might be a continuation OR might be a false final (period added incorrectly), wait longer
@@ -1288,8 +1302,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // CRITICAL: Check max wait time - don't extend wait if we've already waited too long
                     // CRITICAL: Check if pendingFinalization still exists (it may have been cleared above)
                     if (!pendingFinalization) {
-                      // pendingFinalization was cleared (final was committed) - skip continuation logic
-                      return; // Continue processing the new partial as a new segment
+                      // pendingFinalization was cleared (final was committed) - continue processing the new partial
+                      // DO NOT return - the partial still needs to be sent below
                     }
                     const timeSinceMaxWait = Date.now() - pendingFinalization.maxWaitTimestamp;
                     if ((mightBeContinuation || mightBeFalseFinal) && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {

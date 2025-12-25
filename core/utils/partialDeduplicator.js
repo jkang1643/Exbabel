@@ -707,6 +707,9 @@ export function deduplicatePartialText({
   // 2. Check first 5 words of next segment
   // 3. Find ANY matching word (not requiring consecutive from start)
   // 4. When a matching word is found, deduplicate all words from start up to and including the match
+  // CRITICAL FIX: If final ends with punctuation and partial starts with capital, be more conservative
+  // - Require multiple word matches OR match at end of previous final (not just any position)
+  // - This prevents false deduplication when new sentences start with common words like "You", "I", "The"
   if (!overlapInfo && partialWords.length > 0) {
     // Define windows: check last 5 words of previous and first 5 words of new
     const WINDOW_SIZE_PREVIOUS = Math.min(5, finalWords.length); // Check last 5 words of previous
@@ -743,7 +746,9 @@ export function deduplicatePartialText({
             newIndex: newIdx,
             newWord: newWord,
             prevIndex: prevIdx,
-            prevWord: prevWord
+            prevWord: prevWord,
+            // Track if match is at the end of previous final (most reliable indicator of continuation)
+            isAtEndOfPrevious: prevIdx === previousWindow.length - 1
           });
           console.log(`[${mode}]   ✅ Match found: "${newWord.original}" (position ${newIdx} in new) matches "${prevWord.original}" (position ${prevIdx} in previous)`);
           break; // Found match for this word, move to next
@@ -751,26 +756,41 @@ export function deduplicatePartialText({
       }
     }
     
-    // If we found matching words, deduplicate all words from start up to and including the LAST match
+    // If we found matching words, check if we should deduplicate
     if (lastMatchingIndex >= 0) {
-      // skipCount = number of words to skip from start (lastMatchingIndex + 1 because index is 0-based)
-      const skipCount = lastMatchingIndex + 1;
+      // CRITICAL: If final ends with punctuation and partial starts with capital,
+      // require either:
+      // 1. Multiple word matches (2+), OR
+      // 2. Single match at position 0 that matches the LAST word of previous final
+      // This prevents false deduplication when new sentences start with common words
+      const isLikelyNewSentence = finalEndsWithPunctuation && partialStartsWithCapital;
+      const isSingleWordMatchAtStart = matchedWords.length === 1 && lastMatchingIndex === 0;
+      const matchIsAtEndOfPrevious = matchedWords.some(m => m.isAtEndOfPrevious);
       
-      overlapInfo = {
-        phraseLen: matchedWords.length, // Number of matching words found
-        partialStart: 0,
-        skipCount: skipCount
-      };
-      
-      const matchedWordsStr = matchedWords.map(m => `"${m.newWord.original}"`).join(', ');
-      const matchedPreviousWordsStr = matchedWords.map(m => `"${m.prevWord.original}"`).join(', ');
-      console.log(`[${mode}] 🔍 WORD MATCHING RESULT:`);
-      console.log(`[${mode}]   Found ${matchedWords.length} word match(es) in first 5 words of new segment`);
-      console.log(`[${mode}]   Matched words in new: ${matchedWordsStr}`);
-      console.log(`[${mode}]   Matched words in previous: ${matchedPreviousWordsStr}`);
-      console.log(`[${mode}]   Last matching word position in new: ${lastMatchingIndex} (0-based)`);
-      console.log(`[${mode}]   Will skip ${skipCount} word(s) from start (all words up to and including last match)`);
-      console.log(`[${mode}]   Algorithm: Check last 5 words of previous → Check first 5 words of new → Find ALL matches → Deduplicate up to LAST match`);
+      if (isLikelyNewSentence && isSingleWordMatchAtStart && !matchIsAtEndOfPrevious) {
+        // This is likely a new sentence starting with a common word - don't deduplicate
+        console.log(`[${mode}]   ⚠️ Skipping deduplication: New sentence likely starts with common word "${matchedWords[0].newWord.original}" (not a continuation)`);
+        overlapInfo = null; // Don't deduplicate
+      } else {
+        // skipCount = number of words to skip from start (lastMatchingIndex + 1 because index is 0-based)
+        const skipCount = lastMatchingIndex + 1;
+        
+        overlapInfo = {
+          phraseLen: matchedWords.length, // Number of matching words found
+          partialStart: 0,
+          skipCount: skipCount
+        };
+        
+        const matchedWordsStr = matchedWords.map(m => `"${m.newWord.original}"`).join(', ');
+        const matchedPreviousWordsStr = matchedWords.map(m => `"${m.prevWord.original}"`).join(', ');
+        console.log(`[${mode}] 🔍 WORD MATCHING RESULT:`);
+        console.log(`[${mode}]   Found ${matchedWords.length} word match(es) in first 5 words of new segment`);
+        console.log(`[${mode}]   Matched words in new: ${matchedWordsStr}`);
+        console.log(`[${mode}]   Matched words in previous: ${matchedPreviousWordsStr}`);
+        console.log(`[${mode}]   Last matching word position in new: ${lastMatchingIndex} (0-based)`);
+        console.log(`[${mode}]   Will skip ${skipCount} word(s) from start (all words up to and including last match)`);
+        console.log(`[${mode}]   Algorithm: Check last 5 words of previous → Check first 5 words of new → Find ALL matches → Deduplicate up to LAST match`);
+      }
     }
   }
   

@@ -735,10 +735,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                     
                     if (textToCompareAgainst && timeToCompareAgainst) {
                       const timeSinceLastFinal = Date.now() - timeToCompareAgainst;
+                      
+                      // CRITICAL FIX: Recovery commits use longer time window (30 seconds)
+                      // Recovery commits are logically consecutive segments regardless of recovery processing time
+                      // Normal commits use 5 seconds since they should arrive quickly
+                      const timeWindowForDedup = (deduplicationSource === 'recovery_passed_previous_final') ? 30000 : 5000;
+                      
                       console.log(`[HostMode] 🔍 DEDUPLICATION CHECK:`);
                       console.log(`[HostMode]   Previous final (${deduplicationSource}): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
                       console.log(`[HostMode]   New final: "${trimmedText.substring(0, 80)}..."`);
-                      console.log(`[HostMode]   Time since previous: ${timeSinceLastFinal}ms (window: 5000ms)`);
+                      console.log(`[HostMode]   Time since previous: ${timeSinceLastFinal}ms (window: ${timeWindowForDedup}ms${deduplicationSource === 'recovery_passed_previous_final' ? ' [recovery commit - extended window]' : ''})`);
                       console.log(`[HostMode]   Will check last 10 words of previous against first 10 words of new`);
                       
                       const dedupResult = deduplicateFinalText({
@@ -746,7 +752,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         previousFinalText: textToCompareAgainst,
                         previousFinalTime: timeToCompareAgainst,
                         mode: 'HostMode',
-                        timeWindowMs: 5000,
+                        timeWindowMs: timeWindowForDedup,
                         maxWordsToCheck: 10
                       });
                       
@@ -1674,6 +1680,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // If partial is clearly a new segment (no relationship to final), commit the pending final immediately
                     // BUT: If it might be a false final (period added incorrectly) OR the final itself was a false final, wait longer
                     // CRITICAL: For false finals, use longer time window (5000ms) before committing
+                    // If partial is clearly a new segment (no relationship to final), commit the pending final immediately
+                    // BUT: If it might be a false final (period added incorrectly) OR the final itself was a false final, wait longer
+                    // CRITICAL: For false finals, use longer time window (5000ms) before committing
                     if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord && 
                         timeSinceFinal > (finalWasFalseFinal ? 5000 : 500) && !mightBeFalseFinal) {
                       console.log(`[HostMode] 🔀 New segment detected - partial "${partialText}" has no relationship to pending FINAL "${finalText.substring(0, 50)}..."`);
@@ -1684,9 +1693,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // PHASE 8: Clear using engine
                       finalizationEngine.clearPendingFinalization();
                       syncPendingFinalization();
+                      // CRITICAL FIX: Track the new partial BEFORE resetting, so it's not lost
+                      partialTracker.updatePartial(transcriptText);
                       // PHASE 8: Reset partial tracking using tracker
                       partialTracker.reset();
                       syncPartialVariables();
+                      // CRITICAL FIX: Reset translation state to ensure next partial is treated as first
+                      lastPartialTranslation = '';
+                      lastPartialTranslationTime = 0;
                       processFinalText(textToCommit);
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
                     }
@@ -1870,9 +1884,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
+                        // CRITICAL FIX: Track the new partial BEFORE resetting, so it's not lost
+                        // This ensures the partial that triggered the commit is still processed
+                        partialTracker.updatePartial(transcriptText);
                         // PHASE 8: Reset partial tracking using tracker
                         partialTracker.reset();
                         syncPartialVariables();
+                        // CRITICAL FIX: Reset translation state to ensure next partial is treated as first
+                        // This prevents translation throttling from dropping short partials
+                        lastPartialTranslation = '';
+                        lastPartialTranslationTime = 0;
                         processFinalText(textToCommit);
                         // Continue processing the new partial as a new segment (don't return - let it be processed below)
                       } else if (isFalseFinal && clearlyNewSegment) {
@@ -1963,7 +1984,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                               console.log(`[HostMode] ⏳ Partial text is mid-sentence and new segment detected - waiting longer before committing (${timeSinceFinal}ms < 2000ms)`);
                               console.log(`[HostMode] 📊 Text: "${textToProcessTrimmed.substring(0, 100)}..."`);
                               // Don't commit yet - continue tracking
-                              return; // Exit early, let the partial continue to be tracked
+                              // CRITICAL FIX: DO NOT return here - this would drop the partial that triggered this commit
+                              // Instead, we'll commit the final but continue processing the partial below
+                              // The partial is from a new segment, so it's safe to commit the final
+                              console.log(`[HostMode] ⚠️ Committing final anyway (new segment detected), but continuing to process partial below`);
+                              // Continue to commit the final below, don't return
                             }
                           }
                           
@@ -1975,9 +2000,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.log('[HostMode] ⏳ Recovery in progress - deferring partial tracker reset until recovery completes');
                             // Reset will happen in recovery completion callback
                           } else {
+                            // CRITICAL FIX: Track the new partial BEFORE resetting, so it's not lost
+                            partialTracker.updatePartial(transcriptText);
                             // PHASE 8: Reset partial tracking using tracker
                             partialTracker.reset();
                             syncPartialVariables();
+                            // CRITICAL FIX: Reset translation state to ensure next partial is treated as first
+                            // This prevents translation throttling from dropping short partials
+                            lastPartialTranslation = '';
+                            lastPartialTranslationTime = 0;
                           }
                           // PHASE 8: Clear using engine
                           finalizationEngine.clearPendingFinalization();
@@ -2798,23 +2829,25 @@ export async function handleHostConnection(clientWs, sessionId) {
                     nextFinalAfterRecovery = null; // Reset
                     
                     // PHASE 8: Create forced final buffer using engine (for recovery tracking)
-                    // CRITICAL: Capture lastSentFinalText and lastSentFinalTime BEFORE creating buffer so recovery can use it for deduplication
+                    // CRITICAL: Capture lastSentFinalText, lastSentOriginalText, and lastSentFinalTime BEFORE creating buffer so recovery can use it for deduplication
                     // When recovery commits, lastSentFinalText may have been updated, so we need to preserve the previous final
                     // that was sent before this forced final was detected
+                    // IMPORTANT: Prefer lastSentOriginalText over lastSentFinalText for deduplication (full original text vs grammar-corrected shortened version)
                     const lastSentFinalTextBeforeForcedFinal = lastSentFinalText;
+                    const lastSentOriginalTextBeforeForcedFinal = lastSentOriginalText;
                     const lastSentFinalTimeBeforeForcedFinal = lastSentFinalTime;
-                    forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp, lastSentFinalTextBeforeForcedFinal, lastSentFinalTimeBeforeForcedFinal);
+                    forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp, lastSentFinalTextBeforeForcedFinal, lastSentFinalTimeBeforeForcedFinal, lastSentOriginalTextBeforeForcedFinal);
                     syncForcedFinalBuffer();
                     console.log(`[HostMode] 📌 CREATING FORCED FINAL BUFFER:`);
                     console.log(`[HostMode]   Forced final text: "${transcriptText.substring(0, 80)}..."`);
                     console.log(`[HostMode]   Forced final timestamp: ${forcedFinalTimestamp}`);
-                    console.log(`[HostMode]   Capturing lastSentFinalText BEFORE buffer creation:`);
+                    console.log(`[HostMode]   Capturing previous final text BEFORE buffer creation:`);
                     console.log(`[HostMode]     lastSentFinalText: "${lastSentFinalTextBeforeForcedFinal ? lastSentFinalTextBeforeForcedFinal.substring(Math.max(0, lastSentFinalTextBeforeForcedFinal.length - 80)) : '(empty)'}"`);
-                    console.log(`[HostMode]     lastSentOriginalText: "${lastSentOriginalText ? lastSentOriginalText.substring(Math.max(0, lastSentOriginalText.length - 80)) : '(empty)'}"`);
+                    console.log(`[HostMode]     lastSentOriginalText: "${lastSentOriginalTextBeforeForcedFinal ? lastSentOriginalTextBeforeForcedFinal.substring(Math.max(0, lastSentOriginalTextBeforeForcedFinal.length - 80)) : '(empty)'}"`);
                     console.log(`[HostMode]     lastSentFinalTime: ${lastSentFinalTimeBeforeForcedFinal || '(not set)'}`);
-                    console.log(`[HostMode]   ⚠️ CRITICAL: This previous final will be stored in buffer.lastSentFinalTextBeforeBuffer`);
+                    console.log(`[HostMode]   ⚠️ CRITICAL: lastSentOriginalText will be stored in buffer.lastSentOriginalTextBeforeBuffer (preferred for deduplication)`);
                     console.log(`[HostMode]   ⚠️ CRITICAL: It will be used for deduplication when recovery commits this forced final`);
-                    console.log(`[HostMode]   ⚠️ CRITICAL: This ensures recovery uses the CORRECT previous segment, not a different one`);
+                    console.log(`[HostMode]   ⚠️ CRITICAL: This ensures recovery uses the CORRECT previous segment with FULL original text, not a different one`);
                     
                     // NOTE: Buffer was already created above at line 2669 - no need to create it again
                     
@@ -2822,7 +2855,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const buffer = forcedCommitEngine.getForcedFinalBuffer();
                     console.log(`[HostMode] ✅ Forced final buffer created and verified:`);
                     console.log(`[HostMode]   Buffer.text: "${buffer?.text ? buffer.text.substring(0, 80) : '(none)'}..."`);
-                    console.log(`[HostMode]   Buffer.lastSentFinalTextBeforeBuffer: "${buffer?.lastSentFinalTextBeforeBuffer ? buffer.lastSentFinalTextBeforeBuffer.substring(Math.max(0, buffer.lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+                    console.log(`[HostMode]   Buffer.lastSentOriginalTextBeforeBuffer: "${buffer?.lastSentOriginalTextBeforeBuffer ? buffer.lastSentOriginalTextBeforeBuffer.substring(Math.max(0, buffer.lastSentOriginalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+                    console.log(`[HostMode]   Buffer.lastSentFinalTextBeforeBuffer: "${buffer?.lastSentFinalTextBeforeBuffer ? buffer.lastSentFinalTextBeforeBuffer.substring(Math.max(0, buffer.lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}" (fallback)`);
                     console.log(`[HostMode]   Buffer.lastSentFinalTimeBeforeBuffer: ${buffer?.lastSentFinalTimeBeforeBuffer || '(not set)'}`);
                     console.log(`[HostMode]   Buffer.timestamp: ${buffer?.timestamp || '(not set)'}`);
                     console.log(`[HostMode] ✅ Forced final buffer created for recovery - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
@@ -2938,11 +2972,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // - PRE-final audio (1400ms before the final) ← Contains the decoder gap!
                         // - POST-final audio (800ms after the final) ← Captures complete phrases like "self-centered"
                         const captureWindowMs = 2200;
+                        // ⭐ BUG FIX: Limit POST-final audio to 800ms max to prevent capturing next segment
+                        // Window end should be: forcedFinalTimestamp + 800ms (not current time if more than 800ms passed)
+                        const maxPostFinalMs = 800;
+                        const windowEndTimestamp = Math.min(forcedFinalTimestamp + maxPostFinalMs, Date.now());
+                        const actualPostFinalMs = windowEndTimestamp - forcedFinalTimestamp;
+                        const actualPreFinalMs = captureWindowMs - actualPostFinalMs;
                         console.log(`[HostMode] 🎵 Capturing PRE+POST-final audio: last ${captureWindowMs}ms`);
-                        console.log(`[HostMode] 📊 Window covers: [T-${captureWindowMs - timeSinceForcedFinal}ms to T+${timeSinceForcedFinal}ms]`);
+                        console.log(`[HostMode] 📊 Window covers: [T-${actualPreFinalMs}ms to T+${actualPostFinalMs}ms]`);
                         console.log(`[HostMode] 🎯 This INCLUDES the decoder gap at ~T-200ms where missing words exist!`);
+                        console.log(`[HostMode] 🔒 POST-final limited to ${actualPostFinalMs}ms (max ${maxPostFinalMs}ms) to prevent capturing next segment`);
 
-                        const recoveryAudio = speechStream.getRecentAudio(captureWindowMs);
+                        const recoveryAudio = speechStream.getRecentAudio(captureWindowMs, windowEndTimestamp);
                         console.log(`[HostMode] 🎵 Captured ${recoveryAudio.length} bytes of PRE+POST-final audio`);
                         console.log(`[HostMode] 🎯 DUAL BUFFER SYSTEM: Audio buffer retrieved - ${recoveryAudio.length} bytes available for recovery`);
                         
@@ -3172,11 +3213,45 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode]   Forced final: "${buffer.text.substring(0, 50)}..."`);
                       console.log(`[HostMode]   New FINAL: "${transcriptText.substring(0, 50)}..."`);
                     } else {
-                      console.log('[HostMode] ✅ Forced final recovery in progress, but new FINAL is unrelated segment - processing immediately');
+                      console.log('[HostMode] ✅ Forced final recovery in progress, but new FINAL is unrelated segment - committing forced final first');
                       console.log(`[HostMode]   Forced final: "${buffer.text.substring(0, 50)}..."`);
                       console.log(`[HostMode]   New FINAL (unrelated): "${transcriptText.substring(0, 50)}..."`);
-                      // Don't block - process this FINAL immediately (it's a new segment)
-                      // Continue processing below, skip the recovery wait
+                      // CRITICAL FIX: Even though they're unrelated, we must commit the forced final first
+                      // to prevent it from being lost. Don't wait for recovery - commit from buffer immediately.
+                      console.log('[HostMode] 📝 Committing forced final first (unrelated new FINAL, but forced final must not be lost)');
+                      
+                      // Mark as committed BEFORE clearing buffer
+                      syncForcedFinalBuffer();
+                      if (buffer) {
+                        buffer.committedByRecovery = true; // Mark as committed to prevent timeout from also committing
+                      }
+                      
+                      // Get the previous final text for deduplication from the buffer
+                      // Prefer lastSentOriginalTextBeforeBuffer (full original text) over lastSentFinalTextBeforeBuffer (grammar-corrected shortened version)
+                      const lastSentOriginalTextBeforeBuffer = buffer?.lastSentOriginalTextBeforeBuffer || null;
+                      const lastSentFinalTextBeforeBuffer = buffer?.lastSentFinalTextBeforeBuffer || null;
+                      const lastSentFinalTimeBeforeBuffer = buffer?.lastSentFinalTimeBeforeBuffer || null;
+                      const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+                      
+                      // Commit the forced final with proper deduplication context
+                      const forcedFinalText = buffer.text;
+                      processFinalText(forcedFinalText, { 
+                        forceFinal: true,
+                        previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                        previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+                      });
+                      
+                      // Clear the buffer and timeout
+                      forcedCommitEngine.clearForcedFinalBufferTimeout();
+                      forcedCommitEngine.clearForcedFinalBuffer();
+                      syncForcedFinalBuffer();
+                      
+                      // Reset recovery tracking
+                      recoveryStartTime = 0;
+                      nextFinalAfterRecovery = null;
+                      
+                      // Continue processing the new FINAL below (don't return - let it be processed)
+                      console.log('[HostMode] 📝 Now processing unrelated new FINAL (forced final already committed)');
                     }
                     
                     if (mightBeRelated) {
@@ -3450,6 +3525,37 @@ export async function handleHostConnection(clientWs, sessionId) {
                   }
                 }
                 
+                // CRITICAL FIX: Deduplicate the new FINAL text itself (similar to how partials are deduplicated)
+                // This ensures that if partials were deduplicated (e.g., "gathered" removed from "gathered together"),
+                // the FINAL text is also deduplicated to match
+                // Use lastSentOriginalText for comparison (raw text from Google Speech) to match partial deduplication logic
+                if (lastSentOriginalText && transcriptText && lastSentFinalTime) {
+                  const timeSinceLastFinal = Date.now() - lastSentFinalTime;
+                  if (timeSinceLastFinal < 5000) { // Only deduplicate if within time window
+                    const dedupResult = deduplicateFinalText({
+                      newFinalText: transcriptText,
+                      previousFinalText: lastSentOriginalText,
+                      previousFinalTime: lastSentFinalTime,
+                      mode: 'HostMode',
+                      timeWindowMs: 5000,
+                      maxWordsToCheck: 5
+                    });
+                    
+                    if (dedupResult.wasDeduplicated && dedupResult.wordsSkipped > 0) {
+                      console.log(`[HostMode] ✂️ Deduplicated FINAL text: Removed ${dedupResult.wordsSkipped} duplicate word(s)`);
+                      console.log(`[HostMode]   Before: "${transcriptText.substring(0, 80)}..."`);
+                      console.log(`[HostMode]   After:  "${dedupResult.deduplicatedText.substring(0, 80)}..."`);
+                      transcriptText = dedupResult.deduplicatedText;
+                      
+                      // If all words were duplicates, skip processing this final entirely
+                      if (!transcriptText || transcriptText.trim().length === 0) {
+                        console.log(`[HostMode] ⏭️ Skipping final - all words are duplicates of previous FINAL`);
+                        return;
+                      }
+                    }
+                  }
+                }
+                
                 // CRITICAL: Check if this FINAL is a continuation of the last sent FINAL
                 // This prevents splitting sentences like "Where two or three" / "Are gathered together"
                 let wasContinuationMerged = false;
@@ -3675,11 +3781,25 @@ export async function handleHostConnection(clientWs, sessionId) {
                       WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (finalTextToUse.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
                     }
                   } else {
-                    // Different final - cancel old one and start new
-                    // PHASE 8: Clear using engine
+                    // Different final - commit the pending final FIRST so deduplication can detect relationship
+                    // CRITICAL FIX: Commit pending final before processing new final so deduplication/merge logic can run
+                    // This allows cases like "You just can't." + "People up with Doctrine..." to be detected and merged
+                    console.log(`[HostMode] 🔀 New FINAL arrived that doesn't extend pending final - committing pending final first`);
+                    console.log(`[HostMode]   Pending final: "${pending.text.substring(0, 50)}..."`);
+                    console.log(`[HostMode]   New FINAL: "${finalTextToUse.substring(0, 50)}..."`);
+                    console.log(`[HostMode] ✅ Committing pending FINAL before processing new FINAL (deduplication will detect if they should merge)`);
+                    
+                    // PHASE 8: Clear timeout using engine
                     finalizationEngine.clearPendingFinalizationTimeout();
+                    const textToCommit = pending.text;
+                    // PHASE 8: Clear using engine
                     finalizationEngine.clearPendingFinalization();
                     syncPendingFinalization();
+                    
+                    // Commit the pending final - this will update lastSentFinalText so deduplication can detect relationship
+                    processFinalText(textToCommit);
+                    
+                    // Continue processing the new FINAL below - deduplication will now compare against the just-committed final
                   }
                 }
                 

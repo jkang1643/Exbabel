@@ -1232,14 +1232,15 @@ export class GoogleSpeechStream {
   /**
    * Get recent audio from buffer for recovery operations
    * @param {number} durationMs - Duration in milliseconds to retrieve
+   * @param {number} endTimestamp - Optional end timestamp (defaults to now)
    * @returns {Buffer} Concatenated audio buffer
    */
-  getRecentAudio(durationMs = 600) {
+  getRecentAudio(durationMs = 600, endTimestamp = null) {
     if (!this.audioBufferManager) {
       console.warn('[GoogleSpeech] AudioBufferManager not initialized');
       return Buffer.alloc(0);
     }
-    return Buffer.concat(this.audioBufferManager.getRecentAudio(durationMs));
+    return Buffer.concat(this.audioBufferManager.getRecentAudio(durationMs, endTimestamp));
   }
 
   /**

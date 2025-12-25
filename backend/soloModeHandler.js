@@ -2146,11 +2146,18 @@ export async function handleSoloMode(clientWs) {
                           // - PRE-final audio (1400ms before the final) ← Contains the decoder gap!
                           // - POST-final audio (800ms after the final) ← Captures complete phrases like "self-centered"
                           const captureWindowMs = forcedCommitEngine.CAPTURE_WINDOW_MS;
+                          // ⭐ BUG FIX: Limit POST-final audio to 800ms max to prevent capturing next segment
+                          // Window end should be: forcedFinalTimestamp + 800ms (not current time if more than 800ms passed)
+                          const maxPostFinalMs = 800;
+                          const windowEndTimestamp = Math.min(forcedFinalTimestamp + maxPostFinalMs, Date.now());
+                          const actualPostFinalMs = windowEndTimestamp - forcedFinalTimestamp;
+                          const actualPreFinalMs = captureWindowMs - actualPostFinalMs;
                           console.log(`[SoloMode] 🎵 Capturing PRE+POST-final audio: last ${captureWindowMs}ms`);
-                          console.log(`[SoloMode] 📊 Window covers: [T-${captureWindowMs - timeSinceForcedFinal}ms to T+${timeSinceForcedFinal}ms]`);
+                          console.log(`[SoloMode] 📊 Window covers: [T-${actualPreFinalMs}ms to T+${actualPostFinalMs}ms]`);
                           console.log(`[SoloMode] 🎯 This INCLUDES the decoder gap at ~T-200ms where missing words exist!`);
+                          console.log(`[SoloMode] 🔒 POST-final limited to ${actualPostFinalMs}ms (max ${maxPostFinalMs}ms) to prevent capturing next segment`);
 
-                          const recoveryAudio = speechStream.getRecentAudio(captureWindowMs);
+                          const recoveryAudio = speechStream.getRecentAudio(captureWindowMs, windowEndTimestamp);
                           console.log(`[SoloMode] 🎵 Captured ${recoveryAudio.length} bytes of PRE+POST-final audio`);
                           
                           // CRITICAL: If audio buffer is empty (stream ended), commit forced final immediately

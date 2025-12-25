@@ -220,6 +220,67 @@ runTest('Buffer creation should handle null/undefined lastSentFinalText', () => 
   console.log(`   ✅ Buffer handles null lastSentFinalText correctly`);
 });
 
+// Test 5: Verify that lastSentOriginalText is captured instead of lastSentFinalText (from user's bug report)
+// Scenario: lastSentFinalText="out." but lastSentOriginalText="And I show out."
+// We should capture lastSentOriginalText so the full previous text is available for deduplication
+runTest('Forced final buffer should capture lastSentOriginalText when available (host mode scenario)', () => {
+  const engine = new ForcedCommitEngine();
+  
+  // Scenario from user's bug report (lines 2442-2455):
+  // lastSentFinalText: "out."
+  // lastSentOriginalText: "And I show out."
+  // Forced final: "Can I tell you outside, the taco, stands on Tuesday night. It's one of our large..."
+  // Expected: Buffer should capture "And I show out." (lastSentOriginalText) for proper deduplication
+  
+  const lastSentFinalText = "out.";
+  const lastSentOriginalText = "And I show out.";
+  const forcedFinal = "Can I tell you outside, the taco, stands on Tuesday night. It's one of our large...";
+  const forcedFinalTime = Date.now();
+  const previousFinalTime = Date.now() - 15000;
+  
+  // After the fix: createForcedFinalBuffer should accept lastSentOriginalText parameter
+  // and store it in lastSentOriginalTextBeforeBuffer (preferring it over lastSentFinalText)
+  // For now, we test the expected behavior after the fix
+  
+  // Create buffer with both lastSentFinalText and lastSentOriginalText
+  // The function should prefer lastSentOriginalText when available
+  engine.createForcedFinalBuffer(
+    forcedFinal, 
+    forcedFinalTime, 
+    lastSentFinalText, 
+    previousFinalTime,
+    lastSentOriginalText  // New parameter: prefer this over lastSentFinalText
+  );
+  
+  const buffer = engine.getForcedFinalBuffer();
+  
+  if (!buffer) {
+    throw new Error('Buffer was not created');
+  }
+  
+  // After fix: Buffer should contain lastSentOriginalTextBeforeBuffer with "And I show out."
+  if (!buffer.lastSentOriginalTextBeforeBuffer || buffer.lastSentOriginalTextBeforeBuffer !== lastSentOriginalText) {
+    throw new Error(
+      `Buffer did not capture lastSentOriginalText correctly. ` +
+      `Expected: "${lastSentOriginalText}" ` +
+      `Got: "${buffer.lastSentOriginalTextBeforeBuffer || 'null'}"`
+    );
+  }
+  
+  // When recovery commits, it should use lastSentOriginalTextBeforeBuffer for deduplication
+  // This ensures we compare against the full original text, not the shortened version
+  const textToCompareAgainst = buffer.lastSentOriginalTextBeforeBuffer || buffer.lastSentFinalTextBeforeBuffer;
+  if (textToCompareAgainst !== lastSentOriginalText) {
+    throw new Error(
+      `For deduplication, should prefer lastSentOriginalText ("${lastSentOriginalText}") ` +
+      `but got: "${textToCompareAgainst || 'null'}"`
+    );
+  }
+  
+  console.log(`   ✅ Buffer correctly captured lastSentOriginalText: "${buffer.lastSentOriginalTextBeforeBuffer}"`);
+  console.log(`   ✅ This will be used for deduplication instead of the shortened "${lastSentFinalText}"`);
+});
+
 // Summary
 console.log('\n' + '='.repeat(70));
 console.log('\n📊 Test Summary\n');
