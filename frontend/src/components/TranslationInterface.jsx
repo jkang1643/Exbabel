@@ -335,7 +335,9 @@ function TranslationInterface({ onBackToHome }) {
         console.log('[TranslationInterface] ✅ Translation session ready')
         break
       case 'translation':
-        if (message.isPartial) {
+        // CRITICAL: Only route to partial handler if isPartial is explicitly true
+        // This ensures partials with undefined/missing isPartial don't accidentally go to final handler
+        if (message.isPartial === true) {
           // 🔴 LIVE PARTIAL: Optimized handler with utility functions
           const isTranscriptionMode = message.isTranscriptionOnly === true || (sourceLang === targetLang && !message.hasTranslation);
           const originalText = message.originalText || '';
@@ -347,7 +349,11 @@ function TranslationInterface({ onBackToHome }) {
             // Update original text using utility function
             const textToDisplay = mergeTextWithCorrection(originalText, correctedText);
             if (textToDisplay) {
-              setLivePartialOriginal(textToDisplay);
+              // REAL-TIME STREAMING FIX: Update immediately on every delta for true real-time streaming
+              // Match HostPage behavior - use flushSync for immediate updates
+              flushSync(() => {
+                setLivePartialOriginal(textToDisplay);
+              });
             }
 
             // Update translation text - only if different from original
@@ -383,9 +389,11 @@ function TranslationInterface({ onBackToHome }) {
           }
         } else {
           // 📝 FINAL: Commit immediately to history (restored simple approach)
-          // CRITICAL SAFEGUARD: Double-check that this is NOT a partial (defensive programming)
-          if (message.isPartial === true) {
-            console.warn(`[TranslationInterface] ⚠️ SAFEGUARD: Received message marked as partial in FINAL handler - ignoring to prevent mid-sentence commits. Text: "${(message.translatedText || message.correctedText || message.originalText || '').substring(0, 50)}..."`);
+          // CRITICAL SAFEGUARD: Only commit if isPartial is explicitly false
+          // If isPartial is true, undefined, or missing, treat as partial and skip commit
+          if (message.isPartial !== false) {
+            // isPartial is true, undefined, or missing - treat as partial and don't commit
+            console.warn(`[TranslationInterface] ⚠️ SAFEGUARD: Received message with isPartial=${message.isPartial} in FINAL handler - treating as partial and skipping commit. Text: "${(message.translatedText || message.correctedText || message.originalText || '').substring(0, 50)}..."`);
             return; // Skip committing partials - they should only update live text
           }
           

@@ -333,7 +333,8 @@ export function HostPage({ onBackToHome }) {
           
           case 'translation':
             // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
-            if (message.isPartial) {
+            // CRITICAL: Only route to partial handler if isPartial is explicitly true
+            if (message.isPartial === true) {
               // CRITICAL: Merge grammar corrections with existing partial text
               // This ensures grammar corrections are applied live to the transcription
               const originalText = message.originalText || '';
@@ -359,8 +360,20 @@ export function HostPage({ onBackToHome }) {
               flushSync(() => {
                 setCurrentTranscript(liveText);
               });
+
+              // CRITICAL: Partials should NOT be stored in history
+              // Only finals should be committed to history to prevent cluttering and duplicates
+              // Partials are only for live display and will be replaced by finals when they arrive
             } else {
               // Final transcript - use processFinal like solo mode (handles deduplication automatically)
+              // CRITICAL SAFEGUARD: Only commit if isPartial is explicitly false
+              // If isPartial is true, undefined, or missing, treat as partial and skip commit
+              if (message.isPartial !== false) {
+                // isPartial is true, undefined, or missing - treat as partial and don't commit
+                console.warn(`[HostPage] ⚠️ SAFEGUARD: Received message with isPartial=${message.isPartial} in FINAL handler - treating as partial and skipping commit. Text: "${(message.translatedText || message.correctedText || message.originalText || '').substring(0, 50)}..."`);
+                return; // Skip committing partials - they should only update live text
+              }
+              
               // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
               // This ensures grammar corrections and recovered text are applied to finals
               const finalText = message.correctedText || message.translatedText || message.originalText;
@@ -486,10 +499,11 @@ export function HostPage({ onBackToHome }) {
                     setTranscript(prev => {
                       // CRITICAL: Remove auto-segmented items that are contained in this final
                       // This prevents duplicates when the final extends an auto-segmented partial
-                      const finalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                      // Use more comprehensive normalization including quotes and apostrophes for forced finals
+                      const finalNormalized = fullFinalText.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
                       const filteredPrev = prev.filter(entry => {
                         if (entry.isSegmented) {
-                          const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:]/g, ' ').replace(/\s+/g, ' ').trim();
+                          const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
                           // If final contains this auto-segmented entry, remove it
                           if (finalNormalized.includes(entryNormalized) && entryNormalized.length > 10) {
                             console.log(`[HostPage] 🗑️ Removing auto-segmented item contained in final: "${entry.text.substring(0, 50)}..."`);
@@ -502,17 +516,32 @@ export function HostPage({ onBackToHome }) {
                       // CRITICAL: Check if this exact text already exists in history (prevent duplicates)
                       // Also check if this is a newer version of an existing entry (replace older with newer)
                       // This catches cases where forced finals with different seqIds have similar text
-                      // Use more comprehensive normalization including quotes and apostrophes for forced finals
                       const joinedNormalized = joinedText.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
                       
                       // First pass: Find and remove older versions of similar text
                       let updatedPrev = filteredPrev.filter(entry => {
+                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                        
+                        // Remove entries with the same seqId (including partials that are being replaced by final)
                         if (entry.seqId === finalSeqId) {
-                          console.log(`[HostPage] 🗑️ Removing duplicate entry with same seqId: ${finalSeqId}`);
-                          return false; // Remove exact duplicate
+                          if (entry.isPartial) {
+                            console.log(`[HostPage] 🗑️ Removing partial entry replaced by final (seqId: ${finalSeqId}): "${entry.text.substring(0, 50)}..."`);
+                          } else {
+                            console.log(`[HostPage] 🗑️ Removing duplicate entry with same seqId: ${finalSeqId}`);
+                          }
+                          return false; // Remove exact duplicate or partial being replaced
                         }
                         
-                        const entryNormalized = entry.text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                        // Also remove partials that are likely replaced by this final (if final extends the partial)
+                        if (entry.isPartial && entry.seqId !== undefined && entry.seqId !== null) {
+                          // If final extends the partial (starts with it or contains it), remove the partial
+                          if (finalNormalized.length > entryNormalized.length && 
+                              (finalNormalized.startsWith(entryNormalized) || finalNormalized.includes(entryNormalized)) &&
+                              entryNormalized.length > 10) {
+                            console.log(`[HostPage] 🗑️ Removing partial replaced by extending final (seqId: ${entry.seqId} → ${finalSeqId}): "${entry.text.substring(0, 50)}..."`);
+                            return false; // Remove partial that's being replaced
+                          }
+                        }
                         
                         // For forced finals, use more lenient matching since they may have punctuation variations
                         if (isForcedFinal) {

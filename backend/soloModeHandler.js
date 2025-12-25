@@ -2378,12 +2378,50 @@ export async function handleSoloMode(clientWs) {
                       console.error(`[SoloMode] ❌ Stack:`, error.stack);
                     }
                     
-                    // Cancel pending finalization timers (if any) since we're handling it now
-                    // PHASE 5: Clear using engine
-                    if (finalizationEngine.hasPendingFinalization()) {
-                      finalizationEngine.clearPendingFinalization();
-                    }
+                    // CRITICAL FIX: Commit any pending finalization first before handling forced final
+                    // This ensures no partials are lost when stream restarts
                     syncPendingFinalization();
+                    if (pendingFinalization) {
+                      // Before committing, check for longest partial to ensure best accuracy
+                      syncPartialVariables();
+                      let textToCommit = pendingFinalization.text;
+                      const pendingTrimmed = pendingFinalization.text.trim();
+                      
+                      // Always check longest partial before committing - this ensures best accuracy
+                      if (longestPartialText && longestPartialText.length > pendingFinalization.text.length) {
+                        const longestTrimmed = longestPartialText.trim();
+                        const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                        
+                        // Check if longest partial extends the pending text
+                        const pendingNormalized = pendingTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const extendsPending = longestNormalized.startsWith(pendingNormalized) || 
+                                              (pendingTrimmed.length > 10 && longestNormalized.substring(0, pendingNormalized.length) === pendingNormalized) ||
+                                              longestTrimmed.startsWith(pendingTrimmed) ||
+                                              (pendingTrimmed.length > 10 && longestTrimmed.substring(0, pendingTrimmed.length) === pendingTrimmed);
+                        
+                        if (extendsPending && timeSinceLongest < 10000) {
+                          // Use longest partial for best accuracy
+                          const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
+                          console.log(`[SoloMode] ⚠️ Using LONGEST partial before committing pending (forced final): "${missingWords}"`);
+                          textToCommit = longestPartialText;
+                        } else {
+                          // Check for overlap merge
+                          const merged = mergeWithOverlap(pendingTrimmed, longestTrimmed);
+                          if (merged && merged.length > pendingTrimmed.length + 3 && timeSinceLongest < 10000) {
+                            console.log(`[SoloMode] ⚠️ Merging LONGEST partial with pending via overlap (forced final): ${pendingFinalization.text.length} → ${merged.length} chars`);
+                            textToCommit = merged;
+                          }
+                        }
+                      }
+                      
+                      console.log(`[SoloMode] 🔀 Forced final arrived - committing pending finalization first: "${textToCommit.substring(0, 50)}..."`);
+                      console.log(`[SoloMode] ✅ Ensuring best accuracy by checking longest partial before committing`);
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      processFinalText(textToCommit);
+                    }
                     
                     return;
                   }
@@ -2821,24 +2859,51 @@ export async function handleSoloMode(clientWs) {
                         WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (finalTextToUse.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
                       }
                     } else {
-                      // Different final - commit pending one first if it's been waiting, then start new
-                      // CRITICAL FIX: Don't lose pending finalizations for new segment partials
+                      // Different final - ALWAYS commit pending one first to ensure no partials are lost
+                      // CRITICAL FIX: Never cancel pending finalizations - always commit them first
+                      // This ensures we get the best accuracy possible by checking longest partial before committing
                       const timeSincePending = Date.now() - pendingFinalization.timestamp;
-                      if (timeSincePending > 500) {
-                        // Pending has been waiting - commit it first (it's a different segment)
-                        console.log(`[SoloMode] 🔀 New final doesn't extend pending - committing pending first: "${pendingText.substring(0, 50)}..."`);
-                        finalizationEngine.clearPendingFinalizationTimeout();
-                        const textToCommit = pendingFinalization.text;
-                        finalizationEngine.clearPendingFinalization();
-                        syncPendingFinalization();
-                        processFinalText(textToCommit);
-                      } else {
-                        // Pending just created - cancel it and start new
-                        console.log(`[SoloMode] 🔀 New final arrived soon after pending - canceling pending and starting new`);
-                        // PHASE 5: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
-                        syncPendingFinalization();
+                      
+                      // Before committing, check for longest partial to ensure best accuracy
+                      syncPartialVariables();
+                      let textToCommit = pendingFinalization.text;
+                      const pendingTrimmed = pendingText.trim();
+                      
+                      // Always check longest partial before committing - this ensures best accuracy
+                      if (longestPartialText && longestPartialText.length > pendingFinalization.text.length) {
+                        const longestTrimmed = longestPartialText.trim();
+                        const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                        
+                        // Check if longest partial extends the pending text
+                        const pendingNormalized = pendingTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                        const extendsPending = longestNormalized.startsWith(pendingNormalized) || 
+                                              (pendingTrimmed.length > 10 && longestNormalized.substring(0, pendingNormalized.length) === pendingNormalized) ||
+                                              longestTrimmed.startsWith(pendingTrimmed) ||
+                                              (pendingTrimmed.length > 10 && longestTrimmed.substring(0, pendingTrimmed.length) === pendingTrimmed);
+                        
+                        if (extendsPending && timeSinceLongest < 10000) {
+                          // Use longest partial for best accuracy
+                          const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
+                          console.log(`[SoloMode] ⚠️ Using LONGEST partial before committing pending (${pendingFinalization.text.length} → ${longestPartialText.length} chars): "${missingWords}"`);
+                          textToCommit = longestPartialText;
+                        } else {
+                          // Check for overlap merge
+                          const merged = mergeWithOverlap(pendingTrimmed, longestTrimmed);
+                          if (merged && merged.length > pendingTrimmed.length + 3 && timeSinceLongest < 10000) {
+                            console.log(`[SoloMode] ⚠️ Merging LONGEST partial with pending via overlap (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                            textToCommit = merged;
+                          }
+                        }
                       }
+                      
+                      // ALWAYS commit pending first - never cancel it
+                      console.log(`[SoloMode] 🔀 New final doesn't extend pending - ALWAYS committing pending first (waited ${timeSincePending}ms): "${textToCommit.substring(0, 50)}..."`);
+                      console.log(`[SoloMode] ✅ Ensuring best accuracy by checking longest partial before committing`);
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      processFinalText(textToCommit);
                     }
                   }
                   

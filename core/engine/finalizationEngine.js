@@ -57,6 +57,7 @@ export class FinalizationEngine {
     this.pendingFinalization = {
       seqId,
       text,
+      initialTextLength: text ? text.length : 0, // Track initial length to detect if partials have extended it
       timestamp: Date.now(),
       maxWaitTimestamp: Date.now(), // Track when FINAL was first received
       timeout: null,

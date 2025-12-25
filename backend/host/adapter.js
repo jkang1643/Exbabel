@@ -645,7 +645,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                     }
                     
                     // CRITICAL: Remove duplicate words from new final that overlap with previous final
-                    // This handles cases where Google Speech sends overlapping finals
+                    // NOTE: Deduplication ONLY runs for forced finals, not regular finals
+                    // Regular finals from Google Speech should be sent as-is without deduplication
                     // Example: "...our own selves." followed by "Own self-centered desires..." 
                     // Should become "self-centered desires..." (removing "Own")
                     // IMPORTANT: Use lastSentOriginalText for comparison (raw text from Google Speech)
@@ -653,8 +654,6 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // CRITICAL FIX: For forced finals, NEVER use the forced final buffer for deduplication
                     // The forced final buffer contains the SAME text being committed, so it would incorrectly
                     // identify it as a duplicate. Only use lastSentFinalText/lastSentOriginalText for forced finals.
-                    // For regular finals, we can check the forced final buffer if lastSentFinalText is not available
-                    // (handles cases where recovery just committed a final but async processing hasn't finished)
                     let finalTextToProcess = trimmedText;
                     
                     console.log(`[HostMode] 🔍 DEDUPLICATION START - Analyzing text for deduplication:`);
@@ -663,24 +662,39 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode]   Current lastSentFinalText: "${lastSentFinalText ? lastSentFinalText.substring(Math.max(0, lastSentFinalText.length - 60)) : '(empty)'}"`);
                     console.log(`[HostMode]   Current lastSentOriginalText: "${lastSentOriginalText ? lastSentOriginalText.substring(Math.max(0, lastSentOriginalText.length - 60)) : '(empty)'}"`);
                     console.log(`[HostMode]   Options.previousFinalTextForDeduplication: "${options.previousFinalTextForDeduplication ? options.previousFinalTextForDeduplication.substring(Math.max(0, options.previousFinalTextForDeduplication.length - 60)) : '(not provided)'}"`);
+                    console.log(`[HostMode]   Options.skipDeduplication: ${options.skipDeduplication ? 'true' : 'false'}`);
                     
-                    // CRITICAL FIX: For recovery commits, use the previous final text that was passed in options
-                    // This ensures recovery commits use the correct previous final (from before the forced final was buffered)
-                    // instead of the current lastSentFinalText which might be from a different segment
-                    let textToCompareAgainst = null;
-                    let timeToCompareAgainst = null;
-                    let deduplicationSource = 'unknown';
-                    
-                    if (options.previousFinalTextForDeduplication) {
-                      // Recovery is committing - use the captured previous final text
-                      textToCompareAgainst = options.previousFinalTextForDeduplication;
-                      timeToCompareAgainst = options.previousFinalTimeForDeduplication || Date.now();
-                      deduplicationSource = 'recovery_passed_previous_final';
-                      console.log(`[HostMode] ✅ Recovery commit detected - using passed previous final for deduplication`);
-                      console.log(`[HostMode]   Source: ${deduplicationSource}`);
-                      console.log(`[HostMode]   Previous final (from recovery): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
-                      console.log(`[HostMode]   Previous final time: ${timeToCompareAgainst} (${Date.now() - timeToCompareAgainst}ms ago)`);
+                    // CRITICAL FIX: Skip deduplication if this final is being committed because a new segment was detected
+                    // When we commit a pending final because a new segment arrived, we've already determined it's a new segment
+                    // and shouldn't be deduplicated against the previous final
+                    if (options.skipDeduplication) {
+                      console.log(`[HostMode] ⏭️ Skipping deduplication - this final is a new segment (detected before commit)`);
+                      // Keep original text as-is when skipping deduplication
+                      finalTextToProcess = trimmedText;
+                    } else if (!isForcedFinal) {
+                      // CRITICAL FIX: Only run deduplication for forced finals, not regular finals
+                      // Regular finals from Google Speech should be sent as-is without deduplication
+                      console.log(`[HostMode] ⏭️ Skipping deduplication - only applies to forced finals (isForcedFinal: ${isForcedFinal})`);
+                      // Keep original text as-is when skipping deduplication
+                      finalTextToProcess = trimmedText;
                     } else {
+                      // CRITICAL FIX: For recovery commits, use the previous final text that was passed in options
+                      // This ensures recovery commits use the correct previous final (from before the forced final was buffered)
+                      // instead of the current lastSentFinalText which might be from a different segment
+                      let textToCompareAgainst = null;
+                      let timeToCompareAgainst = null;
+                      let deduplicationSource = 'unknown';
+                      
+                      if (options.previousFinalTextForDeduplication) {
+                        // Recovery is committing - use the captured previous final text
+                        textToCompareAgainst = options.previousFinalTextForDeduplication;
+                        timeToCompareAgainst = options.previousFinalTimeForDeduplication || Date.now();
+                        deduplicationSource = 'recovery_passed_previous_final';
+                        console.log(`[HostMode] ✅ Recovery commit detected - using passed previous final for deduplication`);
+                        console.log(`[HostMode]   Source: ${deduplicationSource}`);
+                        console.log(`[HostMode]   Previous final (from recovery): "${textToCompareAgainst.substring(Math.max(0, textToCompareAgainst.length - 80))}"`);
+                        console.log(`[HostMode]   Previous final time: ${timeToCompareAgainst} (${Date.now() - timeToCompareAgainst}ms ago)`);
+                      } else {
                       // Normal flow - use lastSentOriginalText or lastSentFinalText
                       textToCompareAgainst = lastSentOriginalText || lastSentFinalText; // Prefer original, fallback to corrected
                       timeToCompareAgainst = lastSentFinalTime;
@@ -788,6 +802,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log(`[HostMode] ℹ️ No previous final time to compare against`);
                       }
                     }
+                    } // End of else block for skipDeduplication check
                     
                     // Use deduplicated text for all subsequent processing
                     // Keep original textToProcess for tracking purposes (to detect duplicates)
@@ -1771,7 +1786,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // CRITICAL FIX: Reset translation state to ensure next partial is treated as first
                       lastPartialTranslation = '';
                       lastPartialTranslationTime = 0;
-                      processFinalText(textToCommit);
+                      // CRITICAL FIX: Skip deduplication when committing pending final because new segment was detected
+                      // We've already determined this is a new segment, so it shouldn't be deduplicated against previous final
+                      processFinalText(textToCommit, { skipDeduplication: true });
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
                     }
                     
@@ -1964,7 +1981,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // This prevents translation throttling from dropping short partials
                         lastPartialTranslation = '';
                         lastPartialTranslationTime = 0;
-                        processFinalText(textToCommit);
+                        // CRITICAL FIX: Skip deduplication when committing pending final because new segment was detected
+                        // We've already determined this is a new segment, so it shouldn't be deduplicated against previous final
+                        processFinalText(textToCommit, { skipDeduplication: true });
                         // Continue processing the new partial as a new segment (don't return - let it be processed below)
                       } else if (isFalseFinal && clearlyNewSegment) {
                         // False final with new segment detected, but not enough time has passed
@@ -3645,36 +3664,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                   }
                 }
                 
-                // CRITICAL FIX: Deduplicate the new FINAL text itself (similar to how partials are deduplicated)
-                // This ensures that if partials were deduplicated (e.g., "gathered" removed from "gathered together"),
-                // the FINAL text is also deduplicated to match
-                // Use lastSentOriginalText for comparison (raw text from Google Speech) to match partial deduplication logic
-                if (lastSentOriginalText && transcriptText && lastSentFinalTime) {
-                  const timeSinceLastFinal = Date.now() - lastSentFinalTime;
-                  if (timeSinceLastFinal < 5000) { // Only deduplicate if within time window
-                    const dedupResult = deduplicateFinalText({
-                      newFinalText: transcriptText,
-                      previousFinalText: lastSentOriginalText,
-                      previousFinalTime: lastSentFinalTime,
-                      mode: 'HostMode',
-                      timeWindowMs: 5000,
-                      maxWordsToCheck: 5
-                    });
-                    
-                    if (dedupResult.wasDeduplicated && dedupResult.wordsSkipped > 0) {
-                      console.log(`[HostMode] ✂️ Deduplicated FINAL text: Removed ${dedupResult.wordsSkipped} duplicate word(s)`);
-                      console.log(`[HostMode]   Before: "${transcriptText.substring(0, 80)}..."`);
-                      console.log(`[HostMode]   After:  "${dedupResult.deduplicatedText.substring(0, 80)}..."`);
-                      transcriptText = dedupResult.deduplicatedText;
-                      
-                      // If all words were duplicates, skip processing this final entirely
-                      if (!transcriptText || transcriptText.trim().length === 0) {
-                        console.log(`[HostMode] ⏭️ Skipping final - all words are duplicates of previous FINAL`);
-                        return;
-                      }
-                    }
-                  }
-                }
+                // NOTE: Deduplication removed - only applies to forced finals, not regular finals from Google Speech
+                // Regular finals should be sent as-is without deduplication
                 
                 // CRITICAL: Check if this FINAL is a continuation of the last sent FINAL
                 // This prevents splitting sentences like "Where two or three" / "Are gathered together"

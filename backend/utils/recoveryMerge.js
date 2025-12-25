@@ -633,7 +633,86 @@ function mergeRecoveryText(bufferedText, recoveredText, options = {}) {
           : '';
         
         if (recoveredTextToAppend) {
-          const mergedText = bufferedNormalized + ' ' + recoveredTextToAppend;
+          let mergedText = bufferedNormalized + ' ' + recoveredTextToAppend;
+          
+          // CRITICAL FIX: Check for duplicate phrases in merged text
+          // This prevents cases where buffered text already contains the phrase we're appending
+          const recoveredWordsClean = recoveredWordsToAppend.map(w => 
+            w.toLowerCase().replace(/[.,!?;:\-'"()]/g, '')
+          );
+          
+          // Check if recovered words already appear at the end of buffered text
+          if (recoveredWordsClean.length > 0 && bufferedWords.length >= recoveredWordsClean.length) {
+            const bufferedEndWords = bufferedWords.slice(-recoveredWordsClean.length).map(w => 
+              w.toLowerCase().replace(/[.,!?;:\-'"()]/g, '')
+            );
+            
+            // Check if buffered end matches recovered start (duplicate phrase)
+            let duplicateCount = 0;
+            for (let i = 0; i < Math.min(bufferedEndWords.length, recoveredWordsClean.length); i++) {
+              if (bufferedEndWords[i] === recoveredWordsClean[i]) {
+                duplicateCount++;
+              } else {
+                break;
+              }
+            }
+            
+            // If we found duplicate words at the end, remove them from the merged text
+            if (duplicateCount > 0 && duplicateCount === recoveredWordsClean.length) {
+              // All recovered words are duplicates - don't append anything
+              console.log(`[${mode}] ⚠️ All recovered words already in buffered text - skipping append to prevent duplication`);
+              mergedText = bufferedNormalized;
+            } else if (duplicateCount > 0) {
+              // Some recovered words are duplicates - only append the non-duplicate part
+              const uniqueRecovered = recoveredWordsToAppend.slice(duplicateCount);
+              mergedText = bufferedNormalized + ' ' + uniqueRecovered.join(' ');
+              console.log(`[${mode}] ✂️ Removed ${duplicateCount} duplicate word(s) from recovery to prevent duplication`);
+              console.log(`[${mode}]   Original recovery: "${recoveredWordsToAppend.join(' ')}"`);
+              console.log(`[${mode}]   Unique recovery: "${uniqueRecovered.join(' ')}"`);
+            }
+          }
+          
+          // ADDITIONAL FIX: Check for duplicate phrases anywhere in the merged text
+          // This catches cases where the buffered text itself might have duplication
+          const mergedWordsArray = mergedText.split(/\s+/);
+          if (mergedWordsArray.length > 3) {
+            // Look for repeated phrases (3+ words) in the merged text
+            for (let phraseLen = Math.min(5, Math.floor(mergedWordsArray.length / 2)); phraseLen >= 3; phraseLen--) {
+              // Check if the last phraseLen words appear earlier in the text
+              const lastPhrase = mergedWordsArray.slice(-phraseLen).map(w => 
+                w.toLowerCase().replace(/[.,!?;:\-'"()]/g, '')
+              );
+              
+              // Check all possible positions where this phrase might appear earlier
+              for (let i = 0; i <= mergedWordsArray.length - phraseLen * 2; i++) {
+                const earlierPhrase = mergedWordsArray.slice(i, i + phraseLen).map(w => 
+                  w.toLowerCase().replace(/[.,!?;:\-'"()]/g, '')
+                );
+                
+                // Check if phrases match
+                let matches = true;
+                for (let j = 0; j < phraseLen; j++) {
+                  if (earlierPhrase[j] !== lastPhrase[j]) {
+                    matches = false;
+                    break;
+                  }
+                }
+                
+                if (matches) {
+                  // Found duplicate phrase - remove the duplicate at the end
+                  const wordsToKeep = mergedWordsArray.slice(0, mergedWordsArray.length - phraseLen);
+                  mergedText = wordsToKeep.join(' ');
+                  console.log(`[${mode}] ✂️ Removed duplicate phrase (${phraseLen} words) from end of merged text (full append case)`);
+                  console.log(`[${mode}]   Duplicate phrase: "${mergedWordsArray.slice(-phraseLen).join(' ')}"`);
+                  break; // Only remove one duplicate phrase at a time
+                }
+              }
+              if (mergedText !== (bufferedNormalized + ' ' + recoveredTextToAppend)) {
+                break; // Already fixed, don't check shorter phrases
+              }
+            }
+          }
+          
           return {
             merged: true,
             mergedText: mergedText.trim(),
@@ -668,7 +747,87 @@ function mergeRecoveryText(bufferedText, recoveredText, options = {}) {
   
   // Step 6: Merge
   if (tail.length > 0) {
-    const mergedText = bufferedNormalized + ' ' + tail.join(' ');
+    let mergedText = bufferedNormalized + ' ' + tail.join(' ');
+    
+    // CRITICAL FIX: Check for duplicate phrases in merged text
+    // This prevents cases where buffered text already contains the phrase we're appending
+    // Example: buffered="friendly than them", tail="friendly than them out" -> should be "friendly than them out" not "friendly than them friendly than them out"
+    const tailWords = tail.map(w => w.toLowerCase().replace(/[.,!?;:\-'"()]/g, ''));
+    
+    // Check if tail words already appear at the end of buffered text
+    if (tailWords.length > 0 && bufferedWords.length >= tailWords.length) {
+      const bufferedEndWords = bufferedWords.slice(-tailWords.length).map(w => 
+        w.toLowerCase().replace(/[.,!?;:\-'"()]/g, '')
+      );
+      
+      // Check if buffered end matches tail start (duplicate phrase)
+      let duplicateCount = 0;
+      for (let i = 0; i < Math.min(bufferedEndWords.length, tailWords.length); i++) {
+        if (bufferedEndWords[i] === tailWords[i]) {
+          duplicateCount++;
+        } else {
+          break;
+        }
+      }
+      
+      // If we found duplicate words at the end, remove them from the merged text
+      if (duplicateCount > 0 && duplicateCount === tailWords.length) {
+        // All tail words are duplicates - don't append anything
+        console.log(`[${mode}] ⚠️ All tail words already in buffered text - skipping append to prevent duplication`);
+        mergedText = bufferedNormalized;
+      } else if (duplicateCount > 0) {
+        // Some tail words are duplicates - only append the non-duplicate part
+        const uniqueTail = tail.slice(duplicateCount);
+        mergedText = bufferedNormalized + ' ' + uniqueTail.join(' ');
+        console.log(`[${mode}] ✂️ Removed ${duplicateCount} duplicate word(s) from tail to prevent duplication`);
+        console.log(`[${mode}]   Original tail: "${tail.join(' ')}"`);
+        console.log(`[${mode}]   Unique tail: "${uniqueTail.join(' ')}"`);
+      }
+    }
+    
+    // ADDITIONAL FIX: Check for duplicate phrases anywhere in the merged text
+    // This catches cases where the buffered text itself might have duplication
+    // Example: "friendly than them. friendly than them out" -> should be "friendly than them out"
+    const mergedWordsArray = mergedText.split(/\s+/);
+    if (mergedWordsArray.length > 3) {
+      // Look for repeated phrases (3+ words) in the merged text
+      for (let phraseLen = Math.min(5, Math.floor(mergedWordsArray.length / 2)); phraseLen >= 3; phraseLen--) {
+        // Check if the last phraseLen words appear earlier in the text
+        const lastPhrase = mergedWordsArray.slice(-phraseLen).map(w => 
+          w.toLowerCase().replace(/[.,!?;:\-'"()]/g, '')
+        );
+        
+        // Check all possible positions where this phrase might appear earlier
+        for (let i = 0; i <= mergedWordsArray.length - phraseLen * 2; i++) {
+          const earlierPhrase = mergedWordsArray.slice(i, i + phraseLen).map(w => 
+            w.toLowerCase().replace(/[.,!?;:\-'"()]/g, '')
+          );
+          
+          // Check if phrases match
+          let matches = true;
+          for (let j = 0; j < phraseLen; j++) {
+            if (earlierPhrase[j] !== lastPhrase[j]) {
+              matches = false;
+              break;
+            }
+          }
+          
+          if (matches) {
+            // Found duplicate phrase - remove the duplicate at the end
+            const wordsToKeep = mergedWordsArray.slice(0, mergedWordsArray.length - phraseLen);
+            mergedText = wordsToKeep.join(' ');
+            console.log(`[${mode}] ✂️ Removed duplicate phrase (${phraseLen} words) from end of merged text`);
+            console.log(`[${mode}]   Duplicate phrase: "${mergedWordsArray.slice(-phraseLen).join(' ')}"`);
+            console.log(`[${mode}]   Before: "${mergedText.substring(Math.max(0, mergedText.length - 80))}"`);
+            break; // Only remove one duplicate phrase at a time
+          }
+        }
+        if (mergedText !== (bufferedNormalized + ' ' + tail.join(' '))) {
+          break; // Already fixed, don't check shorter phrases
+        }
+      }
+    }
+    
     console.log(`[${mode}] 🎯 Merge successful (${matchInfo.type} match)`);
     console.log(`[${mode}]   New words to append: "${tail.join(' ')}"`);
     console.log(`[${mode}]   Before: "${bufferedNormalized.substring(Math.max(0, bufferedNormalized.length - 60))}"`);
