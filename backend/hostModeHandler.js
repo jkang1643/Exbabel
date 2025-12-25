@@ -490,6 +490,86 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Flag to prevent concurrent final processing
               let isProcessingFinal = false;
               
+              // CRITICAL: Track small partials to ensure they ALWAYS get committed to finals
+              // This ensures no partial is ever lost, regardless of state
+              let pendingPartialCommit = null; // { text: string, timestamp: number, timeout: NodeJS.Timeout }
+              const SMALL_PARTIAL_COMMIT_TIMEOUT_MS = 3000; // Commit small partials after 3 seconds if no final arrives
+              const clearPendingPartialCommit = () => {
+                if (pendingPartialCommit && pendingPartialCommit.timeout) {
+                  clearTimeout(pendingPartialCommit.timeout);
+                  pendingPartialCommit = null;
+                }
+              };
+              const schedulePartialCommit = (partialText) => {
+                // If there's an existing pending commit, check if the new partial extends it
+                if (pendingPartialCommit) {
+                  const existingText = pendingPartialCommit.text.trim().toLowerCase();
+                  const newText = partialText.trim().toLowerCase();
+                  
+                  // If new partial extends the existing one, update the commit to use the extended text
+                  if (newText.length > existingText.length && 
+                      (newText.startsWith(existingText) || existingText.length === 0)) {
+                    // Clear existing timeout and update with extended text
+                    clearPendingPartialCommit();
+                    console.log(`[HostMode] 🔄 Updating pending partial commit (${existingText.length} → ${newText.length} chars)`);
+                  } else if (newText === existingText || newText.length <= existingText.length) {
+                    // Same or shorter text - don't reschedule, keep existing commit
+                    return;
+                  }
+                }
+                
+                // Schedule commit for this partial (or extended version)
+                const timeout = setTimeout(() => {
+                  if (pendingPartialCommit && pendingPartialCommit.text === partialText) {
+                    // CRITICAL: Check if connection is still open before committing
+                    if (!clientWs || clientWs.readyState !== WebSocket.OPEN) {
+                      console.log(`[HostMode] ⏰ Partial commit timeout but connection closed - skipping commit`);
+                      pendingPartialCommit = null;
+                      return;
+                    }
+                    
+                    // CRITICAL: Before committing, check if there's a longer partial available
+                    syncPartialVariables();
+                    let textToCommit = partialText;
+                    
+                    // Use longest partial if it's longer and recent
+                    if (longestPartialText && longestPartialText.length > partialText.length) {
+                      const longestTrimmed = longestPartialText.trim().toLowerCase();
+                      const partialTrimmed = partialText.trim().toLowerCase();
+                      // Verify longest extends the partial (not from a different segment)
+                      if (longestTrimmed.startsWith(partialTrimmed) || 
+                          (partialTrimmed.length > 5 && longestTrimmed.substring(0, partialTrimmed.length) === partialTrimmed)) {
+                        console.log(`[HostMode] ⏰ Using LONGEST partial for commit (${partialText.length} → ${longestPartialText.length} chars)`);
+                        textToCommit = longestPartialText;
+                      }
+                    }
+                    
+                    // Also check latest partial if it's longer
+                    if (latestPartialText && latestPartialText.length > textToCommit.length) {
+                      const latestTrimmed = latestPartialText.trim().toLowerCase();
+                      const commitTrimmed = textToCommit.trim().toLowerCase();
+                      // Verify latest extends the commit text
+                      if (latestTrimmed.startsWith(commitTrimmed) || 
+                          (commitTrimmed.length > 5 && latestTrimmed.substring(0, commitTrimmed.length) === commitTrimmed)) {
+                        console.log(`[HostMode] ⏰ Using LATEST partial for commit (${textToCommit.length} → ${latestPartialText.length} chars)`);
+                        textToCommit = latestPartialText;
+                      }
+                    }
+                    
+                    console.log(`[HostMode] ⏰ Small partial commit timeout - committing partial to final: "${textToCommit.substring(0, 60)}..."`);
+                    // Commit this partial as a final
+                    processFinalText(textToCommit, { forceFinal: true, fromPartialCommit: true });
+                    pendingPartialCommit = null;
+                  }
+                }, SMALL_PARTIAL_COMMIT_TIMEOUT_MS);
+                
+                pendingPartialCommit = {
+                  text: partialText,
+                  timestamp: Date.now(),
+                  timeout: timeout
+                };
+              };
+              
               // Helper function to check for partials that extend a just-sent FINAL
               // This should ALWAYS be called after a FINAL is sent to catch any partials that arrived
               // CRITICAL: This ensures no partials are missed when they arrive after a FINAL is sent
@@ -683,6 +763,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                     if (isProcessingFinal) {
                       console.log(`[HostMode] ⚠️ Final already being processed, skipping: "${textToProcess.substring(0, 60)}..."`);
                       return; // Skip if already processing a final
+                    }
+                    
+                    // CRITICAL: Clear pending partial commit when processing a final
+                    // (unless this final IS the partial commit itself)
+                    if (!options.fromPartialCommit) {
+                      clearPendingPartialCommit();
                     }
                     
                     // Set flag to prevent concurrent processing
@@ -1210,6 +1296,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                     hasTranslation: false, // Flag that translation is pending
                     hasCorrection: false // Flag that correction is pending
                   }, true);
+                  
+                  // CRITICAL: Schedule commit for ALL partials (regardless of length or state)
+                  // This ensures small partials ALWAYS get committed to finals, even if no final arrives
+                  // The timeout will be cleared if a final arrives or the partial gets extended
+                  // Use longest partial if available and it extends the current partial
+                  syncPartialVariables();
+                  let partialToCommit = transcriptText;
+                  if (longestPartialText && longestPartialText.length > transcriptText.length) {
+                    const longestTrimmed = longestPartialText.trim().toLowerCase();
+                    const currentTrimmed = transcriptText.trim().toLowerCase();
+                    // Verify longest extends current (not from a different segment)
+                    if (longestTrimmed.startsWith(currentTrimmed) || 
+                        (currentTrimmed.length > 5 && longestTrimmed.substring(0, currentTrimmed.length) === currentTrimmed)) {
+                      partialToCommit = longestPartialText;
+                    }
+                  }
+                  schedulePartialCommit(partialToCommit);
                   
                   // CRITICAL: Host mode doesn't use finalization logic
                   // Google Speech handles finalization - we just process finals immediately
@@ -2016,6 +2119,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // Final transcript - delay processing to allow partials to extend it (solo mode logic)
                 const isForcedFinal = meta?.forced === true;
                 console.log(`[HostMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
+                
+                // CRITICAL: Clear pending partial commit since a final has arrived
+                // The final will be committed instead, so we don't need to commit the partial separately
+                clearPendingPartialCommit();
                 
                 if (isForcedFinal) {
                   console.warn(`[HostMode] ⚠️ Forced FINAL due to stream restart (${transcriptText.length} chars)`);
