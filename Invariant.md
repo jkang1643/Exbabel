@@ -70,8 +70,18 @@ But more importantly:
 
 expect(final.source).toBe(CandidateSource.Recovery)
 
+7. Invariant Seven
+
+If FinalityGate transitions a segment to finalized=true, then the same call must synchronously enqueue/emit the FINAL to your outbound stream (host/frontend), using the same segmentId.
+
+No “finalized” state updates that happen without the emit. No emits that happen without the gate transition.
+
 
 If Grammar ever wins over Recovery → test fails.
+
+8. So the next invariant to enforce is:
+
+If recovery is pending for segment S, nothing may finalize S until recovery resolves.
 
 🔒 Invariant 1 — Partial text is never finalizable
 

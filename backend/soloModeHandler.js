@@ -17,9 +17,6 @@ import { grammarWorker } from './grammarWorker.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
 import { CandidateSource } from '../core/engine/finalityGate.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
-import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';
-import { PartialTranslationStateManager } from './partialTranslationStateManager.js';
-import { TranslationErrorHandler } from './translationErrorHandler.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -298,11 +295,11 @@ export async function handleSoloMode(clientWs) {
                 }
               });
               
-              // REFACTORED: Use centralized state manager for partial translations
-              const partialState = new PartialTranslationStateManager();
-              
-              // Initialize error handler (sendWithSequence is defined above)
-              const translationErrorHandler = new TranslationErrorHandler(partialState, sendWithSequence);
+              // Translation throttling for partials
+              let lastPartialTranslation = '';
+              let lastPartialTranslationTime = 0;
+              let pendingPartialTranslation = null;
+              let currentPartialText = ''; // Track current partial text for delayed translations
               
               // PHASE 7: Partial Tracker now accessed via CoreEngine
               // Use the partial tracker from coreEngine (already initialized)
@@ -530,52 +527,29 @@ export async function handleSoloMode(clientWs) {
                 if (!options.segmentId && candidateSegmentId !== currentSegmentId && candidateSegmentId !== null) {
                   console.log(`[SoloMode] 🔴 BLOCKED: Attempted to finalize stale segment ${candidateSegmentId} (current: ${currentSegmentId})`);
                   console.log(`[SoloMode]   Text: "${textToProcess.substring(0, 60)}..."`);
-                  return; // Block stale segment finalization
+                  return Promise.resolve({ accepted: false, reason: 'stale_segment', segmentId: candidateSegmentId, text: textToProcess }); // Block stale segment finalization
                 }
                 
                 // Use the segmentId from options if provided (for boundary finalization), otherwise use currentSegmentId
                 const targetSegmentId = options.segmentId || currentSegmentId;
                 
-                // CRITICAL: Use FinalityGate to enforce dominance rules - ALL candidates must go through
-                // FinalityGate is the single authority - never bypass it
+                // CRITICAL: Early blocking checks - check but don't finalize yet
+                // Finalization will happen AFTER duplicate checks to ensure atomicity
                 if (coreEngine && coreEngine.finalityGate) {
-                  // Determine candidate source from options (recovery candidates pass it explicitly)
-                  const candidateSource = options.candidateSource || (options.forceFinal ? CandidateSource.Forced : CandidateSource.Grammar);
+                  // Check specific blocking reasons before proceeding
+                  const isAlreadyFinalized = coreEngine.finalityGate.isFinalized(targetSegmentId);
+                  const isRecoveryPending = coreEngine.finalityGate.isRecoveryPending(targetSegmentId);
                   
-                  const candidate = {
-                    text: textToProcess.trim(),
-                    source: candidateSource,
-                    segmentId: targetSegmentId, // Use target segment ID for FinalityGate isolation
-                    timestamp: Date.now(),
-                    options: options
-                  };
-                  
-                  // Submit candidate to FinalityGate (updates best candidate if better)
-                  // Note: Recovery candidates may have already been submitted in RecoveryStreamEngine,
-                  // but submitCandidate is idempotent (same candidate won't change bestCandidate)
-                  const result = coreEngine.finalityGate.submitCandidate(candidate);
-                  
-                  if (!result.canCommit) {
-                    console.log(`[SoloMode] 🔴 FinalityGate: Blocking ${candidateSource === CandidateSource.Forced ? 'Forced' : candidateSource === CandidateSource.Recovery ? 'Recovery' : 'Grammar'} candidate (recovery pending or already finalized)`);
+                  if (isAlreadyFinalized) {
+                    console.log(`[SoloMode] 🔴 FinalityGate: Segment ${targetSegmentId} already finalized`);
                     console.log(`[SoloMode]   Text: "${textToProcess.substring(0, 60)}..."`);
-                    return; // Blocked by FinalityGate (recovery pending or segment finalized)
+                    return Promise.resolve({ accepted: false, reason: 'already_finalized', segmentId: targetSegmentId, text: textToProcess }); // Already finalized - idempotent
                   }
                   
-                  // Candidate can commit - finalize through FinalityGate (single authority)
-                  const finalized = coreEngine.finalityGate.finalizeSegment(targetSegmentId);
-                  if (!finalized) {
-                    console.log(`[SoloMode] ⚠️ FinalityGate: No candidate to finalize (should not happen)`);
-                    return; // Nothing to finalize
-                  }
-                  
-                  // Use the finalized candidate text (may be different if recovery upgraded it)
-                  if (finalized.text !== textToProcess.trim()) {
-                    console.log(`[SoloMode] ✅ FinalityGate: Using better candidate (${textToProcess.trim().length} → ${finalized.text.length} chars)`);
-                    console.log(`[SoloMode]   Original: "${textToProcess.substring(0, 60)}..."`);
-                    console.log(`[SoloMode]   Finalized: "${finalized.text.substring(0, 60)}..."`);
-                    textToProcess = finalized.text; // Use the better candidate
-                    // Merge options from finalized candidate
-                    Object.assign(options, finalized.options || {});
+                  if (isRecoveryPending) {
+                    console.log(`[SoloMode] 🔴 FinalityGate: Recovery pending for segment ${targetSegmentId}`);
+                    console.log(`[SoloMode]   Text: "${textToProcess.substring(0, 60)}..."`);
+                    return Promise.resolve({ accepted: false, reason: 'recovery_pending', segmentId: targetSegmentId, text: textToProcess }); // Recovery pending - should retry
                   }
                 }
                 
@@ -583,11 +557,11 @@ export async function handleSoloMode(clientWs) {
                 if (isProcessingFinal) {
                   console.log(`[SoloMode] ⏳ Final already being processed, queuing: "${textToProcess.substring(0, 60)}..."`);
                   finalProcessingQueue.push({ textToProcess, options });
-                  return; // Queue instead of process immediately
+                  return Promise.resolve({ accepted: false, reason: 'queued', segmentId: targetSegmentId, text: textToProcess }); // Queue instead of process immediately
                 }
                 
-                // Process immediately
-                (async () => {
+                // Process immediately - return Promise that resolves to status
+                return (async () => {
                   try {
                     // Set flag to prevent concurrent processing
                     isProcessingFinal = true;
@@ -608,7 +582,7 @@ export async function handleSoloMode(clientWs) {
                       if (textNormalized === lastSentOriginalNormalized) {
                         if (timeSinceLastFinal < 5000) {
                           console.log(`[SoloMode] ⚠️ Duplicate final detected (same original text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
-                          return; // Skip processing duplicate
+                          return { accepted: false, reason: 'duplicate_same_original', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                         }
                       }
                       
@@ -617,7 +591,7 @@ export async function handleSoloMode(clientWs) {
                       if (timeSinceLastFinal < 5000) {
                         if (textNormalized === lastSentFinalNormalized) {
                           console.log(`[SoloMode] ⚠️ Duplicate final detected (same corrected text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
-                          return; // Skip processing duplicate
+                          return { accepted: false, reason: 'duplicate_same_corrected', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                         }
                         
                         // Check for near-exact matches (very similar text within 5 seconds)
@@ -628,7 +602,7 @@ export async function handleSoloMode(clientWs) {
                           // If texts are very similar (one contains the other) and length difference is small
                           if (similarity && lengthDiff < 10 && lengthDiff < Math.min(textNormalized.length, lastSentFinalNormalized.length) * 0.1) {
                             console.log(`[SoloMode] ⚠️ Duplicate final detected (very similar text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
-                            return; // Skip processing duplicate
+                            return { accepted: false, reason: 'duplicate_very_similar', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                           }
                           
                           // CRITICAL: Also check for high word overlap (catches cases with punctuation/capitalization differences)
@@ -646,7 +620,7 @@ export async function handleSoloMode(clientWs) {
                             // If 80%+ words match and texts are similar length, it's likely a duplicate
                             if (wordOverlapRatio >= 0.8 && lengthDiff < 20) {
                               console.log(`[SoloMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
-                              return; // Skip processing duplicate
+                              return { accepted: false, reason: 'duplicate_high_word_overlap', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                             }
                           }
                         }
@@ -657,7 +631,7 @@ export async function handleSoloMode(clientWs) {
                              (textNormalized.includes(lastSentFinalNormalized) || lastSentFinalNormalized.includes(textNormalized)) &&
                              Math.abs(textNormalized.length - lastSentFinalNormalized.length) < 5)) {
                           console.log(`[SoloMode] ⚠️ Duplicate final detected (same corrected text), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
-                          return; // Skip processing duplicate
+                          return { accepted: false, reason: 'duplicate_same_corrected_continuation', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                         }
                         
                         // Also check word overlap for continuation window (catches punctuation/capitalization differences)
@@ -676,7 +650,7 @@ export async function handleSoloMode(clientWs) {
                             // If 85%+ words match and texts are similar length, it's likely a duplicate
                             if (wordOverlapRatio >= 0.85 && lengthDiff < 15) {
                               console.log(`[SoloMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% in continuation window), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
-                              return; // Skip processing duplicate
+                              return { accepted: false, reason: 'duplicate_high_overlap_continuation', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                             }
                           }
                         }
@@ -698,11 +672,71 @@ export async function handleSoloMode(clientWs) {
                             // If 90%+ words match and texts are very similar length, it's likely a duplicate even outside time window
                             if (wordOverlapRatio >= 0.9 && lengthDiff < 25) {
                               console.log(`[SoloMode] ⚠️ Duplicate final detected (very high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% outside time window, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
-                              return; // Skip processing duplicate
+                              return { accepted: false, reason: 'duplicate_very_high_overlap', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                             }
                           }
                         }
                       }
+                    }
+                    
+                    // CRITICAL: FinalityGate finalize happens HERE (after duplicate checks) to ensure atomicity
+                    // If we got here, we're definitely going to emit, so it's safe to finalize
+                    if (coreEngine && coreEngine.finalityGate) {
+                      // Determine candidate source from options (recovery candidates pass it explicitly)
+                      const candidateSource = options.candidateSource || (options.forceFinal ? CandidateSource.Forced : CandidateSource.Grammar);
+                      
+                      const candidate = {
+                        text: trimmedText,
+                        source: candidateSource,
+                        segmentId: targetSegmentId, // Use target segment ID for FinalityGate isolation
+                        timestamp: Date.now(),
+                        options: options
+                      };
+                      
+                      // Submit candidate to FinalityGate (updates best candidate if better)
+                      // Note: Recovery candidates may have already been submitted in RecoveryStreamEngine,
+                      // but submitCandidate is idempotent (same candidate won't change bestCandidate)
+                      const result = coreEngine.finalityGate.submitCandidate(candidate);
+                      
+                      if (!result.canCommit) {
+                        // Fallback - should not happen if checks above are correct, but handle gracefully
+                        console.log(`[SoloMode] 🔴 FinalityGate: Blocking ${candidateSource === CandidateSource.Forced ? 'Forced' : candidateSource === CandidateSource.Recovery ? 'Recovery' : 'Grammar'} candidate`);
+                        console.log(`[SoloMode]   Text: "${trimmedText.substring(0, 60)}..."`);
+                        isProcessingFinal = false;
+                        return { accepted: false, reason: 'finality_gate_blocked', segmentId: targetSegmentId, text: trimmedText };
+                      }
+                      
+                      // Candidate can commit - finalize through FinalityGate (single authority)
+                      const finalized = coreEngine.finalityGate.finalizeSegment(targetSegmentId);
+                      if (!finalized) {
+                        console.log(`[SoloMode] ⚠️ FinalityGate: No candidate to finalize (should not happen)`);
+                        isProcessingFinal = false;
+                        return { accepted: false, reason: 'no_candidate', segmentId: targetSegmentId, text: trimmedText }; // Nothing to finalize
+                      }
+                      
+                      // INVARIANT: If FinalityGate finalizes, we MUST emit
+                      // Track this for verification
+                      const finalizationCommitId = `${targetSegmentId}-${Date.now()}`;
+                      console.log(`[SoloMode] 🔒 INVARIANT: FinalityGate finalized segment ${targetSegmentId}, commit ID: ${finalizationCommitId}`);
+                      
+                      // Use the finalized candidate text (may be different if recovery upgraded it)
+                      // Safety tweak: ensure we use finalized text before grammar/translation
+                      if (finalized.text !== trimmedText) {
+                        console.log(`[SoloMode] ✅ FinalityGate: Using better candidate (${trimmedText.length} → ${finalized.text.length} chars)`);
+                        console.log(`[SoloMode]   Original: "${trimmedText.substring(0, 60)}..."`);
+                        console.log(`[SoloMode]   Finalized: "${finalized.text.substring(0, 60)}..."`);
+                        textToProcess = finalized.text; // Use the better candidate
+                        trimmedText = finalized.text.trim(); // Update trimmedText for consistency
+                        textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase(); // Update normalized text
+                        // Merge options from finalized candidate
+                        Object.assign(options, finalized.options || {});
+                      }
+                      
+                      // Store commit ID in options for later use
+                      options.commitId = finalizationCommitId;
+                    } else {
+                      // No FinalityGate - create commit ID anyway for tracking
+                      options.commitId = `${targetSegmentId}-${Date.now()}`;
                     }
                     
                     // Bible reference detection (non-blocking, runs in parallel)
@@ -867,7 +901,7 @@ export async function handleSoloMode(clientWs) {
                       if (currentSourceLang === 'en') {
                         try {
                           const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
-                          sendWithSequence({
+                          const seqId = sendWithSequence({
                             type: 'translation',
                             originalText: textToProcess,
                             correctedText: correctedText,
@@ -877,6 +911,10 @@ export async function handleSoloMode(clientWs) {
                             isTranscriptionOnly: true,
                             forceFinal: false
                           }, false);
+                          
+                          // Enhanced logging (Fix 5)
+                          const textPreview = correctedText.substring(0, 60);
+                          console.log(`[SoloMode] ✅ EMITTED (transcription): seqId=${seqId}, segmentId=${targetSegmentId}, text="${textPreview}..."`);
                           
                           // CRITICAL: Update last sent FINAL tracking after sending
                           // Track both original and corrected text to prevent duplicates
@@ -896,6 +934,14 @@ export async function handleSoloMode(clientWs) {
                         // This allows next FINAL to generate a new segment ID
                         currentSegmentId = null;
                         console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission`);
+                        
+                        // INVARIANT: Log successful emission (Fix 6)
+                        const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                        const finalText = correctedText || textToProcess;
+                        console.log(`[SoloMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully (transcription-only), commit ID: ${commitId}`);
+                        
+                        // Return success status with finalText
+                        return { accepted: true, reason: 'committed', segmentId: targetSegmentId, finalText, commitId };
                       } catch (error) {
                         console.error('[SoloMode] Grammar correction error:', error);
                           sendWithSequence({
@@ -919,10 +965,15 @@ export async function handleSoloMode(clientWs) {
                         syncPartialVariables();
                         currentSegmentId = null;
                         console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission (error path)`);
-                        }
+                        
+                        // Return success status (text was sent)
+                        const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                        console.log(`[SoloMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully (transcription-only error path but text sent), commit ID: ${commitId}`);
+                        return { accepted: true, reason: 'committed', segmentId: targetSegmentId, finalText: textToProcess, commitId };
+                      }
                       } else {
                         // Non-English transcription - no grammar correction
-                        sendWithSequence({
+                        const seqId = sendWithSequence({
                           type: 'translation',
                           originalText: textToProcess,
                           correctedText: textToProcess,
@@ -933,12 +984,29 @@ export async function handleSoloMode(clientWs) {
                           forceFinal: false
                         }, false);
                         
+                        // Enhanced logging (Fix 5)
+                        const textPreview = textToProcess.substring(0, 60);
+                        console.log(`[SoloMode] ✅ EMITTED (non-English transcription): seqId=${seqId}, segmentId=${targetSegmentId}, text="${textPreview}..."`);
+                        
                         // CRITICAL: Update last sent FINAL tracking after sending
                         lastSentFinalText = textToProcess;
                         lastSentFinalTime = Date.now();
                         
                         // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
                         checkForExtendingPartialsAfterFinal(textToProcess);
+                        
+                        // CRITICAL FIX: Reset partial tracking AFTER final is successfully emitted
+                        partialTracker.reset();
+                        syncPartialVariables();
+                        currentSegmentId = null;
+                        console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission (non-English transcription)`);
+                        
+                        // INVARIANT: Log successful emission (Fix 6)
+                        const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                        console.log(`[SoloMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully (non-English transcription), commit ID: ${commitId}`);
+                        
+                        // Return success status
+                        return { accepted: true, segmentId: targetSegmentId, text: textToProcess, commitId };
                       }
                     } else {
                       // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
@@ -1007,7 +1075,7 @@ export async function handleSoloMode(clientWs) {
                         console.log(`[SoloMode]   hasCorrection: ${hasCorrection}`);
                         console.log(`[SoloMode]   correction changed text: ${hasCorrection}`);
 
-                        sendWithSequence({
+                        const seqId = sendWithSequence({
                           type: 'translation',
                           originalText: textToProcess, // Use final text (may include recovered words from partials)
                           correctedText: correctedText, // Grammar-corrected text (updates when available)
@@ -1018,6 +1086,11 @@ export async function handleSoloMode(clientWs) {
                           isTranscriptionOnly: false,
                           forceFinal: false
                         }, false);
+                        
+                        // Enhanced logging with seqId (Fix 5)
+                        const finalTextForLog = correctedText || textToProcess;
+                        const textPreview = finalTextForLog.substring(0, 60);
+                        console.log(`[SoloMode] ✅ EMITTED: seqId=${seqId}, segmentId=${targetSegmentId}, text="${textPreview}..."`);
                         
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates
@@ -1037,6 +1110,15 @@ export async function handleSoloMode(clientWs) {
                         // This allows next FINAL to generate a new segment ID
                         currentSegmentId = null;
                         console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission`);
+                        
+                        // INVARIANT: Log successful emission (Fix 6)
+                        // Note: seqId was already logged above
+                        const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                        const finalText = correctedText || textToProcess;
+                        console.log(`[SoloMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully, commit ID: ${commitId}`);
+                        
+                        // Return success status with finalText
+                        return { accepted: true, reason: 'committed', segmentId: targetSegmentId, finalText, commitId };
                       } catch (error) {
                         console.error(`[SoloMode] Final processing error:`, error);
                         // If it's a skip request error, use corrected text (or original if not set)
@@ -1068,12 +1150,24 @@ export async function handleSoloMode(clientWs) {
                             syncPartialVariables();
                             currentSegmentId = null;
                             console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission (error path)`);
+                            
+                            // Return success status if text was sent
+                            const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                            console.log(`[SoloMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully (error path but text sent), commit ID: ${commitId}`);
+                            return { accepted: true, segmentId: targetSegmentId, text: finalText, commitId };
+                          } else {
+                            // Text was not sent - invariant violation
+                            console.error(`[SoloMode] 🔴 INVARIANT VIOLATION: Segment ${targetSegmentId} finalized but not emitted! Error: ${error.message}`);
+                            return { accepted: false, reason: 'emission_failed', segmentId: targetSegmentId, text: textToProcess, error: error.message };
                           }
                         }
                       }
                     }
                   } catch (error) {
                     console.error(`[SoloMode] Error processing final:`, error);
+                    // Return failure status for outer error
+                    console.error(`[SoloMode] 🔴 INVARIANT VIOLATION: Segment ${targetSegmentId} finalized but processing failed! Error: ${error.message}`);
+                    return { accepted: false, reason: 'processing_error', segmentId: targetSegmentId, text: textToProcess, error: error.message };
                   } finally {
                     // CRITICAL: Always clear the processing flag when done
                     isProcessingFinal = false;
@@ -1149,11 +1243,29 @@ export async function handleSoloMode(clientWs) {
                             if (recoveredMerged) {
                               console.log('[SoloMode] 🔁 Merging recovered text with extending partial and committing');
                               forcedCommitEngine.clearForcedFinalBufferTimeout();
-                              processFinalText(recoveredMerged, { forceFinal: true });
-                              forcedCommitEngine.clearForcedFinalBuffer();
-                              syncForcedFinalBuffer();
-                              // Continue processing the extended partial normally
-                              return; // Exit early - already committed
+                              const result = await processFinalText(recoveredMerged, { forceFinal: true });
+                              // Handle idempotent success for already_finalized (Fix 2)
+                              if (result.accepted || result.reason === 'already_finalized') {
+                                forcedCommitEngine.clearForcedFinalBuffer();
+                                syncForcedFinalBuffer();
+                                // Continue processing the extended partial normally
+                                return; // Exit early - already committed
+                              } else if (result.reason === 'recovery_pending') {
+                                console.log(`[SoloMode] ⏳ Recovery merge recovery pending, will retry in 250ms`);
+                                setTimeout(async () => {
+                                  const retryResult = await processFinalText(recoveredMerged, { forceFinal: true });
+                                  if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                                    forcedCommitEngine.clearForcedFinalBuffer();
+                                    syncForcedFinalBuffer();
+                                    console.log(`[SoloMode] ✅ Recovery merge retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'committed'}`);
+                                    return; // Exit early - already committed
+                                  } else {
+                                    console.log(`[SoloMode] ⚠️ Recovery merge retry failed - ${retryResult.reason}, preserving buffer`);
+                                  }
+                                }, 250);
+                              } else {
+                                console.log(`[SoloMode] ⚠️ Recovery merge commit rejected - ${result.reason}, preserving buffer`);
+                              }
                             }
                           }
                         } catch (error) {
@@ -1240,15 +1352,33 @@ export async function handleSoloMode(clientWs) {
                               console.log(`[SoloMode]   Old segment ID: ${oldSegmentId}`);
                               console.log(`[SoloMode]   Text: "${textToFinalize.substring(0, 80)}..."`);
                               // Use old segment ID for finalization
-                              processFinalText(textToFinalize, { 
+                              const result = await processFinalText(textToFinalize, { 
                                 forceFinal: true,
                                 segmentId: oldSegmentId  // Use old segment ID
                               });
-                              // Clear pending finalization and reset partial tracker after finalizing
-                              finalizationEngine.clearPendingFinalization();
-                              syncPendingFinalization();
-                              partialTracker.reset();
-                              syncPartialVariables();
+                              // Handle idempotent success for already_finalized (Fix 2)
+                              if (result.accepted || result.reason === 'already_finalized') {
+                                finalizationEngine.clearPendingFinalization();
+                                syncPendingFinalization();
+                                partialTracker.reset();
+                                syncPartialVariables();
+                              } else if (result.reason === 'recovery_pending') {
+                                console.log(`[SoloMode] ⏳ BOUNDARY: Recovery pending for old segment ${oldSegmentId}, will retry in 250ms`);
+                                setTimeout(async () => {
+                                  const retryResult = await processFinalText(textToFinalize, { forceFinal: true, segmentId: oldSegmentId });
+                                  if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                                    finalizationEngine.clearPendingFinalization();
+                                    syncPendingFinalization();
+                                    partialTracker.reset();
+                                    syncPartialVariables();
+                                    console.log(`[SoloMode] ✅ BOUNDARY retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'finalized'}`);
+                                  } else {
+                                    console.log(`[SoloMode] ⚠️ BOUNDARY retry failed - ${retryResult.reason}, preserving state`);
+                                  }
+                                }, 250);
+                              } else {
+                                console.log(`[SoloMode] ⚠️ BOUNDARY: Finalization rejected - ${result.reason}, preserving state`);
+                              }
                             }
                           }
                           
@@ -1454,11 +1584,16 @@ export async function handleSoloMode(clientWs) {
                       // PHASE 5: Clear timeout using engine
                       finalizationEngine.clearPendingFinalizationTimeout();
                       const textToCommit = pendingFinalization.text;
-                      // PHASE 5: Clear using engine
-                      finalizationEngine.clearPendingFinalization();
-                      syncPendingFinalization();
-                      // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
-                      processFinalText(textToCommit);
+                      // CRITICAL: Check result before clearing state
+                      const result = await processFinalText(textToCommit);
+                      if (result.accepted) {
+                        // PHASE 5: Clear using engine
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
+                        // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
+                      } else {
+                        console.log(`[SoloMode] ⚠️ BOUNDARY: Finalization rejected - ${result.reason}, preserving state`);
+                      }
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
                     } else {
                       // No gap detected - continue as same segment (don't create new segment ID)
@@ -1496,7 +1631,7 @@ export async function handleSoloMode(clientWs) {
                       // Reschedule - will check for longer partials when timeout fires
                       // PHASE 5: Use engine to set timeout
                       updateEngineFromPending();
-                      finalizationEngine.setPendingFinalizationTimeout(() => {
+                      finalizationEngine.setPendingFinalizationTimeout(async () => {
                         // PHASE 5: Sync and null check (CRITICAL)
                         syncPendingFinalization();
                         if (!pendingFinalization) {
@@ -1573,11 +1708,29 @@ export async function handleSoloMode(clientWs) {
                         // latestPartialText = '';
                         // longestPartialText = '';
                         const waitTime = Date.now() - pendingFinalization.timestamp;
-                        // PHASE 5: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
-                        syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
-                        processFinalText(textToProcess);
+                        const result = await processFinalText(textToProcess);
+                        
+                        // Handle idempotent success for already_finalized (Fix 2)
+                        if (result.accepted || result.reason === 'already_finalized') {
+                          // PHASE 5: Clear using engine
+                          finalizationEngine.clearPendingFinalization();
+                          syncPendingFinalization();
+                        } else if (result.reason === 'recovery_pending') {
+                          console.log(`[SoloMode] ⏳ Safety finalization recovery pending, will retry in 250ms`);
+                          setTimeout(async () => {
+                            const retryResult = await processFinalText(textToProcess);
+                            if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                              finalizationEngine.clearPendingFinalization();
+                              syncPendingFinalization();
+                              console.log(`[SoloMode] ✅ Safety finalization retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'finalized'}`);
+                            } else {
+                              console.log(`[SoloMode] ⚠️ Safety finalization retry failed - ${retryResult.reason}, preserving state`);
+                            }
+                          }, 250);
+                        } else {
+                          console.log(`[SoloMode] ⚠️ Finalization rejected - ${result.reason}, preserving state`);
+                        }
                       }, remainingWait);
                       syncPendingFinalization(); // Sync after setting timeout
                       // Continue tracking this partial (don't return - let it be tracked normally below)
@@ -1623,7 +1776,7 @@ export async function handleSoloMode(clientWs) {
                       // Reschedule with the same processing logic
                       // PHASE 5: Use engine to set timeout
                       updateEngineFromPending();
-                      finalizationEngine.setPendingFinalizationTimeout(() => {
+                      finalizationEngine.setPendingFinalizationTimeout(async () => {
                         // PHASE 5: Sync and null check (CRITICAL)
                         syncPendingFinalization();
                         if (!pendingFinalization) {
@@ -1660,12 +1813,16 @@ export async function handleSoloMode(clientWs) {
                         // latestPartialText = '';
                         // longestPartialText = '';
                         const waitTime = Date.now() - pendingFinalization.timestamp;
-                        // PHASE 5: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
-                        syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                         // Process final (reuse the async function logic from the main timeout)
-                        processFinalText(textToProcess);
+                        const result = await processFinalText(textToProcess);
+                        if (result.accepted) {
+                          // PHASE 5: Clear using engine - ONLY if commit succeeded
+                          finalizationEngine.clearPendingFinalization();
+                          syncPendingFinalization();
+                        } else {
+                          console.log(`[SoloMode] ⚠️ Finalization rejected - ${result.reason}, preserving state`);
+                        }
                       }, remainingWait);
                     } else if (!extendsFinal && timeSinceFinal > 600) {
                       // New segment detected - commit FINAL immediately to avoid blocking
@@ -1819,19 +1976,40 @@ export async function handleSoloMode(clientWs) {
                     return; // Skip translation processing for transcription mode
                   }
                   
-                  // REFACTORED: Use state manager for throttling and state tracking
+                  // OPTIMIZED: Throttle updates to prevent overwhelming the API
+                  // Updates every 2 characters for word-by-word feel with stable translations
                   if (transcriptText.length >= 1) {
                     // Update current partial text (used for delayed translations)
-                    partialState.updateCurrentText(transcriptText);
+                    currentPartialText = transcriptText;
 
-                    // Check if translation should happen now (immediate path)
-                    const { shouldTranslate, reason } = partialState.shouldTranslateNow();
-                    
-                    if (shouldTranslate) {
-                      console.log(`[SoloMode] 🔄 Should translate now: ${reason}`);
+                    const now = Date.now();
+                    const timeSinceLastTranslation = now - lastPartialTranslationTime;
+
+                    // Balanced approach: Update every 2 characters OR every 150ms
+                    // This provides responsive updates without overwhelming the API
+                    const textGrowth = transcriptText.length - lastPartialTranslation.length;
+                    const GROWTH_THRESHOLD = 2; // Update every 2 characters (~per word)
+                    const MIN_TIME_MS = 150; // Minimum 150ms between updates (6-7 updates/sec)
+
+                    const textGrewSignificantly = textGrowth >= GROWTH_THRESHOLD;
+                    const enoughTimePassed = timeSinceLastTranslation >= MIN_TIME_MS;
+
+                    // Immediate translation on growth OR time passed
+                    const isFirstTranslation = lastPartialTranslation.length === 0;
+                    const shouldTranslateNow = isFirstTranslation ||
+                                               (textGrewSignificantly && enoughTimePassed);
+
+                    if (shouldTranslateNow) {
+                      // Cancel any pending translation
+                      if (pendingPartialTranslation) {
+                        clearTimeout(pendingPartialTranslation);
+                        pendingPartialTranslation = null;
+                      }
                       
-                      // Cancel any pending delayed translation
-                      partialState.clearPendingTimeout();
+                      // CRITICAL: Don't update lastPartialTranslation until AFTER successful translation
+                      // This ensures we can retry if translation fails
+                      lastPartialTranslationTime = now;
+                      // Don't set lastPartialTranslation here - only after successful translation
                       
                       try {
                         console.log(`[SoloMode] 🔄 Processing partial (${transcriptText.length} chars): "${transcriptText.substring(0, 40)}..."`);
@@ -1844,7 +2022,7 @@ export async function handleSoloMode(clientWs) {
                         
                         if (isTranscriptionMode) {
                           // TRANSCRIPTION MODE: Send raw text immediately, no translation API call needed
-                          partialState.updateAfterSuccess(capturedText);
+                          lastPartialTranslation = capturedText;
                           
                           console.log(`[SoloMode] ✅ TRANSCRIPTION (IMMEDIATE): "${capturedText.substring(0, 40)}..."`);
                           
@@ -1918,30 +2096,72 @@ export async function handleSoloMode(clientWs) {
                               sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
                             );
 
-                            // REFACTORED: Use unified error handler
+                            // Send translation IMMEDIATELY when ready (don't wait for grammar)
                             translationPromise.then(translatedText => {
-                              // Use error handler for success (validates and updates state)
-                              const success = translationErrorHandler.handleSuccess(
-                                rawCapturedText,
-                                translatedText,
-                                false, // hasCorrection (grammar not ready yet)
-                                null   // correctedText
-                              );
-                              
-                              if (success) {
-                                console.log(`[SoloMode] ✅ TRANSLATION (IMMEDIATE): "${translatedText.substring(0, 40)}..."`);
+                              // Validate translation result
+                              if (!translatedText || translatedText.trim().length === 0) {
+                                console.warn(`[SoloMode] ⚠️ Translation returned empty for ${capturedText.length} char text`);
+                                return;
                               }
-                            }).catch(error => {
-                              // REFACTORED: Use unified error handler
-                              const stateUpdated = translationErrorHandler.handleError(
-                                error,
-                                rawCapturedText,
-                                workerType,
-                                false // isDelayed
-                              );
+
+                              // CRITICAL: Validate that translation is different from original (prevent English leak)
+                              const isSameAsOriginal = translatedText === translationReadyText || 
+                                                       translatedText.trim() === translationReadyText.trim() ||
+                                                       translatedText.toLowerCase() === translationReadyText.toLowerCase();
                               
-                              // If state wasn't updated, error handler determined we should retry
-                              // (e.g., cancelled, English leak, truncated) - no action needed
+                              if (isSameAsOriginal) {
+                                console.warn(`[SoloMode] ⚠️ Translation matches original (English leak detected): "${translatedText.substring(0, 60)}..."`);
+                                return; // Don't send English as translation
+                              }
+                              // CRITICAL: Only update lastPartialTranslation AFTER successful translation
+                              lastPartialTranslation = capturedText;
+                              
+                              console.log(`[SoloMode] ✅ TRANSLATION (IMMEDIATE): "${translatedText.substring(0, 40)}..."`);
+                              
+                              // Send translation result immediately - sequence IDs handle ordering
+                              sendWithSequence({
+                                type: 'translation',
+                                originalText: rawCapturedText,
+                                translatedText: translatedText,
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasTranslation: true,
+                                hasCorrection: false // Grammar not ready yet
+                              }, true);
+                            }).catch(error => {
+                              // Handle translation errors gracefully
+                              if (error.name !== 'AbortError') {
+                                if (error.message && error.message.includes('cancelled')) {
+                                  // Request was cancelled by a newer request - this is expected, silently skip
+                                  console.log(`[SoloMode] ⏭️ Translation cancelled (newer request took priority)`);
+                                } else if (error.conversational) {
+                                  // Model returned conversational response instead of translation - use original
+                                  console.warn(`[SoloMode] ⚠️ Model returned conversational response instead of translation - using original text`);
+                                  // Send original text as fallback
+                                  sendWithSequence({
+                                    type: 'translation',
+                                    originalText: capturedText,
+                                    translatedText: capturedText,
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: false,
+                                    hasTranslation: true,
+                                    hasCorrection: false
+                                  }, true);
+                                } else if (error.englishLeak) {
+                                  // Translation matched original (English leak) - silently skip
+                                  console.log(`[SoloMode] ⏭️ English leak detected for partial - skipping (${rawCapturedText.length} chars)`);
+                                  // Don't send anything - will retry with next partial
+                                } else if (error.message && error.message.includes('truncated')) {
+                                  // Translation was truncated - log warning but don't send incomplete translation
+                                  console.warn(`[SoloMode] ⚠️ Partial translation truncated (${rawCapturedText.length} chars) - waiting for longer partial`);
+                                } else if (error.message && error.message.includes('timeout')) {
+                                  console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
+                                  // Don't send error message to frontend - just skip this translation
+                                } else {
+                                  console.error(`[SoloMode] ❌ Translation error (${workerType} API, ${rawCapturedText.length} chars):`, error.message);
+                                }
+                              }
+                              // Don't send anything on error - keep last partial translation
                             });
                           }
 
@@ -1977,33 +2197,35 @@ export async function handleSoloMode(clientWs) {
                         }
                       } catch (error) {
                         console.error(`[SoloMode] ❌ Partial processing error (${transcriptText.length} chars):`, error.message);
-                        // REFACTORED: State manager handles retry logic - state not updated on error allows retry
+                        // CRITICAL: Don't update lastPartialTranslation on error - allows retry
                         // Continue processing - don't stop translations on error
                       }
                     } else {
-                      // REFACTORED: Delayed translation path (throttled)
+                      // With THROTTLE_MS = 0 and GROWTH_THRESHOLD = 1, this path should rarely execute
+                      // But keep as fallback for edge cases
                       // Always cancel and reschedule to ensure we translate the latest text
-                      partialState.clearPendingTimeout();
-                      
-                      // Calculate delay using state manager
-                      const delayMs = partialState.calculateDelayedPathDelay(finalProcessingQueue.length);
-                      
-                      if (finalProcessingQueue.length > 0) {
-                        console.log(`[SoloMode] ⏸️ ${finalProcessingQueue.length} queued final(s) - adding ${partialState.ADDITIONAL_DELAY_WHEN_QUEUED}ms delay to partial translation`);
+                      if (pendingPartialTranslation) {
+                        clearTimeout(pendingPartialTranslation);
+                        pendingPartialTranslation = null;
                       }
                       
-                      const timeoutHandle = setTimeout(async () => {
+                      // Immediate execution (no delay) for real-time feel
+                      const delayMs = 0;
+                      
+                      pendingPartialTranslation = setTimeout(async () => {
                         // CRITICAL: Always capture LATEST text at timeout execution
-                        const latestText = partialState.getCurrentText();
+                        const latestText = currentPartialText;
                         if (!latestText || latestText.length < 1) {
-                          partialState.clearPendingTimeout();
+                          pendingPartialTranslation = null;
                           return;
                         }
                         
                         // Skip only if exact match (no need to retranslate identical text)
-                        if (partialState.isExactMatch(latestText)) {
+                        const isExactMatch = latestText === lastPartialTranslation;
+                        
+                        if (isExactMatch) {
                           console.log(`[SoloMode] ⏭️ Skipping exact match translation`);
-                          partialState.clearPendingTimeout();
+                          pendingPartialTranslation = null;
                           return;
                         }
                         
@@ -2015,7 +2237,8 @@ export async function handleSoloMode(clientWs) {
                           
                           if (isTranscriptionMode) {
                             // TRANSCRIPTION MODE: Send raw text immediately, no translation API call needed
-                            partialState.updateAfterSuccess(latestText);
+                            lastPartialTranslation = latestText;
+                            lastPartialTranslationTime = Date.now();
                             
                             console.log(`[SoloMode] ✅ TRANSCRIPTION (DELAYED): "${latestText.substring(0, 40)}..."`);
                             
@@ -2077,31 +2300,47 @@ export async function handleSoloMode(clientWs) {
                                 sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
                               );
 
-                              // REFACTORED: Use unified error handler
+                              // Send translation IMMEDIATELY when ready (don't wait for grammar)
                               translationPromise.then(translatedText => {
-                                // Use error handler for success (validates and updates state)
-                                const success = translationErrorHandler.handleSuccess(
-                                  latestText,
-                                  translatedText,
-                                  false, // hasCorrection (grammar not ready yet)
-                                  null   // correctedText
-                                );
-                                
-                                if (success) {
-                                  console.log(`[SoloMode] ✅ TRANSLATION (DELAYED): "${translatedText.substring(0, 40)}..."`);
+                                // Validate translation result
+                                if (!translatedText || translatedText.trim().length === 0) {
+                                  console.warn(`[SoloMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
+                                  return;
                                 }
+
+                                // CRITICAL: Update tracking and send translation
+                                lastPartialTranslation = latestText;
+                                lastPartialTranslationTime = Date.now();
+                                
+                                console.log(`[SoloMode] ✅ TRANSLATION (DELAYED): "${translatedText.substring(0, 40)}..."`);
+                                
+                                // Send immediately - sequence IDs handle ordering
+                                sendWithSequence({
+                                  type: 'translation',
+                                  originalText: latestText,
+                                  translatedText: translatedText,
+                                  timestamp: Date.now(),
+                                  isTranscriptionOnly: false,
+                                  hasTranslation: true,
+                                  hasCorrection: false // Grammar not ready yet
+                                }, true);
                               }).catch(error => {
-                                  // REFACTORED: Use unified error handler
-                                  const stateUpdated = translationErrorHandler.handleError(
-                                    error,
-                                    latestText,
-                                    workerType,
-                                    true // isDelayed
-                                  );
-                                  
-                                  // If state wasn't updated, error handler determined we should retry
-                                  // (e.g., cancelled, English leak, truncated) - no action needed
-                                });
+                                // Handle translation errors gracefully
+                                if (error.name !== 'AbortError') {
+                                  if (error.message && error.message.includes('cancelled')) {
+                                    // Request was cancelled by a newer request - this is expected, silently skip
+                                    console.log(`[SoloMode] ⏭️ Delayed translation cancelled (newer request took priority)`);
+                                  } else if (error.englishLeak) {
+                                    // Translation matched original (English leak) - silently skip
+                                    console.log(`[SoloMode] ⏭️ English leak detected for delayed partial - skipping (${latestText.length} chars)`);
+                                  } else if (error.message && error.message.includes('timeout')) {
+                                    console.warn(`[SoloMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
+                                  } else {
+                                    console.error(`[SoloMode] ❌ Delayed translation error (${workerType} API, ${latestText.length} chars):`, error.message);
+                                  }
+                                }
+                                // Don't send anything on error
+                              });
                             }
 
                             // Send grammar correction separately when ready (English only)
@@ -2130,15 +2369,12 @@ export async function handleSoloMode(clientWs) {
                             }
                           }
 
-                          partialState.clearPendingTimeout();
+                          pendingPartialTranslation = null;
                         } catch (error) {
-                          console.error(`[SoloMode] ❌ Delayed partial processing error (${latestText?.length || 0} chars):`, error.message);
-                          partialState.clearPendingTimeout();
+                          console.error(`[SoloMode] ❌ Delayed partial processing error (${latestText.length} chars):`, error.message);
+                          pendingPartialTranslation = null;
                         }
                       }, delayMs);
-                      
-                      // Store timeout handle in state manager
-                      partialState.setPendingTimeout(timeoutHandle);
                     }
                   }
                 } else {
@@ -2415,12 +2651,14 @@ export async function handleSoloMode(clientWs) {
                           // Commit the forced final (with grammar correction via processFinalText)
                           console.log(`[SoloMode] 📝 Committing forced final from timeout: "${textToCommit.substring(0, 80)}..." (${textToCommit.length} chars)`);
                           console.log(`[SoloMode] 📊 Final text to commit: "${textToCommit}"`);
-                          processFinalText(textToCommit, { forceFinal: true });
+                          const result = await processFinalText(textToCommit, { forceFinal: true });
                           
-                          // Clear buffer if it still exists
-                          if (bufferStillExists) {
+                          if (result.accepted && bufferStillExists) {
+                            // Clear buffer only if commit was accepted
                             forcedCommitEngine.clearForcedFinalBuffer();
                             syncForcedFinalBuffer();
+                          } else if (!result.accepted) {
+                            console.log(`[SoloMode] ⚠️ Forced final commit rejected - ${result.reason}, preserving buffer`);
                           }
                           
                           // CRITICAL: Partial reset is now handled in processFinalText finally block after final is emitted
@@ -2758,41 +2996,6 @@ export async function handleSoloMode(clientWs) {
                     console.log(`[SoloMode] 📝 FINAL ends mid-word - will wait for extending partials or timeout`);
                   }
                   
-                  // CRITICAL FIX: Check if FINAL is a fragment of an active partial
-                  // If a partial exists that starts with this FINAL, skip processing the FINAL
-                  // The partial will eventually be finalized and contain the complete text
-                  // This prevents race conditions where a fragment FINAL gets finalized while the partial is still being extended
-                  syncPartialVariables();
-                  if (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 10000) {
-                    const longestTrimmed = longestPartialText.trim();
-                    const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                    const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                    const isFragment = longestNormalized.startsWith(finalNormalized) || 
-                                      (finalTrimmed.length > 5 && longestNormalized.substring(0, finalNormalized.length) === finalNormalized) ||
-                                      longestTrimmed.startsWith(finalTrimmed) ||
-                                      (finalTrimmed.length > 5 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
-                    
-                    if (isFragment) {
-                      console.log(`[SoloMode] ⏭️ SKIPPING FINAL fragment - partial extends it (FINAL: "${finalTrimmed}", PARTIAL: "${longestTrimmed.substring(0, Math.min(80, longestTrimmed.length))}...")`);
-                      console.log(`[SoloMode] 📊 The partial will be finalized instead - preventing duplicate/partial commit`);
-                      return; // Skip processing this FINAL - the partial will handle it
-                    }
-                  } else if (latestPartialText && latestPartialText.length > transcriptText.length && timeSinceLatest < 5000) {
-                    const latestTrimmed = latestPartialText.trim();
-                    const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                    const latestNormalized = latestTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                    const isFragment = latestNormalized.startsWith(finalNormalized) || 
-                                      (finalTrimmed.length > 5 && latestNormalized.substring(0, finalNormalized.length) === finalNormalized) ||
-                                      latestTrimmed.startsWith(finalTrimmed) ||
-                                      (finalTrimmed.length > 5 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed);
-                    
-                    if (isFragment) {
-                      console.log(`[SoloMode] ⏭️ SKIPPING FINAL fragment - partial extends it (FINAL: "${finalTrimmed}", PARTIAL: "${latestTrimmed.substring(0, Math.min(80, latestTrimmed.length))}...")`);
-                      console.log(`[SoloMode] 📊 The partial will be finalized instead - preventing duplicate/partial commit`);
-                      return; // Skip processing this FINAL - the partial will handle it
-                    }
-                  }
-                  
                   // Check if longest partial extends the final
                   // CRITICAL: Google Speech may send incomplete FINALs (missing words like "secular")
                   // Always check partials even if FINAL appears complete - partials may have more complete text
@@ -2941,11 +3144,19 @@ export async function handleSoloMode(clientWs) {
                     // CRITICAL: Don't reset partials here - they're needed during timeout check
                     // Both BASIC and PREMIUM tiers need partials available during the wait period
                     // Partials will be reset AFTER final processing completes (see timeout callback)
-                    finalizationEngine.createPendingFinalization(finalTextToUse, null);
+                    
+                    // Capture segment snapshot for safety finalization (Fix 3)
+                    const safetySnapshot = {
+                      segmentId: currentSegmentId,
+                      text: finalTextToUse,
+                      timestamp: Date.now()
+                    };
+                    
+                    finalizationEngine.createPendingFinalization(finalTextToUse, safetySnapshot);
                   }
                   
                   // Schedule or reschedule the timeout
-                  finalizationEngine.setPendingFinalizationTimeout(() => {
+                  finalizationEngine.setPendingFinalizationTimeout(async () => {
                       // PHASE 5: Sync variable from engine at start of timeout (CRITICAL - must be first)
                       syncPendingFinalization();
                       if (!pendingFinalization) {
@@ -2953,23 +3164,23 @@ export async function handleSoloMode(clientWs) {
                         return; // Safety check
                       }
                       
+                      // Use snapshot if available, otherwise fallback to current state (Fix 3)
+                      const snapshot = pendingFinalization.snapshot || { segmentId: currentSegmentId, text: pendingFinalization.text };
+                      let finalTextToUse = snapshot.text;
+                      
                       // After waiting, check again for longer partials
                       // CRITICAL: Google Speech may send FINALs that are incomplete (missing words)
                       // Always prefer partials that extend the FINAL, even if FINAL appears "complete"
                       const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                       const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
-                      
-                      // Use the longest available partial (within reasonable time window)
-                      // CRITICAL: Only use if it actually extends the final (not from a previous segment)
-                      let finalTextToUse = pendingFinalization.text;
-                      const finalTrimmed = pendingFinalization.text.trim();
+                      const finalTrimmed = finalTextToUse.trim();
                       
                       // Check if FINAL ends with complete sentence
                       // If not, be more aggressive about using partials and wait longer
                       let finalEndsWithCompleteSentence = endsWithCompleteSentence(finalTrimmed);
-                      const shouldPreferPartials = !finalEndsWithCompleteSentence || longestPartialText?.length > pendingFinalization.text.length + 10;
+                      const shouldPreferPartials = !finalEndsWithCompleteSentence || longestPartialText?.length > finalTextToUse.length + 10;
                       
-                      if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
+                      if (longestPartialText && longestPartialText.length > finalTextToUse.length && timeSinceLongest < 10000) {
                         const longestTrimmed = longestPartialText.trim();
                         // More lenient matching: check if partial extends final (case-insensitive, normalized)
                         const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();
@@ -3043,7 +3254,7 @@ export async function handleSoloMode(clientWs) {
                         // Reschedule the timeout to check again after remaining wait
                         // PHASE 5: Use engine to set timeout
                         updateEngineFromPending();
-                        finalizationEngine.setPendingFinalizationTimeout(() => {
+                        finalizationEngine.setPendingFinalizationTimeout(async () => {
                           // PHASE 5: Sync and null check (CRITICAL)
                           syncPendingFinalization();
                           if (!pendingFinalization) {
@@ -3120,11 +3331,49 @@ export async function handleSoloMode(clientWs) {
                           // longestPartialText = '';
                           // latestPartialTime = 0;
                           // longestPartialTime = 0;
-                          // PHASE 5: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
-                        syncPendingFinalization();
                           console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
-                          processFinalText(textToProcess);
+                          // Verify snapshot.segmentId exists in FinalityGate before committing (Fix 4)
+                          if (!snapshot.segmentId) {
+                            console.log(`[SoloMode] ⚠️ Snapshot segmentId is null, clearing pending finalization`);
+                            finalizationEngine.clearPendingFinalization();
+                            syncPendingFinalization();
+                            return;
+                          }
+                          
+                          // Check if segment still exists in FinalityGate state
+                          if (coreEngine?.finalityGate && !coreEngine.finalityGate.isFinalized(snapshot.segmentId)) {
+                            const bestCandidate = coreEngine.finalityGate.getBestCandidate(snapshot.segmentId);
+                            if (!bestCandidate && !coreEngine.finalityGate.isRecoveryPending(snapshot.segmentId)) {
+                              console.log(`[SoloMode] ⚠️ Segment ${snapshot.segmentId} missing from FinalityGate state, clearing pending finalization`);
+                              finalizationEngine.clearPendingFinalization();
+                              syncPendingFinalization();
+                              return;
+                            }
+                          }
+                          
+                          // Finalize using snapshot segment ID (Fix 3)
+                          const result = await processFinalText(textToProcess, { segmentId: snapshot.segmentId });
+                          
+                          // Handle idempotent success for already_finalized (Fix 2)
+                          if (result.accepted || result.reason === 'already_finalized') {
+                            // PHASE 5: Clear using engine
+                            finalizationEngine.clearPendingFinalization();
+                            syncPendingFinalization();
+                          } else if (result.reason === 'recovery_pending') {
+                            console.log(`[SoloMode] ⏳ Safety finalization recovery pending for segment ${snapshot.segmentId}, will retry in 250ms`);
+                            setTimeout(async () => {
+                              const retryResult = await processFinalText(textToProcess, { segmentId: snapshot.segmentId });
+                              if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                                finalizationEngine.clearPendingFinalization();
+                                syncPendingFinalization();
+                                console.log(`[SoloMode] ✅ Safety finalization retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'finalized'}`);
+                              } else {
+                                console.log(`[SoloMode] ⚠️ Safety finalization retry failed for segment ${snapshot.segmentId} - ${retryResult.reason}, preserving state`);
+                              }
+                            }, 250);
+                          } else {
+                            console.log(`[SoloMode] ⚠️ Finalization rejected for segment ${snapshot.segmentId} - ${result.reason}, preserving state`);
+                          }
                         }, remainingWait);
                         return; // Don't commit yet
                       }
@@ -3137,17 +3386,21 @@ export async function handleSoloMode(clientWs) {
                       // longestPartialText = '';
                       // latestPartialTime = 0;
                       // longestPartialTime = 0;
-                      // PHASE 5: Clear using engine (prevents duplicate processing)
-                      finalizationEngine.clearPendingFinalization();
-                      syncPendingFinalization();
                       
                       if (!finalEndsWithCompleteSentence) {
                         console.log(`[SoloMode] ⚠️ Committing incomplete sentence after ${waitTime}ms wait (max wait: ${MAX_FINALIZATION_WAIT_MS}ms)`);
                       }
                       console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                       
-                      // Process final - translate and send to client
-                      processFinalText(textToProcess);
+                      // Process final - translate and send to client (use snapshot segment ID)
+                      const result = await processFinalText(textToProcess, { segmentId: snapshot.segmentId });
+                      if (result.accepted) {
+                        // PHASE 5: Clear using engine - ONLY if commit succeeded (prevents duplicate processing)
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
+                      } else {
+                        console.log(`[SoloMode] ⚠️ Finalization rejected for segment ${snapshot.segmentId} - ${result.reason}, preserving state`);
+                      }
                     }, WAIT_FOR_PARTIALS_MS);
                 }
               });

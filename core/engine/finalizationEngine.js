@@ -90,7 +90,7 @@ export class FinalizationEngine {
   /**
    * Set pending finalization timeout
    * 
-   * @param {Function} callback - Callback to execute when timeout fires
+   * @param {Function} callback - Callback to execute when timeout fires (may be async)
    * @param {number} delayMs - Delay in milliseconds
    */
   setPendingFinalizationTimeout(callback, delayMs) {
@@ -98,7 +98,13 @@ export class FinalizationEngine {
       clearTimeout(this.pendingFinalization.timeout);
     }
     if (this.pendingFinalization) {
-      this.pendingFinalization.timeout = setTimeout(callback, delayMs);
+      this.pendingFinalization.timeout = setTimeout(async () => {
+        try {
+          await callback();
+        } catch (err) {
+          console.error('[FinalizationEngine] Pending finalization callback failed:', err);
+        }
+      }, delayMs);
     }
   }
 

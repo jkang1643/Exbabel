@@ -104,6 +104,224 @@ export async function handleHostConnection(clientWs, sessionId) {
   // CRITICAL: Safety mechanism to ensure all partials get finalized
   // Track safety check interval (declared in outer scope so it can be cleared on disconnect)
   let partialSafetyCheckInterval = null;
+  
+  // Track current segment ID for safety finalization
+  let currentSegmentId = null;
+
+  // --------------------
+  // Recovery event queue
+  // --------------------
+  const recoveryQueues = new Map(); // segmentId -> Array<RecoveryEvent> (FINALs only)
+  const recoveryQueuedBestPartial = new Map(); // segmentId -> { text, meta, receivedAt } (coalesced best PARTIAL)
+  const drainingRecoveryQueue = new Map(); // segmentId -> boolean (track draining state per segment)
+  const MAX_RECOVERY_QUEUE_EVENTS = 300;
+
+  function enqueueDuringRecovery(eventType, text, isHostMode = true, meta = {}, segmentIdOverride = null) {
+    try {
+      const segId = segmentIdOverride || currentSegmentId;
+
+      if (!segId) {
+        console.warn('[HostMode] ⚠️ enqueueDuringRecovery called with no segmentId available');
+        return;
+      }
+
+      const textStr = (text || '').toString().trim();
+      if (!textStr) {
+        return; // Skip empty text
+      }
+
+      if (eventType === 'PARTIAL') {
+        // Coalesce PARTIALs - keep only the best (longest) one
+        const prev = recoveryQueuedBestPartial.get(segId);
+        if (!prev || textStr.length > prev.text.length) {
+          recoveryQueuedBestPartial.set(segId, {
+            text: textStr,
+            meta: meta || {},
+            receivedAt: Date.now()
+          });
+          console.log(`[HostMode] 📦 Coalesced PARTIAL for ${segId} (len=${textStr.length}${prev ? `, prev=${prev.text.length}` : ''})`);
+        } else {
+          console.log(`[HostMode] 📦 PARTIAL for ${segId} skipped (shorter: ${textStr.length} <= ${prev.text.length})`);
+        }
+        return; // PARTIALs are not queued, only coalesced
+      }
+
+      // FINAL events are queued normally
+      const q = recoveryQueues.get(segId) || [];
+      q.push({
+        type: eventType,                 // 'FINAL'
+        text: textStr,
+        meta: meta || {},
+        isHostMode: !!isHostMode,
+        receivedAt: Date.now(),
+        enqueuedAt: Date.now(),
+        segmentIdAtEnqueue: segId
+      });
+
+      if (q.length > MAX_RECOVERY_QUEUE_EVENTS) {
+        q.splice(0, q.length - MAX_RECOVERY_QUEUE_EVENTS);
+      }
+
+      recoveryQueues.set(segId, q);
+      console.log(`[HostMode] 📦 Queued ${eventType} event for segment ${segId} (queue size: ${q.length}, segmentId: ${segId})`);
+    } catch (err) {
+      console.error('[HostMode] 🚨 enqueueDuringRecovery failed:', err);
+    }
+  }
+
+  async function drainRecoveryQueue(segmentId, broadcastWithSequenceFn = null, syncPartialVariablesFn = null, processFinalTextFn = null) {
+    if (!segmentId) {
+      console.warn('[HostMode] ⚠️ drainRecoveryQueue called with no segmentId');
+      return;
+    }
+
+    // Prevent concurrent draining for the same segment
+    if (drainingRecoveryQueue.get(segmentId)) {
+      console.log(`[HostMode] ⏸️ Already draining recovery queue for segment ${segmentId}, skipping`);
+      return;
+    }
+
+    // CRITICAL: Check if recovery is still pending before starting
+    const locked = coreEngine?.finalityGate?.isRecoveryPending(segmentId);
+    if (locked) {
+      console.log(`[HostMode] ⏸️ Recovery still pending for segment ${segmentId} - cannot drain yet`);
+      return;
+    }
+
+    // ✅ FIX 2: Liveness guarantee (Invariant 4 - Finalization Liveness)
+    // Check if FinalityGate has a bestCandidate first (preferred path)
+    const bestCandidate = coreEngine?.finalityGate?.getBestCandidate(segmentId);
+    if (bestCandidate && !coreEngine?.finalityGate?.isFinalized(segmentId)) {
+      console.log(`[HostMode] 🔒 Liveness: FinalityGate has bestCandidate for ${segmentId} (source=${bestCandidate.source === CandidateSource.Recovery ? 'Recovery' : bestCandidate.source === CandidateSource.AsrFinal ? 'AsrFinal' : bestCandidate.source === CandidateSource.Forced ? 'Forced' : 'Grammar'})`);
+      try {
+        // Finalize the best candidate (already a CANDIDATE, not a PARTIAL)
+        if (!processFinalTextFn) {
+          console.error(`[HostMode] ⚠️ processFinalTextFn not provided to drainRecoveryQueue`);
+          return;
+        }
+        await processFinalTextFn(bestCandidate.text, {
+          segmentId: segmentId,
+          candidateSource: bestCandidate.source,
+          forceFinal: bestCandidate.source !== CandidateSource.Grammar
+        });
+        console.log(`[HostMode] ✅ Liveness: finalized segment ${segmentId} with bestCandidate`);
+      } catch (err) {
+        console.error(`[HostMode] ⚠️ Failed to finalize bestCandidate for ${segmentId}:`, err);
+      }
+    } else {
+      // Fallback: Only use best partial if no bestCandidate exists AND no FINAL in queue
+      // This ensures we don't violate Invariant 1 (Partial Non-Finality) unnecessarily
+      const bestPartial = recoveryQueuedBestPartial.get(segmentId);
+      const qCheck = recoveryQueues.get(segmentId);
+      const hasQueuedFinals = qCheck && qCheck.length > 0;
+      
+      if (!hasQueuedFinals && bestPartial && bestPartial.text && bestPartial.text.trim().length >= 10) {
+        const bestPartialText = bestPartial.text.trim();
+        console.log(`[HostMode] 🔒 Liveness fallback: no bestCandidate or FINALs, using best partial for ${segmentId} (len=${bestPartialText.length})`);
+        console.log(`[HostMode] ⚠️ NOTE: Converting PARTIAL → CANDIDATE → FINAL (last resort for liveness)`);
+        
+        try {
+          // Submit as Forced CANDIDATE (not FINAL) - processFinalText will handle conversion
+          // This is PARTIAL → CANDIDATE → FINAL, which is allowed per Invariant 1
+          if (!processFinalTextFn) {
+            console.error(`[HostMode] ⚠️ processFinalTextFn not provided to drainRecoveryQueue`);
+            return;
+          }
+          await processFinalTextFn(bestPartialText, {
+            segmentId: segmentId,
+            candidateSource: CandidateSource.Forced,
+            forceFinal: true
+          });
+          console.log(`[HostMode] ✅ Liveness fallback: finalized segment ${segmentId} with best partial`);
+        } catch (err) {
+          console.error(`[HostMode] ⚠️ Failed to force-finalize best partial for ${segmentId}:`, err);
+        }
+      } else if (hasQueuedFinals) {
+        console.log(`[HostMode] ℹ️ Liveness: Skipping best partial - ${qCheck.length} FINAL(s) queued will be processed`);
+      } else if (!bestPartial || !bestPartial.text || bestPartial.text.trim().length < 10) {
+        console.log(`[HostMode] ℹ️ Liveness: No best partial available (or too short) for ${segmentId}`);
+      }
+    }
+
+    // Clear best partial cache
+    recoveryQueuedBestPartial.delete(segmentId);
+
+    const q = recoveryQueues.get(segmentId);
+    if (!q || q.length === 0) {
+      console.log(`[HostMode] 🧹 No recovery queue for segment ${segmentId} (or already processed)`);
+      return;
+    }
+
+    // Mark as draining
+    drainingRecoveryQueue.set(segmentId, true);
+    const initialQueueSize = q.length;
+    let drainedCount = 0;
+
+    try {
+      console.log(`[HostMode] 🧹 Starting to drain recovery queue for ${segmentId}: ${initialQueueSize} FINAL event(s)`);
+
+      // Replay FINALs in order (PARTIALs are not queued anymore, only coalesced)
+      while (q.length > 0) {
+        const evt = q[0]; // Peek at first event
+
+        // CRITICAL: Check if recovery is STILL pending before processing each event
+        const stillLocked = coreEngine?.finalityGate?.isRecoveryPending(segmentId);
+        if (stillLocked) {
+          console.log(`[HostMode] ⏸️ Recovery still pending for segment ${segmentId} - stopping drain (${q.length} events remaining)`);
+          return; // Bail out, will retry when recovery completes
+        }
+
+        // Safe to process - remove from queue
+        q.shift();
+        drainedCount++;
+
+        try {
+          const evtText = (evt.text || '').trim();
+          if (!evtText) {
+            console.log(`[HostMode] ⏭️ Skipping empty event in recovery queue`);
+            continue;
+          }
+
+          // Queue should only contain FINALs now (PARTIALs are coalesced, not queued)
+          if (evt.type === 'FINAL') {
+            // ✅ FIX 3: Preserve original candidateSource intent instead of forcing Forced
+            const candidateSource = evt.meta?.candidateSource ||
+              (evt.meta?.forceFinal ? CandidateSource.Forced : CandidateSource.Grammar);
+
+            if (!processFinalTextFn) {
+              console.error(`[HostMode] ⚠️ processFinalTextFn not provided to drainRecoveryQueue`);
+              return;
+            }
+            await processFinalTextFn(evtText, {
+              segmentId: evt.segmentIdAtEnqueue || segmentId,
+              candidateSource: candidateSource,
+              forceFinal: candidateSource !== CandidateSource.Grammar
+            });
+
+            const sourceName = candidateSource === CandidateSource.Recovery ? 'Recovery' :
+                              candidateSource === CandidateSource.AsrFinal ? 'AsrFinal' :
+                              candidateSource === CandidateSource.Forced ? 'Forced' :
+                              candidateSource === CandidateSource.Grammar ? 'Grammar' : 'Unknown';
+            console.log(`[HostMode] 🔄 Replayed FINAL: "${evtText.substring(0, 50)}..." (${drainedCount}/${initialQueueSize}, source=${sourceName})`);
+          } else {
+            console.warn(`[HostMode] ⚠️ Unexpected event type in recovery queue: ${evt.type} (should only be FINAL)`);
+          }
+        } catch (err) {
+          console.error(`[HostMode] ⚠️ Failed to replay recovery-queued event for ${segmentId}:`, err);
+          // Continue with next event even if this one failed
+        }
+      }
+
+      // All events processed - remove queue
+      recoveryQueues.delete(segmentId);
+      console.log(`[HostMode] ✅ Finished draining recovery queue for ${segmentId}: ${drainedCount} FINAL event(s) processed`);
+    } catch (err) {
+      console.error(`[HostMode] 🚨 drainRecoveryQueue failed for segment ${segmentId}:`, err);
+    } finally {
+      // Always clear draining flag
+      drainingRecoveryQueue.delete(segmentId);
+    }
+  }
 
   // Helper: Measure RTT from client timestamp
   const measureRTT = (clientTimestamp) => {
@@ -428,6 +646,9 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Queue for finals that arrive while another is being processed
               const finalProcessingQueue = [];
               
+              // Snapshot for skipped FINAL fragments (Fix 5)
+              let pendingFinalSnapshot = null;
+              
               // CRITICAL: Safety mechanism to ensure all partials get finalized
               // Track the last time we received a partial or final
               let lastTranscriptActivity = Date.now();
@@ -435,6 +656,16 @@ export async function handleHostConnection(clientWs, sessionId) {
               const PARTIAL_MAX_AGE_MS = 10000; // Finalize partials older than 10 seconds
               
               // Safety function to finalize any pending partials
+              const finalizePendingPartials = (reason = 'timeout', segmentIdSnapshot = null) => {
+                // Capture current segment ID at execution time for comparison
+                const activeId = currentSegmentId;
+                
+                // If snapshot was provided, check if segment is still active
+                if (segmentIdSnapshot !== null && segmentIdSnapshot !== activeId) {
+                  console.log(`[HostMode] ⏭️ Skipping finalization - segment ${segmentIdSnapshot} is no longer active (current: ${activeId})`);
+                  return;
+                }
+                
                 syncPartialVariables();
                 syncPendingFinalization();
                 
@@ -448,12 +679,19 @@ export async function handleHostConnection(clientWs, sessionId) {
                   console.log(`[HostMode] 🔒 SAFETY: Finalizing pending partials (reason: ${reason}, age: ${timeSinceLastPartial}ms)`);
                   console.log(`[HostMode]   Partial text: "${longestPartialText.substring(0, 80)}..."`);
                   
+                  // Capture segment snapshot for safety finalization (Fix 3)
+                  const safetySnapshot = {
+                    segmentId: activeId,
+                    text: longestPartialText,
+                    timestamp: Date.now()
+                  };
+                  
                   // Create pending finalization for the longest partial
-                  finalizationEngine.createPendingFinalization(longestPartialText, null);
+                  finalizationEngine.createPendingFinalization(longestPartialText, safetySnapshot);
                   syncPendingFinalization();
                   
                   // Schedule immediate finalization (short timeout)
-                  finalizationEngine.setPendingFinalizationTimeout(() => {
+                  finalizationEngine.setPendingFinalizationTimeout(async () => {
                     syncPendingFinalization();
                     syncPartialVariables();
                     if (!pendingFinalization) {
@@ -461,22 +699,93 @@ export async function handleHostConnection(clientWs, sessionId) {
                       return;
                     }
                     
-                    // Use longest partial if available
-                    let textToCommit = pendingFinalization.text;
-                    if (longestPartialText && longestPartialText.length > pendingFinalization.text.length) {
-                      const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
+                    // Use snapshot if available, otherwise fallback to current state (Fix 3)
+                    const snapshot = pendingFinalization.snapshot || { segmentId: activeId, text: pendingFinalization.text };
+                    
+                    // CRITICAL: Skip safety finalization if recovery is pending for this segment
+                    if (snapshot.segmentId && coreEngine?.finalityGate?.isRecoveryPending(snapshot.segmentId)) {
+                      console.log(`[HostMode] 🔒 Safety finalize skipped - recovery pending for ${snapshot.segmentId}`);
+                      return;
+                    }
+                    
+                    let textToCommit = snapshot.text;
+                    
+                    // Check for pending FINAL snapshot (Fix 5)
+                    if (pendingFinalSnapshot && pendingFinalSnapshot.segmentId === snapshot.segmentId) {
+                      // Use the longer of snapshot text or pending FINAL snapshot
+                      const snapshotText = pendingFinalSnapshot.text;
+                      if (snapshotText.length > textToCommit.length) {
+                        textToCommit = snapshotText;
+                        console.log(`[HostMode] ✅ Using pending FINAL snapshot: "${snapshotText.substring(0, 60)}..."`);
+                      }
+                      pendingFinalSnapshot = null; // Clear after use
+                    }
+                    
+                    // Use longest partial if available and it extends the snapshot
+                    if (longestPartialText && longestPartialText.length > textToCommit.length) {
+                      const longestExtends = partialTracker.checkLongestExtends(textToCommit, 10000);
                       if (longestExtends) {
                         textToCommit = longestExtends.extendedText;
                         console.log(`[HostMode] ✅ Safety finalization using longest partial: "${longestExtends.missingWords}"`);
                       }
                     }
                     
-                    partialTracker.reset();
-                    syncPartialVariables();
-                    finalizationEngine.clearPendingFinalization();
-                    syncPendingFinalization();
-                    console.log(`[HostMode] ✅ SAFETY: Finalized pending partial: "${textToCommit.substring(0, 80)}..."`);
-                    processFinalText(textToCommit);
+                    // Verify snapshot.segmentId exists in FinalityGate before committing (Fix 4)
+                    if (!snapshot.segmentId) {
+                      console.log(`[HostMode] ⚠️ SAFETY: Snapshot segmentId is null, clearing pending finalization`);
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      return;
+                    }
+                    
+                    // Check if segment still exists in FinalityGate state
+                    if (coreEngine?.finalityGate && !coreEngine.finalityGate.isFinalized(snapshot.segmentId)) {
+                      // Segment not finalized - check if it exists (has state)
+                      const bestCandidate = coreEngine.finalityGate.getBestCandidate(snapshot.segmentId);
+                      if (!bestCandidate && !coreEngine.finalityGate.isRecoveryPending(snapshot.segmentId)) {
+                        // No state exists - try to create segment state first before clearing
+                        coreEngine.finalityGate.openSegment(snapshot.segmentId);
+                        const retryCandidate = coreEngine.finalityGate.getBestCandidate(snapshot.segmentId);
+                        if (!retryCandidate) {
+                          // Still no candidate after creating state - segment was likely reset/cleared
+                          console.log(`[HostMode] ⚠️ SAFETY: Segment ${snapshot.segmentId} missing from FinalityGate state, clearing pending finalization`);
+                          finalizationEngine.clearPendingFinalization();
+                          syncPendingFinalization();
+                          return;
+                        }
+                        // State created successfully - continue with retryCandidate (or proceed with textToCommit)
+                      }
+                    }
+                    
+                    // Finalize using snapshot segment ID (Fix 3)
+                    const result = await processFinalText(textToCommit, { segmentId: snapshot.segmentId });
+                    
+                    // Handle idempotent success for already_finalized (Fix 2)
+                    if (result.accepted || result.reason === 'already_finalized') {
+                      partialTracker.reset();
+                      syncPartialVariables();
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      const statusText = result.accepted ? 'Finalized' : 'Already finalized (idempotent)';
+                      console.log(`[HostMode] ✅ SAFETY: ${statusText} pending partial: "${textToCommit.substring(0, 80)}..." (segment: ${snapshot.segmentId}, reason: ${result.reason || 'committed'})`);
+                    } else if (result.reason === 'recovery_pending') {
+                      // Retry after delay (Fix 2 - retry logic)
+                      console.log(`[HostMode] ⏳ SAFETY: Recovery pending for segment ${snapshot.segmentId}, will retry in 250ms`);
+                      setTimeout(async () => {
+                        const retryResult = await processFinalText(textToCommit, { segmentId: snapshot.segmentId });
+                        if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                          partialTracker.reset();
+                          syncPartialVariables();
+                          finalizationEngine.clearPendingFinalization();
+                          syncPendingFinalization();
+                          console.log(`[HostMode] ✅ SAFETY: Retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'finalized'}: "${textToCommit.substring(0, 80)}..."`);
+                        } else {
+                          console.log(`[HostMode] ⚠️ SAFETY: Retry failed for segment ${snapshot.segmentId} - ${retryResult.reason}, preserving state`);
+                        }
+                      }, 250);
+                    } else {
+                      console.log(`[HostMode] ⚠️ SAFETY: Finalization rejected for segment ${snapshot.segmentId} - ${result.reason}, preserving state`);
+                    }
                   }, 500); // Short timeout for safety finalization
                 } else if (hasPendingFinal) {
                   // Check if pending final has been waiting too long
@@ -485,11 +794,34 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] 🔒 SAFETY: Pending final has been waiting too long (${timeSincePending}ms) - forcing commit`);
                     finalizationEngine.clearPendingFinalizationTimeout();
                     
+                    // Use snapshot if available, otherwise fallback to current state (Fix 3)
+                    // Capture currentSegmentId at this point (may have changed since function started)
+                    const currentIdAtExecution = currentSegmentId;
+                    const snapshot = pendingFinalization.snapshot || { segmentId: currentIdAtExecution, text: pendingFinalization.text };
+                    
+                    // CRITICAL: Skip safety finalization if recovery is pending for this segment
+                    if (snapshot.segmentId && coreEngine?.finalityGate?.isRecoveryPending(snapshot.segmentId)) {
+                      console.log(`[HostMode] 🔒 Safety finalize skipped - recovery pending for ${snapshot.segmentId}`);
+                      return;
+                    }
+                    
+                    let textToCommit = snapshot.text;
+                    
+                    // Check for pending FINAL snapshot (Fix 5)
+                    if (pendingFinalSnapshot && pendingFinalSnapshot.segmentId === snapshot.segmentId) {
+                      // Use the longer of snapshot text or pending FINAL snapshot
+                      const snapshotText = pendingFinalSnapshot.text;
+                      if (snapshotText.length > textToCommit.length) {
+                        textToCommit = snapshotText;
+                        console.log(`[HostMode] ✅ Using pending FINAL snapshot: "${snapshotText.substring(0, 60)}..."`);
+                      }
+                      pendingFinalSnapshot = null; // Clear after use
+                    }
+                    
                     // Check for extending partials one more time
                     syncPartialVariables();
-                    let textToCommit = pendingFinalization.text;
-                    const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
-                    const latestExtends = partialTracker.checkLatestExtends(pendingFinalization.text, 5000);
+                    const longestExtends = partialTracker.checkLongestExtends(textToCommit, 10000);
+                    const latestExtends = partialTracker.checkLatestExtends(textToCommit, 5000);
                     
                     if (longestExtends) {
                       textToCommit = longestExtends.extendedText;
@@ -499,18 +831,76 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode] ✅ Safety finalization using latest partial: "${latestExtends.missingWords}"`);
                     }
                     
-                    partialTracker.reset();
-                    syncPartialVariables();
-                    finalizationEngine.clearPendingFinalization();
-                    syncPendingFinalization();
-                    console.log(`[HostMode] ✅ SAFETY: Forced finalization of pending final: "${textToCommit.substring(0, 80)}..."`);
-                    processFinalText(textToCommit);
+                    // Verify snapshot.segmentId exists in FinalityGate before committing (Fix 4)
+                    if (!snapshot.segmentId) {
+                      console.log(`[HostMode] ⚠️ SAFETY: Snapshot segmentId is null, clearing pending finalization`);
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      return;
+                    }
+                    
+                    // Check if segment still exists in FinalityGate state
+                    if (coreEngine?.finalityGate && !coreEngine.finalityGate.isFinalized(snapshot.segmentId)) {
+                      const bestCandidate = coreEngine.finalityGate.getBestCandidate(snapshot.segmentId);
+                      if (!bestCandidate && !coreEngine.finalityGate.isRecoveryPending(snapshot.segmentId)) {
+                        // No state exists - try to create segment state first before clearing
+                        coreEngine.finalityGate.openSegment(snapshot.segmentId);
+                        const retryCandidate = coreEngine.finalityGate.getBestCandidate(snapshot.segmentId);
+                        if (!retryCandidate) {
+                          // Still no candidate after creating state - segment was likely reset/cleared
+                          console.log(`[HostMode] ⚠️ SAFETY: Segment ${snapshot.segmentId} missing from FinalityGate state, clearing pending finalization`);
+                          finalizationEngine.clearPendingFinalization();
+                          syncPendingFinalization();
+                          return;
+                        }
+                        // State created successfully - continue with retryCandidate (or proceed with textToCommit)
+                      }
+                    }
+                    
+                    // Finalize using snapshot segment ID (Fix 3) - wrap in async IIFE
+                    (async () => {
+                      const result = await processFinalText(textToCommit, { segmentId: snapshot.segmentId });
+                      
+                      // Handle idempotent success for already_finalized (Fix 2)
+                      if (result.accepted || result.reason === 'already_finalized') {
+                        partialTracker.reset();
+                        syncPartialVariables();
+                        finalizationEngine.clearPendingFinalization();
+                        syncPendingFinalization();
+                        const statusText = result.accepted ? 'Forced finalization' : 'Already finalized (idempotent)';
+                        console.log(`[HostMode] ✅ SAFETY: ${statusText} of pending final: "${textToCommit.substring(0, 80)}..." (segment: ${snapshot.segmentId})`);
+                      } else if (result.reason === 'recovery_pending') {
+                        // Retry after delay (Fix 2)
+                        console.log(`[HostMode] ⏳ SAFETY: Recovery pending for segment ${snapshot.segmentId}, will retry in 250ms`);
+                        setTimeout(async () => {
+                          const retryResult = await processFinalText(textToCommit, { segmentId: snapshot.segmentId });
+                          if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                            partialTracker.reset();
+                            syncPartialVariables();
+                            finalizationEngine.clearPendingFinalization();
+                            syncPendingFinalization();
+                            console.log(`[HostMode] ✅ SAFETY: Retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'finalized'}: "${textToCommit.substring(0, 80)}..."`);
+                          } else {
+                            console.log(`[HostMode] ⚠️ SAFETY: Retry failed for segment ${snapshot.segmentId} - ${retryResult.reason}, preserving state`);
+                          }
+                        }, 250);
+                      } else {
+                        console.log(`[HostMode] ⚠️ SAFETY: Finalization rejected for segment ${snapshot.segmentId} - ${result.reason}, preserving state`);
+                      }
+                    })();
                   }
                 }
               };
               
               // Start periodic safety check
               partialSafetyCheckInterval = setInterval(() => {
+                try {
+                  // Capture currentSegmentId at schedule time
+                  const snapshotId = currentSegmentId;
+                  finalizePendingPartials('periodic_check', snapshotId);
+                } catch (e) {
+                  console.error('[HostMode] 🚨 finalizePendingPartials crashed:', e);
+                }
               }, PARTIAL_SAFETY_CHECK_INTERVAL_MS);
               
               // Extract final processing into separate async function (using solo mode logic, adapted for broadcasting)
@@ -522,52 +912,37 @@ export async function handleHostConnection(clientWs, sessionId) {
                 if (!options.segmentId && candidateSegmentId !== currentSegmentId && candidateSegmentId !== null) {
                   console.log(`[HostMode] 🔴 BLOCKED: Attempted to finalize stale segment ${candidateSegmentId} (current: ${currentSegmentId})`);
                   console.log(`[HostMode]   Text: "${textToProcess.substring(0, 60)}..."`);
-                  return; // Block stale segment finalization
+                  return Promise.resolve({ accepted: false, reason: 'stale_segment', segmentId: candidateSegmentId, text: textToProcess }); // Block stale segment finalization
                 }
                 
                 // Use the segmentId from options if provided (for boundary finalization), otherwise use currentSegmentId
                 const targetSegmentId = options.segmentId || currentSegmentId;
                 
-                // CRITICAL: Use FinalityGate to enforce dominance rules - ALL candidates must go through
-                // FinalityGate is the single authority - never bypass it
+                // Debug logging to verify segmentId attribution
+                if (options.segmentId) {
+                  console.log(`[HostMode] 🔍 processFinalText: Using explicit segmentId from options: ${options.segmentId}`);
+                } else {
+                  console.log(`[HostMode] 🔍 processFinalText: Using currentSegmentId: ${currentSegmentId}`);
+                }
+                console.log(`[HostMode] 🔍 processFinalText: targetSegmentId=${targetSegmentId}, text="${textToProcess.substring(0, 60)}..."`);
+                
+                // CRITICAL: Early blocking checks - check but don't finalize yet
+                // Finalization will happen AFTER skip-fragment checks to ensure atomicity
                 if (coreEngine && coreEngine.finalityGate) {
-                  // Determine candidate source from options (recovery candidates pass it explicitly)
-                  const candidateSource = options.candidateSource || (options.forceFinal ? CandidateSource.Forced : CandidateSource.Grammar);
+                  // Check specific blocking reasons before proceeding
+                  const isAlreadyFinalized = coreEngine.finalityGate.isFinalized(targetSegmentId);
+                  const isRecoveryPending = coreEngine.finalityGate.isRecoveryPending(targetSegmentId);
                   
-                  const candidate = {
-                    text: textToProcess.trim(),
-                    source: candidateSource,
-                    segmentId: targetSegmentId, // Use target segment ID for FinalityGate isolation
-                    timestamp: Date.now(),
-                    options: options
-                  };
-                  
-                  // Submit candidate to FinalityGate (updates best candidate if better)
-                  // Note: Recovery candidates may have already been submitted in RecoveryStreamEngine,
-                  // but submitCandidate is idempotent (same candidate won't change bestCandidate)
-                  const result = coreEngine.finalityGate.submitCandidate(candidate);
-                  
-                  if (!result.canCommit) {
-                    console.log(`[HostMode] 🔴 FinalityGate: Blocking ${candidateSource === CandidateSource.Forced ? 'Forced' : candidateSource === CandidateSource.Recovery ? 'Recovery' : 'Grammar'} candidate (recovery pending or already finalized)`);
+                  if (isAlreadyFinalized) {
+                    console.log(`[HostMode] 🔴 FinalityGate: Segment ${targetSegmentId} already finalized`);
                     console.log(`[HostMode]   Text: "${textToProcess.substring(0, 60)}..."`);
-                    return; // Blocked by FinalityGate (recovery pending or segment finalized)
+                    return Promise.resolve({ accepted: false, reason: 'already_finalized', segmentId: targetSegmentId, text: textToProcess }); // Already finalized - idempotent
                   }
                   
-                  // Candidate can commit - finalize through FinalityGate (single authority)
-                  const finalized = coreEngine.finalityGate.finalizeSegment(targetSegmentId);
-                  if (!finalized) {
-                    console.log(`[HostMode] ⚠️ FinalityGate: No candidate to finalize (should not happen)`);
-                    return; // Nothing to finalize
-                  }
-                  
-                  // Use the finalized candidate text (may be different if recovery upgraded it)
-                  if (finalized.text !== textToProcess.trim()) {
-                    console.log(`[HostMode] ✅ FinalityGate: Using better candidate (${textToProcess.trim().length} → ${finalized.text.length} chars)`);
-                    console.log(`[HostMode]   Original: "${textToProcess.substring(0, 60)}..."`);
-                    console.log(`[HostMode]   Finalized: "${finalized.text.substring(0, 60)}..."`);
-                    textToProcess = finalized.text; // Use the better candidate
-                    // Merge options from finalized candidate
-                    Object.assign(options, finalized.options || {});
+                  if (isRecoveryPending) {
+                    console.log(`[HostMode] 🔴 FinalityGate: Recovery pending for segment ${targetSegmentId}`);
+                    console.log(`[HostMode]   Text: "${textToProcess.substring(0, 60)}..."`);
+                    return Promise.resolve({ accepted: false, reason: 'recovery_pending', segmentId: targetSegmentId, text: textToProcess }); // Recovery pending - should retry
                   }
                 }
                 
@@ -584,17 +959,17 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode] ⏭️ Skipping queued final - older version already committed (queued: ${queuedNormalized.length} chars, sent: ${lastSentNormalized.length} chars)`);
                       console.log(`[HostMode]   Would queue: "${textToProcess.substring(0, 80)}..."`);
                       console.log(`[HostMode]   Already sent: "${lastSentFinalText.substring(0, 80)}..."`);
-                      return; // Don't queue older version
+                      return Promise.resolve({ accepted: false, reason: 'older_version_committed', segmentId: targetSegmentId, text: textToProcess }); // Don't queue older version
                     }
                   }
                   
                   console.log(`[HostMode] ⏳ Final already being processed, queuing: "${textToProcess.substring(0, 60)}..."`);
                   finalProcessingQueue.push({ textToProcess, options });
-                  return; // Queue instead of skip
+                  return Promise.resolve({ accepted: false, reason: 'queued', segmentId: targetSegmentId, text: textToProcess }); // Queue instead of skip
                 }
                 
-                // Process immediately
-                (async () => {
+                // Process immediately - return Promise that resolves to status
+                return (async () => {
                   try {
                     // Set flag to prevent concurrent processing
                     isProcessingFinal = true;
@@ -707,17 +1082,31 @@ export async function handleHostConnection(clientWs, sessionId) {
                       const startsWithMatch = partialStartsWithFinalWords(longestTrimmed);
                       const containsAllWords = partialContainsAllFinalWords(longestTrimmed);
                       
-                      if (isLonger && (startsWithMatch || containsAllWords)) {
+                      // Only skip if:
+                      // 1. Partial starts with FINAL (exact match at start), OR
+                      // 2. FINAL is very short (≤3 words AND ≤20 chars) AND partial is much longer (≥50 chars)
+                      const isVeryShortFinal = finalWords.length <= 3 && trimmedText.length <= 20;
+                      const isMuchLongerPartial = longestTrimmed.length >= trimmedText.length + 50;
+                      
+                      if (isLonger && (startsWithMatch || (isVeryShortFinal && isMuchLongerPartial && containsAllWords))) {
                         // For forced finals, only skip if partial is significantly longer (allows forced finals through)
                         // For regular finals, skip if partial is longer
                         if (!isForcedFinal || isSignificantlyLonger) {
                           // Partial contains final words - skip the final fragment
                           console.log(`[HostMode] ⏸️ SKIPPING FINAL FRAGMENT (in processFinalText): "${trimmedText.substring(0, 50)}..." (${trimmedText.length} chars)`);
                           console.log(`[HostMode]   Active partial contains final words: "${longestTrimmed.substring(0, 50)}..." (${longestTrimmed.length} chars)`);
-                          console.log(`[HostMode]   Match type: startsWith=${startsWithMatch}, containsAll=${containsAllWords}`);
+                          console.log(`[HostMode]   Match type: startsWith=${startsWithMatch}, containsAll=${containsAllWords}, isVeryShortFinal=${isVeryShortFinal}, isMuchLongerPartial=${isMuchLongerPartial}`);
                           console.log(`[HostMode]   Fragment is contained in active partial - waiting for partial to finalize instead`);
+                          
+                          // CRITICAL: Capture snapshot before skipping (Fix 5)
+                          pendingFinalSnapshot = {
+                            segmentId: targetSegmentId,
+                            text: trimmedText,
+                            timestamp: Date.now()
+                          };
+                          
                           isProcessingFinal = false;
-                          return; // Exit early, don't process this final fragment
+                          return { accepted: false, reason: 'skipped_fragment', segmentId: targetSegmentId, text: trimmedText }; // Exit early, don't process this final fragment
                         }
                       }
                     }
@@ -731,19 +1120,93 @@ export async function handleHostConnection(clientWs, sessionId) {
                       const startsWithMatch = partialStartsWithFinalWords(latestTrimmed);
                       const containsAllWords = partialContainsAllFinalWords(latestTrimmed);
                       
-                      if (isLonger && (startsWithMatch || containsAllWords)) {
+                      // Only skip if:
+                      // 1. Partial starts with FINAL (exact match at start), OR
+                      // 2. FINAL is very short (≤3 words AND ≤20 chars) AND partial is much longer (≥50 chars)
+                      const isVeryShortFinal = finalWords.length <= 3 && trimmedText.length <= 20;
+                      const isMuchLongerPartial = latestTrimmed.length >= trimmedText.length + 50;
+                      
+                      if (isLonger && (startsWithMatch || (isVeryShortFinal && isMuchLongerPartial && containsAllWords))) {
                         // For forced finals, only skip if partial is significantly longer (allows forced finals through)
                         // For regular finals, skip if partial is longer
                         if (!isForcedFinal || isSignificantlyLonger) {
                           // Partial contains final words - skip the final fragment
                           console.log(`[HostMode] ⏸️ SKIPPING FINAL FRAGMENT (in processFinalText): "${trimmedText.substring(0, 50)}..." (${trimmedText.length} chars)`);
                           console.log(`[HostMode]   Active partial contains final words: "${latestTrimmed.substring(0, 50)}..." (${latestTrimmed.length} chars)`);
-                          console.log(`[HostMode]   Match type: startsWith=${startsWithMatch}, containsAll=${containsAllWords}`);
+                          console.log(`[HostMode]   Match type: startsWith=${startsWithMatch}, containsAll=${containsAllWords}, isVeryShortFinal=${isVeryShortFinal}, isMuchLongerPartial=${isMuchLongerPartial}`);
                           console.log(`[HostMode]   Fragment is contained in active partial - waiting for partial to finalize instead`);
+                          
+                          // CRITICAL: Capture snapshot before skipping (Fix 5)
+                          pendingFinalSnapshot = {
+                            segmentId: targetSegmentId,
+                            text: trimmedText,
+                            timestamp: Date.now()
+                          };
+                          
                           isProcessingFinal = false;
-                          return; // Exit early, don't process this final fragment
+                          return { accepted: false, reason: 'skipped_fragment', segmentId: targetSegmentId, text: trimmedText }; // Exit early, don't process this final fragment
                         }
                       }
+                    }
+                    
+                    // CRITICAL: FinalityGate finalize happens HERE (after skip checks) to ensure atomicity
+                    // If we got here, we're definitely going to emit, so it's safe to finalize
+                    if (coreEngine && coreEngine.finalityGate) {
+                      // Determine candidate source from options (recovery candidates pass it explicitly)
+                      const candidateSource = options.candidateSource || (options.forceFinal ? CandidateSource.Forced : CandidateSource.Grammar);
+                      
+                      const candidate = {
+                        text: trimmedText,
+                        source: candidateSource,
+                        segmentId: targetSegmentId, // Use target segment ID for FinalityGate isolation
+                        timestamp: Date.now(),
+                        options: options
+                      };
+                      
+                      // Submit candidate to FinalityGate (updates best candidate if better)
+                      // Note: Recovery candidates may have already been submitted in RecoveryStreamEngine,
+                      // but submitCandidate is idempotent (same candidate won't change bestCandidate)
+                      const result = coreEngine.finalityGate.submitCandidate(candidate);
+                      
+                      if (!result.canCommit) {
+                        // Fallback - should not happen if checks above are correct, but handle gracefully
+                        console.log(`[HostMode] 🔴 FinalityGate: Blocking ${candidateSource === CandidateSource.Forced ? 'Forced' : candidateSource === CandidateSource.Recovery ? 'Recovery' : 'Grammar'} candidate`);
+                        console.log(`[HostMode]   Text: "${trimmedText.substring(0, 60)}..."`);
+                        isProcessingFinal = false;
+                        return { accepted: false, reason: 'finality_gate_blocked', segmentId: targetSegmentId, text: trimmedText };
+                      }
+                      
+                      // Candidate can commit - finalize through FinalityGate (single authority)
+                      const finalized = coreEngine.finalityGate.finalizeSegment(targetSegmentId);
+                      if (!finalized) {
+                        console.log(`[HostMode] ⚠️ FinalityGate: No candidate to finalize (should not happen)`);
+                        isProcessingFinal = false;
+                        return { accepted: false, reason: 'no_candidate', segmentId: targetSegmentId, text: trimmedText }; // Nothing to finalize
+                      }
+                      
+                      // INVARIANT: If FinalityGate finalizes, we MUST emit
+                      // Track this for verification
+                      const finalizationCommitId = `${targetSegmentId}-${Date.now()}`;
+                      console.log(`[HostMode] 🔒 INVARIANT: FinalityGate finalized segment ${targetSegmentId}, commit ID: ${finalizationCommitId}`);
+                      
+                      // Use the finalized candidate text (may be different if recovery upgraded it)
+                      // Safety tweak: ensure we use finalized text before dedup/grammar/translation
+                      if (finalized.text !== trimmedText) {
+                        console.log(`[HostMode] ✅ FinalityGate: Using better candidate (${trimmedText.length} → ${finalized.text.length} chars)`);
+                        console.log(`[HostMode]   Original: "${trimmedText.substring(0, 60)}..."`);
+                        console.log(`[HostMode]   Finalized: "${finalized.text.substring(0, 60)}..."`);
+                        textToProcess = finalized.text; // Use the better candidate
+                        trimmedText = finalized.text.trim(); // Update trimmedText for consistency
+                        textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase(); // Update normalized text
+                        // Merge options from finalized candidate
+                        Object.assign(options, finalized.options || {});
+                      }
+                      
+                      // Store commit ID in options for later use
+                      options.commitId = finalizationCommitId;
+                    } else {
+                      // No FinalityGate - create commit ID anyway for tracking
+                      options.commitId = `${targetSegmentId}-${Date.now()}`;
                     }
                     
                     // Always check for duplicates if we have tracking data (not just within time window)
@@ -767,7 +1230,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             // They're identical - skip
                             console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (identical text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
                             isProcessingFinal = false;
-                            return;
+                            return { accepted: false, reason: 'duplicate_identical', segmentId: targetSegmentId, text: trimmedText };
                           } else if (textNormalized.length > lastSentFinalNormalized.length && 
                                      (textNormalized.startsWith(lastSentFinalNormalized) || 
                                       lastSentFinalNormalized.startsWith(textNormalized.substring(0, Math.min(textNormalized.length, lastSentFinalNormalized.length))))) {
@@ -778,7 +1241,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.log(`[HostMode]   Shorter (already sent): "${lastSentFinalText.substring(0, 80)}..." (${lastSentFinalNormalized.length} chars)`);
                             console.log(`[HostMode]   Longer (new, skipping): "${trimmedText.substring(0, 80)}..." (${textNormalized.length} chars)`);
                             isProcessingFinal = false;
-                            return; // Skip longer version to prevent duplication
+                            return { accepted: false, reason: 'duplicate_longer_contains_shorter', segmentId: targetSegmentId, text: trimmedText }; // Skip longer version to prevent duplication
                           }
                           
                           // CRITICAL: Check if one forced final is a prefix/extension of another
@@ -792,7 +1255,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 console.log(`[HostMode]   New: "${trimmedText.substring(0, 80)}..."`);
                                 console.log(`[HostMode]   Last sent: "${lastSentFinalText.substring(0, 80)}..."`);
                                 isProcessingFinal = false;
-                                return;
+                                return { accepted: false, reason: 'duplicate_new_is_prefix', segmentId: targetSegmentId, text: trimmedText };
                               }
                             }
                             
@@ -805,7 +1268,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                               } else if (prefixLen > 30) {
                                 console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (last sent is prefix of new but new is not longer, ${timeSinceLastFinal}ms ago), skipping`);
                                 isProcessingFinal = false;
-                                return;
+                                return { accepted: false, reason: 'duplicate_last_is_prefix_not_longer', segmentId: targetSegmentId, text: trimmedText };
                               }
                             }
                           }
@@ -833,12 +1296,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 console.log(`[HostMode]   Shorter (already sent): "${lastSentFinalText.substring(0, 80)}..." (${lastSentFinalNormalized.length} chars)`);
                                 console.log(`[HostMode]   Longer (new, skipping): "${trimmedText.substring(0, 80)}..." (${textNormalized.length} chars)`);
                                 isProcessingFinal = false;
-                                return; // Skip longer version to prevent duplication
+                                return { accepted: false, reason: 'duplicate_high_overlap_longer', segmentId: targetSegmentId, text: trimmedText }; // Skip longer version to prevent duplication
                               } else if (textNormalized.length <= lastSentFinalNormalized.length + 10) {
                                 // New text is NOT significantly longer - skip it (old one is better or same)
                                 console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
                                 isProcessingFinal = false;
-                                return;
+                                return { accepted: false, reason: 'duplicate_high_overlap_not_longer', segmentId: targetSegmentId, text: trimmedText };
                               }
                             }
                           }
@@ -855,7 +1318,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           console.log(`[HostMode]   Shorter: "${trimmedText.substring(0, 60)}..."`);
                           console.log(`[HostMode]   Longer (already sent): "${lastSentFinalText.substring(0, 60)}..."`);
                           isProcessingFinal = false;
-                          return; // Skip shorter version - longer one already sent
+                          return { accepted: false, reason: 'duplicate_shorter_version', segmentId: targetSegmentId, text: trimmedText }; // Skip shorter version - longer one already sent
                         }
                       }
                       
@@ -865,7 +1328,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (timeSinceLastFinal < 5000) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same original text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
                           isProcessingFinal = false; // Clear flag before returning
-                          return; // Skip processing duplicate
+                          return { accepted: false, reason: 'duplicate_same_original', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                         }
                       }
                       
@@ -875,7 +1338,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (textNormalized === lastSentFinalNormalized) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                           isProcessingFinal = false; // Clear flag before returning
-                          return; // Skip processing duplicate
+                          return { accepted: false, reason: 'duplicate_same_corrected', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                         }
                         
                         // Check for near-exact matches (very similar text within 5 seconds)
@@ -891,14 +1354,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.log(`[HostMode]   Shorter: "${trimmedText.substring(0, 60)}..."`);
                             console.log(`[HostMode]   Longer (already sent): "${lastSentFinalText.substring(0, 60)}..."`);
                             isProcessingFinal = false;
-                            return; // Skip shorter version
+                            return { accepted: false, reason: 'duplicate_shorter_version', segmentId: targetSegmentId, text: trimmedText }; // Skip shorter version
                           }
                           
                           // If texts are very similar (one contains the other) and length difference is small
                           if (similarity && lengthDiff < 10 && lengthDiff < Math.min(textNormalized.length, lastSentFinalNormalized.length) * 0.1) {
                             console.log(`[HostMode] ⚠️ Duplicate final detected (very similar text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                             isProcessingFinal = false; // Clear flag before returning
-                            return; // Skip processing duplicate
+                            return { accepted: false, reason: 'duplicate_very_similar', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                           }
                           
                           // CRITICAL: Also check for high word overlap (catches cases with punctuation/capitalization differences)
@@ -927,7 +1390,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.8 && lengthDiff < 20 && !isExtension) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
-                              return; // Skip processing duplicate
+                              return { accepted: false, reason: 'duplicate_high_word_overlap', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                             } else if (isExtension && wordOverlapRatio >= 0.8) {
                               console.log(`[HostMode] ✅ Allowing recovery update (extension detected: ${textWords.length} words vs ${lastSentWords.length} words, +${wordCountDiff} words, overlap ${(wordOverlapRatio * 100).toFixed(0)}%)`);
                             }
@@ -941,7 +1404,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                              Math.abs(textNormalized.length - lastSentFinalNormalized.length) < 5)) {
                           console.log(`[HostMode] ⚠️ Duplicate final detected (same corrected text), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                           isProcessingFinal = false; // Clear flag before returning
-                          return; // Skip processing duplicate
+                          return { accepted: false, reason: 'duplicate_same_corrected_continuation', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                         }
                         
                         // Also check word overlap for continuation window (catches punctuation/capitalization differences)
@@ -971,7 +1434,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.85 && lengthDiff < 15 && !isExtension) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% in continuation window), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
-                              return; // Skip processing duplicate
+                              return { accepted: false, reason: 'duplicate_high_overlap_continuation', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                             } else if (isExtension && wordOverlapRatio >= 0.85) {
                               console.log(`[HostMode] ✅ Allowing recovery update (extension detected: ${textWords.length} words vs ${lastSentWords.length} words, +${wordCountDiff} words, overlap ${(wordOverlapRatio * 100).toFixed(0)}%)`);
                             }
@@ -1006,7 +1469,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (wordOverlapRatio >= 0.9 && lengthDiff < 25 && !isExtension) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (very high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% outside time window, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
-                              return; // Skip processing duplicate
+                              return { accepted: false, reason: 'duplicate_very_high_overlap', segmentId: targetSegmentId, text: trimmedText }; // Skip processing duplicate
                             } else if (isExtension && wordOverlapRatio >= 0.9) {
                               console.log(`[HostMode] ✅ Allowing recovery update (extension detected: ${textWords.length} words vs ${lastSentWords.length} words, +${wordCountDiff} words, overlap ${(wordOverlapRatio * 100).toFixed(0)}%)`);
                             }
@@ -1157,7 +1620,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (!finalTextToProcess || finalTextToProcess.length === 0) {
                           console.log(`[HostMode] ⏭️ Skipping final - all words are duplicates of previous FINAL`);
                           isProcessingFinal = false;
-                          return;
+                          return { accepted: false, reason: 'all_words_duplicates', segmentId: targetSegmentId, text: trimmedText };
                         }
                         
                         // Update textNormalized for subsequent processing
@@ -1258,7 +1721,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log('[HostMode] No listeners yet, skipping translation');
                         // Still send to host
                         if (clientWs && clientWs.readyState === WebSocket.OPEN) {
-                          broadcastWithSequence({
+                          const seqId = broadcastWithSequence({
                             type: 'translation',
                             originalText: textToProcess,
                             correctedText: correctedText,
@@ -1270,8 +1733,19 @@ export async function handleHostConnection(clientWs, sessionId) {
                             hasCorrection: correctedText !== textToProcess,
                             forceFinal: !!options.forceFinal
                           }, false);
+                          
+                          // Enhanced logging (Fix 5)
+                          const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                          const finalText = correctedText || textToProcess;
+                          const textPreview = finalText.substring(0, 60);
+                          console.log(`[HostMode] ✅ EMITTED (no listeners): seqId=${seqId}, segmentId=${targetSegmentId}, text="${textPreview}..."`);
+                          console.log(`[HostMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully (no listeners), commit ID: ${commitId}`);
+                          return { accepted: true, reason: 'committed', segmentId: targetSegmentId, finalText, commitId };
+                        } else {
+                          // No client connection - return failure
+                          console.error(`[HostMode] 🔴 INVARIANT VIOLATION: Segment ${targetSegmentId} finalized but client not connected!`);
+                          return { accepted: false, reason: 'client_not_connected', segmentId: targetSegmentId, text: textToProcess };
                         }
-                        return;
                       }
 
                       // Translate the CORRECTED text (not the original) to all target languages
@@ -1386,7 +1860,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                           messageToSend.translationError = true;
                         }
                         
-                        broadcastWithSequence(messageToSend, false, targetLang);
+                        const seqId = broadcastWithSequence(messageToSend, false, targetLang);
+                        
+                        // Enhanced logging with seqId (Fix 5)
+                        const textPreview = (correctedText || textToProcess).substring(0, 60);
+                        console.log(`[HostMode] ✅ EMITTED: seqId=${seqId}, segmentId=${targetSegmentId}, text="${textPreview}..."`);
                       }
                       
                       // CRITICAL: Update last sent FINAL tracking after sending
@@ -1412,6 +1890,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // This allows next FINAL to generate a new segment ID
                       currentSegmentId = null;
                       console.log(`[HostMode] 🧹 Reset partial tracking and segment ID after final emission`);
+                      
+                      // INVARIANT: Log successful emission (Fix 5 & 6)
+                      // Note: seqId was already logged above in the broadcast loop per language
+                      const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                      const finalText = correctedText || textToProcess;
+                      console.log(`[HostMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully, commit ID: ${commitId}`);
+                      
+                      // Return success status with finalText
+                      return { accepted: true, reason: 'committed', segmentId: targetSegmentId, finalText, commitId };
                     } catch (error) {
                       console.error(`[HostMode] Final processing error:`, error);
                       // If it's a skip request error, use corrected text (or original if not set)
@@ -1449,6 +1936,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                         syncPartialVariables();
                         currentSegmentId = null;
                         console.log(`[HostMode] 🧹 Reset partial tracking and segment ID after final emission (error path)`);
+                        
+                        // Return success status if text was sent
+                        const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                        console.log(`[HostMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully (error path but text sent), commit ID: ${commitId}`);
+                        return { accepted: true, segmentId: targetSegmentId, text: finalText, commitId };
+                      } else {
+                        // Text was not sent - invariant violation
+                        console.error(`[HostMode] 🔴 INVARIANT VIOLATION: Segment ${targetSegmentId} finalized but not emitted! Error: ${error.message}`);
+                        return { accepted: false, reason: 'emission_failed', segmentId: targetSegmentId, text: textToProcess, error: error.message };
                       }
                       }
                     } finally {
@@ -1493,6 +1989,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // CRITICAL: Clear flag on outer error too
                     isProcessingFinal = false;
                     
+                    // Return failure status for outer error
+                    console.error(`[HostMode] 🔴 INVARIANT VIOLATION: Segment ${targetSegmentId} finalized but processing failed! Error: ${error.message}`);
+                    return { accepted: false, reason: 'processing_error', segmentId: targetSegmentId, text: textToProcess, error: error.message };
+                    
                     // Process next queued final even on error
                     // CRITICAL: Filter out queued finals that are older versions of text already committed
                     while (finalProcessingQueue.length > 0) {
@@ -1530,13 +2030,14 @@ export async function handleHostConnection(clientWs, sessionId) {
               
               // Set up result callback - handles both partials and finals (solo mode logic, adapted for broadcasting)
               speechStream.onResult(async (transcriptText, isPartial, meta = {}) => {
-                if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
-                
-                // CRITICAL: Null check - recovery stream may send null results
-                if (!transcriptText || transcriptText.length === 0) {
-                  console.log(`[HostMode] ⚠️ Received empty/null transcriptText from stream, ignoring`);
-                  return;
-                }
+                try {
+                  if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
+                  
+                  // CRITICAL: Null check - recovery stream may send null results
+                  if (!transcriptText || transcriptText.length === 0) {
+                    console.log(`[HostMode] ⚠️ Received empty/null transcriptText from stream, ignoring`);
+                    return;
+                  }
 
                 // 🧪 AUDIO BUFFER TEST: Log buffer status on every result (same as solo mode)
                 const audioBufferStatus = speechStream.getAudioBufferStatus();
@@ -1681,14 +2182,19 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log('[HostMode] 🔁 New partial extends forced final - merging and committing');
                       forcedCommitEngine.clearForcedFinalBufferTimeout();
                       const mergedFinal = partialTracker.mergeWithOverlap(forcedCommitEngine.getForcedFinalBuffer().text, transcriptText);
+                      let result;
                       if (mergedFinal) {
-                        processFinalText(mergedFinal, { forceFinal: true });
+                        result = await processFinalText(mergedFinal, { forceFinal: true });
                       } else {
                         // Merge failed - use extended text
-                        processFinalText(extension.extendedText, { forceFinal: true });
+                        result = await processFinalText(extension.extendedText, { forceFinal: true });
                       }
-                      forcedCommitEngine.clearForcedFinalBuffer();
-                      syncForcedFinalBuffer();
+                      if (result.accepted) {
+                        forcedCommitEngine.clearForcedFinalBuffer();
+                        syncForcedFinalBuffer();
+                      } else {
+                        console.log(`[HostMode] ⚠️ Forced final merge commit rejected - ${result.reason}, preserving buffer`);
+                      }
                       // Continue processing the extended partial normally
                     } else {
                       // Check for actual silence gap (audio activity, not partial growth)
@@ -1711,7 +2217,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           if (coreEngine?.finalityGate?.isRecoveryPending(oldSegmentId)) {
                             console.log(`[HostMode] 🔒 Deferring BOUNDARY finalization - recovery pending for ${oldSegmentId}`);
                             // Queue this partial instead
-                            enqueueDuringRecovery('PARTIAL', transcriptText, true, meta);
+                            enqueueDuringRecovery('PARTIAL', transcriptText, true, meta, oldSegmentId);
                             return;
                           }
                           
@@ -1790,7 +2296,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       } else if (currentSegmentRecoveryPending) {
                         // Recovery pending for THIS segment - queue instead of creating new segment
                         console.log(`[HostMode] 🔒 Recovery pending for ${currentSegmentId} - queuing partial`);
-                        enqueueDuringRecovery('PARTIAL', transcriptText, true, meta);
+                        enqueueDuringRecovery('PARTIAL', transcriptText, true, meta, currentSegmentId);
                         return;
                       } else {
                         // Not a boundary, not locked - continue as same segment
@@ -2261,34 +2767,44 @@ export async function handleHostConnection(clientWs, sessionId) {
                       if (oldSegmentId && coreEngine?.finalityGate?.isRecoveryPending(oldSegmentId)) {
                         console.log(`[HostMode] 🔒 Deferring segment boundary - recovery pending for ${oldSegmentId}`);
                         // Queue this partial instead
-                        enqueueDuringRecovery('PARTIAL', transcriptText, true, meta);
+                        enqueueDuringRecovery('PARTIAL', transcriptText, true, meta, oldSegmentId);
                         return;
                       }
                       
-                      // CRITICAL: Close old segment in FinalityGate before starting new segment
-                      if (oldSegmentId && coreEngine?.finalityGate) {
-                        coreEngine.finalityGate.closeSegment(oldSegmentId);
-                      }
-                      // CRITICAL: Generate new segment ID for this new segment (gap-based boundary)
-                      currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                      console.log(`[HostMode] 🆕 Generated new segment ID: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
                       console.log(`[HostMode] 🔀 New segment detected - gap-based boundary (${timeSinceLastAudio}ms > ${SILENCE_GAP_MS}ms)`);
                       console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
+                      
                       // PHASE 8: Clear timeout using engine
                       finalizationEngine.clearPendingFinalizationTimeout();
                       const textToCommit = pendingFinalization.text;
+                      
                       // PHASE 8: Clear using engine
                       finalizationEngine.clearPendingFinalization();
                       syncPendingFinalization();
-                      // CRITICAL FIX: Track the new partial BEFORE finalizing, so it's not lost
+                      
+                      // CRITICAL: Commit FINAL on the OLD segment id BEFORE generating new segmentId
+                      // This prevents the final from being attributed to the wrong segment
+                      processFinalText(textToCommit, {
+                        skipDeduplication: true,
+                        segmentId: oldSegmentId,
+                      });
+                      
+                      // NOW it's safe to close the old segment
+                      if (oldSegmentId && coreEngine?.finalityGate) {
+                        coreEngine.finalityGate.closeSegment(oldSegmentId);
+                      }
+                      
+                      // NOW create the new segment id
+                      currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                      console.log(`[HostMode] 🆕 Generated new segment ID: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
+                      
+                      // Track the triggering partial AFTER we've committed the old final
                       partialTracker.updatePartial(transcriptText);
+                      
                       // CRITICAL FIX: Reset translation state to ensure next partial is treated as first
                       lastPartialTranslation = '';
                       lastPartialTranslationTime = 0;
-                      // CRITICAL FIX: Skip deduplication when committing pending final because new segment was detected
-                      // We've already determined this is a new segment, so it shouldn't be deduplicated against previous final
-                      // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
-                      processFinalText(textToCommit, { skipDeduplication: true });
+                      
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
                     } else {
                       // No gap detected - continue as same segment (don't create new segment ID)
@@ -2455,15 +2971,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                                                            (timeSinceFinal >= 2000 || transcriptText.length > 30);
                         
                         if (clearlyNewSegment && (!isFalseFinal || shouldCommitFalseFinalEarly)) {
-                        // CRITICAL: Close old segment in FinalityGate before starting new segment
+                        // 0) Capture old segment ID FIRST (before any changes)
                         const oldSegmentId = currentSegmentId;
-                        if (oldSegmentId && coreEngine?.finalityGate) {
-                          coreEngine.finalityGate.closeSegment(oldSegmentId);
-                        }
-                        // CRITICAL: Generate new segment ID for this new segment
-                        currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-                        console.log(`[HostMode] 🆕 Generated new segment ID: ${currentSegmentId}`);
-                        
+
                         // CRITICAL FIX: If partial is CLEARLY a new segment, commit final IMMEDIATELY
                         // BUT: For false finals, only commit if enough time has passed or partial is clearly unrelated
                         if (isFalseFinal) {
@@ -2472,23 +2982,39 @@ export async function handleHostConnection(clientWs, sessionId) {
                           console.log(`[HostMode] 🔀 CLEARLY new segment detected - committing pending FINAL immediately (partial: "${partialText.substring(0, 30)}...")`);
                         }
                         console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
+                        
                         // PHASE 8: Clear timeout using engine
                         finalizationEngine.clearPendingFinalizationTimeout();
                         const textToCommit = pendingFinalization.text;
+                        
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
-                        // CRITICAL FIX: Track the new partial BEFORE resetting, so it's not lost
-                        // This ensures the partial that triggered the commit is still processed
+                        
+                        // CRITICAL: Commit FINAL on the OLD segment id BEFORE generating new segmentId
+                        // This prevents the final from being attributed to the wrong segment
+                        processFinalText(textToCommit, {
+                          skipDeduplication: true,
+                          segmentId: oldSegmentId,
+                        });
+                        
+                        // NOW it's safe to close the old segment
+                        if (oldSegmentId && coreEngine?.finalityGate) {
+                          coreEngine.finalityGate.closeSegment(oldSegmentId);
+                        }
+                        
+                        // NOW create the new segment id
+                        currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        console.log(`[HostMode] 🆕 Generated new segment ID: ${currentSegmentId}`);
+                        
+                        // Track the triggering partial AFTER we've committed the old final
                         partialTracker.updatePartial(transcriptText);
+                        
                         // CRITICAL FIX: Reset translation state to ensure next partial is treated as first
                         // This prevents translation throttling from dropping short partials
                         lastPartialTranslation = '';
                         lastPartialTranslationTime = 0;
-                        // CRITICAL FIX: Skip deduplication when committing pending final because new segment was detected
-                        // We've already determined this is a new segment, so it shouldn't be deduplicated against previous final
-                        // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
-                        processFinalText(textToCommit, { skipDeduplication: true });
+                        
                         // Continue processing the new partial as a new segment (don't return - let it be processed below)
                       } else if (isFalseFinal && clearlyNewSegment) {
                         // False final with new segment detected, but not enough time has passed
@@ -3334,7 +3860,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   const currentSegmentRecoveryPending = coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId);
                   if (currentSegmentRecoveryPending) {
                     console.log(`[HostMode] 🔒 Recovery pending for ${currentSegmentId} - queuing FINAL`);
-                    enqueueDuringRecovery('FINAL', transcriptText, false, meta);
+                    enqueueDuringRecovery('FINAL', transcriptText, false, meta, currentSegmentId);
                     return;
                   }
                   
@@ -3872,11 +4398,28 @@ export async function handleHostConnection(clientWs, sessionId) {
                             }
                             
                             // Commit the forced final immediately
-                            processFinalText(forcedFinalText, { forceFinal: true });
+                            const result = await processFinalText(forcedFinalText, { forceFinal: true });
                             
-                            // Clear the buffer
-                            forcedCommitEngine.clearForcedFinalBuffer();
-                            syncForcedFinalBuffer();
+                            // Handle idempotent success for already_finalized (Fix 2)
+                            if (result.accepted || result.reason === 'already_finalized') {
+                              // Clear the buffer
+                              forcedCommitEngine.clearForcedFinalBuffer();
+                              syncForcedFinalBuffer();
+                            } else if (result.reason === 'recovery_pending') {
+                              console.log(`[HostMode] ⏳ Forced final recovery pending, will retry in 250ms`);
+                              setTimeout(async () => {
+                                const retryResult = await processFinalText(forcedFinalText, { forceFinal: true });
+                                if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                                  forcedCommitEngine.clearForcedFinalBuffer();
+                                  syncForcedFinalBuffer();
+                                  console.log(`[HostMode] ✅ Forced final retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'committed'}`);
+                                } else {
+                                  console.log(`[HostMode] ⚠️ Forced final retry failed - ${retryResult.reason}, preserving buffer`);
+                                }
+                              }, 250);
+                            } else {
+                              console.log(`[HostMode] ⚠️ Forced final commit rejected - ${result.reason}, preserving buffer`);
+                            }
                             
                             console.log('[HostMode] ✅ Forced final committed immediately (no audio to recover)');
                             return; // Skip recovery attempt
@@ -3967,6 +4510,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (recoveryAlreadyCommitted) {
                           console.log(`[HostMode] ⏭️ Skipping recovery stream call - recovery already committed`);
                         } else if (recoveryAudio.length > 0) {
+                          // Capture segment ID before recovery starts (may change during recovery)
+                          const recoverySegmentId = currentSegmentId;
+                          
                           // Use RecoveryStreamEngine to handle recovery stream operations
                           // Wrap recoveryStartTime and nextFinalAfterRecovery in objects so they can be modified
                           const recoveryStartTimeRef = { value: recoveryStartTime };
@@ -3988,15 +4534,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                             recoveryStartTime: recoveryStartTimeRef,
                             nextFinalAfterRecovery: nextFinalAfterRecoveryRef,
                             recoveryAudio,
-                            segmentId: currentSegmentId // Pass current segment ID for FinalityGate isolation
+                            segmentId: recoverySegmentId // Pass captured segment ID for FinalityGate isolation
                           });
                           
                           // Update the original variables from the refs
                           recoveryStartTime = recoveryStartTimeRef.value;
                           nextFinalAfterRecovery = nextFinalAfterRecoveryRef.value;
                           
-                          // Drain queued events after recovery completes
-                          drainRecoveryQueue();
+                          // Drain queued events after recovery completes (use captured segment ID)
+                          // Pass broadcastWithSequence, syncPartialVariables, and processFinalText from resultCallback scope
+                          await drainRecoveryQueue(recoverySegmentId, broadcastWithSequence, syncPartialVariables, processFinalText);
                         } else {
                           // No recovery audio available
                           console.log(`[HostMode] ⚠️ No recovery audio available (${recoveryAudio.length} bytes) - committing without recovery`);
@@ -4348,9 +4895,26 @@ export async function handleHostConnection(clientWs, sessionId) {
                     if (isDuplicate) {
                       // Same text - commit forced final and skip new FINAL (it's a duplicate)
                       console.log('[HostMode] ⚠️ New FINAL is duplicate of forced final - committing forced final and skipping new FINAL');
-                      processFinalText(forcedFinalText, { forceFinal: true });
-                      forcedCommitEngine.clearForcedFinalBuffer();
-                      syncForcedFinalBuffer();
+                      const result = await processFinalText(forcedFinalText, { forceFinal: true });
+                      // Handle idempotent success for already_finalized (Fix 2)
+                      if (result.accepted || result.reason === 'already_finalized') {
+                        forcedCommitEngine.clearForcedFinalBuffer();
+                        syncForcedFinalBuffer();
+                      } else if (result.reason === 'recovery_pending') {
+                        console.log(`[HostMode] ⏳ Forced final recovery pending, will retry in 250ms`);
+                        setTimeout(async () => {
+                          const retryResult = await processFinalText(forcedFinalText, { forceFinal: true });
+                          if (retryResult.accepted || retryResult.reason === 'already_finalized') {
+                            forcedCommitEngine.clearForcedFinalBuffer();
+                            syncForcedFinalBuffer();
+                            console.log(`[HostMode] ✅ Forced final retry succeeded - ${retryResult.reason === 'already_finalized' ? 'already finalized (idempotent)' : 'committed'}`);
+                          } else {
+                            console.log(`[HostMode] ⚠️ Forced final retry failed - ${retryResult.reason}, preserving buffer`);
+                          }
+                        }, 250);
+                      } else {
+                        console.log(`[HostMode] ⚠️ Forced final commit rejected - ${result.reason}, preserving buffer`);
+                      }
                       // Skip processing the new FINAL (it's a duplicate)
                       return;
                     } else if (merged && merged.length > forcedFinalText.length) {
@@ -4786,12 +5350,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // PHASE 8: Clear timeout using engine
                     finalizationEngine.clearPendingFinalizationTimeout();
                     const textToCommit = pending.text;
+                    // Capture snapshot segmentId before clearing
+                    const segId = pending.snapshot?.segmentId || currentSegmentId;
                     // PHASE 8: Clear using engine
                     finalizationEngine.clearPendingFinalization();
                     syncPendingFinalization();
                     
                     // Commit the pending final - this will update lastSentFinalText so deduplication can detect relationship
-                    processFinalText(textToCommit);
+                    processFinalText(textToCommit, { segmentId: segId });
                     
                     // Continue processing the new FINAL below - deduplication will now compare against the just-committed final
                   }
@@ -4820,9 +5386,19 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] ⚠️ FALSE FINAL DETECTED: "${finalTrimmed.substring(0, 50)}..." - short final with period but clearly incomplete, will wait longer for extending partials`);
                     // Use longer wait time for false finals
                     const FALSE_FINAL_WAIT_MS = 3000; // Wait 3 seconds for false finals
+                    // Capture segmentId at creation time to prevent misattribution if segment changes
+                    const segmentIdAtCreation = currentSegmentId;
                     // Still create pending finalization, but with longer timeout and isFalseFinal flag
                     finalizationEngine.createPendingFinalization(finalTextToUse, null, true);
                     syncPendingFinalization();
+                    // Store snapshot for timeout handler to use correct segmentId
+                    if (pendingFinalization) {
+                      pendingFinalization.snapshot = {
+                        segmentId: segmentIdAtCreation,
+                        text: finalTextToUse,
+                        timestamp: Date.now()
+                      };
+                    }
                     // Schedule timeout with longer wait
                     finalizationEngine.setPendingFinalizationTimeout(() => {
                       syncPendingFinalization();
@@ -4831,6 +5407,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
                         return;
                       }
+                      // Use snapshot if available, otherwise fallback to current state
+                      const snapshot = pendingFinalization.snapshot || { segmentId: currentSegmentId, text: pendingFinalization.text };
+                      
                       // Check for extending partials before committing
                       const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
                       const latestExtends = partialTracker.checkLatestExtends(pendingFinalization.text, 5000);
@@ -4846,8 +5425,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       finalizationEngine.clearPendingFinalization();
                       syncPendingFinalization();
-                      // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
-                      processFinalText(textToCommit);
+                      // CRITICAL: Use snapshot segmentId to prevent misattribution if segment changed
+                      processFinalText(textToCommit, { segmentId: snapshot.segmentId });
                     }, FALSE_FINAL_WAIT_MS);
                     return; // Exit early - timeout scheduled
                   }
@@ -5062,6 +5641,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
                     processFinalText(textToProcess);
                   }, WAIT_FOR_PARTIALS_MS);
+                } catch (err) {
+                  console.error('[HostMode] 🚨 resultCallback failed:', err);
+                }
               });
               
               console.log('[HostMode] ✅ Google Speech stream initialized and ready');
