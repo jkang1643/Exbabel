@@ -536,8 +536,32 @@ export class GoogleSpeechStream {
       this.recognizeStream = null;
     }
 
-    // Clear jitter buffer and retry tracking on restart
-    this.clearJitterBuffer();
+    // CRITICAL FIX: Preserve audio chunks from jitter buffer before clearing
+    // Move any pending audio chunks to audioQueue to prevent loss during restart
+    const jitterBufferAudio = [];
+    while (this.jitterBuffer.length > 0) {
+      const chunk = this.jitterBuffer.shift();
+      // Extract audio data from chunk (it's already base64 encoded)
+      // The chunk contains audioData which is base64, so we can queue it directly
+      if (chunk.audioData) {
+        jitterBufferAudio.push(chunk.audioData);
+      }
+      // Clear retry tracking for chunks being moved to queue
+      this.clearChunkRetry(chunk.chunkId);
+      this.clearChunkTimeout(chunk.chunkId);
+    }
+    
+    // Add jitter buffer audio to queue (preserve order)
+    if (jitterBufferAudio.length > 0) {
+      console.log(`[GoogleSpeech] 🔄 Preserving ${jitterBufferAudio.length} audio chunks from jitter buffer during restart`);
+      this.audioQueue.push(...jitterBufferAudio);
+    }
+    
+    // Clear jitter buffer timer
+    if (this.jitterBufferTimer) {
+      clearTimeout(this.jitterBufferTimer);
+      this.jitterBufferTimer = null;
+    }
     
     // Clear all retry timers
     for (const [chunkId, retryInfo] of this.chunkRetryMap.entries()) {
@@ -565,19 +589,33 @@ export class GoogleSpeechStream {
     try {
       await this.startStream();
 
-      // Process any queued audio after restart
+      // CRITICAL FIX: Process queued audio after restart completes
+      // This ensures no audio is lost during the restart gap
       if (this.audioQueue.length > 0) {
-        console.log(`[GoogleSpeech] Processing ${this.audioQueue.length} queued audio chunks...`);
+        console.log(`[GoogleSpeech] ✅ Processing ${this.audioQueue.length} queued audio chunks after restart...`);
         const queuedAudio = [...this.audioQueue];
         this.audioQueue = [];
 
+        // Process queued audio asynchronously to avoid blocking restart completion
+        // But ensure they're processed in order
         for (const audioData of queuedAudio) {
           await this.processAudio(audioData);
         }
+        console.log(`[GoogleSpeech] ✅ Finished processing ${queuedAudio.length} queued audio chunks`);
+      } else {
+        console.log(`[GoogleSpeech] ✅ Stream restart complete (no queued audio)`);
       }
+      
+      // Mark restart as complete
+      this.isRestarting = false;
     } catch (error) {
       console.error('[GoogleSpeech] Failed to restart stream:', error);
       this.isRestarting = false;
+
+      // CRITICAL: Even on error, preserve queued audio for next restart attempt
+      if (this.audioQueue.length > 0) {
+        console.log(`[GoogleSpeech] ⚠️ Restart failed but preserving ${this.audioQueue.length} queued audio chunks for next attempt`);
+      }
 
       // Notify error callback
       if (this.errorCallback) {
@@ -766,12 +804,23 @@ export class GoogleSpeechStream {
       
       // Check if stream is ready
       if (!this.isStreamReady()) {
+        // CRITICAL FIX: During restart, queue audio to audioQueue instead of dropping it
+        // This prevents audio loss during stream restarts
+        if (this.isRestarting) {
+          console.log(`[GoogleSpeech] 🔄 Stream restarting - queuing audio chunk ${chunkId} (queue size: ${this.audioQueue.length})`);
+          this.audioQueue.push(audioData);
+          // Clear retry tracking since we're queuing it
+          this.chunkRetryMap.delete(chunkId);
+          this.clearChunkTimeout(chunkId);
+          return;
+        }
+        
         // If stream not ready, check if we should retry or give up
         const existingRetry = this.chunkRetryMap.get(chunkId);
         const attempts = existingRetry ? existingRetry.attempts : 0;
         
         // Only retry if we haven't exceeded max attempts and stream is just restarting (not inactive)
-        if (attempts < this.MAX_CHUNK_RETRIES && !this.isRestarting && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+        if (attempts < this.MAX_CHUNK_RETRIES && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
           this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
         } else {
           // Give up - stream inactive or too many attempts
@@ -833,6 +882,16 @@ export class GoogleSpeechStream {
         this.lastAudioTime = Date.now();
       } else {
         console.warn('[GoogleSpeech] Stream became unavailable, checking if retry is needed...');
+        
+        // CRITICAL FIX: If restarting, queue audio instead of retrying
+        if (this.isRestarting) {
+          console.log(`[GoogleSpeech] 🔄 Stream restarting - queuing audio chunk ${chunkId} (queue size: ${this.audioQueue.length})`);
+          this.audioQueue.push(audioData);
+          this.chunkRetryMap.delete(chunkId);
+          this.clearChunkTimeout(chunkId);
+          return;
+        }
+        
         const existingRetry = this.chunkRetryMap.get(chunkId);
         const attempts = existingRetry ? existingRetry.attempts : 0;
         
@@ -1119,13 +1178,18 @@ export class GoogleSpeechStream {
   }
   
   clearJitterBuffer() {
-    // Release all pending chunks immediately before clearing
-    while (this.jitterBuffer.length > 0) {
-      const chunk = this.jitterBuffer.shift();
-      // Clear retry tracking for chunks being cleared
-      this.clearChunkRetry(chunk.chunkId);
-      this.clearChunkTimeout(chunk.chunkId);
+    // NOTE: This method is called during restart, but we now preserve audio in restartStream()
+    // So we only clear if NOT restarting (for other cleanup scenarios)
+    if (!this.isRestarting) {
+      // Release all pending chunks immediately before clearing
+      while (this.jitterBuffer.length > 0) {
+        const chunk = this.jitterBuffer.shift();
+        // Clear retry tracking for chunks being cleared
+        this.clearChunkRetry(chunk.chunkId);
+        this.clearChunkTimeout(chunk.chunkId);
+      }
     }
+    // If restarting, audio is preserved in restartStream() method
     
     if (this.jitterBufferTimer) {
       clearTimeout(this.jitterBufferTimer);

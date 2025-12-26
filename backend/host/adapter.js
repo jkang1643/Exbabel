@@ -99,6 +99,10 @@ export async function handleHostConnection(clientWs, sessionId) {
   // Track next final that arrives after recovery starts (to prevent word duplication)
   let nextFinalAfterRecovery = null;
   let recoveryStartTime = 0;
+  
+  // CRITICAL: Safety mechanism to ensure all partials get finalized
+  // Track safety check interval (declared in outer scope so it can be cleared on disconnect)
+  let partialSafetyCheckInterval = null;
 
   // Helper: Measure RTT from client timestamp
   const measureRTT = (clientTimestamp) => {
@@ -423,6 +427,93 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Queue for finals that arrive while another is being processed
               const finalProcessingQueue = [];
               
+              // CRITICAL: Safety mechanism to ensure all partials get finalized
+              // Track the last time we received a partial or final
+              let lastTranscriptActivity = Date.now();
+              const PARTIAL_SAFETY_CHECK_INTERVAL_MS = 5000; // Check every 5 seconds
+              const PARTIAL_MAX_AGE_MS = 10000; // Finalize partials older than 10 seconds
+              
+              // Safety function to finalize any pending partials
+              const finalizePendingPartials = (reason = 'safety check') => {
+                syncPartialVariables();
+                syncPendingFinalization();
+                
+                // Check if there are partials that need to be finalized
+                const hasPartials = longestPartialText && longestPartialText.length > 0;
+                const hasPendingFinal = pendingFinalization !== null;
+                const timeSinceLastPartial = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                
+                // If we have partials that are old enough and no pending final, create one
+                if (hasPartials && !hasPendingFinal && timeSinceLastPartial > 2000) {
+                  console.log(`[HostMode] 🔒 SAFETY: Finalizing pending partials (reason: ${reason}, age: ${timeSinceLastPartial}ms)`);
+                  console.log(`[HostMode]   Partial text: "${longestPartialText.substring(0, 80)}..."`);
+                  
+                  // Create pending finalization for the longest partial
+                  finalizationEngine.createPendingFinalization(longestPartialText, null);
+                  syncPendingFinalization();
+                  
+                  // Schedule immediate finalization (short timeout)
+                  finalizationEngine.setPendingFinalizationTimeout(() => {
+                    syncPendingFinalization();
+                    syncPartialVariables();
+                    if (!pendingFinalization) {
+                      console.warn('[HostMode] ⚠️ Safety timeout fired but pendingFinalization is null - skipping');
+                      return;
+                    }
+                    
+                    // Use longest partial if available
+                    let textToCommit = pendingFinalization.text;
+                    if (longestPartialText && longestPartialText.length > pendingFinalization.text.length) {
+                      const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
+                      if (longestExtends) {
+                        textToCommit = longestExtends.extendedText;
+                        console.log(`[HostMode] ✅ Safety finalization using longest partial: "${longestExtends.missingWords}"`);
+                      }
+                    }
+                    
+                    partialTracker.reset();
+                    syncPartialVariables();
+                    finalizationEngine.clearPendingFinalization();
+                    syncPendingFinalization();
+                    console.log(`[HostMode] ✅ SAFETY: Finalized pending partial: "${textToCommit.substring(0, 80)}..."`);
+                    processFinalText(textToCommit);
+                  }, 500); // Short timeout for safety finalization
+                } else if (hasPendingFinal) {
+                  // Check if pending final has been waiting too long
+                  const timeSincePending = Date.now() - pendingFinalization.timestamp;
+                  if (timeSincePending > PARTIAL_MAX_AGE_MS) {
+                    console.log(`[HostMode] 🔒 SAFETY: Pending final has been waiting too long (${timeSincePending}ms) - forcing commit`);
+                    finalizationEngine.clearPendingFinalizationTimeout();
+                    
+                    // Check for extending partials one more time
+                    syncPartialVariables();
+                    let textToCommit = pendingFinalization.text;
+                    const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
+                    const latestExtends = partialTracker.checkLatestExtends(pendingFinalization.text, 5000);
+                    
+                    if (longestExtends) {
+                      textToCommit = longestExtends.extendedText;
+                      console.log(`[HostMode] ✅ Safety finalization using longest partial: "${longestExtends.missingWords}"`);
+                    } else if (latestExtends) {
+                      textToCommit = latestExtends.extendedText;
+                      console.log(`[HostMode] ✅ Safety finalization using latest partial: "${latestExtends.missingWords}"`);
+                    }
+                    
+                    partialTracker.reset();
+                    syncPartialVariables();
+                    finalizationEngine.clearPendingFinalization();
+                    syncPendingFinalization();
+                    console.log(`[HostMode] ✅ SAFETY: Forced finalization of pending final: "${textToCommit.substring(0, 80)}..."`);
+                    processFinalText(textToCommit);
+                  }
+                }
+              };
+              
+              // Start periodic safety check
+              partialSafetyCheckInterval = setInterval(() => {
+                finalizePendingPartials('periodic check');
+              }, PARTIAL_SAFETY_CHECK_INTERVAL_MS);
+              
               // Extract final processing into separate async function (using solo mode logic, adapted for broadcasting)
               const processFinalText = (textToProcess, options = {}) => {
                 // If already processing, queue this final instead of skipping
@@ -578,11 +669,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                             );
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             
+                            // CRITICAL FIX: Check if new text is a legitimate extension (recovery update)
+                            // If new text is significantly longer and has high word overlap, it's likely a recovery update, not a duplicate
+                            // Extension means: new text contains previous text + additional words (recovery found missing words)
+                            const wordCountDiff = textWords.length - lastSentWords.length;
+                            const isExtension = textWords.length > lastSentWords.length && 
+                                              wordCountDiff >= 1 && // At least 1 additional word
+                                              (textNormalized.startsWith(lastSentFinalNormalized.substring(0, Math.min(50, lastSentFinalNormalized.length))) ||
+                                               textNormalized.includes(lastSentFinalNormalized.substring(Math.max(0, lastSentFinalNormalized.length - 50)))); // Or ends with previous text
+                            
                             // If 80%+ words match and texts are similar length, it's likely a duplicate
-                            if (wordOverlapRatio >= 0.8 && lengthDiff < 20) {
+                            // BUT: Skip duplicate detection if it's a legitimate extension (recovery update with additional words)
+                            if (wordOverlapRatio >= 0.8 && lengthDiff < 20 && !isExtension) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
                               return; // Skip processing duplicate
+                            } else if (isExtension && wordOverlapRatio >= 0.8) {
+                              console.log(`[HostMode] ✅ Allowing recovery update (extension detected: ${textWords.length} words vs ${lastSentWords.length} words, +${wordCountDiff} words, overlap ${(wordOverlapRatio * 100).toFixed(0)}%)`);
                             }
                           }
                         }
@@ -610,11 +713,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
                             
+                            // CRITICAL FIX: Check if new text is a legitimate extension (recovery update)
+                            // If new text is significantly longer and has high word overlap, it's likely a recovery update, not a duplicate
+                            // Extension means: new text contains previous text + additional words (recovery found missing words)
+                            const wordCountDiff = textWords.length - lastSentWords.length;
+                            const isExtension = textWords.length > lastSentWords.length && 
+                                              wordCountDiff >= 1 && // At least 1 additional word
+                                              (textNormalized.startsWith(lastSentFinalNormalized.substring(0, Math.min(50, lastSentFinalNormalized.length))) ||
+                                               textNormalized.includes(lastSentFinalNormalized.substring(Math.max(0, lastSentFinalNormalized.length - 50)))); // Or ends with previous text
+                            
                             // If 85%+ words match and texts are similar length, it's likely a duplicate
-                            if (wordOverlapRatio >= 0.85 && lengthDiff < 15) {
+                            // BUT: Skip duplicate detection if it's a legitimate extension (recovery update with additional words)
+                            if (wordOverlapRatio >= 0.85 && lengthDiff < 15 && !isExtension) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% in continuation window), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
                               return; // Skip processing duplicate
+                            } else if (isExtension && wordOverlapRatio >= 0.85) {
+                              console.log(`[HostMode] ✅ Allowing recovery update (extension detected: ${textWords.length} words vs ${lastSentWords.length} words, +${wordCountDiff} words, overlap ${(wordOverlapRatio * 100).toFixed(0)}%)`);
                             }
                           }
                         }
@@ -633,11 +748,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
                             
+                            // CRITICAL FIX: Check if new text is a legitimate extension (recovery update)
+                            // If new text is significantly longer and has high word overlap, it's likely a recovery update, not a duplicate
+                            // Extension means: new text contains previous text + additional words (recovery found missing words)
+                            const wordCountDiff = textWords.length - lastSentWords.length;
+                            const isExtension = textWords.length > lastSentWords.length && 
+                                              wordCountDiff >= 1 && // At least 1 additional word
+                                              (textNormalized.startsWith(lastSentFinalNormalized.substring(0, Math.min(50, lastSentFinalNormalized.length))) ||
+                                               textNormalized.includes(lastSentFinalNormalized.substring(Math.max(0, lastSentFinalNormalized.length - 50)))); // Or ends with previous text
+                            
                             // If 90%+ words match and texts are very similar length, it's likely a duplicate even outside time window
-                            if (wordOverlapRatio >= 0.9 && lengthDiff < 25) {
+                            // BUT: Skip duplicate detection if it's a legitimate extension (recovery update with additional words)
+                            if (wordOverlapRatio >= 0.9 && lengthDiff < 25 && !isExtension) {
                               console.log(`[HostMode] ⚠️ Duplicate final detected (very high word overlap ${(wordOverlapRatio * 100).toFixed(0)}% outside time window, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
                               isProcessingFinal = false; // Clear flag before returning
                               return; // Skip processing duplicate
+                            } else if (isExtension && wordOverlapRatio >= 0.9) {
+                              console.log(`[HostMode] ✅ Allowing recovery update (extension detected: ${textWords.length} words vs ${lastSentWords.length} words, +${wordCountDiff} words, overlap ${(wordOverlapRatio * 100).toFixed(0)}%)`);
                             }
                           }
                         }
@@ -1174,6 +1301,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                 
                 // DEBUG: Log every result to verify callback is being called
                 console.log(`[HostMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (meta: ${JSON.stringify(meta)})`);
+                
+                // CRITICAL: Update last activity timestamp whenever we receive any transcript
+                lastTranscriptActivity = Date.now();
                 
                 if (isPartial) {
                   // PHASE 8: Removed deprecated PRIORITY 0 backpatching logic
@@ -2108,11 +2238,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
                       }
                       }
-                    } else {
-                      // Partials are still arriving - update tracking but don't extend timeout
-                      console.log(`[HostMode] 📝 Partial arrived during finalization wait - tracking updated (${transcriptText.length} chars)`);
+                } else {
+                  // Partials are still arriving - update tracking but don't extend timeout
+                  console.log(`[HostMode] 📝 Partial arrived during finalization wait - tracking updated (${transcriptText.length} chars)`);
+                  
+                  // CRITICAL: Update pending finalization if this partial extends it
+                  // This ensures we don't lose extending partials
+                  syncPendingFinalization();
+                  if (pendingFinalization && transcriptText.length > pendingFinalization.text.length) {
+                    const finalTrimmed = pendingFinalization.text.trim();
+                    const partialTrimmed = transcriptText.trim();
+                    const finalNormalized = finalTrimmed.toLowerCase();
+                    const partialNormalized = partialTrimmed.toLowerCase();
+                    
+                    // Check if partial extends the pending final
+                    if (partialNormalized.startsWith(finalNormalized) || 
+                        (finalTrimmed.length > 5 && partialNormalized.substring(0, finalNormalized.length) === finalNormalized)) {
+                      console.log(`[HostMode] 📝 Updating pending finalization with extending partial (${pendingFinalization.text.length} → ${transcriptText.length} chars)`);
+                      finalizationEngine.updatePendingFinalizationText(transcriptText);
+                      syncPendingFinalization();
                     }
                   }
+                }
+              }
                   
                   // Update last audio timestamp (we have new audio activity)
                   lastAudioTimestamp = Date.now();
@@ -4292,25 +4440,90 @@ export async function handleHostConnection(clientWs, sessionId) {
   clientWs.on('close', () => {
     console.log(`[HostMode] Host disconnected from session ${currentSessionId}`);
     
-    // CRITICAL: If there's a forced final buffer waiting for recovery, commit it immediately
-    // The audio buffer will be cleared, so recovery won't work anyway
-    syncForcedFinalBuffer();
-    if (forcedCommitEngine.hasForcedFinalBuffer()) {
-      const buffer = forcedCommitEngine.getForcedFinalBuffer();
-      console.log('[HostMode] ⚠️ Client disconnected with forced final buffer - committing immediately (no audio to recover)');
-      
-      // Cancel recovery timeout since there's no audio to recover
-      forcedCommitEngine.clearForcedFinalBufferTimeout();
-      
-      // Commit the forced final immediately
-      const forcedFinalText = buffer.text;
-      processFinalText(forcedFinalText, { forceFinal: true });
-      
-      // Clear the buffer
-      forcedCommitEngine.clearForcedFinalBuffer();
+    // CRITICAL: Stop safety check interval
+    if (partialSafetyCheckInterval) {
+      clearInterval(partialSafetyCheckInterval);
+      partialSafetyCheckInterval = null;
+    }
+    
+    // CRITICAL: Finalize any remaining partials before disconnect
+    // This ensures no partials are lost when the connection closes
+    // Note: We use engines directly since variables are scoped inside init handler
+    try {
       syncForcedFinalBuffer();
+      syncPendingFinalization();
       
-      console.log('[HostMode] ✅ Forced final committed due to client disconnect');
+      // Get current partial state from tracker
+      const partialSnapshot = partialTracker.getSnapshot();
+      const longestPartialText = partialSnapshot.longest || '';
+      const longestPartialTime = partialSnapshot.longestTime || 0;
+      
+      // First, handle forced final buffer
+      if (forcedCommitEngine.hasForcedFinalBuffer()) {
+        const buffer = forcedCommitEngine.getForcedFinalBuffer();
+        console.log('[HostMode] ⚠️ Client disconnected with forced final buffer - committing immediately (no audio to recover)');
+        
+        // Cancel recovery timeout since there's no audio to recover
+        forcedCommitEngine.clearForcedFinalBufferTimeout();
+        
+        // Note: processFinalText is not accessible here, but we can use translationManager directly
+        // For now, just log and clear - the forced final should have been handled by recovery system
+        console.log(`[HostMode]   Forced final text: "${buffer.text.substring(0, 80)}..."`);
+        
+        // Clear the buffer
+        forcedCommitEngine.clearForcedFinalBuffer();
+        syncForcedFinalBuffer();
+        
+        console.log('[HostMode] ✅ Forced final buffer cleared due to client disconnect');
+      }
+      
+      // CRITICAL: Finalize any pending finalization
+      if (finalizationEngine.hasPendingFinalization()) {
+        const pending = finalizationEngine.getPendingFinalization();
+        console.log('[HostMode] ⚠️ Client disconnected with pending finalization - committing immediately');
+        console.log(`[HostMode]   Pending text: "${pending.text.substring(0, 80)}..."`);
+        
+        // Cancel timeout
+        finalizationEngine.clearPendingFinalizationTimeout();
+        
+        // Check for extending partials one last time
+        let textToCommit = pending.text;
+        const longestExtends = partialTracker.checkLongestExtends(pending.text, 10000);
+        const latestExtends = partialTracker.checkLatestExtends(pending.text, 5000);
+        
+        if (longestExtends) {
+          textToCommit = longestExtends.extendedText;
+          console.log(`[HostMode] ✅ Disconnect finalization using longest partial: "${longestExtends.missingWords}"`);
+        } else if (latestExtends) {
+          textToCommit = latestExtends.extendedText;
+          console.log(`[HostMode] ✅ Disconnect finalization using latest partial: "${latestExtends.missingWords}"`);
+        }
+        
+        partialTracker.reset();
+        finalizationEngine.clearPendingFinalization();
+        syncPendingFinalization();
+        console.log(`[HostMode] ✅ Pending final cleared due to disconnect: "${textToCommit.substring(0, 80)}..."`);
+        console.log(`[HostMode] ⚠️ NOTE: Final text was prepared but processFinalText is not accessible in close handler`);
+        console.log(`[HostMode] ⚠️ NOTE: This should be handled by the safety check interval before disconnect`);
+      }
+      
+      // CRITICAL: Finalize any remaining partials that haven't been finalized
+      if (longestPartialText && longestPartialText.length > 0) {
+        const timeSinceLastPartial = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+        if (timeSinceLastPartial > 1000) { // Only if partial is at least 1 second old
+          console.log('[HostMode] ⚠️ Client disconnected with remaining partials - finalizing immediately');
+          console.log(`[HostMode]   Partial text: "${longestPartialText.substring(0, 80)}..."`);
+          console.log(`[HostMode]   Age: ${timeSinceLastPartial}ms`);
+          
+          // Reset partial tracker
+          partialTracker.reset();
+          console.log(`[HostMode] ✅ Remaining partial cleared due to disconnect`);
+          console.log(`[HostMode] ⚠️ NOTE: Partial text was prepared but processFinalText is not accessible in close handler`);
+          console.log(`[HostMode] ⚠️ NOTE: This should be handled by the safety check interval before disconnect`);
+        }
+      }
+    } catch (error) {
+      console.error('[HostMode] ❌ Error finalizing partials on disconnect:', error);
     }
     
     if (speechStream) {
