@@ -728,6 +728,46 @@ export class GoogleSpeechStream {
 
     if (isFinal) {
       // Final result - high confidence
+      // CRITICAL FIX: Check if there's a longer partial that contains this final fragment
+      // Google Speech can finalize a fragment (e.g., "I've been oh boy.") while a longer partial
+      // (e.g., "I've been oh boy to grocery store...") is still being processed. We should NOT finalize
+      // the fragment if it's contained in an active partial.
+      // 
+      // This prevents premature finalization of sentence fragments that are still being transcribed.
+      // Example: Google might finalize "I've been oh boy." but the partial is "I've been oh boy to grocery store so..."
+      // In this case, we skip the final and wait for the partial to be finalized with the complete sentence.
+      const finalTrimmed = combinedTranscript.trim();
+      const hasLongerPartial = this.lastPartialTranscript && 
+                                this.lastPartialTranscript.trim().length > finalTrimmed.length;
+      
+      if (hasLongerPartial) {
+        const partialTrimmed = this.lastPartialTranscript.trim();
+        
+        // Normalize both texts (remove punctuation, normalize whitespace) for comparison
+        // This handles cases where final has punctuation but partial doesn't yet
+        const finalWithoutTrailingPunct = finalTrimmed.replace(/[.!?…]+$/, '').trim();
+        const finalNormalized = finalWithoutTrailingPunct.toLowerCase().replace(/[.,!?;:…]/g, ' ').replace(/\s+/g, ' ').trim();
+        const partialNormalized = partialTrimmed.toLowerCase().replace(/[.,!?;:…]/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        // Multiple checks to catch all variations
+        const partialStartsWithFinal = partialTrimmed.toLowerCase().startsWith(finalTrimmed.toLowerCase());
+        const partialStartsWithFinalNoPunct = partialTrimmed.toLowerCase().startsWith(finalWithoutTrailingPunct.toLowerCase());
+        const partialNormalizedStartsWithFinal = partialNormalized.startsWith(finalNormalized);
+        const partialContainsFinal = finalNormalized.length > 10 && partialNormalized.includes(finalNormalized);
+        
+        // If partial contains the final (as a prefix or substring), skip finalizing the fragment
+        // This prevents premature finalization of fragments that are part of longer sentences
+        if (partialStartsWithFinal || partialStartsWithFinalNoPunct || partialNormalizedStartsWithFinal || partialContainsFinal) {
+          console.log(`[GoogleSpeech] ⏸️ SKIPPING FINAL FRAGMENT: "${finalTrimmed.substring(0, 50)}..." (${finalTrimmed.length} chars)`);
+          console.log(`[GoogleSpeech]   Active partial is longer: "${partialTrimmed.substring(0, 50)}..." (${partialTrimmed.length} chars)`);
+          console.log(`[GoogleSpeech]   Fragment is contained in active partial - waiting for partial to finalize instead`);
+          console.log(`[GoogleSpeech]   Match type: startsWith=${partialStartsWithFinal}, startsWithNoPunct=${partialStartsWithFinalNoPunct}, normalized=${partialNormalizedStartsWithFinal}, contains=${partialContainsFinal}`);
+          // Don't send the final - the partial will eventually be finalized with the complete text
+          // Keep the partial cached so future finals can still be checked against it
+          return; // Exit early, don't clear chunks or send callback
+        }
+      }
+
       // CRITICAL: Clear ALL remaining chunks to prevent them from generating spurious partials
       console.log(`[GoogleSpeech] ✅ FINAL (${data.results.length} result(s)): "${combinedTranscript}"`);
 
@@ -878,8 +918,9 @@ export class GoogleSpeechStream {
         // Set per-chunk timeout (5s)
         this.setChunkTimeout(chunkId, sendTimestamp, audioData, metadata);
         
-        // Track last audio time
+        // Track last audio time (for gap detection)
         this.lastAudioTime = Date.now();
+        this.lastAudioChunkTime = Date.now(); // Also update chunk time for gap detection
       } else {
         console.warn('[GoogleSpeech] Stream became unavailable, checking if retry is needed...');
         
@@ -1351,5 +1392,14 @@ export class GoogleSpeechStream {
         utilizationPercent: audioBufferStatus.utilizationPercent || 0
       }
     };
+  }
+
+  /**
+   * Get last audio activity timestamp (for gap detection)
+   * Returns the timestamp when the last audio chunk was written to the stream
+   * @returns {number} Timestamp in milliseconds
+   */
+  getLastAudioActivityTime() {
+    return this.lastAudioChunkTime || this.lastAudioTime || Date.now();
   }
 }

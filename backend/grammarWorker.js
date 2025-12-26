@@ -35,6 +35,15 @@ Your goal is to take partial or final text transcribed from speech-to-text and m
      - "then/than", "affect/effect", "accept/except"
      - "and counter" → "encounter"
      - "are" → "our" (when possessive)
+   - **CRITICAL: NEVER change contractions to possessives:**
+     - "they're" → NEVER change to "their"
+     - "we're" → NEVER change to "were"  
+     - "you're" → NEVER change to "your"
+     - "it's" → NEVER change to "its"
+     - "I'm" → NEVER change to "Im"
+     - "can't" → NEVER change to "cant"
+     - "don't" → NEVER change to "dont"
+     These are valid contractions in speech transcription. Only fix if STT misheard a similar-sounding word.
    - **NEVER replace words with synonyms or contextually "better" alternatives** (e.g., "calling" → "addressing", "said" → "stated", "talk" → "speak", "big" → "large")
    - **DO NOT replace words with contextually better alternatives if they don't sound similar**
    - If a word makes sense in context but sounds different, KEEP IT AS IS - the speaker may have actually said that word
@@ -124,6 +133,46 @@ function validateCorrectionResponse(corrected, original) {
   }
   
   return corrected;
+}
+
+/**
+ * Guardrail: Prevent GrammarWorker from changing contractions to possessives
+ * @param {string} corrected - Grammar-corrected text
+ * @param {string} original - Original text before correction
+ * @returns {string} Corrected text with contraction changes reverted
+ */
+function protectContractions(corrected, original) {
+  // Protected contractions: map possessive back to contraction if grammar changed it
+  const protectedContractions = {
+    "their": "they're", // If grammar changed "they're" to "their", revert
+    "were": "we're",     // If grammar changed "we're" to "were", revert
+    "your": "you're",    // If grammar changed "you're" to "your", revert
+    "its": "it's",       // If grammar changed "it's" to "its", revert
+    "Im": "I'm",         // If grammar changed "I'm" to "Im", revert
+    "cant": "can't",     // If grammar changed "can't" to "cant", revert
+    "dont": "don't"      // If grammar changed "don't" to "dont", revert
+  };
+  
+  const originalLower = original.toLowerCase();
+  const correctedWords = corrected.split(/\s+/);
+  let changed = false;
+  
+  // Check each word in corrected text
+  for (let i = 0; i < correctedWords.length; i++) {
+    const word = correctedWords[i];
+    const wordLower = word.toLowerCase().replace(/[.,!?;:]/g, '');
+    
+    // If this word is a possessive that should be a contraction, and original had the contraction
+    if (protectedContractions[wordLower] && originalLower.includes(protectedContractions[wordLower])) {
+      console.warn(`[GrammarWorker] 🚫 Blocked contraction→possessive change: "${word}" → reverting to "${protectedContractions[wordLower]}"`);
+      // Revert this word (preserve punctuation)
+      const punctuation = word.match(/[.,!?;:]+$/)?.[0] || '';
+      correctedWords[i] = protectedContractions[wordLower] + punctuation;
+      changed = true;
+    }
+  }
+  
+  return changed ? correctedWords.join(' ') : corrected;
 }
 
 export class GrammarWorker {
@@ -258,6 +307,9 @@ export class GrammarWorker {
       
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
+      
+      // Guardrail: Prevent changing contractions to possessives
+      corrected = protectContractions(corrected, text);
       
       if (corrected !== text) {
         // Show full diff for better visibility
@@ -490,6 +542,9 @@ export class GrammarWorker {
       
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
+      
+      // Guardrail: Prevent changing contractions to possessives
+      corrected = protectContractions(corrected, text);
       
       if (corrected !== text) {
         // Show full diff for better visibility

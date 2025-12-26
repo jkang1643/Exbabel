@@ -15,6 +15,7 @@ import { partialTranslationWorker, finalTranslationWorker } from './translationW
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
 import { grammarWorker } from './grammarWorker.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
+import { CandidateSource } from '../core/engine/finalityGate.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';
 import { PartialTranslationStateManager } from './partialTranslationStateManager.js';
@@ -106,6 +107,49 @@ export async function handleSoloMode(clientWs) {
   // Track next final that arrives after recovery starts (to prevent word duplication)
   let nextFinalAfterRecovery = null;
   let recoveryStartTime = 0;
+  
+  // CRITICAL: Segment ID tracking for FinalityGate isolation
+  // Each semantic segment gets a unique ID to prevent recovery from blocking other segments
+  let currentSegmentId = null;
+
+  // Recovery deferred queue: Store partials/finals that arrive during recovery windows
+  const recoveryDeferredQueue = [];
+  
+  /**
+   * Enqueue a result during recovery (instead of dropping it)
+   * @param {string} type - 'PARTIAL' or 'FINAL'
+   * @param {string} text - Transcript text
+   * @param {boolean} isPartial - Whether this is a partial result
+   * @param {Object} meta - Metadata
+   */
+  function enqueueDuringRecovery(type, text, isPartial, meta) {
+    recoveryDeferredQueue.push({
+      type: isPartial ? 'PARTIAL' : 'FINAL',
+      text,
+      isPartial,
+      meta,
+      timestamp: Date.now()
+    });
+    console.log(`[SoloMode] 📦 Queued ${type} during recovery: "${text.substring(0, 50)}..."`);
+  }
+  
+  /**
+   * Drain the recovery queue and process events in order
+   */
+  function drainRecoveryQueue() {
+    if (recoveryDeferredQueue.length === 0) return;
+    console.log(`[SoloMode] 🔄 Draining ${recoveryDeferredQueue.length} queued events after recovery`);
+    const queue = [...recoveryDeferredQueue];
+    recoveryDeferredQueue.length = 0;
+    // Process in order - re-invoke the onResult handler for each queued event
+    for (const event of queue) {
+      // Note: We'll need to call the onResult handler directly
+      // This will be set up after speechStream is initialized
+      if (speechStream && speechStream.onResult) {
+        speechStream.onResult(event.text, event.isPartial, event.meta);
+      }
+    }
+  }
   
   // PHASE 2: RTT functions now delegate to RTT tracker
   // Helper: Calculate RTT from client timestamp (delegates to RTT tracker)
@@ -479,6 +523,62 @@ export async function handleSoloMode(clientWs) {
               
               // Helper function to process final text (defined here so it can access closure variables)
               const processFinalText = (textToProcess, options = {}) => {
+                // CRITICAL: Guard against stale segment finalization
+                const candidateSegmentId = options.segmentId || currentSegmentId;
+                // If segmentId is explicitly provided in options, allow it (for boundary finalization of old segments)
+                // Otherwise, if candidateSegmentId doesn't match currentSegmentId, block it (stale finalization)
+                if (!options.segmentId && candidateSegmentId !== currentSegmentId && candidateSegmentId !== null) {
+                  console.log(`[SoloMode] 🔴 BLOCKED: Attempted to finalize stale segment ${candidateSegmentId} (current: ${currentSegmentId})`);
+                  console.log(`[SoloMode]   Text: "${textToProcess.substring(0, 60)}..."`);
+                  return; // Block stale segment finalization
+                }
+                
+                // Use the segmentId from options if provided (for boundary finalization), otherwise use currentSegmentId
+                const targetSegmentId = options.segmentId || currentSegmentId;
+                
+                // CRITICAL: Use FinalityGate to enforce dominance rules - ALL candidates must go through
+                // FinalityGate is the single authority - never bypass it
+                if (coreEngine && coreEngine.finalityGate) {
+                  // Determine candidate source from options (recovery candidates pass it explicitly)
+                  const candidateSource = options.candidateSource || (options.forceFinal ? CandidateSource.Forced : CandidateSource.Grammar);
+                  
+                  const candidate = {
+                    text: textToProcess.trim(),
+                    source: candidateSource,
+                    segmentId: targetSegmentId, // Use target segment ID for FinalityGate isolation
+                    timestamp: Date.now(),
+                    options: options
+                  };
+                  
+                  // Submit candidate to FinalityGate (updates best candidate if better)
+                  // Note: Recovery candidates may have already been submitted in RecoveryStreamEngine,
+                  // but submitCandidate is idempotent (same candidate won't change bestCandidate)
+                  const result = coreEngine.finalityGate.submitCandidate(candidate);
+                  
+                  if (!result.canCommit) {
+                    console.log(`[SoloMode] 🔴 FinalityGate: Blocking ${candidateSource === CandidateSource.Forced ? 'Forced' : candidateSource === CandidateSource.Recovery ? 'Recovery' : 'Grammar'} candidate (recovery pending or already finalized)`);
+                    console.log(`[SoloMode]   Text: "${textToProcess.substring(0, 60)}..."`);
+                    return; // Blocked by FinalityGate (recovery pending or segment finalized)
+                  }
+                  
+                  // Candidate can commit - finalize through FinalityGate (single authority)
+                  const finalized = coreEngine.finalityGate.finalizeSegment(targetSegmentId);
+                  if (!finalized) {
+                    console.log(`[SoloMode] ⚠️ FinalityGate: No candidate to finalize (should not happen)`);
+                    return; // Nothing to finalize
+                  }
+                  
+                  // Use the finalized candidate text (may be different if recovery upgraded it)
+                  if (finalized.text !== textToProcess.trim()) {
+                    console.log(`[SoloMode] ✅ FinalityGate: Using better candidate (${textToProcess.trim().length} → ${finalized.text.length} chars)`);
+                    console.log(`[SoloMode]   Original: "${textToProcess.substring(0, 60)}..."`);
+                    console.log(`[SoloMode]   Finalized: "${finalized.text.substring(0, 60)}..."`);
+                    textToProcess = finalized.text; // Use the better candidate
+                    // Merge options from finalized candidate
+                    Object.assign(options, finalized.options || {});
+                  }
+                }
+                
                 // If already processing, queue this final instead of processing immediately
                 if (isProcessingFinal) {
                   console.log(`[SoloMode] ⏳ Final already being processed, queuing: "${textToProcess.substring(0, 60)}..."`);
@@ -784,10 +884,20 @@ export async function handleSoloMode(clientWs) {
                           lastSentFinalText = correctedText; // Track the corrected text that was sent
                           lastSentFinalTime = Date.now();
                           
-                          // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
-                          checkForExtendingPartialsAfterFinal(textToProcess);
-                        } catch (error) {
-                          console.error('[SoloMode] Grammar correction error:', error);
+                        // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
+                        checkForExtendingPartialsAfterFinal(textToProcess);
+                        
+                        // CRITICAL FIX: Reset partial tracking AFTER final is successfully emitted
+                        // This ensures recovery and finalization have access to partial state
+                        partialTracker.reset();
+                        syncPartialVariables();
+                        
+                        // CRITICAL: Reset segment ID after segment is finalized
+                        // This allows next FINAL to generate a new segment ID
+                        currentSegmentId = null;
+                        console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission`);
+                      } catch (error) {
+                        console.error('[SoloMode] Grammar correction error:', error);
                           sendWithSequence({
                             type: 'translation',
                             originalText: textToProcess,
@@ -799,10 +909,16 @@ export async function handleSoloMode(clientWs) {
                             forceFinal: false
                           }, false);
                           
-                          // CRITICAL: Update last sent FINAL tracking after sending (even on error)
-                          lastSentOriginalText = textToProcess; // Track original
-                          lastSentFinalText = textToProcess; // No correction, so same as original
-                          lastSentFinalTime = Date.now();
+                        // CRITICAL: Update last sent FINAL tracking after sending (even on error)
+                        lastSentOriginalText = textToProcess; // Track original
+                        lastSentFinalText = textToProcess; // No correction, so same as original
+                        lastSentFinalTime = Date.now();
+                        
+                        // CRITICAL FIX: Reset partial tracking AFTER final is successfully emitted (even on error path if text was sent)
+                        partialTracker.reset();
+                        syncPartialVariables();
+                        currentSegmentId = null;
+                        console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission (error path)`);
                         }
                       } else {
                         // Non-English transcription - no grammar correction
@@ -911,6 +1027,16 @@ export async function handleSoloMode(clientWs) {
                         
                         // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
                         checkForExtendingPartialsAfterFinal(textToProcess);
+                        
+                        // CRITICAL FIX: Reset partial tracking AFTER final is successfully emitted
+                        // This ensures recovery and finalization have access to partial state
+                        partialTracker.reset();
+                        syncPartialVariables();
+                        
+                        // CRITICAL: Reset segment ID after segment is finalized
+                        // This allows next FINAL to generate a new segment ID
+                        currentSegmentId = null;
+                        console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission`);
                       } catch (error) {
                         console.error(`[SoloMode] Final processing error:`, error);
                         // If it's a skip request error, use corrected text (or original if not set)
@@ -935,6 +1061,14 @@ export async function handleSoloMode(clientWs) {
                           
                           // CRITICAL: ALWAYS check for partials that extend this just-sent FINAL
                           checkForExtendingPartialsAfterFinal(textToProcess);
+                          
+                          // CRITICAL FIX: Reset partial tracking AFTER final is successfully emitted (even on error path if text was sent)
+                          if (error.skipRequest || finalText !== `[Translation error: ${error.message}]`) {
+                            partialTracker.reset();
+                            syncPartialVariables();
+                            currentSegmentId = null;
+                            console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission (error path)`);
+                          }
                         }
                       }
                     }
@@ -1008,35 +1142,10 @@ export async function handleSoloMode(clientWs) {
                         console.log('[SoloMode] ⏳ Recovery in progress - waiting for completion before committing extended partial...');
                         try {
                           const recoveredText = await forcedFinalBuffer.recoveryPromise;
-                          syncForcedFinalBuffer(); // Re-sync after recovery completes
-                          
-                          // CRITICAL FIX: Merge recovery text with forced final buffer text first
-                          const forcedFinalText = forcedCommitEngine.getForcedFinalBuffer()?.text || forcedFinalBuffer.text;
-                          let mergedRecoveryText = recoveredText;
-                          
-                          if (recoveredText && recoveredText.length > 0 && forcedFinalText) {
-                            // Use recovery merge utility for better merge logic
-                            const mergeResult = mergeRecoveryText(
-                              forcedFinalText,
-                              recoveredText,
-                              {
-                                nextPartialText: transcriptText,
-                                nextFinalText: null,
-                                mode: 'SoloMode'
-                              }
-                            );
-                            
-                            if (mergeResult.merged) {
-                              mergedRecoveryText = mergeResult.mergedText;
-                              console.log(`[SoloMode] ✅ Recovery merged with forced final: "${mergeResult.reason}"`);
-                            }
-                          }
-                          
-                          // Now merge the merged recovery text with the extending partial
-                          if (mergedRecoveryText && mergedRecoveryText.length > 0) {
-                            console.log(`[SoloMode] ✅ Recovery completed with text: "${mergedRecoveryText.substring(0, 60)}..."`);
+                          if (recoveredText && recoveredText.length > 0) {
+                            console.log(`[SoloMode] ✅ Recovery completed with text: "${recoveredText.substring(0, 60)}..."`);
                             // Recovery found words - merge recovered text with extending partial
-                            const recoveredMerged = mergeWithOverlap(mergedRecoveryText, transcriptText);
+                            const recoveredMerged = mergeWithOverlap(recoveredText, transcriptText);
                             if (recoveredMerged) {
                               console.log('[SoloMode] 🔁 Merging recovered text with extending partial and committing');
                               forcedCommitEngine.clearForcedFinalBufferTimeout();
@@ -1045,19 +1154,10 @@ export async function handleSoloMode(clientWs) {
                               syncForcedFinalBuffer();
                               // Continue processing the extended partial normally
                               return; // Exit early - already committed
-                            } else {
-                              // Merge failed - use the extending partial text directly
-                              console.log('[SoloMode] ⚠️ Merge with extending partial failed - using extending partial');
-                              forcedCommitEngine.clearForcedFinalBufferTimeout();
-                              processFinalText(extension.extendedText, { forceFinal: true });
-                              forcedCommitEngine.clearForcedFinalBuffer();
-                              syncForcedFinalBuffer();
-                              return; // Exit early - already committed
                             }
                           }
                         } catch (error) {
                           console.error('[SoloMode] ❌ Error waiting for recovery:', error.message);
-                          // Fall through to normal merge logic
                         }
                       }
                       
@@ -1075,50 +1175,171 @@ export async function handleSoloMode(clientWs) {
                       syncForcedFinalBuffer();
                       // Continue processing the extended partial normally
                     } else {
-                      // New segment detected - but DON'T cancel timeout yet!
-                      // Let the POST-final audio recovery complete in the timeout
-                      // CRITICAL: Check if recovery is in progress - if so, don't reset partial tracker yet
-                      // This prevents race conditions where new partials mix with recovery data
-                      syncForcedFinalBuffer();
-                      const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
-                      if (recoveryInProgress) {
-                        console.log('[SoloMode] 🔀 New segment detected but recovery in progress - deferring partial tracker reset');
-                        console.log('[SoloMode] ⏳ Will reset partial tracker after recovery completes');
+                      // Check for actual silence gap (audio activity, not partial growth)
+                      const lastAudioTime = speechStream.getLastAudioActivityTime?.() || Date.now();
+                      const timeSinceLastAudio = Date.now() - lastAudioTime;
+                      const SILENCE_GAP_MS = 800; // 700-900ms range
+                      
+                      // Check if recovery is pending for current segment
+                      const currentSegmentRecoveryPending = coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId);
+                      
+                      if (timeSinceLastAudio > SILENCE_GAP_MS) {
+                        // Actual boundary detected - allow new segment even if recovery pending elsewhere
+                        syncForcedFinalBuffer();
+                        const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
+                        
+                        // CRITICAL: Finalize old segment before starting new segment (gap-based boundary)
+                        const oldSegmentId = currentSegmentId;
+                        if (oldSegmentId) {
+                          // Check if recovery pending for old segment - don't finalize if locked
+                          if (coreEngine?.finalityGate?.isRecoveryPending(oldSegmentId)) {
+                            console.log(`[SoloMode] 🔒 Deferring BOUNDARY finalization - recovery pending for ${oldSegmentId}`);
+                            // Queue this partial instead
+                            enqueueDuringRecovery('PARTIAL', transcriptText, true, meta);
+                            return;
+                          }
+                          
+                          // Finalize any pending partials for the old segment
+                          syncPendingFinalization();
+                          syncPartialVariables();
+                          
+                          if (pendingFinalization || (longestPartialText && longestPartialText.length > 0)) {
+                            // Force finalize the old segment immediately (gap-based boundary)
+                            const textToFinalize = pendingFinalization?.text || longestPartialText;
+                            if (textToFinalize) {
+                              // Add minimum length/age checks before force-finalizing
+                              const MIN_FORCE_FINAL_WORDS = 3;
+                              const MIN_FORCE_FINAL_CHARS = 20;
+                              const MIN_SILENCE_GAP_MS = 1200; // 1200-1500ms for short segments
+                              const ASR_STUBS = ['and', 'you', 'oh', 'their', 'i', 'the', 'a', 'an'];
+                              
+                              const wordCount = textToFinalize.trim().split(/\s+/).filter(w => w.length > 0).length;
+                              const charCount = textToFinalize.trim().length;
+                              const textLower = textToFinalize.trim().toLowerCase();
+                              const endsWithEllipsis = textLower.endsWith('...');
+                              const isAsrStub = ASR_STUBS.some(stub => textLower === stub || textLower === `${stub}.`);
+                              
+                              // Check if too short and no gap
+                              const tooShort = wordCount < MIN_FORCE_FINAL_WORDS && charCount < MIN_FORCE_FINAL_CHARS;
+                              const noGap = timeSinceLastAudio < MIN_SILENCE_GAP_MS;
+                              const isStub = endsWithEllipsis || isAsrStub;
+                              
+                              if (tooShort && noGap) {
+                                console.log(`[SoloMode] ⏭️ Skipping force-finalize: too short (${wordCount} words, ${charCount} chars) and no silence gap (${timeSinceLastAudio}ms)`);
+                                // Continue processing as same segment
+                                return;
+                              }
+                              
+                              if (isStub && timeSinceLastAudio < 1500) {
+                                console.log(`[SoloMode] ⏭️ Skipping force-finalize: ASR stub "${textToFinalize}" without sufficient gap (${timeSinceLastAudio}ms < 1500ms)`);
+                                // Continue processing as same segment
+                                return;
+                              }
+                              
+                              console.log(`[SoloMode] 🔒 BOUNDARY: Finalizing old segment before new segment starts (gap: ${timeSinceLastAudio}ms)`);
+                              console.log(`[SoloMode]   Old segment ID: ${oldSegmentId}`);
+                              console.log(`[SoloMode]   Text: "${textToFinalize.substring(0, 80)}..."`);
+                              // Use old segment ID for finalization
+                              processFinalText(textToFinalize, { 
+                                forceFinal: true,
+                                segmentId: oldSegmentId  // Use old segment ID
+                              });
+                              // Clear pending finalization and reset partial tracker after finalizing
+                              finalizationEngine.clearPendingFinalization();
+                              syncPendingFinalization();
+                              partialTracker.reset();
+                              syncPartialVariables();
+                            }
+                          }
+                          
+                          // Close old segment in FinalityGate
+                          if (coreEngine?.finalityGate) {
+                            coreEngine.finalityGate.closeSegment(oldSegmentId);
+                          }
+                        }
+                        // CRITICAL: Generate new segment ID for this new segment (gap-based boundary)
+                        currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        console.log(`[SoloMode] 🆕 Generated new segment ID: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
+                        
+                        if (recoveryInProgress) {
+                          console.log('[SoloMode] 🔀 New segment detected but recovery in progress - deferring partial tracker reset');
+                          console.log('[SoloMode] ⏳ Will reset partial tracker after recovery completes');
+                        } else {
+                          console.log('[SoloMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                        }
+                        // DON'T clear timeout or set to null - let it run!
+                        // The timeout will commit the final after POST-final audio recovery
+                        // Continue processing the new partial as a new segment
+                        // NOTE: Partial tracker reset will happen in the timeout callback after recovery
+                      } else if (currentSegmentRecoveryPending) {
+                        // Recovery pending for THIS segment - queue instead of creating new segment
+                        console.log(`[SoloMode] 🔒 Recovery pending for ${currentSegmentId} - queuing partial`);
+                        enqueueDuringRecovery('PARTIAL', transcriptText, true, meta);
+                        return;
                       } else {
-                        console.log('[SoloMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                        // Not a boundary, not locked - continue as same segment
+                        // Don't generate new segment ID
+                        console.log(`[SoloMode] ⏭️ No boundary detected (gap: ${timeSinceLastAudio}ms < ${SILENCE_GAP_MS}ms) - continuing as same segment`);
                       }
-                      // DON'T clear timeout or set to null - let it run!
-                      // The timeout will commit the final after POST-final audio recovery
-                      // Continue processing the new partial as a new segment
-                      // NOTE: Partial tracker reset will happen in the timeout callback after recovery
                     }
                   }
-                  // CRITICAL: Check if this partial duplicates words from the previous FINAL FIRST
-                  // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
-                  // Do this BEFORE updating partial tracker so we track the deduplicated text
-                  // Use core engine utility for deduplication
-                  const dedupResult = deduplicatePartialText({
-                    partialText: transcriptText,
-                    lastFinalText: lastSentFinalText,
-                    lastFinalTime: lastSentFinalTime,
-                    mode: 'SoloMode',
-                    timeWindowMs: 5000,
-                    maxWordsToCheck: 3
-                  });
-                  
-                  let partialTextToSend = dedupResult.deduplicatedText;
-                  
-                  // If all words were duplicates, skip sending this partial entirely
-                  if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
-                    console.log(`[SoloMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
-                    return; // Skip this partial entirely
-                  }
-                  
                   // PHASE 4: Update partial tracking using Partial Tracker
-                  // Use deduplicated text for tracking to ensure consistency
-                  partialTracker.updatePartial(partialTextToSend);
+                  partialTracker.updatePartial(transcriptText);
                   syncPartialVariables(); // Sync variables for compatibility
-                  const translationSeedText = applyCachedCorrections(partialTextToSend);
+                  const translationSeedText = applyCachedCorrections(transcriptText);
+                  
+                  // CRITICAL: Check if this partial duplicates words from the previous FINAL
+                  // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
+                  let partialTextToSend = transcriptText;
+                  if (lastSentFinalText && lastSentFinalTime) {
+                    const timeSinceLastFinal = Date.now() - lastSentFinalTime;
+                    // Only check if FINAL was sent recently (within 5 seconds)
+                    if (timeSinceLastFinal < 5000) {
+                      const lastSentFinalNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                      const partialNormalized = transcriptText.replace(/\s+/g, ' ').toLowerCase();
+                      
+                      // Get last few words from previous FINAL (check last 3-5 words)
+                      const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
+                      const partialWords = partialNormalized.split(/\s+/).filter(w => w.length > 2);
+                      
+                      // Check if partial starts with words that are related to the end of previous FINAL
+                      if (lastSentWords.length > 0 && partialWords.length > 0) {
+                        const lastWordsFromFinal = lastSentWords.slice(-3); // Last 3 words from FINAL
+                        const firstWordsFromPartial = partialWords.slice(0, 3); // First 3 words from PARTIAL
+                        
+                        // Check if the first word(s) of partial match the last word(s) of final
+                        // This catches cases like "desires" at end of FINAL followed by "Desires" at start of PARTIAL
+                        let wordsToSkip = 0;
+                        
+                        // Check backwards: first word of partial vs last word of final, second vs second-to-last, etc.
+                        for (let i = 0; i < Math.min(firstWordsFromPartial.length, lastWordsFromFinal.length); i++) {
+                          const partialWord = firstWordsFromPartial[i];
+                          const finalWord = lastWordsFromFinal[lastWordsFromFinal.length - 1 - i];
+                          
+                          if (wordsAreRelated(partialWord, finalWord)) {
+                            wordsToSkip++;
+                            console.log(`[SoloMode] ⚠️ Partial word "${partialWord}" (position ${i}) matches final word "${finalWord}" (position ${lastWordsFromFinal.length - 1 - i})`);
+                          } else {
+                            // Stop checking once we find a non-match
+                            break;
+                          }
+                        }
+                        
+                        if (wordsToSkip > 0) {
+                          // Skip the duplicate words
+                          const partialWordsArray = transcriptText.split(/\s+/);
+                          partialTextToSend = partialWordsArray.slice(wordsToSkip).join(' ').trim();
+                          console.log(`[SoloMode] ✂️ Trimmed ${wordsToSkip} duplicate word(s) from partial: "${transcriptText.substring(0, 50)}..." → "${partialTextToSend.substring(0, 50)}..."`);
+                          
+                          // If nothing left after trimming, skip sending this partial entirely
+                          if (!partialTextToSend || partialTextToSend.length < 3) {
+                            console.log(`[SoloMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
+                            return; // Skip this partial entirely
+                          }
+                        }
+                      }
+                    }
+                  }
                   
                   // CRITICAL: Don't send very short partials at the start of a new segment
                   // Google Speech needs time to refine the transcription, especially for the first word
@@ -1153,11 +1374,10 @@ export async function handleSoloMode(clientWs) {
                   }, true);
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
-                  // Use deduplicated text for all checks to ensure consistency
                   if (pendingFinalization) {
                     const timeSinceFinal = Date.now() - pendingFinalization.timestamp;
                     const finalText = pendingFinalization.text.trim();
-                    const partialText = partialTextToSend.trim(); // Use deduplicated text, not original
+                    const partialText = transcriptText.trim();
                     
                     // Check if this partial actually extends the final (starts with it or has significant overlap)
                     // For short finals, require exact start match. For longer finals, allow some flexibility
@@ -1203,14 +1423,33 @@ export async function handleSoloMode(clientWs) {
                                              !startsWithFinalWord && 
                                              !extendsFinal;
                     
-                    // If partial is clearly a new segment (no relationship to final), commit the pending final immediately
-                    // BUT: If it might be a false final (period added incorrectly), wait a bit longer
-                    // CRITICAL FIX: Also delay commit if final is short and incomplete to allow extending partials to arrive
-                    const isShortIncompleteFinal = finalText.length < 50 && !finalEndsWithCompleteSentence;
-                    const shouldDelayCommit = mightBeFalseFinal || (isShortIncompleteFinal && timeSinceFinal < 2000);
+                    // REMOVED: Text-heuristic segment detection (no word overlap)
+                    // Now using gap-based detection only - check for actual silence gap
+                    const lastAudioTime = speechStream.getLastAudioActivityTime?.() || Date.now();
+                    const timeSinceLastAudio = Date.now() - lastAudioTime;
+                    const SILENCE_GAP_MS = 800; // 700-900ms range
                     
-                    if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord && timeSinceFinal > 500 && !shouldDelayCommit) {
-                      console.log(`[SoloMode] 🔀 New segment detected - partial "${partialText}" has no relationship to pending FINAL "${finalText.substring(0, 50)}..."`);
+                    // Only create new segment if there's an actual silence gap
+                    if (timeSinceLastAudio > SILENCE_GAP_MS) {
+                      // Actual boundary detected - commit pending final and start new segment
+                      const oldSegmentId = currentSegmentId;
+                      
+                      // Check if recovery pending for old segment
+                      if (oldSegmentId && coreEngine?.finalityGate?.isRecoveryPending(oldSegmentId)) {
+                        console.log(`[SoloMode] 🔒 Deferring segment boundary - recovery pending for ${oldSegmentId}`);
+                        // Queue this partial instead
+                        enqueueDuringRecovery('PARTIAL', transcriptText, true, meta);
+                        return;
+                      }
+                      
+                      // CRITICAL: Close old segment in FinalityGate before starting new segment
+                      if (oldSegmentId && coreEngine?.finalityGate) {
+                        coreEngine.finalityGate.closeSegment(oldSegmentId);
+                      }
+                      // CRITICAL: Generate new segment ID for this new segment (gap-based boundary)
+                      currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                      console.log(`[SoloMode] 🆕 Generated new segment ID: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
+                      console.log(`[SoloMode] 🔀 New segment detected - gap-based boundary (${timeSinceLastAudio}ms > ${SILENCE_GAP_MS}ms)`);
                       console.log(`[SoloMode] ✅ Committing pending FINAL before processing new segment`);
                       // PHASE 5: Clear timeout using engine
                       finalizationEngine.clearPendingFinalizationTimeout();
@@ -1218,30 +1457,12 @@ export async function handleSoloMode(clientWs) {
                       // PHASE 5: Clear using engine
                       finalizationEngine.clearPendingFinalization();
                       syncPendingFinalization();
-                      // PHASE 4: Reset partial tracking using tracker
-                      partialTracker.reset();
-                      // REFACTORED: Also reset partial translation state for new segment
-                      partialState.reset();
-                      syncPartialVariables();
+                      // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
                       processFinalText(textToCommit);
-                      // CRITICAL FIX: Create pending finalization for the new segment partial so it eventually becomes a final
-                      // This ensures all partials eventually get committed as finals
-                      if (partialTextToSend && partialTextToSend.trim().length > 0) {
-                        console.log(`[SoloMode] 📝 Creating pending finalization for new segment partial: "${partialTextToSend.substring(0, 50)}..."`);
-                        finalizationEngine.createPendingFinalization(partialTextToSend);
-                        syncPendingFinalization();
-                        // Schedule timeout to commit this new segment partial as a final
-                        const waitTime = finalizationEngine.calculateWaitTime(partialTextToSend, 1500);
-                        finalizationEngine.setPendingFinalizationTimeout(() => {
-                          syncPendingFinalization();
-                          if (!pendingFinalization) return;
-                          const finalTextToCommit = pendingFinalization.text;
-                          finalizationEngine.clearPendingFinalization();
-                          syncPendingFinalization();
-                          processFinalText(finalTextToCommit);
-                        }, waitTime);
-                      }
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
+                    } else {
+                      // No gap detected - continue as same segment (don't create new segment ID)
+                      console.log(`[SoloMode] ⏭️ No boundary detected (gap: ${timeSinceLastAudio}ms < ${SILENCE_GAP_MS}ms) - continuing as same segment`);
                     }
                     
                     // If partial might be a continuation OR might be a false final (period added incorrectly), wait longer
@@ -1363,30 +1584,27 @@ export async function handleSoloMode(clientWs) {
                     }
                     
                     // If partials are still arriving and extending the final, update the pending text and extend the timeout
-                    // CRITICAL FIX: Also check for partials that extend during the wait period (even if not in this exact moment)
-                    if (timeSinceFinal < 3000 && extendsFinal) {
+                    if (timeSinceFinal < 2000 && extendsFinal) {
                       // CRITICAL: Update the pending finalization text with the extended partial IMMEDIATELY
                       // Always use the LONGEST partial available, not just the current one
-                      let textToUpdate = partialTextToSend; // Use deduplicated text
+                      let textToUpdate = transcriptText;
                       const finalTrimmed = pendingFinalization.text.trim();
                       
                       // Check if longestPartialText is even longer and extends the final
-                      syncPartialVariables();
-                      if (longestPartialText && longestPartialText.length > partialTextToSend.length && 
+                      if (longestPartialText && longestPartialText.length > transcriptText.length && 
                           longestPartialTime && (Date.now() - longestPartialTime) < 10000) {
                         const longestTrimmed = longestPartialText.trim();
                         if (longestTrimmed.startsWith(finalTrimmed) || 
                             (finalTrimmed.length > 10 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
-                          console.log(`[SoloMode] 📝 Using LONGEST partial instead of current (${partialTextToSend.length} → ${longestPartialText.length} chars)`);
+                          console.log(`[SoloMode] 📝 Using LONGEST partial instead of current (${transcriptText.length} → ${longestPartialText.length} chars)`);
                           textToUpdate = longestPartialText;
                         }
                       }
                       
                       if (textToUpdate.length > pendingFinalization.text.length) {
                         console.log(`[SoloMode] 📝 Updating pending final with extended partial (${pendingFinalization.text.length} → ${textToUpdate.length} chars)`);
-                        // CRITICAL FIX: Update using engine method to ensure state is synced
-                        finalizationEngine.updatePendingFinalizationText(textToUpdate);
-                        syncPendingFinalization();
+                        pendingFinalization.text = textToUpdate;
+                        pendingFinalization.timestamp = Date.now(); // Reset timestamp to give more time
                         
                         // CRITICAL: If extended text now ends with complete sentence, we can finalize sooner
                         const extendedEndsWithCompleteSentence = endsWithCompleteSentence(textToUpdate);
@@ -1413,11 +1631,9 @@ export async function handleSoloMode(clientWs) {
                           return;
                         }
                         
-                        // CRITICAL FIX: Use the updated pending finalization text (which may have been extended)
-                        let finalTextToUse = pendingFinalization.text;
-                        syncPartialVariables();
                         const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                         const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                        let finalTextToUse = pendingFinalization.text;
                         // CRITICAL: Only use longest/latest if they actually extend the final
                         const finalTrimmed = pendingFinalization.text.trim();
                         if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
@@ -1541,13 +1757,13 @@ export async function handleSoloMode(clientWs) {
                           console.log('[SoloMode] ⏳ Recovery in progress - deferring partial tracker reset until recovery completes');
                           // Reset will happen in recovery completion callback
                         } else {
-                          // PHASE 8: Reset partial tracking using tracker
-                          partialTracker.reset();
-                          partialState.reset();
-                          syncPartialVariables();
+                          // DON'T reset yet - will reset after final is emitted
+                          // CRITICAL FIX: Partial reset moved to after final emission to prevent state loss
+                          console.log(`[SoloMode] ⏳ Will reset partial tracking after final is emitted`);
                         }
                         
                         console.log(`[SoloMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
+                        // CRITICAL: Partial reset happens in processFinalText finally block after final is emitted
                         processFinalText(textToProcess);
                         // Continue processing the new partial as a new segment
                       }
@@ -1787,13 +2003,6 @@ export async function handleSoloMode(clientWs) {
                         // Skip only if exact match (no need to retranslate identical text)
                         if (partialState.isExactMatch(latestText)) {
                           console.log(`[SoloMode] ⏭️ Skipping exact match translation`);
-                          partialState.clearPendingTimeout();
-                          return;
-                        }
-                        
-                        // CRITICAL FIX: Check if text changed during delay (rapid partials)
-                        if (partialState.isStale(latestText)) {
-                          console.log(`[SoloMode] ⏭️ Skipping stale translation (text changed during delay)`);
                           partialState.clearPendingTimeout();
                           return;
                         }
@@ -2042,14 +2251,9 @@ export async function handleSoloMode(clientWs) {
                             }
                           }
 
-                          // NOW reset partial tracking for next segment (clean slate for recovery)
-                          // CRITICAL: Use snapshotAndReset to prevent race conditions where new partials
-                          // arrive between snapshot and reset, which could mix segments
-                          console.log(`[SoloMode] 🧹 Resetting partial tracking for next segment`);
-                          // PHASE 4: Reset partial tracking using tracker (snapshot already taken above)
-                          partialTracker.reset();
-                          partialState.reset();
-                          syncPartialVariables(); // Sync variables after reset
+                          // DON'T reset partial tracking yet - will reset after final is emitted
+                          // CRITICAL FIX: Partial reset moved to after final emission to prevent state loss
+                          console.log(`[SoloMode] ⏳ Will reset partial tracking after final is emitted`);
 
                           // Calculate how much time has passed since forced final
                           const timeSinceForcedFinal = Date.now() - forcedFinalTimestamp;
@@ -2059,18 +2263,11 @@ export async function handleSoloMode(clientWs) {
                           // - PRE-final audio (1400ms before the final) ← Contains the decoder gap!
                           // - POST-final audio (800ms after the final) ← Captures complete phrases like "self-centered"
                           const captureWindowMs = forcedCommitEngine.CAPTURE_WINDOW_MS;
-                          // ⭐ BUG FIX: Limit POST-final audio to 800ms max to prevent capturing next segment
-                          // Window end should be: forcedFinalTimestamp + 800ms (not current time if more than 800ms passed)
-                          const maxPostFinalMs = 800;
-                          const windowEndTimestamp = Math.min(forcedFinalTimestamp + maxPostFinalMs, Date.now());
-                          const actualPostFinalMs = windowEndTimestamp - forcedFinalTimestamp;
-                          const actualPreFinalMs = captureWindowMs - actualPostFinalMs;
                           console.log(`[SoloMode] 🎵 Capturing PRE+POST-final audio: last ${captureWindowMs}ms`);
-                          console.log(`[SoloMode] 📊 Window covers: [T-${actualPreFinalMs}ms to T+${actualPostFinalMs}ms]`);
+                          console.log(`[SoloMode] 📊 Window covers: [T-${captureWindowMs - timeSinceForcedFinal}ms to T+${timeSinceForcedFinal}ms]`);
                           console.log(`[SoloMode] 🎯 This INCLUDES the decoder gap at ~T-200ms where missing words exist!`);
-                          console.log(`[SoloMode] 🔒 POST-final limited to ${actualPostFinalMs}ms (max ${maxPostFinalMs}ms) to prevent capturing next segment`);
 
-                          const recoveryAudio = speechStream.getRecentAudio(captureWindowMs, windowEndTimestamp);
+                          const recoveryAudio = speechStream.getRecentAudio(captureWindowMs);
                           console.log(`[SoloMode] 🎵 Captured ${recoveryAudio.length} bytes of PRE+POST-final audio`);
                           
                           // CRITICAL: If audio buffer is empty (stream ended), commit forced final immediately
@@ -2116,59 +2313,46 @@ export async function handleSoloMode(clientWs) {
                           }
 
                           // Use finalWithPartials (which includes any late partials captured in Phase 1)
-                          let finalTextToCommit = finalWithPartials;
-                          
                           // CRITICAL: bufferedText (captured earlier) is the original forced final text
                           // We'll use this as fallback if buffer is cleared before we can commit
 
                           console.log(`[SoloMode] 📊 Text to commit after late partial recovery:`);
-                          console.log(`[SoloMode]   Text: "${finalTextToCommit}"`);
+                          console.log(`[SoloMode]   Text: "${finalWithPartials}"`);
                           console.log(`[SoloMode]   Original forced final (bufferedText): "${bufferedText}"`);
 
                           // ⭐ NOW: Send the PRE+POST-final audio to recovery stream
                           // This audio includes the decoder gap at T-200ms where "spent" exists!
                           if (recoveryAudio.length > 0) {
-                            // CRITICAL FIX: Skip recovery if there are queued finals waiting
-                            // Recovery is less important than processing new finals - queued finals indicate
-                            // the system is already backlogged, so skip recovery to prevent further lag
-                            if (finalProcessingQueue.length > 0) {
-                              console.log(`[SoloMode] ⏭️ Skipping recovery - ${finalProcessingQueue.length} queued final(s) waiting (recovery would cause further lag)`);
-                            } else {
-                              // Use RecoveryStreamEngine to handle recovery stream operations
-                              // Wrap recoveryStartTime and nextFinalAfterRecovery in objects so they can be modified
-                              const recoveryStartTimeRef = { value: recoveryStartTime };
-                              const nextFinalAfterRecoveryRef = { value: nextFinalAfterRecovery };
-                              
-                              // CRITICAL FIX: Make recovery stream processing truly non-blocking
-                              // Recovery stream processing is CPU-intensive and blocks the event loop
-                              // Fire and forget - don't await, just start it and let it run in background
-                              // This prevents blocking audio processing and queued finals
-                              setImmediate(() => {
-                                // Don't await - let it run in background without blocking
-                                coreEngine.recoveryStreamEngine.performRecoveryStream({
-                                  speechStream,
-                                  sourceLang: currentSourceLang,
-                                  forcedCommitEngine,
-                                  finalWithPartials,
-                                  latestPartialText,
-                                  nextFinalAfterRecovery,
-                                  bufferedText,
-                                  processFinalText,
-                                  syncForcedFinalBuffer,
-                                  syncPartialVariables,
-                                  mode: 'SoloMode',
-                                  recoveryStartTime: recoveryStartTimeRef,
-                                  nextFinalAfterRecovery: nextFinalAfterRecoveryRef,
-                                  recoveryAudio
-                                }).then(() => {
-                                  // Update the original variables from the refs when done
-                                  recoveryStartTime = recoveryStartTimeRef.value;
-                                  nextFinalAfterRecovery = nextFinalAfterRecoveryRef.value;
-                                }).catch(error => {
-                                  console.error('[SoloMode] ❌ Recovery stream error:', error);
-                                });
-                              });
-                            }
+                            // Use RecoveryStreamEngine to handle recovery stream operations
+                            // Wrap recoveryStartTime and nextFinalAfterRecovery in objects so they can be modified
+                            const recoveryStartTimeRef = { value: recoveryStartTime };
+                            const nextFinalAfterRecoveryRef = { value: nextFinalAfterRecovery };
+                            
+                            await coreEngine.recoveryStreamEngine.performRecoveryStream({
+                              speechStream,
+                              sourceLang: currentSourceLang,
+                              forcedCommitEngine,
+                              finalityGate: coreEngine.finalityGate,
+                              finalWithPartials,
+                              latestPartialText,
+                              nextFinalAfterRecovery,
+                              bufferedText,
+                              processFinalText,
+                              syncForcedFinalBuffer,
+                              syncPartialVariables,
+                              mode: 'SoloMode',
+                              recoveryStartTime: recoveryStartTimeRef,
+                              nextFinalAfterRecovery: nextFinalAfterRecoveryRef,
+                              recoveryAudio,
+                              segmentId: currentSegmentId // Pass current segment ID for FinalityGate isolation
+                            });
+                            
+                            // Update the original variables from the refs
+                            recoveryStartTime = recoveryStartTimeRef.value;
+                            nextFinalAfterRecovery = nextFinalAfterRecoveryRef.value;
+                            
+                            // Drain queued events after recovery completes
+                            drainRecoveryQueue();
                           } else {
                             // No recovery audio available
                             console.log(`[SoloMode] ⚠️ No recovery audio available (${recoveryAudio.length} bytes) - committing without recovery`);
@@ -2177,7 +2361,33 @@ export async function handleSoloMode(clientWs) {
                           // CRITICAL: Check if recovery already committed before committing from timeout
                           syncForcedFinalBuffer();
                           const bufferStillExists = forcedCommitEngine.hasForcedFinalBuffer();
-                          const wasCommittedByRecovery = forcedFinalBuffer?.committedByRecovery === true;
+                          
+                          // Check if recovery already committed by checking the buffer's committedByRecovery flag
+                          // OR if buffer was cleared but recovery was in progress (recovery clears buffer after committing)
+                          let wasCommittedByRecovery = false;
+                          if (bufferStillExists) {
+                            // Buffer still exists - check its flag
+                            const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                            wasCommittedByRecovery = buffer?.committedByRecovery === true;
+                          } else {
+                            // Buffer doesn't exist - check if recovery was in progress
+                            // If recovery was in progress and buffer is now cleared, recovery must have committed it
+                            // We can't directly check if recovery completed, but we can infer:
+                            // - If buffer was cleared AND we're in the timeout callback, recovery likely committed it
+                            // - However, buffer could also be cleared by new FINAL or extending partial
+                            // So we need a more reliable check: look for recovery promise completion
+                            // For now, if buffer doesn't exist, we'll check if there's any indication recovery ran
+                            // The safest approach: if buffer doesn't exist, don't commit (recovery or new FINAL already handled it)
+                            console.log('[SoloMode] ⚠️ Forced final buffer already cleared - checking if recovery already committed...');
+                            
+                            // If we reach here and buffer is cleared, it means either:
+                            // 1. Recovery committed it (and cleared buffer) - DON'T commit again
+                            // 2. New FINAL arrived and merged with it - DON'T commit again  
+                            // 3. Extending partial cleared it - DON'T commit again
+                            // In all cases, we should NOT commit from timeout if buffer is cleared
+                            console.log('[SoloMode] ⏭️ Skipping timeout commit - buffer already cleared (likely committed by recovery, new FINAL, or extending partial)');
+                            return; // Skip commit - something else already handled it
+                          }
                           
                           if (wasCommittedByRecovery) {
                             console.log('[SoloMode] ⏭️ Skipping timeout commit - recovery already committed this forced final');
@@ -2189,9 +2399,8 @@ export async function handleSoloMode(clientWs) {
                             return; // Skip commit - recovery already handled it
                           }
                           
-                          // Use finalTextToCommit (which may include recovery words) or fallback to bufferedText
-                          // CRITICAL: bufferedText is captured in closure, so it's always available even if buffer is cleared
-                          const textToCommit = finalTextToCommit || bufferedText;
+                          // Use bufferedText (which is captured in closure, so it's always available even if buffer is cleared)
+                          const textToCommit = bufferedText;
                           
                           if (!textToCommit || textToCommit.length === 0) {
                             console.error('[SoloMode] ❌ No text to commit - forced final text is empty!');
@@ -2201,12 +2410,6 @@ export async function handleSoloMode(clientWs) {
                               syncForcedFinalBuffer();
                             }
                             return;
-                          }
-                          
-                          if (!bufferStillExists) {
-                            console.log('[SoloMode] ⚠️ Forced final buffer already cleared - but committing forced final to ensure it is not lost');
-                            // Buffer was cleared (likely by extending partial or new FINAL), but we should still commit
-                            // the forced final text to ensure it's not lost (recovery didn't commit it, so timeout must)
                           }
                           
                           // Commit the forced final (with grammar correction via processFinalText)
@@ -2220,6 +2423,9 @@ export async function handleSoloMode(clientWs) {
                             syncForcedFinalBuffer();
                           }
                           
+                          // CRITICAL: Partial reset is now handled in processFinalText finally block after final is emitted
+                          // No need to reset here - processFinalText will handle it
+                          
                           // Reset recovery tracking after commit
                           recoveryStartTime = 0;
                           nextFinalAfterRecovery = null;
@@ -2231,50 +2437,12 @@ export async function handleSoloMode(clientWs) {
                       console.error(`[SoloMode] ❌ Stack:`, error.stack);
                     }
                     
-                    // CRITICAL FIX: Commit any pending finalization first before handling forced final
-                    // This ensures no partials are lost when stream restarts
-                    syncPendingFinalization();
-                    if (pendingFinalization) {
-                      // Before committing, check for longest partial to ensure best accuracy
-                      syncPartialVariables();
-                      let textToCommit = pendingFinalization.text;
-                      const pendingTrimmed = pendingFinalization.text.trim();
-                      
-                      // Always check longest partial before committing - this ensures best accuracy
-                      if (longestPartialText && longestPartialText.length > pendingFinalization.text.length) {
-                        const longestTrimmed = longestPartialText.trim();
-                        const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
-                        
-                        // Check if longest partial extends the pending text
-                        const pendingNormalized = pendingTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                        const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                        const extendsPending = longestNormalized.startsWith(pendingNormalized) || 
-                                              (pendingTrimmed.length > 10 && longestNormalized.substring(0, pendingNormalized.length) === pendingNormalized) ||
-                                              longestTrimmed.startsWith(pendingTrimmed) ||
-                                              (pendingTrimmed.length > 10 && longestTrimmed.substring(0, pendingTrimmed.length) === pendingTrimmed);
-                        
-                        if (extendsPending && timeSinceLongest < 10000) {
-                          // Use longest partial for best accuracy
-                          const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
-                          console.log(`[SoloMode] ⚠️ Using LONGEST partial before committing pending (forced final): "${missingWords}"`);
-                          textToCommit = longestPartialText;
-                        } else {
-                          // Check for overlap merge
-                          const merged = mergeWithOverlap(pendingTrimmed, longestTrimmed);
-                          if (merged && merged.length > pendingTrimmed.length + 3 && timeSinceLongest < 10000) {
-                            console.log(`[SoloMode] ⚠️ Merging LONGEST partial with pending via overlap (forced final): ${pendingFinalization.text.length} → ${merged.length} chars`);
-                            textToCommit = merged;
-                          }
-                        }
-                      }
-                      
-                      console.log(`[SoloMode] 🔀 Forced final arrived - committing pending finalization first: "${textToCommit.substring(0, 50)}..."`);
-                      console.log(`[SoloMode] ✅ Ensuring best accuracy by checking longest partial before committing`);
-                      finalizationEngine.clearPendingFinalizationTimeout();
+                    // Cancel pending finalization timers (if any) since we're handling it now
+                    // PHASE 5: Clear using engine
+                    if (finalizationEngine.hasPendingFinalization()) {
                       finalizationEngine.clearPendingFinalization();
-                      syncPendingFinalization();
-                      processFinalText(textToCommit);
                     }
+                    syncPendingFinalization();
                     
                     return;
                   }
@@ -2405,31 +2573,6 @@ export async function handleSoloMode(clientWs) {
                   // Example: lastSentFinalText="...self-centered desires", newFinal="Desires cordoned off..."
                   let lastSentFinalTextToUse = lastSentFinalText;
                   if (lastSentFinalText && transcriptText) {
-                    // CRITICAL FIX: Deduplicate the NEW final text against lastSentFinalText
-                    // This removes duplicate words from the start of the new final that overlap with the end of the previous final
-                    // This is the same logic used for partials, ensuring consistency
-                    const dedupResult = deduplicatePartialText({
-                      partialText: transcriptText,
-                      lastFinalText: lastSentFinalText,
-                      lastFinalTime: lastSentFinalTime,
-                      mode: 'SoloMode',
-                      timeWindowMs: 5000,
-                      maxWordsToCheck: 5
-                    });
-                    
-                    if (dedupResult.wasDeduplicated && dedupResult.deduplicatedText) {
-                      // Update transcriptText with deduplicated version
-                      const originalLength = transcriptText.length;
-                      transcriptText = dedupResult.deduplicatedText;
-                      console.log(`[SoloMode] ✂️ Deduplicated final text (${originalLength} → ${transcriptText.length} chars, removed ${dedupResult.wordsSkipped} word(s))`);
-                      
-                      // If deduplication removed all text, this shouldn't be processed
-                      if (transcriptText.length === 0) {
-                        console.log(`[SoloMode] ⏭️ Final text would be empty after deduplication - skipping`);
-                        return;
-                      }
-                    }
-                    
                     const lastSentWords = lastSentFinalText.trim().split(/\s+/);
                     const newFinalWords = transcriptText.trim().toLowerCase().split(/\s+/);
                     
@@ -2609,10 +2752,10 @@ export async function handleSoloMode(clientWs) {
                   const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                   const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
                   
-                  // Note: We no longer extend wait time for mid-word finals - commit immediately
+                  // Note: We no longer extend wait time for mid-word finals - will wait for partials or timeout
                   // Continuations will be caught by the partial continuation detection logic
                   if (!finalEndsCompleteWord) {
-                    console.log(`[SoloMode] 📝 FINAL ends mid-word - will commit immediately, continuation will be caught in partials`);
+                    console.log(`[SoloMode] 📝 FINAL ends mid-word - will wait for extending partials or timeout`);
                   }
                   
                   // CRITICAL FIX: Check if FINAL is a fragment of an active partial
@@ -2723,18 +2866,9 @@ export async function handleSoloMode(clientWs) {
                   // If we have a pending finalization, check if this final extends it
                   // Google can send multiple finals for long phrases - accumulate them
                   if (pendingFinalization) {
-                    const pendingText = pendingFinalization.text.trim();
-                    const finalTextTrimmed = finalTextToUse.trim();
-                    
                     // Check if this final (or extended final) extends the pending one
-                    const pendingNormalized = pendingText.replace(/\s+/g, ' ').toLowerCase();
-                    const finalNormalized = finalTextTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                    const extendsPending = finalNormalized.startsWith(pendingNormalized) || 
-                                          (pendingText.length > 10 && finalNormalized.substring(0, pendingNormalized.length) === pendingNormalized) ||
-                                          finalTextTrimmed.startsWith(pendingText) ||
-                                          (pendingText.length > 10 && finalTextTrimmed.substring(0, pendingText.length) === pendingText);
-                    
-                    if (extendsPending && finalTextToUse.length > pendingFinalization.text.length) {
+                    if (finalTextToUse.length > pendingFinalization.text.length && 
+                        finalTextToUse.startsWith(pendingFinalization.text.trim())) {
                       // This final extends the pending one - update it with the extended text
                       console.log(`[SoloMode] 📦 Final extends pending (${pendingFinalization.text.length} → ${finalTextToUse.length} chars)`);
                       // PHASE 5: Update using engine
@@ -2747,104 +2881,67 @@ export async function handleSoloMode(clientWs) {
                         WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (finalTextToUse.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
                       }
                     } else {
-                      // Different final - ALWAYS commit pending one first to ensure no partials are lost
-                      // CRITICAL FIX: Never cancel pending finalizations - always commit them first
-                      // This ensures we get the best accuracy possible by checking longest partial before committing
-                      const timeSincePending = Date.now() - pendingFinalization.timestamp;
-                      
-                      // Before committing, check for longest partial to ensure best accuracy
-                      syncPartialVariables();
-                      let textToCommit = pendingFinalization.text;
-                      const pendingTrimmed = pendingText.trim();
-                      
-                      // Always check longest partial before committing - this ensures best accuracy
-                      if (longestPartialText && longestPartialText.length > pendingFinalization.text.length) {
-                        const longestTrimmed = longestPartialText.trim();
-                        const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
-                        
-                        // Check if longest partial extends the pending text
-                        const pendingNormalized = pendingTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                        const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
-                        const extendsPending = longestNormalized.startsWith(pendingNormalized) || 
-                                              (pendingTrimmed.length > 10 && longestNormalized.substring(0, pendingNormalized.length) === pendingNormalized) ||
-                                              longestTrimmed.startsWith(pendingTrimmed) ||
-                                              (pendingTrimmed.length > 10 && longestTrimmed.substring(0, pendingTrimmed.length) === pendingTrimmed);
-                        
-                        if (extendsPending && timeSinceLongest < 10000) {
-                          // Use longest partial for best accuracy
-                          const missingWords = longestPartialText.substring(pendingFinalization.text.length).trim();
-                          console.log(`[SoloMode] ⚠️ Using LONGEST partial before committing pending (${pendingFinalization.text.length} → ${longestPartialText.length} chars): "${missingWords}"`);
-                          textToCommit = longestPartialText;
-                        } else {
-                          // Check for overlap merge
-                          const merged = mergeWithOverlap(pendingTrimmed, longestTrimmed);
-                          if (merged && merged.length > pendingTrimmed.length + 3 && timeSinceLongest < 10000) {
-                            console.log(`[SoloMode] ⚠️ Merging LONGEST partial with pending via overlap (${pendingFinalization.text.length} → ${merged.length} chars)`);
-                            textToCommit = merged;
-                          }
-                        }
-                      }
-                      
-                      // ALWAYS commit pending first - never cancel it
-                      console.log(`[SoloMode] 🔀 New final doesn't extend pending - ALWAYS committing pending first (waited ${timeSincePending}ms): "${textToCommit.substring(0, 50)}..."`);
-                      console.log(`[SoloMode] ✅ Ensuring best accuracy by checking longest partial before committing`);
-                      finalizationEngine.clearPendingFinalizationTimeout();
+                      // Different final - cancel old one and start new
+                      // PHASE 5: Clear using engine
                       finalizationEngine.clearPendingFinalization();
                       syncPendingFinalization();
-                      processFinalText(textToCommit);
                     }
-                  }
-                  
-                  // CRITICAL FIX: If FINAL ends mid-word and no partials extend it, commit immediately
-                  // This prevents short phrases like "Oh my" from being lost when a new segment arrives
-                  const finalTextTrimmed = finalTextToUse.trim();
-                  const finalEndsCompleteWordAfterCheck = endsWithCompleteWord(finalTextTrimmed);
-                  const hasExtendingPartial = (longestPartialText && longestPartialText.length > transcriptText.length && timeSinceLongest < 10000) ||
-                                             (latestPartialText && latestPartialText.length > transcriptText.length && timeSinceLatest < 5000);
-                  
-                  if (!finalEndsCompleteWordAfterCheck && !hasExtendingPartial && finalTextToUse === transcriptText) {
-                    // FINAL ends mid-word, no extending partials found, and we didn't merge with any partial
-                    // Commit immediately instead of waiting - continuation will be caught in partials if it exists
-                    console.log(`[SoloMode] ⚡ Committing mid-word FINAL immediately (no extending partials): "${finalTextTrimmed}"`);
-                    // PHASE 4: Reset partial tracking using tracker
-                    partialTracker.reset();
-                    partialState.reset();
-                    syncPartialVariables();
-                    // Process immediately without waiting
-                    processFinalText(finalTextToUse);
-                    return; // Exit early - don't schedule timeout
                   }
                   
                   // Schedule final processing after a delay to catch any remaining partials
                   // PHASE 5: Use Finalization Engine for pending finalization
                   // If pendingFinalization exists and was extended, we'll reschedule it below
                   if (!finalizationEngine.hasPendingFinalization()) {
+                    // Check for actual boundary (gap-based, not text-based)
+                    const lastAudioTime = speechStream.getLastAudioActivityTime?.() || Date.now();
+                    const timeSinceLastAudio = Date.now() - lastAudioTime;
+                    const SILENCE_GAP_MS = 800;
+                    
+                    // Conservative escape hatch: truly unrelated FINAL after restart
+                    // Only use if there's a gap OR restart happened AND similarity is very low
+                    const normalizedSimilarity = (text1, text2) => {
+                      if (!text1 || !text2) return 0;
+                      const t1 = text1.toLowerCase().replace(/\s+/g, ' ');
+                      const t2 = text2.toLowerCase().replace(/\s+/g, ' ');
+                      const longer = t1.length > t2.length ? t1 : t2;
+                      const shorter = t1.length > t2.length ? t2 : t1;
+                      if (longer.length === 0) return 0;
+                      // Simple similarity: count matching words
+                      const words1 = t1.split(/\s+/).filter(w => w.length > 2);
+                      const words2 = t2.split(/\s+/).filter(w => w.length > 2);
+                      const matching = words1.filter(w => words2.includes(w)).length;
+                      return matching / Math.max(words1.length, words2.length, 1);
+                    };
+                    const restartHappened = false; // TODO: Track stream restarts
+                    const isTrulyUnrelated = timeSinceLastAudio > SILENCE_GAP_MS || 
+                                            (restartHappened && normalizedSimilarity(lastSentFinalText || '', transcriptText) < 0.1);
+                    
+                    if (timeSinceLastAudio > SILENCE_GAP_MS || isTrulyUnrelated) {
+                      // Check recovery lock for current segment
+                      const currentSegmentRecoveryPending = coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId);
+                      if (currentSegmentRecoveryPending) {
+                        console.log(`[SoloMode] 🔒 Recovery pending for ${currentSegmentId} - queuing FINAL`);
+                        enqueueDuringRecovery('FINAL', transcriptText, false, meta);
+                        return;
+                      }
+                      
+                      // CRITICAL: Generate new segment ID for this new FINAL (gap-based boundary)
+                      // This ensures FinalityGate can track this segment independently
+                      if (!currentSegmentId) {
+                        currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        console.log(`[SoloMode] 🆕 Generated new segment ID for FINAL: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
+                      }
+                    } else {
+                      // No gap - continue with existing segment ID (or create if none exists)
+                      if (!currentSegmentId) {
+                        currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        console.log(`[SoloMode] 🆕 Generated new segment ID for FINAL: ${currentSegmentId} (no previous segment)`);
+                      }
+                    }
                     // CRITICAL: Don't reset partials here - they're needed during timeout check
                     // Both BASIC and PREMIUM tiers need partials available during the wait period
                     // Partials will be reset AFTER final processing completes (see timeout callback)
-                    
-                    // CRITICAL FIX: Detect false finals - short finals with periods that are clearly incomplete
-                    // Examples: "I've been.", "You just can't.", "We have."
-                    // These should wait longer for extending partials even if they have periods
-                    const finalTrimmed = finalTextToUse.trim();
-                    const endsWithPeriod = finalTrimmed.endsWith('.');
-                    const isShort = finalTrimmed.length < 25;
-                    const finalEndsWithCompleteSentence = endsWithCompleteSentence(finalTrimmed);
-                    
-                    // Check for common incomplete patterns (even with periods)
-                    const isCommonIncompletePattern = /^(I've|I've been|You|You just|You just can't|We|We have|They|They have|It|It has)\s/i.test(finalTrimmed);
-                    
-                    // CRITICAL FIX: If final is short, has period, but matches incomplete pattern, treat as false final
-                    // This catches cases like "You just can't." which should wait for "beat people up with doctrine"
-                    const isFalseFinal = endsWithPeriod && isShort && isCommonIncompletePattern;
-                    
-                    if (isFalseFinal) {
-                      console.log(`[SoloMode] ⚠️ FALSE FINAL DETECTED: "${finalTrimmed.substring(0, 50)}..." - short final with period but clearly incomplete, will wait longer for extending partials`);
-                      // Use longer wait time for false finals
-                      WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 3000); // Wait at least 3 seconds for false finals
-                    }
-                    
-                    finalizationEngine.createPendingFinalization(finalTextToUse, null, isFalseFinal);
+                    finalizationEngine.createPendingFinalization(finalTextToUse, null);
                   }
                   
                   // Schedule or reschedule the timeout
@@ -2864,9 +2961,6 @@ export async function handleSoloMode(clientWs) {
                       
                       // Use the longest available partial (within reasonable time window)
                       // CRITICAL: Only use if it actually extends the final (not from a previous segment)
-                      // CRITICAL FIX: Always check for extending partials, even if pending finalization text was updated
-                      // Partials that arrive during wait may extend beyond the updated text
-                      syncPartialVariables(); // Ensure we have latest partials
                       let finalTextToUse = pendingFinalization.text;
                       const finalTrimmed = pendingFinalization.text.trim();
                       
@@ -2875,27 +2969,7 @@ export async function handleSoloMode(clientWs) {
                       let finalEndsWithCompleteSentence = endsWithCompleteSentence(finalTrimmed);
                       const shouldPreferPartials = !finalEndsWithCompleteSentence || longestPartialText?.length > pendingFinalization.text.length + 10;
                       
-                      // CRITICAL FIX: Check for extending partials using tracker methods first (more reliable)
-                      const longestExtends = partialTracker.checkLongestExtends(finalTrimmed, 10000);
-                      const latestExtends = partialTracker.checkLatestExtends(finalTrimmed, 5000);
-                      
-                      if (longestExtends) {
-                        const longestTrimmed = longestExtends.extendedText.trim();
-                        if (longestTrimmed.startsWith(finalTrimmed) || 
-                            (finalTrimmed.length > 10 && longestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
-                          console.log(`[SoloMode] ⚠️ Using LONGEST partial from tracker (${pendingFinalization.text.length} → ${longestExtends.extendedText.length} chars)`);
-                          console.log(`[SoloMode] 📊 Recovered: "${longestExtends.missingWords}"`);
-                          finalTextToUse = longestExtends.extendedText;
-                        }
-                      } else if (latestExtends) {
-                        const latestTrimmed = latestExtends.extendedText.trim();
-                        if (latestTrimmed.startsWith(finalTrimmed) || 
-                            (finalTrimmed.length > 10 && latestTrimmed.substring(0, finalTrimmed.length) === finalTrimmed)) {
-                          console.log(`[SoloMode] ⚠️ Using LATEST partial from tracker (${pendingFinalization.text.length} → ${latestExtends.extendedText.length} chars)`);
-                          console.log(`[SoloMode] 📊 Recovered: "${latestExtends.missingWords}"`);
-                          finalTextToUse = latestExtends.extendedText;
-                        }
-                      } else if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
+                      if (longestPartialText && longestPartialText.length > pendingFinalization.text.length && timeSinceLongest < 10000) {
                         const longestTrimmed = longestPartialText.trim();
                         // More lenient matching: check if partial extends final (case-insensitive, normalized)
                         const finalNormalized = finalTrimmed.replace(/\s+/g, ' ').toLowerCase();

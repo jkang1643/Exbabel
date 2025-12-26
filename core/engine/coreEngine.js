@@ -21,6 +21,7 @@ import { PartialTracker } from './partialTracker.js';
 import { FinalizationEngine } from './finalizationEngine.js';
 import { ForcedCommitEngine } from './forcedCommitEngine.js';
 import { RecoveryStreamEngine } from './recoveryStreamEngine.js';
+import { FinalityGate } from './finalityGate.js';
 import { BibleReferenceEngine } from './bibleReferenceEngine.js';
 import { EVENT_TYPES } from '../events/eventTypes.js';
 
@@ -57,6 +58,9 @@ export class CoreEngine extends EventEmitter {
     // Recovery stream engine
     this.recoveryStreamEngine = options.recoveryStreamEngine || new RecoveryStreamEngine();
     
+    // Finality gate engine (enforces finalization dominance rules)
+    this.finalityGate = options.finalityGate || new FinalityGate();
+    
     // Bible reference engine
     this.bibleReferenceEngine = options.bibleReferenceEngine || 
       new BibleReferenceEngine(options.bibleConfig || {});
@@ -89,6 +93,7 @@ export class CoreEngine extends EventEmitter {
     this.partialTracker.reset();
     this.finalizationEngine.clearPendingFinalization();
     this.forcedCommitEngine.clearForcedFinalBuffer();
+    this.finalityGate.reset();
     this.bibleReferenceEngine.reset();
     this.emit('reset');
   }

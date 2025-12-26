@@ -13,6 +13,7 @@
  */
 
 import { mergeRecoveryText } from '../../backend/utils/recoveryMerge.js';
+import { CandidateSource } from './finalityGate.js';
 
 /**
  * Recovery Stream Engine class
@@ -51,6 +52,7 @@ export class RecoveryStreamEngine {
     speechStream,
     sourceLang,
     forcedCommitEngine,
+    finalityGate,
     finalWithPartials,
     latestPartialText,
     nextFinalAfterRecovery,
@@ -61,13 +63,21 @@ export class RecoveryStreamEngine {
     mode = 'UnknownMode',
     recoveryStartTime,
     nextFinalAfterRecovery: nextFinalRef,
-    recoveryAudio: providedRecoveryAudio
+    recoveryAudio: providedRecoveryAudio,
+    segmentId = null
   }) {
     // Get recovery audio if not provided
     const captureWindowMs = forcedCommitEngine.CAPTURE_WINDOW_MS || 2200;
     const recoveryAudio = providedRecoveryAudio || speechStream.getRecentAudio(captureWindowMs);
 
     console.log(`[${mode}] 🎵 Starting decoder gap recovery with PRE+POST-final audio: ${recoveryAudio.length} bytes`);
+
+    // CRITICAL: Mark recovery as pending in FinalityGate BEFORE starting recovery
+    // This blocks lower-priority candidates (grammar/forced) from finalizing while recovery is in progress
+    if (finalityGate) {
+      finalityGate.markRecoveryPending(segmentId);
+      console.log(`[${mode}] 🔴 FinalityGate: Marked recovery as pending for segment ${segmentId || 'default'}`);
+    }
 
     // CRITICAL: Create recovery promise BEFORE starting recovery
     // This allows other code (like new FINALs) to wait for recovery to complete
@@ -270,13 +280,25 @@ export class RecoveryStreamEngine {
             const lastSentFinalTextBeforeBuffer = forcedFinalBuffer?.lastSentFinalTextBeforeBuffer || null;
             const lastSentFinalTimeBeforeBuffer = forcedFinalBuffer?.lastSentFinalTimeBeforeBuffer || null;
             
+            // CRITICAL FIX: If buffer values are empty, we can't deduplicate the recovery commit itself,
+            // but processFinalText will handle it using lastSentFinalText. However, we should ensure
+            // that the recovery commit text (finalTextToCommit) will be used as the basis for NEXT final deduplication.
             // Prefer original text for deduplication (full text vs shortened grammar-corrected version)
-            const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+            let previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+            
+            // If both are empty, we can't provide previous text for deduplication of THIS recovery commit
+            // But processFinalText will use lastSentFinalText for deduplication, and after this commit,
+            // lastSentFinalText will be set to finalTextToCommit, which will be used for NEXT final deduplication
+            if (!previousFinalTextForDeduplication) {
+              console.log(`[${mode}] ⚠️ WARNING: Both lastSentOriginalTextBeforeBuffer and lastSentFinalTextBeforeBuffer are empty`);
+              console.log(`[${mode}] ⚠️ Recovery commit will use lastSentFinalText for deduplication (from processFinalText closure)`);
+              console.log(`[${mode}] ⚠️ After recovery commit, lastSentFinalText will be set to recovery commit text for NEXT final deduplication`);
+            }
             
             console.log(`[${mode}] 🔍 RECOVERY COMMIT - Previous final text for deduplication:`);
             console.log(`[${mode}]   lastSentOriginalTextBeforeBuffer: "${lastSentOriginalTextBeforeBuffer ? lastSentOriginalTextBeforeBuffer.substring(Math.max(0, lastSentOriginalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
             console.log(`[${mode}]   lastSentFinalTextBeforeBuffer: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}" (fallback)`);
-            console.log(`[${mode}]   Using for deduplication: "${previousFinalTextForDeduplication ? previousFinalTextForDeduplication.substring(Math.max(0, previousFinalTextForDeduplication.length - 80)) : '(none)'}"`);
+            console.log(`[${mode}]   Using for deduplication: "${previousFinalTextForDeduplication ? previousFinalTextForDeduplication.substring(Math.max(0, previousFinalTextForDeduplication.length - 80)) : '(none - will use lastSentFinalText from closure)'}"`);
             console.log(`[${mode}]   lastSentFinalTimeBeforeBuffer: ${lastSentFinalTimeBeforeBuffer || '(not set)'}`);
             console.log(`[${mode}]   This is the final that was sent BEFORE the forced final was buffered`);
             console.log(`[${mode}]   Will be used for deduplication to ensure correct previous segment comparison`);
@@ -286,14 +308,36 @@ export class RecoveryStreamEngine {
             }
             
             // Commit the full recovered text (forced final + recovery words)
-            // Pass the captured previous final text so deduplication uses the correct previous segment
-            // Prefer lastSentOriginalTextBeforeBuffer (full original text) over lastSentFinalTextBeforeBuffer
+            // CRITICAL: Use FinalityGate to enforce dominance rules
+            // Recovery candidates always win over grammar/forced candidates
             console.log(`[${mode}] 📤 Calling processFinalText with recovery context:`);
             console.log(`[${mode}]   Text to commit: "${finalTextToCommit.substring(0, 80)}..."`);
             console.log(`[${mode}]   Previous final for deduplication: "${previousFinalTextForDeduplication ? previousFinalTextForDeduplication.substring(Math.max(0, previousFinalTextForDeduplication.length - 80)) : '(none)'}"`);
             
+            // CRITICAL: Submit recovery candidate to FinalityGate (DO NOT finalize here)
+            // processFinalText is the single authority for finalization
+            if (finalityGate) {
+              const candidate = {
+                text: finalTextToCommit,
+                source: CandidateSource.Recovery,
+                segmentId: segmentId,
+                timestamp: Date.now(),
+                options: {
+                  previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                  previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+                }
+              };
+              // Submit candidate (updates best candidate if better)
+              finalityGate.submitCandidate(candidate);
+              // Mark recovery complete - allows finalization to proceed
+              finalityGate.markRecoveryComplete(segmentId);
+            }
+            
+            // Call processFinalText - it will check FinalityGate and finalize if allowed
+            // Recovery candidates always win through FinalityGate dominance rules
             processFinalText(finalTextToCommit, { 
               forceFinal: true,
+              candidateSource: CandidateSource.Recovery, // Tell processFinalText this is a recovery candidate
               previousFinalTextForDeduplication: previousFinalTextForDeduplication,
               previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
             });
@@ -316,11 +360,31 @@ export class RecoveryStreamEngine {
             console.log(`[${mode}] ⚠️ Buffer already cleared but recovery found words - committing merged text anyway to prevent word loss`);
             console.log(`[${mode}] 📤 Committing recovery update (buffer was cleared): "${finalTextToCommit.substring(0, 80)}..."`);
 
-            // Try to get deduplication context from the merge result or use null (processFinalText will handle it)
-            // We don't have access to lastSentOriginalTextBeforeBuffer if buffer was cleared, so use null
+            // CRITICAL: Submit recovery candidate to FinalityGate (DO NOT finalize here)
+            // processFinalText is the single authority for finalization
+            if (finalityGate) {
+              const candidate = {
+                text: finalTextToCommit,
+                source: CandidateSource.Recovery,
+                segmentId: segmentId,
+                timestamp: Date.now(),
+                options: {
+                  previousFinalTextForDeduplication: null,
+                  previousFinalTimeForDeduplication: null
+                }
+              };
+              // Submit candidate (updates best candidate if better)
+              finalityGate.submitCandidate(candidate);
+              // Mark recovery complete - allows finalization to proceed
+              finalityGate.markRecoveryComplete(segmentId);
+            }
+            
+            // Call processFinalText - it will check FinalityGate and finalize if allowed
+            // Recovery candidates always win through FinalityGate dominance rules
             processFinalText(finalTextToCommit, { 
               forceFinal: true,
-              previousFinalTextForDeduplication: null, // Will use last sent final for deduplication
+              candidateSource: CandidateSource.Recovery, // Tell processFinalText this is a recovery candidate
+              previousFinalTextForDeduplication: null,
               previousFinalTimeForDeduplication: null
             });
 
@@ -345,13 +409,25 @@ export class RecoveryStreamEngine {
             const lastSentFinalTextBeforeBuffer = forcedFinalBuffer?.lastSentFinalTextBeforeBuffer || null;
             const lastSentFinalTimeBeforeBuffer = forcedFinalBuffer?.lastSentFinalTimeBeforeBuffer || null;
             
+            // CRITICAL FIX: If buffer values are empty, we can't deduplicate the recovery commit itself,
+            // but processFinalText will handle it using lastSentFinalText. However, we should ensure
+            // that the recovery commit text will be used as the basis for NEXT final deduplication.
             // Prefer original text for deduplication (full text vs shortened grammar-corrected version)
-            const previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+            let previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+            
+            // If both are empty, we can't provide previous text for deduplication of THIS recovery commit
+            // But processFinalText will use lastSentFinalText for deduplication, and after this commit,
+            // lastSentFinalText will be set to forcedFinalText, which will be used for NEXT final deduplication
+            if (!previousFinalTextForDeduplication) {
+              console.log(`[${mode}] ⚠️ WARNING: Both lastSentOriginalTextBeforeBuffer and lastSentFinalTextBeforeBuffer are empty`);
+              console.log(`[${mode}] ⚠️ Recovery commit will use lastSentFinalText for deduplication (from processFinalText closure)`);
+              console.log(`[${mode}] ⚠️ After recovery commit, lastSentFinalText will be set to forced final text for NEXT final deduplication`);
+            }
             
             console.log(`[${mode}] 🔍 RECOVERY COMMIT - Previous final text for deduplication:`);
             console.log(`[${mode}]   lastSentOriginalTextBeforeBuffer: "${lastSentOriginalTextBeforeBuffer ? lastSentOriginalTextBeforeBuffer.substring(Math.max(0, lastSentOriginalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
             console.log(`[${mode}]   lastSentFinalTextBeforeBuffer: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}" (fallback)`);
-            console.log(`[${mode}]   Using for deduplication: "${previousFinalTextForDeduplication ? previousFinalTextForDeduplication.substring(Math.max(0, previousFinalTextForDeduplication.length - 80)) : '(none)'}"`);
+            console.log(`[${mode}]   Using for deduplication: "${previousFinalTextForDeduplication ? previousFinalTextForDeduplication.substring(Math.max(0, previousFinalTextForDeduplication.length - 80)) : '(none - will use lastSentFinalText from closure)'}"`);
             console.log(`[${mode}]   lastSentFinalTimeBeforeBuffer: ${lastSentFinalTimeBeforeBuffer || '(not set)'}`);
             console.log(`[${mode}]   This is the final that was sent BEFORE the forced final was buffered`);
             console.log(`[${mode}]   Will be used for deduplication to ensure correct previous segment comparison`);
@@ -401,12 +477,30 @@ export class RecoveryStreamEngine {
           console.log(`[${mode}]   Forced final text: "${forcedFinalText.substring(0, 80)}..."`);
           
           // Mark as committed by recovery BEFORE clearing buffer
-          // CRITICAL: Capture lastSentFinalTextBeforeBuffer BEFORE clearing buffer
+          // CRITICAL: Capture lastSentOriginalTextBeforeBuffer (preferred) or lastSentFinalTextBeforeBuffer BEFORE clearing buffer
+          const lastSentOriginalTextBeforeBuffer = forcedFinalBuffer?.lastSentOriginalTextBeforeBuffer || null;
           const lastSentFinalTextBeforeBuffer = forcedFinalBuffer?.lastSentFinalTextBeforeBuffer || null;
           const lastSentFinalTimeBeforeBuffer = forcedFinalBuffer?.lastSentFinalTimeBeforeBuffer || null;
           
+          // CRITICAL FIX: If buffer values are empty, we can't deduplicate the recovery commit itself,
+          // but processFinalText will handle it using lastSentFinalText. However, we should ensure
+          // that the recovery commit text will be used as the basis for NEXT final deduplication.
+          // Prefer original text for deduplication (full text vs shortened grammar-corrected version)
+          let previousFinalTextForDeduplication = lastSentOriginalTextBeforeBuffer || lastSentFinalTextBeforeBuffer;
+          
+          // If both are empty, we can't provide previous text for deduplication of THIS recovery commit
+          // But processFinalText will use lastSentFinalText for deduplication, and after this commit,
+          // lastSentFinalText will be set to forcedFinalText, which will be used for NEXT final deduplication
+          if (!previousFinalTextForDeduplication) {
+            console.log(`[${mode}] ⚠️ WARNING: Both lastSentOriginalTextBeforeBuffer and lastSentFinalTextBeforeBuffer are empty`);
+            console.log(`[${mode}] ⚠️ Recovery commit will use lastSentFinalText for deduplication (from processFinalText closure)`);
+            console.log(`[${mode}] ⚠️ After recovery commit, lastSentFinalText will be set to forced final text for NEXT final deduplication`);
+          }
+          
           console.log(`[${mode}] 🔍 RECOVERY COMMIT - Previous final text for deduplication:`);
-          console.log(`[${mode}]   lastSentFinalTextBeforeBuffer: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+          console.log(`[${mode}]   lastSentOriginalTextBeforeBuffer: "${lastSentOriginalTextBeforeBuffer ? lastSentOriginalTextBeforeBuffer.substring(Math.max(0, lastSentOriginalTextBeforeBuffer.length - 80)) : '(empty)'}"`);
+          console.log(`[${mode}]   lastSentFinalTextBeforeBuffer: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(empty)'}" (fallback)`);
+          console.log(`[${mode}]   Using for deduplication: "${previousFinalTextForDeduplication ? previousFinalTextForDeduplication.substring(Math.max(0, previousFinalTextForDeduplication.length - 80)) : '(none - will use lastSentFinalText from closure)'}"`);
           console.log(`[${mode}]   lastSentFinalTimeBeforeBuffer: ${lastSentFinalTimeBeforeBuffer || '(not set)'}`);
           console.log(`[${mode}]   This is the final that was sent BEFORE the forced final was buffered`);
           console.log(`[${mode}]   Will be used for deduplication to ensure correct previous segment comparison`);
@@ -416,14 +510,68 @@ export class RecoveryStreamEngine {
           }
           
           // Commit the forced final (with grammar correction via processFinalText)
+          // NOTE: This case is when recovery didn't find additional words, so this is a Forced candidate, not Recovery
+          // Submit the forced candidate and mark recovery complete so it can proceed
+          if (finalityGate) {
+            const candidate = {
+              text: forcedFinalText,
+              source: CandidateSource.Forced,
+              segmentId: segmentId,
+              timestamp: Date.now(),
+              options: {
+                previousFinalTextForDeduplication: previousFinalTextForDeduplication,
+                previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
+              }
+            };
+            // Submit candidate (updates best candidate if better)
+            finalityGate.submitCandidate(candidate);
+            // Mark recovery complete - returns candidate if segment needs finalization
+            const candidateToFinalize = finalityGate.markRecoveryComplete(segmentId);
+            
+            // CRITICAL FIX: If markRecoveryComplete returns a candidate, it means recovery completed
+            // but segment hasn't been finalized. We should finalize the best candidate (may be this forced one or better)
+            if (candidateToFinalize && !finalityGate.isFinalized(segmentId)) {
+              console.log(`[${mode}] 🔑 FinalityGate: Recovery completed, best candidate ready for finalization`);
+              // Finalize the best candidate via processFinalText to ensure liveness
+              // processFinalText will finalize through FinalityGate (recovery is no longer pending)
+              const finalizeOptions = candidateToFinalize.options || {};
+              finalizeOptions.candidateSource = candidateToFinalize.source;
+              finalizeOptions.forceFinal = candidateToFinalize.source === CandidateSource.Forced || candidateToFinalize.source === CandidateSource.Recovery;
+              finalizeOptions.previousFinalTextForDeduplication = previousFinalTextForDeduplication;
+              finalizeOptions.previousFinalTimeForDeduplication = lastSentFinalTimeBeforeBuffer;
+              
+              console.log(`[${mode}] ✅ Finalizing best candidate via processFinalText: "${candidateToFinalize.text.substring(0, 60)}..."`);
+              processFinalText(candidateToFinalize.text, finalizeOptions);
+              
+              // Clear buffer and return early since we've finalized
+              forcedCommitEngine.clearForcedFinalBuffer();
+              syncForcedFinalBuffer();
+              
+              // Reset recovery tracking
+              if (recoveryStartTime && typeof recoveryStartTime === 'object' && 'value' in recoveryStartTime) {
+                recoveryStartTime.value = 0;
+              }
+              if (nextFinalRef && typeof nextFinalRef === 'object' && 'value' in nextFinalRef) {
+                nextFinalRef.value = null;
+              }
+              
+              console.log(`[${mode}] ✅ Best candidate finalized - timeout callback will skip`);
+              return; // Exit early - we've finalized the best candidate
+            }
+          }
+          
           // Pass the captured previous final text so deduplication uses the correct previous segment
+          // Prefer lastSentOriginalTextBeforeBuffer (full original text) over lastSentFinalTextBeforeBuffer
           console.log(`[${mode}] 📤 Calling processFinalText with recovery context:`);
           console.log(`[${mode}]   Text to commit: "${forcedFinalText.substring(0, 80)}..."`);
-          console.log(`[${mode}]   Previous final for deduplication: "${lastSentFinalTextBeforeBuffer ? lastSentFinalTextBeforeBuffer.substring(Math.max(0, lastSentFinalTextBeforeBuffer.length - 80)) : '(none)'}"`);
+          console.log(`[${mode}]   Previous final for deduplication: "${previousFinalTextForDeduplication ? previousFinalTextForDeduplication.substring(Math.max(0, previousFinalTextForDeduplication.length - 80)) : '(none - will use lastSentFinalText from closure)'}"`);
           
+          // Call processFinalText - it will check FinalityGate and finalize if allowed
+          // This is a Forced candidate (not Recovery), so it goes through normal dominance rules
           processFinalText(forcedFinalText, { 
             forceFinal: true,
-            previousFinalTextForDeduplication: lastSentFinalTextBeforeBuffer,
+            candidateSource: CandidateSource.Forced, // Tell processFinalText this is a forced candidate
+            previousFinalTextForDeduplication: previousFinalTextForDeduplication,
             previousFinalTimeForDeduplication: lastSentFinalTimeBeforeBuffer
           });
           forcedCommitEngine.clearForcedFinalBuffer();
@@ -443,6 +591,36 @@ export class RecoveryStreamEngine {
         }
       }
 
+      // CRITICAL: Mark recovery as complete in FinalityGate (if not already done above)
+      // This is a fallback for cases where recovery completes but no candidate was submitted
+      // If a candidate is returned, we MUST finalize it to ensure liveness
+      if (finalityGate && !finalityGate.isRecoveryResolved(segmentId)) {
+        const candidateToFinalize = finalityGate.markRecoveryComplete(segmentId);
+        if (candidateToFinalize && !finalityGate.isFinalized(segmentId)) {
+          console.log(`[${mode}] 🔑 FinalityGate: Recovery completed, best candidate available but not yet finalized: "${candidateToFinalize.text.substring(0, 60)}..."`);
+          console.log(`[${mode}] ⚠️ CRITICAL: Finalizing candidate to ensure liveness (segment would be dropped otherwise)`);
+          
+          // CRITICAL FIX: Finalize the candidate via processFinalText to ensure eventual finalization
+          // This guarantees that every segment reaches a final state exactly once
+          // We call processFinalText with the candidate text, and it will finalize through FinalityGate
+          // (recovery is no longer pending, so canCommit will return true)
+          if (processFinalText) {
+            const finalizeOptions = candidateToFinalize.options || {};
+            finalizeOptions.candidateSource = candidateToFinalize.source;
+            finalizeOptions.forceFinal = candidateToFinalize.source === CandidateSource.Forced || candidateToFinalize.source === CandidateSource.Recovery;
+            const candidateSource = candidateToFinalize.source === CandidateSource.Recovery ? 'Recovery' : 
+                                   candidateToFinalize.source === CandidateSource.Forced ? 'Forced' : 'Grammar';
+            
+            console.log(`[${mode}] ✅ Finalizing ${candidateSource} candidate via processFinalText: "${candidateToFinalize.text.substring(0, 60)}..."`);
+            processFinalText(candidateToFinalize.text, finalizeOptions);
+          } else {
+            console.log(`[${mode}] ⚠️ WARNING: Could not finalize candidate - processFinalText not available`);
+          }
+        } else {
+          console.log(`[${mode}] 🔴 FinalityGate: Marked recovery as complete for segment ${segmentId || 'default'}`);
+        }
+      }
+
       // CRITICAL: Resolve recovery promise with recovered text (or empty if nothing found)
       // This allows other code (like new FINALs) to wait for recovery to complete
       if (recoveryResolve) {
@@ -456,6 +634,22 @@ export class RecoveryStreamEngine {
       console.error(`[${mode}] ❌ Decoder gap recovery failed:`, error.message);
       console.error(`[${mode}] ❌ Error stack:`, error.stack);
       console.error(`[${mode}] ❌ Full error object:`, error);
+      
+      // CRITICAL: Mark recovery as complete even on error, and finalize any pending candidate
+      // This ensures liveness even when recovery fails
+      if (finalityGate && !finalityGate.isRecoveryResolved(segmentId)) {
+        const candidateToFinalize = finalityGate.markRecoveryComplete(segmentId);
+        if (candidateToFinalize && !finalityGate.isFinalized(segmentId)) {
+          console.log(`[${mode}] 🔑 FinalityGate: Recovery failed, but best candidate exists - finalizing to ensure liveness`);
+          if (processFinalText) {
+            const finalizeOptions = candidateToFinalize.options || {};
+            finalizeOptions.candidateSource = candidateToFinalize.source;
+            finalizeOptions.forceFinal = candidateToFinalize.source === CandidateSource.Forced || candidateToFinalize.source === CandidateSource.Recovery;
+            console.log(`[${mode}] ✅ Finalizing best candidate after recovery error via processFinalText: "${candidateToFinalize.text.substring(0, 60)}..."`);
+            processFinalText(candidateToFinalize.text, finalizeOptions);
+          }
+        }
+      }
       
       // CRITICAL: Resolve recovery promise even on error (with empty string)
       // This prevents other code from hanging while waiting for recovery
