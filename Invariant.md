@@ -83,6 +83,21 @@ If Grammar ever wins over Recovery → test fails.
 
 If recovery is pending for segment S, nothing may finalize S until recovery resolves.
 
+9. Invariant
+Never generate a new segmentId until you’ve committed/finalized the previous segment.
+
+When you detect a new segment boundary (gap-based or “clearly new segment”), the order must be:
+
+oldSegmentId = currentSegmentId
+
+commit/finalize pending final using oldSegmentId
+
+close oldSegmentId (optional if FinalityGate does it)
+
+THEN set currentSegmentId = newId
+
+Right now your code is doing (4) first.
+
 🔒 Invariant 1 — Partial text is never finalizable
 
 A PARTIAL segment may never be promoted directly to FINAL.

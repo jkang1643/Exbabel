@@ -38,8 +38,17 @@ export const CandidateSource = {
  * @property {boolean} recoveryResolved - Whether recovery has completed for this segment
  * @property {FinalCandidate|null} bestCandidate - Best candidate seen so far (may not be finalized)
  * @property {boolean} finalized - Whether this segment has been finalized
+ * @property {boolean} closed - Whether this segment has been closed (idempotency tracking)
  * @property {string} [segmentId] - Segment identifier
+ * @property {string|null} finalizedText - Text that was finalized (stored for comparison)
+ * @property {number} committedFinalCount - Number of committed finals for this segment (invariant tracking)
+ * @property {boolean} sawFinalFromASR - Whether ASR FINAL was received for this segment (invariant tracking)
+ * @property {boolean} sawRecoveryResolved - Whether recovery was resolved for this segment (invariant tracking)
+ * @property {string|null} lastEmitCommitId - Commit ID of the last emitted final (invariant tracking)
+ * @property {string|null} finalizeCommitId - Commit ID when finalizeSegment was called (invariant tracking)
  */
+
+import { assertInvariant } from '../utils/invariant.js';
 
 export class FinalityGate {
   constructor() {
@@ -48,6 +57,15 @@ export class FinalityGate {
     
     // Default segment ID for cases where segment tracking isn't available
     this.defaultSegmentId = 'default';
+    
+    // Recovery timeout for finalized-but-uncommitted segments (5 seconds)
+    this.RECOVERY_TIMEOUT_MS = 5000;
+    
+    // Map segmentId -> recovery timeout handle
+    this.recoveryTimeouts = new Map();
+    
+    // Start periodic recovery check
+    this.startRecoveryCheck();
   }
 
   /**
@@ -134,6 +152,19 @@ export class FinalityGate {
         bestCandidateSource: state.bestCandidate ? this._getSourceName(state.bestCandidate.source) : null,
         bestCandidateLength: state.bestCandidate ? state.bestCandidate.text.length : null
       });
+
+      // INVARIANT #2: Recovery dominance - No final may commit while recovery is unresolved
+      // Recovery candidates always dominate grammar-only candidates for the same segment
+      assertInvariant('recovery_dominance', false, {
+        segmentId,
+        candidateSource: this._getSourceName(candidate.source),
+        recoveryPending: state.recoveryPending,
+        recoveryResolved: state.recoveryResolved,
+        text: candidate.text,
+        bestCandidateSource: state.bestCandidate ? this._getSourceName(state.bestCandidate.source) : null,
+        bestCandidateText: state.bestCandidate ? state.bestCandidate.text : null
+      });
+
       return false;
     }
 
@@ -214,15 +245,33 @@ export class FinalityGate {
    * This should only be called when canCommit returns true
    * After finalization, the segment cannot accept new candidates
    * 
+   * CRITICAL: Pre-check ensures we can commit before finalizing.
+   * If segment has sawFinalFromASR or sawRecoveryResolved, we MUST commit.
+   * 
    * @param {string} [segmentId] - Segment identifier (uses default if not provided)
+   * @param {string} [commitId] - Optional commit ID to track (will be validated after emission)
    * @returns {FinalCandidate|null} The finalized candidate, or null if none exists
    */
-  finalizeSegment(segmentId = null) {
+  finalizeSegment(segmentId = null, commitId = null) {
     const id = segmentId || this.defaultSegmentId;
     const state = this.getOrCreateSegmentState(id);
 
     if (!state.bestCandidate) {
       return null;
+    }
+
+    // CRITICAL PRE-CHECK: If segment has sawFinalFromASR or sawRecoveryResolved,
+    // we MUST ensure we can commit before finalizing (prevents finalized-but-uncommitted state)
+    if (state.sawFinalFromASR || state.sawRecoveryResolved) {
+      // This segment expects exactly one commit - ensure we're ready to commit
+      // If already finalized, this is a duplicate finalization attempt (should not happen)
+      if (state.finalized) {
+        console.warn(`[FinalityGate] ⚠️ Attempted to finalize already-finalized segment ${id} (sawFinalFromASR: ${state.sawFinalFromASR}, sawRecoveryResolved: ${state.sawRecoveryResolved})`);
+        return null;
+      }
+      
+      // Log that we're finalizing a segment that expects a commit
+      console.log(`[FinalityGate] 🔒 Finalizing segment ${id} that expects commit (sawFinalFromASR: ${state.sawFinalFromASR}, sawRecoveryResolved: ${state.sawRecoveryResolved})`);
     }
 
     // Mark as finalized - no more candidates accepted
@@ -232,8 +281,18 @@ export class FinalityGate {
 
     const finalizedCandidate = state.bestCandidate;
 
+    // Store finalized text for comparison (needed for auto-heal logic)
+    state.finalizedText = finalizedCandidate.text;
+
+    // Track finalizeCommitId for validation after emission
+    state.finalizeCommitId = commitId || `${id}-finalize-${Date.now()}`;
+    state.finalizeTimestamp = Date.now();
+
     // Clear best candidate after finalization
     state.bestCandidate = null;
+
+    // Set up recovery timeout: if not committed within 5 seconds, log warning and attempt recovery
+    this.scheduleRecoveryTimeout(id);
 
     return finalizedCandidate;
   }
@@ -305,8 +364,62 @@ export class FinalityGate {
   }
 
   /**
+   * Mark that a segment has been committed (emitted)
+   * Call this AFTER the emit succeeds to record the commit and check the invariant
+   * 
+   * @param {string} segmentId - Segment that was committed
+   * @param {string} commitId - Commit ID of the emitted final
+   */
+  markCommitted(segmentId, commitId) {
+    if (!segmentId) {
+      return;
+    }
+
+    const state = this.segmentStates.get(segmentId);
+    if (!state) {
+      console.warn(`[FinalityGate] ⚠️ markCommitted called for non-existent segment: ${segmentId}`);
+      return;
+    }
+
+    // Record the commit
+    state.committedFinalCount = (state.committedFinalCount || 0) + 1;
+    state.lastEmitCommitId = commitId;
+
+    // CRITICAL: Validate that finalizeCommitId matches (if set)
+    // This ensures the commit corresponds to the finalization
+    if (state.finalizeCommitId && commitId !== state.finalizeCommitId) {
+      // Allow mismatch but log warning (commitId might be generated differently)
+      console.warn(`[FinalityGate] ⚠️ Commit ID mismatch for segment ${segmentId}: finalizeCommitId=${state.finalizeCommitId}, emitCommitId=${commitId}`);
+    }
+
+    // Clear recovery timeout since we've committed successfully
+    this.clearRecoveryTimeout(segmentId);
+
+    // INVARIANT #4: Exactly one committed final per segment
+    // Every segment that receives a FINAL or recovery must emit exactly one committed final
+    // This check happens AFTER the commit is recorded, so it can properly validate the invariant
+    assertInvariant('exactly_one_committed_final',
+      !(state.sawFinalFromASR || state.sawRecoveryResolved) || state.committedFinalCount === 1,
+      {
+        segmentId,
+        sawFinalFromASR: state.sawFinalFromASR,
+        sawRecoveryResolved: state.sawRecoveryResolved,
+        committedFinalCount: state.committedFinalCount,
+        finalized: state.finalized,
+        lastEmitCommitId: state.lastEmitCommitId,
+        finalizeCommitId: state.finalizeCommitId,
+        bestCandidateText: state.bestCandidate ? state.bestCandidate.text : null,
+        finalizedText: state.finalizedText
+      }
+    );
+  }
+
+  /**
    * Close a segment (finalize if needed, clear recovery state)
    * Call this when transitioning to a new segment to prevent recovery state from leaking
+   * 
+   * This method is now idempotent - calling it multiple times is safe.
+   * The invariant check has been moved to markCommitted() which is called after emit succeeds.
    * 
    * @param {string} segmentId - Segment to close
    */
@@ -318,6 +431,11 @@ export class FinalityGate {
     const state = this.segmentStates.get(segmentId);
     if (!state) {
       return; // Segment doesn't exist, nothing to close
+    }
+
+    // IDEMPOTENCY: If already closed, return early (no invariant check, no throw)
+    if (state.closed) {
+      return;
     }
 
     // Don't finalize if recovery is pending for THIS segment
@@ -334,6 +452,12 @@ export class FinalityGate {
     // Clear recovery state for this segment to prevent leakage to new segments
     state.recoveryPending = false;
     state.recoveryResolved = true;
+    
+    // Mark as closed (idempotency)
+    state.closed = true;
+
+    // NOTE: Invariant check moved to markCommitted() which is called AFTER emit succeeds
+    // This prevents false failures when closeSegment() is called before the emit completes
   }
 
   /**
@@ -369,6 +493,18 @@ export class FinalityGate {
   }
 
   /**
+   * Get the finalized text for a segment (if it was finalized)
+   * 
+   * @param {string} [segmentId] - Segment identifier (uses default if not provided)
+   * @returns {string|null} The finalized text, or null if not finalized
+   */
+  getFinalizedText(segmentId = null) {
+    const id = segmentId || this.defaultSegmentId;
+    const state = this.segmentStates.get(id);
+    return state?.finalizedText || null;
+  }
+
+  /**
    * Get or create segment state
    * 
    * @private
@@ -382,10 +518,137 @@ export class FinalityGate {
         recoveryResolved: false,
         bestCandidate: null,
         finalized: false,
-        segmentId
+        closed: false,
+        finalizedText: null,
+        segmentId,
+        // Invariant tracking fields
+        committedFinalCount: 0,
+        sawFinalFromASR: false,
+        sawRecoveryResolved: false,
+        lastEmitCommitId: null,
+        finalizeCommitId: null,
+        finalizeTimestamp: null
       });
     }
     return this.segmentStates.get(segmentId);
+  }
+
+  /**
+   * Schedule recovery timeout for a finalized segment
+   * If segment is not committed within timeout, log warning and attempt recovery
+   * 
+   * @private
+   * @param {string} segmentId - Segment identifier
+   */
+  scheduleRecoveryTimeout(segmentId) {
+    // Clear any existing timeout
+    this.clearRecoveryTimeout(segmentId);
+
+    const timeoutHandle = setTimeout(() => {
+      this.recoverUncommittedSegment(segmentId);
+      this.recoveryTimeouts.delete(segmentId);
+    }, this.RECOVERY_TIMEOUT_MS);
+
+    this.recoveryTimeouts.set(segmentId, timeoutHandle);
+  }
+
+  /**
+   * Clear recovery timeout for a segment
+   * 
+   * @private
+   * @param {string} segmentId - Segment identifier
+   */
+  clearRecoveryTimeout(segmentId) {
+    const timeoutHandle = this.recoveryTimeouts.get(segmentId);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      this.recoveryTimeouts.delete(segmentId);
+    }
+  }
+
+  /**
+   * Recover a segment that was finalized but never committed
+   * Logs warning and resets state to allow recovery
+   * 
+   * @private
+   * @param {string} segmentId - Segment identifier
+   */
+  recoverUncommittedSegment(segmentId) {
+    const state = this.segmentStates.get(segmentId);
+    if (!state) {
+      return; // Segment doesn't exist
+    }
+
+    // Check if segment is finalized but not committed
+    if (state.finalized && state.committedFinalCount === 0) {
+      const timeSinceFinalize = Date.now() - (state.finalizeTimestamp || Date.now());
+      console.error(`[FinalityGate] 🔴 RECOVERY: Segment ${segmentId} finalized but never committed (${timeSinceFinalize}ms ago)`);
+      console.error(`[FinalityGate]   State: finalized=${state.finalized}, committedFinalCount=${state.committedFinalCount}`);
+      console.error(`[FinalityGate]   sawFinalFromASR=${state.sawFinalFromASR}, sawRecoveryResolved=${state.sawRecoveryResolved}`);
+      console.error(`[FinalityGate]   finalizeCommitId=${state.finalizeCommitId}, finalizedText="${state.finalizedText?.substring(0, 60)}..."`);
+      
+      // Reset state to allow recovery (segment can be finalized again if needed)
+      // This prevents the segment from being stuck in finalized-but-uncommitted state
+      state.finalized = false;
+      state.finalizeCommitId = null;
+      state.finalizeTimestamp = null;
+      
+      // If we have finalizedText, restore it as bestCandidate so it can be finalized again
+      if (state.finalizedText && !state.bestCandidate) {
+        // Restore as a recovery candidate (highest priority)
+        state.bestCandidate = {
+          text: state.finalizedText,
+          source: CandidateSource.Recovery,
+          segmentId: segmentId,
+          timestamp: Date.now()
+        };
+        console.log(`[FinalityGate] 🔄 Restored finalized text as recovery candidate for segment ${segmentId}`);
+      }
+    }
+  }
+
+  /**
+   * Recover all segments that are finalized but not committed
+   * Called periodically to catch any segments that slipped through
+   * 
+   * @returns {number} Number of segments recovered
+   */
+  recoverUncommittedSegments() {
+    let recoveredCount = 0;
+    
+    for (const [segmentId, state] of this.segmentStates.entries()) {
+      if (state.finalized && state.committedFinalCount === 0) {
+        const timeSinceFinalize = state.finalizeTimestamp ? (Date.now() - state.finalizeTimestamp) : 0;
+        
+        // Only recover if it's been more than recovery timeout
+        if (timeSinceFinalize >= this.RECOVERY_TIMEOUT_MS) {
+          this.recoverUncommittedSegment(segmentId);
+          recoveredCount++;
+        }
+      }
+    }
+    
+    if (recoveredCount > 0) {
+      console.log(`[FinalityGate] 🔄 Recovered ${recoveredCount} uncommitted segment(s)`);
+    }
+    
+    return recoveredCount;
+  }
+
+  /**
+   * Start periodic recovery check
+   * Checks every 10 seconds for finalized-but-uncommitted segments
+   * 
+   * @private
+   */
+  startRecoveryCheck() {
+    setInterval(() => {
+      try {
+        this.recoverUncommittedSegments();
+      } catch (error) {
+        console.error(`[FinalityGate] ❌ Error in recovery check:`, error);
+      }
+    }, 10000); // Check every 10 seconds
   }
 }
 

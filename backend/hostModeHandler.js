@@ -48,6 +48,7 @@ export async function handleHostConnection(clientWs, sessionId) {
   let speechStream = null;
   let currentSourceLang = 'en';
   let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
+  const audioMessageQueue = []; // Queue to buffer audio messages until stream is ready
 
   // PHASE 8: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (same as solo mode)
@@ -2462,8 +2463,23 @@ export async function handleHostConnection(clientWs, sessionId) {
               });
               
               console.log('[HostMode] ✅ Google Speech stream initialized and ready');
+              
+              // Process any queued audio messages
+              if (audioMessageQueue.length > 0) {
+                console.log(`[HostMode] Processing ${audioMessageQueue.length} queued audio messages`);
+                for (const queuedMessage of audioMessageQueue) {
+                  if (queuedMessage.type === 'audio' && speechStream) {
+                    await speechStream.processAudio(queuedMessage.audioData);
+                  } else if (queuedMessage.type === 'audio_end' && speechStream) {
+                    await speechStream.endAudio();
+                  }
+                }
+                audioMessageQueue.length = 0; // Clear the queue
+              }
             } catch (error) {
               console.error('[HostMode] Failed to initialize Google Speech stream:', error);
+              // Clear queue on error
+              audioMessageQueue.length = 0;
               if (clientWs.readyState === WebSocket.OPEN) {
                 clientWs.send(JSON.stringify({
                   type: 'error',
@@ -2490,7 +2506,12 @@ export async function handleHostConnection(clientWs, sessionId) {
             // Stream audio to Google Speech for transcription
             await speechStream.processAudio(message.audioData);
           } else {
-            console.warn('[HostMode] Received audio before stream initialization');
+            // Queue audio messages until stream is ready (limit queue size to prevent memory issues)
+            if (audioMessageQueue.length < 100) {
+              audioMessageQueue.push(message);
+            } else {
+              console.warn('[HostMode] Audio queue full, dropping audio message');
+            }
           }
           break;
           
@@ -2498,6 +2519,9 @@ export async function handleHostConnection(clientWs, sessionId) {
           console.log('[HostMode] Audio stream ended');
           if (speechStream) {
             await speechStream.endAudio();
+          } else {
+            // Queue audio_end message if stream isn't ready yet
+            audioMessageQueue.push(message);
           }
           break;
       }

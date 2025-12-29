@@ -17,6 +17,7 @@ import { grammarWorker } from './grammarWorker.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
 import { CandidateSource } from '../core/engine/finalityGate.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
+import { assertInvariant } from '../core/utils/invariant.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -541,6 +542,30 @@ export async function handleSoloMode(clientWs) {
                   const isRecoveryPending = coreEngine.finalityGate.isRecoveryPending(targetSegmentId);
                   
                   if (isAlreadyFinalized) {
+                    // AUTO-HEAL: Check if incoming text is different from finalized text
+                    // If it's clearly unrelated, create a new segment ID and reroute
+                    const finalizedText = coreEngine.finalityGate.getFinalizedText(targetSegmentId);
+                    if (finalizedText) {
+                      // Check if incoming text is a continuation/overlap of finalized text
+                      const merged = mergeWithOverlap(finalizedText, textToProcess);
+                      const isContinuation = merged && merged.length > finalizedText.length && 
+                                            (textToProcess.toLowerCase().includes(finalizedText.toLowerCase().substring(0, Math.min(20, finalizedText.length))) ||
+                                             finalizedText.toLowerCase().includes(textToProcess.toLowerCase().substring(0, Math.min(20, textToProcess.length))));
+                      
+                      if (!isContinuation && targetSegmentId === currentSegmentId) {
+                        // Text is clearly different and we're using currentSegmentId - reroute to new segment
+                        console.log(`[SoloMode] 🔄 FinalityGate mismatch: rerouting to new segment`);
+                        console.log(`[SoloMode]   Finalized: "${finalizedText.substring(0, 60)}..."`);
+                        console.log(`[SoloMode]   Incoming: "${textToProcess.substring(0, 60)}..."`);
+                        // Create new segment ID
+                        const newSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        currentSegmentId = newSegmentId;
+                        console.log(`[SoloMode] 🆕 Created new segment ID: ${newSegmentId} (auto-heal from finalized segment)`);
+                        // Retry with new segment ID (recursive call, but with new segmentId to prevent infinite loop)
+                        return processFinalText(textToProcess, { ...options, segmentId: newSegmentId, _autoHealRetry: true });
+                      }
+                    }
+                    
                     console.log(`[SoloMode] 🔴 FinalityGate: Segment ${targetSegmentId} already finalized`);
                     console.log(`[SoloMode]   Text: "${textToProcess.substring(0, 60)}..."`);
                     return Promise.resolve({ accepted: false, reason: 'already_finalized', segmentId: targetSegmentId, text: textToProcess }); // Already finalized - idempotent
@@ -713,11 +738,15 @@ export async function handleSoloMode(clientWs) {
                         isProcessingFinal = false;
                         return { accepted: false, reason: 'no_candidate', segmentId: targetSegmentId, text: trimmedText }; // Nothing to finalize
                       }
-                      
+
                       // INVARIANT: If FinalityGate finalizes, we MUST emit
                       // Track this for verification
                       const finalizationCommitId = `${targetSegmentId}-${Date.now()}`;
                       console.log(`[SoloMode] 🔒 INVARIANT: FinalityGate finalized segment ${targetSegmentId}, commit ID: ${finalizationCommitId}`);
+
+                      // INVARIANT #1: Track that finalize was called (will check that emit happens)
+                      const segmentState = coreEngine.finalityGate.getOrCreateSegmentState(targetSegmentId);
+                      segmentState.finalizeCommitId = finalizationCommitId;
                       
                       // Use the finalized candidate text (may be different if recovery upgraded it)
                       // Safety tweak: ensure we use finalized text before grammar/translation
@@ -1091,7 +1120,14 @@ export async function handleSoloMode(clientWs) {
                         const finalTextForLog = correctedText || textToProcess;
                         const textPreview = finalTextForLog.substring(0, 60);
                         console.log(`[SoloMode] ✅ EMITTED: seqId=${seqId}, segmentId=${targetSegmentId}, text="${textPreview}..."`);
-                        
+
+                        // INVARIANT #1: Mark that emission happened for this finalize commit
+                        // This records the commit and checks the invariant AFTER emit succeeds
+                        const commitId = options.commitId || finalizationCommitId || `${targetSegmentId}-${Date.now()}`;
+                        if (coreEngine?.finalityGate) {
+                          coreEngine.finalityGate.markCommitted(targetSegmentId, commitId);
+                        }
+
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates
                         lastSentOriginalText = textToProcess; // Always track the original
@@ -1112,8 +1148,8 @@ export async function handleSoloMode(clientWs) {
                         console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission`);
                         
                         // INVARIANT: Log successful emission (Fix 6)
-                        // Note: seqId was already logged above
-                        const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                        // Note: seqId was already logged above, and markCommitted() was called above
+                        // commitId was already declared above at line 1126
                         const finalText = correctedText || textToProcess;
                         console.log(`[SoloMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully, commit ID: ${commitId}`);
                         
@@ -1152,7 +1188,11 @@ export async function handleSoloMode(clientWs) {
                             console.log(`[SoloMode] 🧹 Reset partial tracking and segment ID after final emission (error path)`);
                             
                             // Return success status if text was sent
-                            const commitId = options.commitId || `${targetSegmentId}-${Date.now()}`;
+                            const commitId = options.commitId || finalizationCommitId || `${targetSegmentId}-${Date.now()}`;
+                            // Mark committed even in error path if text was sent
+                            if (coreEngine?.finalityGate) {
+                              coreEngine.finalityGate.markCommitted(targetSegmentId, commitId);
+                            }
                             console.log(`[SoloMode] 🔒 INVARIANT: Segment ${targetSegmentId} emitted successfully (error path but text sent), commit ID: ${commitId}`);
                             return { accepted: true, segmentId: targetSegmentId, text: finalText, commitId };
                           } else {
@@ -1387,10 +1427,32 @@ export async function handleSoloMode(clientWs) {
                             coreEngine.finalityGate.closeSegment(oldSegmentId);
                           }
                         }
+                        // INVARIANT #3: Segment Boundary - Never generate new segmentId until previous is finalized/abandoned
+                        const newSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        assertInvariant('segment_boundary',
+                          !oldSegmentId || coreEngine?.finalityGate?.isFinalized(oldSegmentId) || coreEngine?.finalityGate?.isRecoveryResolved(oldSegmentId),
+                          {
+                            segmentId: oldSegmentId,
+                            newSegmentId,
+                            finalized: oldSegmentId ? coreEngine?.finalityGate?.isFinalized(oldSegmentId) : null,
+                            recoveryResolved: oldSegmentId ? coreEngine?.finalityGate?.isRecoveryResolved(oldSegmentId) : null
+                          }
+                        );
+
                         // CRITICAL: Generate new segment ID for this new segment (gap-based boundary)
-                        currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        currentSegmentId = newSegmentId;
                         console.log(`[SoloMode] 🆕 Generated new segment ID: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
-                        
+
+                        // INVARIANT #5: New Segment Zero Pending Recovery - When segmentId changes, new segment must have zero pending recovery
+                        assertInvariant('new_segment_zero_pending_recovery',
+                          !coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                          {
+                            segmentId: currentSegmentId,
+                            recoveryPending: coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                            recoveryResolved: coreEngine?.finalityGate?.isRecoveryResolved(currentSegmentId)
+                          }
+                        );
+
                         if (recoveryInProgress) {
                           console.log('[SoloMode] 🔀 New segment detected but recovery in progress - deferring partial tracker reset');
                           console.log('[SoloMode] ⏳ Will reset partial tracker after recovery completes');
@@ -1576,9 +1638,32 @@ export async function handleSoloMode(clientWs) {
                       if (oldSegmentId && coreEngine?.finalityGate) {
                         coreEngine.finalityGate.closeSegment(oldSegmentId);
                       }
+                      // INVARIANT #3: Segment Boundary - Never generate new segmentId until previous is finalized/abandoned
+                      const newSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                      assertInvariant('segment_boundary',
+                        !oldSegmentId || coreEngine?.finalityGate?.isFinalized(oldSegmentId) || coreEngine?.finalityGate?.isRecoveryResolved(oldSegmentId),
+                        {
+                          segmentId: oldSegmentId,
+                          newSegmentId,
+                          finalized: oldSegmentId ? coreEngine?.finalityGate?.isFinalized(oldSegmentId) : null,
+                          recoveryResolved: oldSegmentId ? coreEngine?.finalityGate?.isRecoveryResolved(oldSegmentId) : null
+                        }
+                      );
+
                       // CRITICAL: Generate new segment ID for this new segment (gap-based boundary)
-                      currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                      currentSegmentId = newSegmentId;
                       console.log(`[SoloMode] 🆕 Generated new segment ID: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
+
+                      // INVARIANT #5: New Segment Zero Pending Recovery - When segmentId changes, new segment must have zero pending recovery
+                      assertInvariant('new_segment_zero_pending_recovery',
+                        !coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                        {
+                          segmentId: currentSegmentId,
+                          recoveryPending: coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                          recoveryResolved: coreEngine?.finalityGate?.isRecoveryResolved(currentSegmentId)
+                        }
+                      );
+
                       console.log(`[SoloMode] 🔀 New segment detected - gap-based boundary (${timeSinceLastAudio}ms > ${SILENCE_GAP_MS}ms)`);
                       console.log(`[SoloMode] ✅ Committing pending FINAL before processing new segment`);
                       // PHASE 5: Clear timeout using engine
@@ -1596,8 +1681,73 @@ export async function handleSoloMode(clientWs) {
                       }
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
                     } else {
-                      // No gap detected - continue as same segment (don't create new segment ID)
-                      console.log(`[SoloMode] ⏭️ No boundary detected (gap: ${timeSinceLastAudio}ms < ${SILENCE_GAP_MS}ms) - continuing as same segment`);
+                      // No gap detected - but check if current segment is already finalized
+                      // CRITICAL FIX: If segment is finalized, we MUST create a new segment ID
+                      // This prevents new text from being attached to a closed segment
+                      const isCurrentSegmentFinalized = currentSegmentId && coreEngine?.finalityGate?.isFinalized(currentSegmentId);
+                      if (isCurrentSegmentFinalized) {
+                        // Segment is finalized - force new segment ID regardless of gap
+                        const oldSegmentId = currentSegmentId;
+                        console.log(`[SoloMode] 🔒 Current segment ${oldSegmentId} already finalized - forcing new segment ID (gap: ${timeSinceLastAudio}ms < ${SILENCE_GAP_MS}ms)`);
+                        // Close old segment in FinalityGate (should already be closed, but ensure it)
+                        if (oldSegmentId && coreEngine?.finalityGate) {
+                          coreEngine.finalityGate.closeSegment(oldSegmentId);
+                        }
+                        // INVARIANT #3: Segment Boundary - Never generate new segmentId until previous is finalized/abandoned
+                        const newSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        assertInvariant('segment_boundary',
+                          !oldSegmentId || coreEngine?.finalityGate?.isFinalized(oldSegmentId) || coreEngine?.finalityGate?.isRecoveryResolved(oldSegmentId),
+                          {
+                            segmentId: oldSegmentId,
+                            newSegmentId,
+                            finalized: oldSegmentId ? coreEngine?.finalityGate?.isFinalized(oldSegmentId) : null,
+                            recoveryResolved: oldSegmentId ? coreEngine?.finalityGate?.isRecoveryResolved(oldSegmentId) : null
+                          }
+                        );
+
+                        // Generate new segment ID
+                        currentSegmentId = newSegmentId;
+                        console.log(`[SoloMode] 🆕 Generated new segment ID: ${currentSegmentId} (previous segment was finalized)`);
+
+                        // INVARIANT #5: New Segment Zero Pending Recovery - When segmentId changes, new segment must have zero pending recovery
+                        assertInvariant('new_segment_zero_pending_recovery',
+                          !coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                          {
+                            segmentId: currentSegmentId,
+                            recoveryPending: coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                            recoveryResolved: coreEngine?.finalityGate?.isRecoveryResolved(currentSegmentId)
+                          }
+                        );
+                      } else if (!currentSegmentId) {
+                        // INVARIANT #3: Segment Boundary - Never generate new segmentId until previous is finalized/abandoned
+                        const newSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        assertInvariant('segment_boundary',
+                          true, // No previous segment, so invariant holds
+                          {
+                            segmentId: null,
+                            newSegmentId,
+                            finalized: null,
+                            recoveryResolved: null
+                          }
+                        );
+
+                        // No current segment ID - create one
+                        currentSegmentId = newSegmentId;
+                        console.log(`[SoloMode] 🆕 Generated new segment ID: ${currentSegmentId} (no previous segment)`);
+
+                        // INVARIANT #5: New Segment Zero Pending Recovery - When segmentId changes, new segment must have zero pending recovery
+                        assertInvariant('new_segment_zero_pending_recovery',
+                          !coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                          {
+                            segmentId: currentSegmentId,
+                            recoveryPending: coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                            recoveryResolved: coreEngine?.finalityGate?.isRecoveryResolved(currentSegmentId)
+                          }
+                        );
+                      } else {
+                        // No gap detected and segment not finalized - continue as same segment
+                        console.log(`[SoloMode] ⏭️ No boundary detected (gap: ${timeSinceLastAudio}ms < ${SILENCE_GAP_MS}ms) - continuing as same segment`);
+                      }
                     }
                     
                     // If partial might be a continuation OR might be a false final (period added incorrectly), wait longer
@@ -2378,6 +2528,10 @@ export async function handleSoloMode(clientWs) {
                     }
                   }
                 } else {
+                  // INVARIANT #4: Track that ASR FINAL was received for this segment
+                  const segmentState = coreEngine.finalityGate.getOrCreateSegmentState(currentSegmentId);
+                  segmentState.sawFinalFromASR = true;
+
                   const isForcedFinal = meta?.forced === true;
                   // Final transcript from Google Speech
                   console.log(`[SoloMode] 📝 FINAL signal received (${transcriptText.length} chars): "${transcriptText.substring(0, 80)}..."`);
@@ -3131,8 +3285,30 @@ export async function handleSoloMode(clientWs) {
                       // CRITICAL: Generate new segment ID for this new FINAL (gap-based boundary)
                       // This ensures FinalityGate can track this segment independently
                       if (!currentSegmentId) {
-                        currentSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        // INVARIANT #3: Segment Boundary - Never generate new segmentId until previous is finalized/abandoned
+                        const newSegmentId = `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                        assertInvariant('segment_boundary',
+                          true, // No previous segment, so invariant holds
+                          {
+                            segmentId: null,
+                            newSegmentId,
+                            finalized: null,
+                            recoveryResolved: null
+                          }
+                        );
+
+                        currentSegmentId = newSegmentId;
                         console.log(`[SoloMode] 🆕 Generated new segment ID for FINAL: ${currentSegmentId} (gap: ${timeSinceLastAudio}ms)`);
+
+                        // INVARIANT #5: New Segment Zero Pending Recovery - When segmentId changes, new segment must have zero pending recovery
+                        assertInvariant('new_segment_zero_pending_recovery',
+                          !coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                          {
+                            segmentId: currentSegmentId,
+                            recoveryPending: coreEngine?.finalityGate?.isRecoveryPending(currentSegmentId),
+                            recoveryResolved: coreEngine?.finalityGate?.isRecoveryResolved(currentSegmentId)
+                          }
+                        );
                       }
                     } else {
                       // No gap - continue with existing segment ID (or create if none exists)

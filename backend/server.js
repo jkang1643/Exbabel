@@ -203,7 +203,22 @@ wss.on("connection", async (clientWs, req) => {
   // Fall back to solo mode for backward compatibility
   // Uses Google Speech for transcription + OpenAI for translation
   console.log("[Backend] Solo mode connection - using Google Speech + OpenAI Translation");
-  handleSoloMode(clientWs);
+  // Don't await - let it run asynchronously to avoid blocking the connection
+  // The handler will manage its own error handling
+  handleSoloMode(clientWs).catch((error) => {
+    console.error("[Backend] Error in solo mode handler:", error);
+    // Only send error if connection is still open
+    if (clientWs.readyState === WebSocket.OPEN) {
+      try {
+        clientWs.send(JSON.stringify({
+          type: 'error',
+          message: 'Error in solo mode: ' + (error.message || 'Unknown error')
+        }));
+      } catch (sendError) {
+        console.error("[Backend] Failed to send error message:", sendError);
+      }
+    }
+  });
 });
 
 // ========================================
