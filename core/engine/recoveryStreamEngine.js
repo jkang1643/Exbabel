@@ -93,6 +93,8 @@ export class RecoveryStreamEngine {
       const { GoogleSpeechStream } = await import('../../backend/googleSpeechStream.js');
 
       const tempStream = new GoogleSpeechStream();
+      // CRITICAL: Mark this as recovery pipeline - dedupe will only run here
+      tempStream.pipeline = 'recovery';
       await tempStream.initialize(sourceLang, { 
         disablePunctuation: true,
         forceEnhanced: true  // Always use enhanced model for recovery streams
@@ -135,8 +137,9 @@ export class RecoveryStreamEngine {
 
       // CRITICAL: Create promise that waits for Google's 'end' event
       const streamCompletionPromise = new Promise((resolve) => {
-        tempStream.onResult((text, isPartial) => {
-          console.log(`[${mode}] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'}: "${text}"`);
+        tempStream.onResult((text, isPartial, meta = {}) => {
+          // Recovery pipeline results will have pipeline="recovery" in meta
+          console.log(`[${mode}] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'} (pipeline: ${meta.pipeline || 'recovery'}): "${text}"`);
           if (!isPartial) {
             recoveredText = text;
           } else {

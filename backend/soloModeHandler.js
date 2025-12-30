@@ -17,6 +17,7 @@ import { grammarWorker } from './grammarWorker.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';
+import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmittedText, hasAlphaNumeric } from '../core/utils/emitGuards.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -289,6 +290,7 @@ export async function handleSoloMode(clientWs) {
               
               // CRITICAL: Track last sent FINAL to merge consecutive continuations
               let lastSentFinalText = ''; // Last FINAL text that was sent to client
+              let segmentStartTime = null; // Track segment start time for grace window
               let lastSentFinalTime = 0; // Timestamp when last FINAL was sent
               let lastSentOriginalText = ''; // Track original text to prevent grammar correction duplicates
               const FINAL_CONTINUATION_WINDOW_MS = 3000; // 3 seconds - if new FINAL arrives within this window and continues last, merge them
@@ -765,7 +767,25 @@ export async function handleSoloMode(clientWs) {
                       if (currentSourceLang === 'en') {
                         try {
                           const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
-                          sendWithSequence({
+                          
+                          // Apply emit guards before sending final
+                          // Use correctedText for the check since that's what we'll send
+                          const finalSegmentId = `final_${Date.now()}`; // Temporary, will use seqId after send
+                          const emitCheck = shouldEmitFinal(finalSegmentId, correctedText, {
+                            allowCorrection: true, // Allow corrections
+                            mode: 'SoloMode'
+                          });
+                          
+                          if (!emitCheck.shouldEmit) {
+                            console.log(`[SoloMode] ⏭️ ${emitCheck.reason}: "${correctedText.substring(0, 50)}..."`);
+                            // Still update tracking even if skipping
+                            lastSentOriginalText = textToProcess;
+                            lastSentFinalText = correctedText;
+                            lastSentFinalTime = Date.now();
+                            return; // Skip emitting this final
+                          }
+                          
+                          const finalSeqId = sendWithSequence({
                             type: 'translation',
                             originalText: textToProcess,
                             correctedText: correctedText,
@@ -775,6 +795,9 @@ export async function handleSoloMode(clientWs) {
                             isTranscriptionOnly: true,
                             forceFinal: false
                           }, false);
+                          
+                          // Track last emitted text for this seqId
+                          setLastEmittedText(finalSeqId, correctedText);
                           
                           // CRITICAL: Update last sent FINAL tracking after sending
                           // Track both original and corrected text to prevent duplicates
@@ -786,7 +809,23 @@ export async function handleSoloMode(clientWs) {
                           checkForExtendingPartialsAfterFinal(textToProcess);
                         } catch (error) {
                           console.error('[SoloMode] Grammar correction error:', error);
-                          sendWithSequence({
+                          
+                          // Apply emit guards before sending final (error case)
+                          const finalSegmentIdError = `final_${Date.now()}`;
+                          const emitCheckError = shouldEmitFinal(finalSegmentIdError, textToProcess, {
+                            allowCorrection: false,
+                            mode: 'SoloMode'
+                          });
+                          
+                          if (!emitCheckError.shouldEmit) {
+                            console.log(`[SoloMode] ⏭️ ${emitCheckError.reason}: "${textToProcess.substring(0, 50)}..."`);
+                            lastSentOriginalText = textToProcess;
+                            lastSentFinalText = textToProcess;
+                            lastSentFinalTime = Date.now();
+                            return; // Skip emitting this final
+                          }
+                          
+                          const finalSeqIdError = sendWithSequence({
                             type: 'translation',
                             originalText: textToProcess,
                             correctedText: textToProcess,
@@ -797,6 +836,9 @@ export async function handleSoloMode(clientWs) {
                             forceFinal: false
                           }, false);
                           
+                          // Track last emitted text
+                          setLastEmittedText(finalSeqIdError, textToProcess);
+                          
                           // CRITICAL: Update last sent FINAL tracking after sending (even on error)
                           lastSentOriginalText = textToProcess; // Track original
                           lastSentFinalText = textToProcess; // No correction, so same as original
@@ -804,7 +846,23 @@ export async function handleSoloMode(clientWs) {
                         }
                       } else {
                         // Non-English transcription - no grammar correction
-                        sendWithSequence({
+                        
+                        // Apply emit guards before sending final
+                        const finalSegmentIdNonEn = `final_${Date.now()}`;
+                        const emitCheckNonEn = shouldEmitFinal(finalSegmentIdNonEn, textToProcess, {
+                          allowCorrection: false,
+                          mode: 'SoloMode'
+                        });
+                        
+                        if (!emitCheckNonEn.shouldEmit) {
+                          console.log(`[SoloMode] ⏭️ ${emitCheckNonEn.reason}: "${textToProcess.substring(0, 50)}..."`);
+                          lastSentOriginalText = textToProcess;
+                          lastSentFinalText = textToProcess;
+                          lastSentFinalTime = Date.now();
+                          return; // Skip emitting this final
+                        }
+                        
+                        const finalSeqIdNonEn = sendWithSequence({
                           type: 'translation',
                           originalText: textToProcess,
                           correctedText: textToProcess,
@@ -814,6 +872,9 @@ export async function handleSoloMode(clientWs) {
                           isTranscriptionOnly: true,
                           forceFinal: false
                         }, false);
+                        
+                        // Track last emitted text
+                        setLastEmittedText(finalSeqIdNonEn, textToProcess);
                         
                         // CRITICAL: Update last sent FINAL tracking after sending
                         lastSentFinalText = textToProcess;
@@ -889,7 +950,23 @@ export async function handleSoloMode(clientWs) {
                         console.log(`[SoloMode]   hasCorrection: ${hasCorrection}`);
                         console.log(`[SoloMode]   correction changed text: ${hasCorrection}`);
 
-                        sendWithSequence({
+                        // Apply emit guards before sending final (translation case)
+                        // Use translatedText for the check since that's what we display
+                        const finalSegmentIdTrans = `final_${Date.now()}`;
+                        const emitCheckTrans = shouldEmitFinal(finalSegmentIdTrans, translatedText, {
+                          allowCorrection: true, // Allow corrections
+                          mode: 'SoloMode'
+                        });
+                        
+                        if (!emitCheckTrans.shouldEmit) {
+                          console.log(`[SoloMode] ⏭️ ${emitCheckTrans.reason}: "${translatedText.substring(0, 50)}..."`);
+                          lastSentOriginalText = correctedText;
+                          lastSentFinalText = translatedText;
+                          lastSentFinalTime = Date.now();
+                          return; // Skip emitting this final
+                        }
+                        
+                        const finalSeqIdTrans = sendWithSequence({
                           type: 'translation',
                           originalText: textToProcess, // Use final text (may include recovered words from partials)
                           correctedText: correctedText, // Grammar-corrected text (updates when available)
@@ -900,6 +977,9 @@ export async function handleSoloMode(clientWs) {
                           isTranscriptionOnly: false,
                           forceFinal: false
                         }, false);
+                        
+                        // Track last emitted text
+                        setLastEmittedText(finalSeqIdTrans, translatedText);
                         
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates
@@ -987,7 +1067,8 @@ export async function handleSoloMode(clientWs) {
                 }
 
                 // DEBUG: Log every result to verify callback is being called
-                console.log(`[SoloMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (meta: ${JSON.stringify(meta)})`);
+                const pipeline = meta.pipeline || 'normal';
+                console.log(`[SoloMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (pipeline: ${pipeline})`);
 
                 if (isPartial) {
                   // PHASE 6: Use Forced Commit Engine to check for forced final extensions
@@ -1057,25 +1138,32 @@ export async function handleSoloMode(clientWs) {
                       // NOTE: Partial tracker reset will happen in the timeout callback after recovery
                     }
                   }
-                  // CRITICAL: Check if this partial duplicates words from the previous FINAL FIRST
-                  // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
-                  // Do this BEFORE updating partial tracker so we track the deduplicated text
-                  // Use core engine utility for deduplication
-                  const dedupResult = deduplicatePartialText({
-                    partialText: transcriptText,
-                    lastFinalText: lastSentFinalText,
-                    lastFinalTime: lastSentFinalTime,
-                    mode: 'SoloMode',
-                    timeWindowMs: 5000,
-                    maxWordsToCheck: 3
-                  });
+                  // CRITICAL: Dedupe ONLY runs in recovery pipeline
+                  // Normal pipeline must NOT run dedupe to prevent dropping early partials
+                  let partialTextToSend = transcriptText;
                   
-                  let partialTextToSend = dedupResult.deduplicatedText;
-                  
-                  // If all words were duplicates, skip sending this partial entirely
-                  if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
-                    console.log(`[SoloMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL`);
-                    return; // Skip this partial entirely
+                  if (pipeline === 'recovery') {
+                    // Recovery pipeline: run dedupe to stitch recovered transcript cleanly
+                    console.log(`[SoloMode] 🔄 DEDUP RUNNING (recovery pipeline only)`);
+                    const dedupResult = deduplicatePartialText({
+                      partialText: transcriptText,
+                      lastFinalText: lastSentFinalText,
+                      lastFinalTime: lastSentFinalTime,
+                      mode: 'SoloMode',
+                      timeWindowMs: 5000,
+                      maxWordsToCheck: 3
+                    });
+                    
+                    partialTextToSend = dedupResult.deduplicatedText;
+                    
+                    // If all words were duplicates, skip sending this partial entirely
+                    if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
+                      console.log(`[SoloMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL (recovery pipeline)`);
+                      return; // Skip this partial entirely
+                    }
+                  } else {
+                    // Normal pipeline: skip dedupe
+                    console.log(`[SoloMode] ⏭️ skip: dedupe disabled (normal pipeline)`);
                   }
                   
                   // PHASE 4: Update partial tracking using Partial Tracker
@@ -1084,10 +1172,8 @@ export async function handleSoloMode(clientWs) {
                   syncPartialVariables(); // Sync variables for compatibility
                   const translationSeedText = applyCachedCorrections(partialTextToSend);
                   
-                  // CRITICAL: Don't send very short partials at the start of a new segment
-                  // Google Speech needs time to refine the transcription, especially for the first word
-                  // Very short partials (< 15 chars) at segment start are often inaccurate
-                  const isVeryShortPartial = partialTextToSend.trim().length < 15;
+                  // Segment start grace window: Allow early short partials with alphanumeric content
+                  // This prevents dropping early partials like "you" at the start of a segment
                   syncPendingFinalization();
                   const hasPendingFinal = finalizationEngine.hasPendingFinalization();
                   syncForcedFinalBuffer();
@@ -1097,11 +1183,56 @@ export async function handleSoloMode(clientWs) {
                                             (!forcedFinalBuffer || !forcedFinalBuffer.recoveryInProgress) &&
                                             timeSinceLastFinal < 2000;
                   
+                  // Track segment start time for grace window
+                  if (isNewSegmentStart && !segmentStartTime) {
+                    segmentStartTime = Date.now();
+                    console.log(`[SoloMode] 🎯 Grace window active - new segment start detected`);
+                  }
+                  
+                  const timeSinceSegmentStart = segmentStartTime ? (Date.now() - segmentStartTime) : Infinity;
+                  const isInGraceWindow = isNewSegmentStart && timeSinceSegmentStart < 900; // 600-900ms grace window
+                  
+                  // In grace window: be conservative - only suppress if pure punctuation/noise
+                  // Outside grace window: apply normal rules
+                  const isVeryShortPartial = partialTextToSend.trim().length < 15;
+                  const hasAlpha = hasAlphaNumeric(partialTextToSend);
+                  
                   if (isVeryShortPartial && isNewSegmentStart) {
-                    console.log(`[SoloMode] ⏳ Delaying very short partial at segment start (${partialTextToSend.trim().length} chars, ${timeSinceLastFinal}ms since last final): "${partialTextToSend.substring(0, 30)}..." - waiting for transcription to stabilize`);
-                    // Don't send yet - wait for partial to grow
-                    // Continue tracking so we can send it once it's longer
-                    return; // Skip sending this partial
+                    if (isInGraceWindow) {
+                      // Grace window: allow if has alphanumeric content
+                      if (hasAlpha) {
+                        console.log(`[SoloMode] ✅ Grace window active (${timeSinceSegmentStart.toFixed(0)}ms) - allowing short partial with alphanumeric: "${partialTextToSend.substring(0, 30)}..."`);
+                        // Allow it through - emit guards will handle duplicates
+                      } else {
+                        // Pure punctuation/noise - suppress even in grace window
+                        console.log(`[SoloMode] ⏳ Grace window active (${timeSinceSegmentStart.toFixed(0)}ms) - suppressing punctuation-only partial: "${partialTextToSend.substring(0, 30)}..."`);
+                        return; // Skip sending this partial
+                      }
+                    } else {
+                      // Outside grace window: apply normal suppression
+                      console.log(`[SoloMode] ⏳ Delaying very short partial at segment start (${partialTextToSend.trim().length} chars, ${timeSinceLastFinal}ms since last final): "${partialTextToSend.substring(0, 30)}..." - waiting for transcription to stabilize`);
+                      return; // Skip sending this partial
+                    }
+                  }
+                  
+                  // Clear segment start time when we're clearly past the grace window
+                  if (timeSinceSegmentStart >= 900) {
+                    segmentStartTime = null;
+                  }
+                  
+                  // Apply emit guards to prevent duplicate flashes and fragment spam
+                  // For partials, we need to check before sending
+                  // Since partials update the same segment, we'll track by a segment identifier
+                  // Use a temporary identifier - will track by seqId after send
+                  const partialSegmentId = `partial_${Date.now()}`; // Temporary, will use seqId after send
+                  const emitCheck = shouldEmitPartial(partialSegmentId, partialTextToSend, {
+                    allowCorrection: false,
+                    mode: 'SoloMode'
+                  });
+                  
+                  if (!emitCheck.shouldEmit) {
+                    console.log(`[SoloMode] ⏭️ ${emitCheck.reason}: "${partialTextToSend.substring(0, 50)}..."`);
+                    return; // Skip emitting this partial
                   }
                   
                   // Live partial transcript - send original immediately with sequence ID
@@ -1115,6 +1246,11 @@ export async function handleSoloMode(clientWs) {
                     hasTranslation: false, // Flag that translation is pending
                     hasCorrection: false // Flag that correction is pending
                   }, true);
+                  
+                  // Track last emitted text for this seqId to prevent duplicates
+                  // Note: For partials that update the same segment, we should track by a consistent segmentId
+                  // For now, track by seqId - frontend should handle update-in-place
+                  setLastEmittedText(seqId, partialTextToSend);
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
                   // Use deduplicated text for all checks to ensure consistency

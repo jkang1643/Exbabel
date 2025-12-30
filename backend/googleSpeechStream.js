@@ -47,6 +47,9 @@ export class GoogleSpeechStream {
     // Unique ID for debugging which stream results come from
     this.streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     console.log(`[GoogleSpeech] Created new stream instance: ${this.streamId}`);
+    
+    // Pipeline marker: "normal" for regular streaming, "recovery" for recovery streams
+    this.pipeline = 'normal';
 
     // AUDIO BUFFER MANAGER: Captures EVERY audio chunk for recovery operations
     // This rolling buffer maintains the last 2500ms of audio for text extension window
@@ -707,7 +710,7 @@ export class GoogleSpeechStream {
         if (this.initOptions?.disablePunctuation) {
           console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with FINAL: "${combinedTranscript}"`);
         }
-        this.resultCallback(combinedTranscript, false); // isPartial = false
+        this.resultCallback(combinedTranscript, false, { pipeline: this.pipeline }); // isPartial = false, pass pipeline in meta
       }
 
       // Clear cached partial since we emitted a real final
@@ -720,7 +723,7 @@ export class GoogleSpeechStream {
         if (this.initOptions?.disablePunctuation) {
           console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with PARTIAL: "${combinedTranscript}"`);
         }
-        this.resultCallback(combinedTranscript, true); // isPartial = true
+        this.resultCallback(combinedTranscript, true, { pipeline: this.pipeline }); // isPartial = true, pass pipeline in meta
       }
 
       // Cache the latest partial so we can force-commit if the stream restarts
