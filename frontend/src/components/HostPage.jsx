@@ -45,6 +45,33 @@ const getWebSocketUrl = () => {
   return `ws://${hostname}:3001`;
 };
 
+// Helper function to detect and trim overlaps between corrected final and next entry
+function detectOverlap(correctedFinal, nextEntry) {
+  // Normalize both texts (lowercase, remove punctuation, collapse spaces)
+  const correctedNorm = correctedFinal.toLowerCase().replace(/[^\w\s']/g, '').replace(/\s+/g, ' ').trim();
+  const nextNorm = nextEntry.toLowerCase().replace(/[^\w\s']/g, '').replace(/\s+/g, ' ').trim();
+  
+  // Check if next starts with words from corrected tail
+  const correctedWords = correctedNorm.split(/\s+/).filter(w => w.length > 0);
+  const nextWords = nextNorm.split(/\s+/).filter(w => w.length > 0);
+  
+  // Find overlap (last N words of corrected match first N words of next)
+  for (let i = Math.min(correctedWords.length, nextWords.length); i > 0; i--) {
+    const correctedTail = correctedWords.slice(-i).join(' ');
+    const nextHead = nextWords.slice(0, i).join(' ');
+    if (correctedTail === nextHead && correctedTail.length > 10) {
+      // Found overlap - trim next entry
+      const trimmedWords = nextWords.slice(i);
+      return {
+        hasOverlap: true,
+        trimmed: trimmedWords.join(' ')
+      };
+    }
+  }
+  
+  return { hasOverlap: false };
+}
+
 // Get the frontend app URL for QR code generation
 // Uses VITE_APP_URL if set (for production), otherwise falls back to window.location.origin
 const getAppUrl = () => {
@@ -359,6 +386,12 @@ export function HostPage({ onBackToHome }) {
               flushSync(() => {
                 setCurrentTranscript(liveText);
               });
+              
+              // CRITICAL: If ephemeral, do not commit to history (prevents leaked continuation segments)
+              // Ephemeral partials are shown live but not persisted, allowing recovery to clean them up
+              if (message.ephemeral) {
+                return; // Do not push into history
+              }
             } else {
               // Final transcript - use processFinal like solo mode (handles deduplication automatically)
               // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
@@ -594,6 +627,47 @@ export function HostPage({ onBackToHome }) {
                       if (stillDuplicate) {
                         console.log(`[HostPage] ⏭️ SKIP DUPLICATE TEXT in history: "${joinedText.substring(0, 50)}..." (seqId: ${finalSeqId})`);
                         return updatedPrev.slice(-50); // Return filtered list
+                      }
+                      
+                      // CRITICAL: Handle correction final - replace provisional forced final and clean up overlaps
+                      const isCorrection = message.isCorrection === true;
+                      const replacesSeqId = message.replacesSeqId;
+                      
+                      if (isCorrection && replacesSeqId !== undefined && replacesSeqId !== null) {
+                        // Find entry to replace
+                        const replaceIndex = updatedPrev.findIndex(e => e.seqId === replacesSeqId);
+                        if (replaceIndex !== -1) {
+                          console.log(`[HostPage] 🔄 Correction final: replacing entry at index ${replaceIndex} (seqId: ${replacesSeqId})`);
+                          // Replace entry
+                          updatedPrev[replaceIndex] = {
+                            text: joinedText,
+                            timestamp: message.timestamp || Date.now(),
+                            seqId: finalSeqId
+                          };
+                          
+                          // Check next entry for overlap and trim/delete
+                          if (replaceIndex + 1 < updatedPrev.length) {
+                            const nextEntry = updatedPrev[replaceIndex + 1];
+                            const overlapResult = detectOverlap(joinedText, nextEntry.text);
+                            if (overlapResult.hasOverlap) {
+                              // Trim or delete next entry
+                              if (overlapResult.trimmed.length < 10) {
+                                console.log(`[HostPage] 🗑️ Deleting overlapping next entry (too short after trim): "${nextEntry.text.substring(0, 50)}..."`);
+                                updatedPrev.splice(replaceIndex + 1, 1); // Delete if too short
+                              } else {
+                                console.log(`[HostPage] ✂️ Trimming overlapping next entry: "${nextEntry.text.substring(0, 50)}..." → "${overlapResult.trimmed.substring(0, 50)}..."`);
+                                updatedPrev[replaceIndex + 1].text = overlapResult.trimmed;
+                              }
+                            }
+                          }
+                          
+                          // Update ref immediately
+                          transcriptRef.current = updatedPrev.slice(-50);
+                          console.log(`[HostPage] ✅ Correction applied - replaced entry and cleaned up overlaps`);
+                          return updatedPrev.slice(-50); // Return updated list
+                        } else {
+                          console.log(`[HostPage] ⚠️ Correction final: entry with seqId ${replacesSeqId} not found, adding as new entry`);
+                        }
                       }
                       
                       const newItem = {

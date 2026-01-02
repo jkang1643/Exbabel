@@ -1083,7 +1083,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                           timestamp: Date.now(),
                           hasTranslation: hasTranslationForLang,
                           hasCorrection: hasCorrection,
-                          forceFinal: !!options.forceFinal
+                          forceFinal: !!options.forceFinal,
+                          // Correction final metadata (for replacing provisional forced final)
+                          isCorrection: !!options.isCorrection,
+                          replacesSeqId: options.replacesSeqId,
+                          recoveryEpoch: options.recoveryEpoch
                         };
                         
                         // CRITICAL: For same-language listeners, use correctedText as translatedText (like solo mode)
@@ -1550,7 +1554,10 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                     // Emit recovery partial directly (bypass shouldEmitPartial to avoid blocking)
                     // Use partialTextToSend (after deduplication) for emission
+                    // CRITICAL: Mark as ephemeral during recovery to prevent history commit
+                    syncForcedFinalBuffer();
                     const recoverySegmentId = `recovery_${recoveryEpoch}_${Date.now()}`;
+                    const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                     const seqId = broadcastWithSequence({
                       type: 'translation',
                       originalText: partialTextToSend,
@@ -1562,6 +1569,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       hasTranslation: false,
                       hasCorrection: false,
                       isPartial: true,
+                      ephemeral: true, // Recovery partials are ephemeral (prevent history commit)
+                      recoveryEpoch: currentRecoveryEpoch,
                       meta: { pipeline: 'recovery' } // ensure frontend can style/handle it
                     }, true);
 
@@ -1647,6 +1656,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Log emission before broadcasting
                     console.log(`[HostMode] EMIT_PARTIAL pipeline=${pipeline}, recoveryInProgress=${recoveryInProgress}, recoveryStub=${recoveryStub}, text="${partialTextToSend.substring(0, 60)}..."`);
                     
+                    // CRITICAL: Mark partials as ephemeral during recovery to prevent them from being committed to history
+                    // They still update live text (no UI freeze), but won't leak into history
+                    syncForcedFinalBuffer();
+                    const ephemeralDuringRecovery = recoveryInProgress;
+                    const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
+                    
                     const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
                     const seqId = broadcastWithSequence({
                       type: 'translation',
@@ -1659,6 +1674,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       hasTranslation: false, // Flag that translation is pending
                       hasCorrection: false, // Flag that correction is pending
                       isPartial: true, // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                      ephemeral: ephemeralDuringRecovery, // Mark as ephemeral during recovery (prevents history commit)
+                      recoveryEpoch: currentRecoveryEpoch, // Include epoch for frontend tracking
                       pipeline: pipeline, // Pipeline metadata (normal or recovery)
                       recoveryInProgress: recoveryInProgress, // Recovery state metadata
                       recoveryStub: recoveryStub // Recovery stub metadata (false for continuations)
@@ -2076,6 +2093,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (targetLanguages.length === 0) {
                           // No listeners - just send to host
                           lastPartialTranslation = capturedText;
+                          // CRITICAL: Mark as ephemeral during recovery
+                          syncForcedFinalBuffer();
+                          const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                          const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                           broadcastWithSequence({
                             type: 'translation',
                             originalText: rawCapturedText,
@@ -2085,7 +2106,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                             timestamp: Date.now(),
                             hasTranslation: false,
                             hasCorrection: false,
-                            isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                            isPartial: true, // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                            ephemeral: ephemeralDuringRecovery,
+                            recoveryEpoch: currentRecoveryEpoch
                           }, true);
                           
                           // CRITICAL: Still run grammar correction even with no listeners
@@ -2105,6 +2128,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 console.log(`[HostMode] ✅ GRAMMAR (ASYNC, no listeners): "${correctedText.substring(0, 40)}..."`);
                                 
                                 // Send grammar correction to host client
+                                // CRITICAL: Mark as ephemeral during recovery
+                                syncForcedFinalBuffer();
+                                const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                                const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                                 broadcastWithSequence({
                                   type: 'translation',
                                   originalText: rawCapturedText,
@@ -2117,7 +2144,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   hasTranslation: false,
                                   hasCorrection: true,
                                   updateType: 'grammar',
-                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
+                                  isPartial: true, // CRITICAL: Grammar updates for partials are still partials
+                                  ephemeral: ephemeralDuringRecovery,
+                                  recoveryEpoch: currentRecoveryEpoch
                                 }, true, currentSourceLang);
                               })
                               .catch(error => {
@@ -2149,6 +2178,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Handle same-language targets (transcription mode)
                         if (sameLanguageTargets.length > 0) {
                           // Send raw text immediately to same-language listeners
+                          // CRITICAL: Mark as ephemeral during recovery
+                          syncForcedFinalBuffer();
+                          const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                          const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                           for (const targetLang of sameLanguageTargets) {
                             broadcastWithSequence({
                               type: 'translation',
@@ -2160,7 +2193,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                               isTranscriptionOnly: true,
                               hasTranslation: false,
                               hasCorrection: false,
-                              isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                              isPartial: true, // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                              ephemeral: ephemeralDuringRecovery,
+                              recoveryEpoch: currentRecoveryEpoch
                             }, true, targetLang);
                           }
                           
@@ -2181,6 +2216,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 console.log(`[HostMode] ✅ GRAMMAR (ASYNC): "${correctedText.substring(0, 40)}..."`);
                                 
                                 // CRITICAL: Send grammar update to host client (source language)
+                                // CRITICAL: Mark as ephemeral during recovery
+                                syncForcedFinalBuffer();
+                                const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                                const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                                 broadcastWithSequence({
                                   type: 'translation',
                                   originalText: rawCapturedText,
@@ -2193,7 +2232,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   hasTranslation: false,
                                   hasCorrection: true,
                                   updateType: 'grammar',
-                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
+                                  isPartial: true, // CRITICAL: Grammar updates for partials are still partials
+                                  ephemeral: ephemeralDuringRecovery,
+                                  recoveryEpoch: currentRecoveryEpoch
                                 }, true, currentSourceLang);
                                 
                                 // Send grammar update separately to same-language listeners
@@ -2453,11 +2494,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // PHASE 8: Create forced final buffer using engine (for recovery tracking)
                     // Note: We've already committed the forced final above, so this buffer is just for recovery
                     forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp);
+                    
+                    // CRITICAL: Set recovery mode immediately (before any timeouts) to prevent continuation partials from leaking
+                    // This closes the race window where partials can arrive before recoveryInProgress is set
+                    recoveryEpoch++; // Increment epoch immediately
+                    forcedCommitEngine.setRecoveryInProgress(true, null); // Set immediately, promise added later in performRecoveryStream
                     syncForcedFinalBuffer();
-                    // ✅ Store segmentId in buffer for proper identity tracking
+                    
+                    // ✅ Store segmentId, epoch, and forcedFinalSeqId in buffer for proper identity tracking
                     if (forcedFinalBuffer) {
                       forcedFinalBuffer.segmentId = `forced_final_${forcedFinalTimestamp}`;
+                      forcedFinalBuffer.epoch = recoveryEpoch;
+                      forcedFinalBuffer.forcedFinalSeqId = null; // Will be set when provisional final is committed (if applicable)
                     }
+                    console.log(`[RecoveryGate] Recovery started immediately - epoch incremented to ${recoveryEpoch}`);
                     console.log(`[HostMode] ✅ Forced final buffer created for recovery - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
                     console.log(`[HostMode] 🎯 DUAL BUFFER: Setting up Phase 1 timeout (delay: 0ms) - recovery system initializing`);
                     
@@ -2770,15 +2820,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                           forcedFinalBuffer.lastContinuationAt = null;
                         }
                         
-                        // ✅ Extract segmentId from buffer if available
+                        // ✅ Extract segmentId and forcedFinalSeqId from buffer if available
                         let segmentIdForCommit = null;
+                        let forcedFinalSeqIdForCorrection = null;
                         try {
+                          syncForcedFinalBuffer();
                           const buf = forcedCommitEngine.getForcedFinalBuffer?.();
                           segmentIdForCommit = buf?.segmentId || null;
+                          forcedFinalSeqIdForCorrection = buf?.forcedFinalSeqId || null;
                         } catch (_) {}
                         
                         try {
-                          processFinalText(textToCommit, { forceFinal: true, segmentId: segmentIdForCommit, pipeline: 'recovery' });
+                          // CRITICAL: Mark as correction final if this is from recovery completion
+                          // This allows frontend to replace any provisional forced final and clean up overlaps
+                          processFinalText(textToCommit, { 
+                            forceFinal: true, 
+                            segmentId: segmentIdForCommit, 
+                            pipeline: 'recovery',
+                            isCorrection: true, // Mark as correction final
+                            replacesSeqId: forcedFinalSeqIdForCorrection, // SeqId of provisional final to replace (if any)
+                            recoveryEpoch: forcedFinalBuffer?.epoch ?? recoveryEpoch
+                          });
                         } catch (e) {
                           console.error('[HostMode] ❌ Forced-final commit failed (timeout):', e);
                         }
