@@ -59,9 +59,13 @@ export class ForcedCommitEngine {
       text,
       timestamp,
       timeout: null,
-      recoveryInProgress: false,
+      recoveryInProgress: false, // Will be set immediately after creation
       recoveryPromise: null,
-      committedByRecovery: false  // Track if recovery already committed this
+      epoch: null, // Will be set by caller
+      forcedFinalSeqId: null, // Will be set by caller - seqId of provisional forced final for replacement tracking
+      committedByRecovery: false,  // Track if recovery already committed this
+      pendingContinuationText: null,  // Accumulated continuation text from overlapping partials
+      lastContinuationAt: null  // Timestamp when continuation was last captured
     };
     return this.forcedFinalBuffer;
   }

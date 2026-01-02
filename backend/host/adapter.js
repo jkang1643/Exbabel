@@ -33,6 +33,145 @@ function normalizeForCompare(s = '') {
 }
 
 /**
+ * Deduplicate buffered normal partial against committed forced-final text
+ * Returns remainder text that extends beyond the forced-final
+ * @param {string} bufferedText - Buffered normal partial text
+ * @param {string} forcedFinalText - Committed forced-final text
+ * @returns {Object} { remainder: string, hasRemainder: boolean }
+ */
+function dedupeBufferedPartialAgainstFinal(bufferedText, forcedFinalText) {
+  if (!bufferedText || !forcedFinalText) {
+    return { remainder: bufferedText || '', hasRemainder: !!(bufferedText && bufferedText.length > 0) };
+  }
+  
+  const bufferedNormalized = normalizeForCompare(bufferedText);
+  const forcedNormalized = normalizeForCompare(forcedFinalText);
+  
+  // Check if buffered text starts with forced-final text
+  if (bufferedNormalized.startsWith(forcedNormalized)) {
+    // Extract suffix that extends beyond forced-final
+    // Find the position in original text where forced-final ends
+    const forcedWords = forcedFinalText.trim().split(/\s+/);
+    const bufferedWords = bufferedText.trim().split(/\s+/);
+    
+    // Find overlap by matching words
+    let overlapWordCount = 0;
+    for (let i = 0; i < Math.min(forcedWords.length, bufferedWords.length); i++) {
+      const forcedWord = normalizeForCompare(forcedWords[i]);
+      const bufferedWord = normalizeForCompare(bufferedWords[i]);
+      if (forcedWord === bufferedWord) {
+        overlapWordCount++;
+      } else {
+        break;
+      }
+    }
+    
+    // Extract remainder by counting characters up to overlapWordCount words
+    if (overlapWordCount >= bufferedWords.length) {
+      // Buffered text is entirely contained in forced-final
+      return { remainder: '', hasRemainder: false };
+    }
+    
+    // Count characters up to overlapWordCount words
+    let charCount = 0;
+    for (let i = 0; i < overlapWordCount; i++) {
+      if (i > 0) charCount += 1; // space
+      charCount += bufferedWords[i].length;
+    }
+    
+    // Extract remainder, preserving original formatting
+    const remainder = bufferedText.substring(charCount).trim();
+    return { remainder, hasRemainder: remainder.length > 0 };
+  }
+  
+  // Buffered text doesn't start with forced-final - might be unrelated or new segment
+  // Return full buffered text as remainder
+  return { remainder: bufferedText, hasRemainder: true };
+}
+
+/**
+ * Classify a partial during recovery to determine if it's a continuation of the forced final
+ * @param {string} partialText - Partial text to classify
+ * @param {string} forcedText - Forced final buffer text
+ * @returns {Object} Classification result with isContinuation, remainderText, and overlapWords
+ */
+function classifyDuringRecovery(partialText, forcedText) {
+  if (!partialText || !forcedText) {
+    return { isContinuation: false, remainderText: partialText || '', overlapWords: 0 };
+  }
+
+  // Normalize both texts: strip punctuation .,!?:;'" and normalize whitespace
+  const normalize = (s) => {
+    return s.trim()
+      .toLowerCase()
+      .replace(/[.,!?:;'"]/g, '')
+      .replace(/\s+/g, ' ');
+  };
+
+  const normalizedPartial = normalize(partialText);
+  const normalizedForced = normalize(forcedText);
+
+  if (!normalizedPartial || !normalizedForced) {
+    return { isContinuation: false, remainderText: partialText, overlapWords: 0 };
+  }
+
+  // Split into word arrays
+  const partialWords = normalizedPartial.split(/\s+/).filter(w => w.length > 0);
+  const forcedWords = normalizedForced.split(/\s+/).filter(w => w.length > 0);
+
+  if (partialWords.length === 0 || forcedWords.length === 0) {
+    return { isContinuation: false, remainderText: partialText, overlapWords: 0 };
+  }
+
+  // Check if partial begins with last N words of forcedText (N up to 6)
+  const maxOverlapWords = Math.min(6, forcedWords.length);
+  let overlapWords = 0;
+  let isContinuation = false;
+
+  // Try matching from 1 to maxOverlapWords words
+  for (let n = maxOverlapWords; n >= 1; n--) {
+    if (n > partialWords.length) continue;
+    
+    const forcedSuffix = forcedWords.slice(-n).join(' ');
+    const partialPrefix = partialWords.slice(0, n).join(' ');
+    
+    if (forcedSuffix === partialPrefix) {
+      overlapWords = n;
+      isContinuation = true;
+      break;
+    }
+  }
+
+  if (!isContinuation) {
+    return { isContinuation: false, remainderText: partialText, overlapWords: 0 };
+  }
+
+  // Calculate remainderText: partial minus overlap portion
+  // Need to preserve original formatting, so work with original partialText
+  // Find where the overlap ends in the original text
+  const overlapWordCount = overlapWords;
+  const partialWordsOriginal = partialText.trim().split(/\s+/);
+  
+  // Count characters up to overlapWordCount words
+  let charCount = 0;
+  let wordCount = 0;
+  for (let i = 0; i < partialWordsOriginal.length && wordCount < overlapWordCount; i++) {
+    if (i > 0) charCount += 1; // space
+    charCount += partialWordsOriginal[i].length;
+    wordCount++;
+  }
+  
+  // Extract remainder, preserving original formatting
+  const remainderText = partialText.substring(charCount).trim();
+  
+  return {
+    isContinuation: true,
+    remainderText: remainderText,
+    overlapWords: overlapWords
+  };
+}
+
+/**
  * Check if a partial is a recovery stub that should be suppressed
  * @param {Object} params - Parameters
  * @param {string} params.partialText - Partial text to check
@@ -135,6 +274,17 @@ export async function handleHostConnection(clientWs, sessionId) {
   // Track next final that arrives after recovery starts (to prevent word duplication)
   let nextFinalAfterRecovery = null;
   let recoveryStartTime = 0;
+
+  // Recovery epoch counter - increments when recoveryInProgress transitions from false to true
+  let recoveryEpoch = 0;
+  let previousRecoveryInProgress = false; // Track previous state to detect transitions
+
+  // Buffer normal-pipeline partials while forced-final recovery is in progress
+  let bufferedNormalPartialDuringRecovery = null; // { text, timestamp, epoch, pipeline }
+
+  // Recovery partial throttling (prevents spam/flicker during recovery)
+  let lastRecoveryEmitAt = null; // Track last recovery partial emission time
+  let latestRecoveryPartialText = null; // Keep latest recovery partial for throttling
 
   // Helper: Measure RTT from client timestamp
   const measureRTT = (clientTimestamp) => {
@@ -253,6 +403,69 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Helper to sync forcedFinalBuffer from engine (call after engine operations)
               const syncForcedFinalBufferFromEngine = () => {
                 syncForcedFinalBuffer();
+              };
+              
+              // Helper to detect recovery epoch transitions and increment epoch when recovery starts
+              const checkRecoveryEpochTransition = () => {
+                const currentRecoveryInProgress = !!forcedFinalBuffer?.recoveryInProgress;
+                if (!previousRecoveryInProgress && currentRecoveryInProgress) {
+                  // Recovery just started - increment epoch
+                  recoveryEpoch++;
+                  console.log(`[RecoveryGate] Recovery started - epoch incremented to ${recoveryEpoch}`);
+                }
+                previousRecoveryInProgress = currentRecoveryInProgress;
+              };
+              
+              // Helper to flush buffered normal partial after recovery completes
+              // Dedupes against committed forced-final text and emits remainder if any
+              const flushBufferedNormalPartial = (committedForcedFinalText) => {
+                if (!bufferedNormalPartialDuringRecovery) {
+                  return; // Nothing to flush
+                }
+                
+                // Check epoch match - only flush if epoch matches current recovery epoch
+                if (bufferedNormalPartialDuringRecovery.epoch !== recoveryEpoch) {
+                  console.log(`[RecoveryGate] Skipping flush - epoch mismatch (buffered: ${bufferedNormalPartialDuringRecovery.epoch}, current: ${recoveryEpoch})`);
+                  bufferedNormalPartialDuringRecovery = null; // Clear stale buffer
+                  return;
+                }
+                
+                const buffered = bufferedNormalPartialDuringRecovery;
+                bufferedNormalPartialDuringRecovery = null; // Clear buffer
+                
+                // Dedupe buffered text against committed forced-final
+                const dedupeResult = dedupeBufferedPartialAgainstFinal(buffered.text, committedForcedFinalText || '');
+                
+                if (dedupeResult.hasRemainder && dedupeResult.remainder.length > 0) {
+                  // Emit remainder as PARTIAL with normal pipeline flag
+                  const snippet = dedupeResult.remainder.substring(0, 60);
+                  console.log(`[RecoveryGate] FLUSH buffered normal partial after recovery (epoch: ${buffered.epoch}, pipeline: ${buffered.pipeline}, remainder: ${dedupeResult.remainder.length} chars, text: "${snippet}...")`);
+                  
+                  // Reset segment timing so released partial is treated as new segment start
+                  segmentStartTime = Date.now();
+                  segmentEpoch++;
+                  
+                  // Emit as partial (same path as normal)
+                  const seqId = broadcastWithSequence({
+                    type: 'translation',
+                    originalText: dedupeResult.remainder,
+                    translatedText: undefined,
+                    sourceLang: currentSourceLang,
+                    targetLang: currentSourceLang,
+                    timestamp: Date.now(),
+                    isTranscriptionOnly: false,
+                    hasTranslation: false,
+                    hasCorrection: false,
+                    isPartial: true,
+                    pipeline: 'normal' // Normal pipeline flag
+                  }, true);
+                  
+                  setLastEmittedText(seqId, dedupeResult.remainder);
+                } else {
+                  // No remainder - already covered by forced-final
+                  const snippet = buffered.text.substring(0, 60);
+                  console.log(`[RecoveryGate] FLUSH buffered normal partial after recovery (epoch: ${buffered.epoch}, pipeline: ${buffered.pipeline}, remainder: 0 chars - already covered by forced-final, text: "${snippet}...")`);
+                }
               };
               
               // Helper functions for text processing (delegated to PartialTracker where possible)
@@ -1056,50 +1269,46 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // PHASE 8: Removed deprecated PRIORITY 0 backpatching logic
                   // Dual buffer recovery system handles word recovery now
                   
+                  // CRITICAL: Compute recoveryInProgress once at the top of partial handler (authoritative source)
+                  syncForcedFinalBuffer(); // Sync variable from engine first
+                  const recoveryInProgress = !!forcedFinalBuffer?.recoveryInProgress;
+                  
                   // Handle forced final buffer (solo mode logic)
                   // PHASE 8: Use Forced Commit Engine to check for forced final extensions
-                  syncForcedFinalBuffer(); // Sync variable from engine
                   if (forcedCommitEngine.hasForcedFinalBuffer()) {
                     // CRITICAL: Check if this partial extends the forced final or is a new segment
                     const extension = forcedCommitEngine.checkPartialExtendsForcedFinal(transcriptText);
                     
                     if (extension && extension.extends) {
-                      // Partial extends the forced final - but wait for recovery if in progress
-                      console.log('[HostMode] 🔁 New partial extends forced final - checking if recovery is in progress...');
+                      // Partial extends the forced final - process immediately without waiting
+                      console.log('[HostMode] 🔁 New partial extends forced final - processing immediately');
                       syncForcedFinalBuffer();
                       
-                      // CRITICAL: If recovery is in progress, wait for it to complete first
-                      if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress && forcedFinalBuffer.recoveryPromise) {
-                        console.log('[HostMode] ⏳ Recovery in progress - waiting for completion before committing extended partial...');
-                        try {
-                          const recoveredText = await forcedFinalBuffer.recoveryPromise;
-                          if (recoveredText && recoveredText.length > 0) {
-                            console.log(`[HostMode] ✅ Recovery completed with text: "${recoveredText.substring(0, 60)}..."`);
-                            // Recovery found words - merge recovered text with extending partial
-                            const recoveredMerged = partialTracker.mergeWithOverlap(recoveredText, transcriptText);
-                            if (recoveredMerged) {
-                              console.log('[HostMode] 🔁 Merging recovered text with extending partial and committing');
-                              forcedCommitEngine.clearForcedFinalBufferTimeout();
-                              try {
-                                processFinalText(recoveredMerged, { forceFinal: true });
-                              } catch (e) {
-                                console.error('[HostMode] ❌ Forced-final commit failed (recovered merged):', e);
-                              }
-                              forcedCommitEngine.clearForcedFinalBuffer();
-                              syncForcedFinalBuffer();
-                              // Continue processing the extended partial normally
-                              return; // Exit early - already committed
-                            }
-                          }
-                        } catch (error) {
-                          console.error('[HostMode] ❌ Error waiting for recovery:', error.message);
-                        }
-                      }
-                      
-                      // No recovery or recovery completed - merge and commit normally
+                      // Merge and commit normally (recovery will complete independently)
                       console.log('[HostMode] 🔁 New partial extends forced final - merging and committing');
                       forcedCommitEngine.clearForcedFinalBufferTimeout();
-                      const mergedFinal = partialTracker.mergeWithOverlap(forcedCommitEngine.getForcedFinalBuffer().text, transcriptText);
+                      syncForcedFinalBuffer();
+                      let baseText = forcedFinalBuffer?.text || forcedCommitEngine.getForcedFinalBuffer().text;
+                      let mergedFinal = partialTracker.mergeWithOverlap(baseText, transcriptText);
+                      
+                      // Merge with pendingContinuationText if it exists
+                      if (forcedFinalBuffer?.pendingContinuationText && mergedFinal) {
+                        const pendingContinuation = forcedFinalBuffer.pendingContinuationText;
+                        const mergedWithContinuation = partialTracker.mergeWithOverlap(mergedFinal, pendingContinuation);
+                        if (mergedWithContinuation) {
+                          mergedFinal = mergedWithContinuation;
+                          console.log(`[RecoveryGate] committing merged final: ${mergedWithContinuation.length} chars (${pendingContinuation.length} chars from continuation)`);
+                        } else {
+                          mergedFinal = (mergedFinal + ' ' + pendingContinuation).trim();
+                          console.log(`[RecoveryGate] committing merged final: ${mergedFinal.length} chars (${pendingContinuation.length} chars from continuation, mergeWithOverlap failed)`);
+                        }
+                        // Clear pendingContinuationText after merge
+                        forcedFinalBuffer.pendingContinuationText = null;
+                        forcedFinalBuffer.lastContinuationAt = null;
+                      }
+                      
+                      // Get committed text before processing
+                      const committedText = mergedFinal || extension.extendedText;
                       try {
                         if (mergedFinal) {
                           processFinalText(mergedFinal, { forceFinal: true });
@@ -1112,6 +1321,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       forcedCommitEngine.clearForcedFinalBuffer();
                       syncForcedFinalBuffer();
+                      
+                      // Flush buffered normal-pipeline partial after recovery completes (with deduplication)
+                      flushBufferedNormalPartial(committedText);
+                      
                       // Continue processing the extended partial normally
                     } else {
                       // New segment detected - but DON'T cancel timeout yet!
@@ -1140,6 +1353,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // This prevents partials like "I've been..." from being treated as new when they're actually
                   // continuations of the forced final "Bend. Oh boy, I've been to grocery store..."
                   syncForcedFinalBuffer();
+                  checkRecoveryEpochTransition(); // Detect recovery start and increment epoch
                   let textToCheckAgainst = lastSentFinalText;
                   let timeToCheckAgainst = lastSentFinalTime;
                   
@@ -1152,18 +1366,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] 🔍 Checking partial against forced final buffer (timestamp: ${timeToCheckAgainst}): "${textToCheckAgainst.substring(0, 60)}..."`);
                   }
                   
-                  // ✅ Recovery-pipeline stub suppression:
-                  // If recovery is active and forced buffer exists, do NOT emit short "stub" partials that will be extended.
+                  // ✅ Recovery-pipeline stub detection (for metadata, not suppression):
+                  // Track if this is a recovery stub partial for metadata purposes
                   const recoveryActive = pipeline === 'recovery' && forcedFinalBuffer && forcedFinalBuffer.text;
                   const forcedRecoveryInProgress = !!forcedFinalBuffer?.recoveryInProgress;
-
-                  if (recoveryActive && forcedRecoveryInProgress) {
-                    if (isRecoveryStubPartial({ partialText: transcriptText, forcedBufferText: forcedFinalBuffer.text })) {
-                      console.log('[HostMode] ⏭️ Skipping recovery stub partial (prevents early emission flicker)');
-                      console.log(`[HostMode]   Stub: "${transcriptText.substring(0, 60)}..."`);
-                      console.log(`[HostMode]   Forced buffer: "${forcedFinalBuffer.text.substring(0, 60)}..."`);
-                      return;
-                    }
+                  const isRecoveryStub = recoveryActive && forcedRecoveryInProgress && 
+                    isRecoveryStubPartial({ partialText: transcriptText, forcedBufferText: forcedFinalBuffer.text });
+                  
+                  // Always emit partials - attach recovery metadata instead of suppressing
+                  if (isRecoveryStub) {
+                    console.log('[HostMode] 📍 Recovery stub partial detected (will emit with metadata)');
+                    console.log(`[HostMode]   Stub: "${transcriptText.substring(0, 60)}..."`);
+                    console.log(`[HostMode]   Forced buffer: "${forcedFinalBuffer.text.substring(0, 60)}..."`);
                   }
                   
                   // CRITICAL: Dedupe ONLY runs in recovery pipeline
@@ -1311,6 +1525,99 @@ export async function handleHostConnection(clientWs, sessionId) {
                     }
                   }
                   
+                  // ✅ CRITICAL: Explicitly handle recovery pipeline partials to prevent UI freeze
+                  // Recovery partials must be emitted live (with throttling + stub filtering)
+                  // Normal pipeline partials are buffered during recovery (handled below)
+                  if (pipeline === 'recovery' && recoveryInProgress) {
+                    // Optional: stub suppression (skip recovery stubs that duplicate forced final)
+                    // Use transcriptText (before deduplication) for stub detection, consistent with earlier stub detection
+                    syncForcedFinalBuffer();
+                    if (forcedFinalBuffer?.text && isRecoveryStubPartial({ partialText: transcriptText, forcedBufferText: forcedFinalBuffer.text })) {
+                      console.log('[RecoveryGate] ⏭️ Skip recovery stub partial');
+                      return;
+                    }
+
+                    // Optional: throttle (prevents spam/flicker)
+                    const MIN_RECOVERY_EMIT_MS = 120; // tune 80–150
+                    const now = Date.now();
+                    if (lastRecoveryEmitAt && (now - lastRecoveryEmitAt) < MIN_RECOVERY_EMIT_MS) {
+                      latestRecoveryPartialText = partialTextToSend; // keep latest, discard older
+                      return;
+                    }
+                    lastRecoveryEmitAt = now;
+
+                    console.log(`[HostMode] EMIT_PARTIAL pipeline=recovery, recoveryInProgress=true, text="${partialTextToSend.substring(0, 60)}..."`);
+
+                    // Emit recovery partial directly (bypass shouldEmitPartial to avoid blocking)
+                    // Use partialTextToSend (after deduplication) for emission
+                    const recoverySegmentId = `recovery_${recoveryEpoch}_${Date.now()}`;
+                    const seqId = broadcastWithSequence({
+                      type: 'translation',
+                      originalText: partialTextToSend,
+                      translatedText: undefined,
+                      sourceLang: currentSourceLang,
+                      targetLang: currentSourceLang,
+                      timestamp: now,
+                      isTranscriptionOnly: false,
+                      hasTranslation: false,
+                      hasCorrection: false,
+                      isPartial: true,
+                      meta: { pipeline: 'recovery' } // ensure frontend can style/handle it
+                    }, true);
+
+                    // Track last emitted text for this recovery partial
+                    setLastEmittedText(recoverySegmentId, partialTextToSend);
+                    return; // Skip normal buffering logic for recovery partials
+                  }
+                  
+                  // ✅ CRITICAL: During forced-final recovery, buffer normal-pipeline partials to prevent dropped segments.
+                  // Recovery-pipeline partials continue to emit normally (no UI freeze).
+                  let isContinuationDuringRecovery = false;
+                  if (pipeline === 'normal' && recoveryInProgress) {
+                    const classification = classifyDuringRecovery(partialTextToSend, forcedFinalBuffer.text);
+                    
+                    if (classification.isContinuation) {
+                      // This is a continuation partial - capture it for merging with forced final
+                      const remainderText = classification.remainderText;
+                      
+                      // Append remainderText to pendingContinuationText (dedupe if remainder repeats)
+                      if (forcedFinalBuffer.pendingContinuationText) {
+                        // Check if remainderText is already contained in pendingContinuationText
+                        const existingNormalized = normalizeForCompare(forcedFinalBuffer.pendingContinuationText);
+                        const remainderNormalized = normalizeForCompare(remainderText);
+                        
+                        if (!existingNormalized.includes(remainderNormalized) && remainderNormalized.length > 0) {
+                          // Append with space if needed
+                          forcedFinalBuffer.pendingContinuationText = 
+                            (forcedFinalBuffer.pendingContinuationText + ' ' + remainderText).trim();
+                        }
+                      } else {
+                        forcedFinalBuffer.pendingContinuationText = remainderText;
+                      }
+                      
+                      forcedFinalBuffer.lastContinuationAt = Date.now();
+                      
+                      isContinuationDuringRecovery = true;
+                      console.log(`[RecoveryGate] captured continuation partial (will emit with metadata): ${classification.overlapWords} words overlap, remainder: "${remainderText.substring(0, 40)}..."`);
+                    } else {
+                      // Not a continuation - BUFFER this normal-pipeline partial during recovery
+                      // Update buffer with longer text if this is longer
+                      if (!bufferedNormalPartialDuringRecovery || 
+                          partialTextToSend.length > bufferedNormalPartialDuringRecovery.text.length) {
+                        bufferedNormalPartialDuringRecovery = {
+                          text: partialTextToSend,
+                          timestamp: Date.now(),
+                          epoch: recoveryEpoch,
+                          pipeline: 'normal'
+                        };
+                      }
+                      const snippet = partialTextToSend.substring(0, 60);
+                      console.log(`[RecoveryGate] BUFFER normal partial during recovery (epoch: ${recoveryEpoch}, pipeline: normal, text: "${snippet}...")`);
+                      // Return early - do NOT emit, do NOT update "last emitted" trackers
+                      return;
+                    }
+                  }
+                  
                   // Only send partial if it doesn't extend a pending final
                   if (!shouldSkipSendingPartial) {
                     // Live partial transcript - send original immediately with sequence ID (solo mode style)
@@ -1326,8 +1633,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                       return; // Skip emitting this partial
                     }
                     
+                    // Invariant A: While recoveryInProgress, there should be ZERO normal-pipeline partial broadcasts
+                    if (pipeline === 'normal' && recoveryInProgress) {
+                      console.error(`[HostMode] ❌ INVARIANT VIOLATION: Normal-pipeline partial broadcast during recovery! This should have been blocked by RecoveryGate.`);
+                    }
+                    
                     // Note: This is the initial send before grammar/translation, so use raw text
                     // CRITICAL: Explicitly set isPartial: true to prevent frontend from committing as FINAL
+                    // Attach recovery metadata if applicable
+                    // Use recoveryInProgress computed at top of handler (authoritative source)
+                    const recoveryStub = isRecoveryStub || false;
+                    
+                    // Log emission before broadcasting
+                    console.log(`[HostMode] EMIT_PARTIAL pipeline=${pipeline}, recoveryInProgress=${recoveryInProgress}, recoveryStub=${recoveryStub}, text="${partialTextToSend.substring(0, 60)}..."`);
+                    
                     const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
                     const seqId = broadcastWithSequence({
                       type: 'translation',
@@ -1339,7 +1658,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                       isTranscriptionOnly: false,
                       hasTranslation: false, // Flag that translation is pending
                       hasCorrection: false, // Flag that correction is pending
-                      isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                      isPartial: true, // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                      pipeline: pipeline, // Pipeline metadata (normal or recovery)
+                      recoveryInProgress: recoveryInProgress, // Recovery state metadata
+                      recoveryStub: recoveryStub // Recovery stub metadata (false for continuations)
                     }, true);
                     
                     // Track last emitted text for this seqId to prevent duplicates
@@ -2025,301 +2347,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // CRITICAL: Don't update lastPartialTranslation on error - allows retry
                         // Continue processing - don't stop translations on error
                       }
-                    } else {
-                      // With THROTTLE_MS = 0 and GROWTH_THRESHOLD = 1, this path should rarely execute
-                      // But keep as fallback for edge cases
-                      // Always cancel and reschedule to ensure we translate the latest text
-                      if (pendingPartialTranslation) {
-                        clearTimeout(pendingPartialTranslation);
-                        pendingPartialTranslation = null;
-                      }
-                      if (delayedPartialTimer) {
-                        clearTimeout(delayedPartialTimer);
-                        delayedPartialTimer = null;
-                      }
-                      
-                      // Immediate execution (no delay) for real-time feel
-                      const delayMs = 0;
-                      
-                      // Capture current epoch before scheduling delayed partial
-                      const myEpoch = segmentEpoch;
-                      delayedPartialTimer = setTimeout(async () => {
-                        // CRITICAL: Check epoch - if we advanced segments since scheduling, drop this delayed partial
-                        // This prevents out-of-order emissions when delayed partial fires after a new segment/FINAL
-                        if (myEpoch !== segmentEpoch) {
-                          console.log(`[HostMode] ⏭️ Dropping delayed partial - epoch mismatch (scheduled: ${myEpoch}, current: ${segmentEpoch})`);
-                          delayedPartialTimer = null;
-                          return;
-                        }
-                        
-                        // CRITICAL: Always capture LATEST text at timeout execution
-                        const latestText = currentPartialText;
-                        if (!latestText || latestText.length < 1) {
-                          delayedPartialTimer = null;
-                          return;
-                        }
-                        
-                        // ✅ Prevent delayed partial broadcast of recovery stubs.
-                        // These create the "Ours cordoned off..." flicker in the recovery pipeline.
-                        syncForcedFinalBuffer();
-                        const recoveryActive = forcedFinalBuffer?.recoveryInProgress && forcedFinalBuffer?.text;
-
-                        if (recoveryActive) {
-                          if (isRecoveryStubPartial({ partialText: latestText, forcedBufferText: forcedFinalBuffer.text })) {
-                            console.log('[HostMode] ⏭️ Dropping delayed recovery stub partial (prevents flicker)');
-                            console.log(`[HostMode]   Stub: "${latestText.substring(0, 60)}..."`);
-                            delayedPartialTimer = null;
-                            return;
-                          }
-                        }
-                        
-                        // Skip only if exact match (no need to retranslate identical text)
-                        const isExactMatch = latestText === lastPartialTranslation;
-                        
-                        if (isExactMatch) {
-                          console.log(`[HostMode] ⏭️ Skipping exact match translation`);
-                          delayedPartialTimer = null;
-                          return;
-                        }
-                        
-                        try {
-                          console.log(`[HostMode] ⏱️ Delayed processing partial (${latestText.length} chars): "${latestText.substring(0, 40)}..."`);
-                          
-                          // Get all target languages needed for listeners
-                          const targetLanguages = sessionStore.getSessionLanguages(currentSessionId);
-                          
-                          if (targetLanguages.length === 0) {
-                            // No listeners - just send to host
-                            lastPartialTranslation = latestText;
-                            lastPartialTranslationTime = Date.now();
-                            broadcastWithSequence({
-                              type: 'translation',
-                              originalText: latestText,
-                              translatedText: latestText,
-                              sourceLang: currentSourceLang,
-                              targetLang: currentSourceLang,
-                              timestamp: Date.now(),
-                              hasTranslation: false,
-                              hasCorrection: false,
-                              isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
-                            }, true);
-                            delayedPartialTimer = null;
-                            return;
-                          }
-                          
-                          // Separate same-language targets from translation targets
-                          const sameLanguageTargets = targetLanguages.filter(lang => lang === currentSourceLang);
-                          const translationTargets = targetLanguages.filter(lang => lang !== currentSourceLang);
-                          
-                          // Handle same-language targets
-                          if (sameLanguageTargets.length > 0) {
-                            lastPartialTranslation = latestText;
-                            lastPartialTranslationTime = Date.now();
-                            
-                            console.log(`[HostMode] ✅ TRANSCRIPTION (DELAYED): "${latestText.substring(0, 40)}..."`);
-                            
-                            // Send transcription immediately
-                            for (const targetLang of sameLanguageTargets) {
-                              broadcastWithSequence({
-                                type: 'translation',
-                                originalText: latestText,
-                                translatedText: latestText,
-                                sourceLang: currentSourceLang,
-                                targetLang: targetLang,
-                                timestamp: Date.now(),
-                                isTranscriptionOnly: true,
-                                hasTranslation: false,
-                                hasCorrection: false,
-                                isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
-                              }, true, targetLang);
-                            }
-                            
-                            // Start grammar correction asynchronously (English only)
-                            if (currentSourceLang === 'en') {
-                              grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
-                                .then(correctedText => {
-                                  console.log(`[HostMode] ✅ GRAMMAR (DELAYED ASYNC): "${correctedText.substring(0, 40)}..."`);
-                                  
-                                  // CRITICAL: Send grammar update to host client (source language)
-                                  broadcastWithSequence({
-                                    type: 'translation',
-                                    originalText: latestText,
-                                    correctedText: correctedText,
-                                    translatedText: correctedText,
-                                    sourceLang: currentSourceLang,
-                                    targetLang: currentSourceLang,
-                                    timestamp: Date.now(),
-                                    isTranscriptionOnly: true,
-                                    hasTranslation: false,
-                                    hasCorrection: true,
-                                    updateType: 'grammar',
-                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
-                                  }, true, currentSourceLang);
-                                  
-                                  // Send grammar update to same-language listeners
-                                  for (const targetLang of sameLanguageTargets) {
-                                    broadcastWithSequence({
-                                      type: 'translation',
-                                      originalText: latestText,
-                                      correctedText: correctedText,
-                                      translatedText: correctedText,
-                                      sourceLang: currentSourceLang,
-                                      targetLang: targetLang,
-                                      timestamp: Date.now(),
-                                      isTranscriptionOnly: true,
-                                      hasTranslation: false,
-                                      hasCorrection: true,
-                                      updateType: 'grammar',
-                                      isPartial: true // CRITICAL: Grammar updates for partials are still partials
-                                    }, true, targetLang);
-                                  }
-                                })
-                                .catch(error => {
-                                  if (error.name !== 'AbortError') {
-                                    console.error(`[HostMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
-                                  }
-                                });
-                            }
-                          }
-                          
-                          // Handle translation targets
-                          if (translationTargets.length > 0) {
-                            // TRANSLATION MODE: Decouple grammar and translation for lowest latency (grammar only for English)
-                            // Route to appropriate worker based on tier
-                            const partialWorker = usePremiumTier 
-                              ? realtimePartialTranslationWorker 
-                              : partialTranslationWorker;
-                            const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
-                            console.log(`[HostMode] 🔀 Using ${workerType} API for delayed partial translation to ${translationTargets.length} language(s) (${latestText.length} chars)`);
-                            const underRestartCooldown = usePremiumTier && Date.now() < realtimeTranslationCooldownUntil;
-                            
-                            // Start grammar correction asynchronously (English only, don't wait for it)
-                            const grammarPromise = currentSourceLang === 'en' 
-                              ? grammarWorker.correctPartial(latestText, process.env.OPENAI_API_KEY)
-                              : Promise.resolve(latestText); // Skip grammar for non-English
-                            
-                            if (underRestartCooldown) {
-                              console.log(`[HostMode] ⏸️ Skipping REALTIME translation (delayed) - restart cooldown active (${realtimeTranslationCooldownUntil - Date.now()}ms remaining)`);
-                            } else {
-                              const translationPromise = partialWorker.translateToMultipleLanguages(
-                                latestText,
-                                currentSourceLang,
-                                translationTargets,
-                                process.env.OPENAI_API_KEY,
-                                currentSessionId
-                              );
-
-                              // Send translation IMMEDIATELY when ready (don't wait for grammar)
-                              translationPromise.then(translations => {
-                                // Validate translation results
-                                if (!translations || Object.keys(translations).length === 0) {
-                                  console.warn(`[HostMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
-                                  return;
-                                }
-
-                                // CRITICAL: Update tracking and send translation
-                                lastPartialTranslation = latestText;
-                                lastPartialTranslationTime = Date.now();
-                                
-                                console.log(`[HostMode] ✅ TRANSLATION (DELAYED): Translated to ${Object.keys(translations).length} language(s)`);
-                                
-                                // Broadcast immediately - sequence IDs handle ordering
-                                for (const targetLang of translationTargets) {
-                                  const translatedText = translations[targetLang];
-                                  // Validate that translation is different from original
-                                  const isSameAsOriginal = translatedText === latestText || 
-                                                           translatedText.trim() === latestText.trim() ||
-                                                           translatedText.toLowerCase() === latestText.toLowerCase();
-                                  
-                                  if (isSameAsOriginal) {
-                                    console.warn(`[HostMode] ⚠️ Translation matches original (English leak detected) for ${targetLang}`);
-                                    continue; // Don't send English as translation
-                                  }
-                                  
-                                  broadcastWithSequence({
-                                    type: 'translation',
-                                    originalText: latestText,
-                                    translatedText: translatedText,
-                                    sourceLang: currentSourceLang,
-                                    targetLang: targetLang,
-                                    timestamp: Date.now(),
-                                    isTranscriptionOnly: false,
-                                    hasTranslation: true,
-                                    hasCorrection: false, // Grammar not ready yet
-                                    isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
-                                  }, true, targetLang);
-                                }
-                              }).catch(error => {
-                                // Handle translation errors gracefully
-                                if (error.name !== 'AbortError') {
-                                  if (error.message && error.message.includes('cancelled')) {
-                                    console.log(`[HostMode] ⏭️ Delayed translation cancelled (newer request took priority)`);
-                                  } else if (error.message && error.message.includes('timeout')) {
-                                    console.warn(`[HostMode] ⚠️ ${workerType} API timeout - translation skipped for this partial`);
-                                  } else {
-                                    console.error(`[HostMode] ❌ Delayed translation error (${workerType} API, ${latestText.length} chars):`, error.message);
-                                  }
-                                }
-                                // Don't send anything on error
-                              });
-                            }
-
-                            // Send grammar correction separately when ready (English only)
-                            if (currentSourceLang === 'en') {
-                              grammarPromise.then(correctedText => {
-                                // Only send if correction actually changed the text
-                                if (correctedText !== latestText && correctedText.trim() !== latestText.trim()) {
-                                  console.log(`[HostMode] ✅ GRAMMAR (DELAYED): "${correctedText.substring(0, 40)}..."`);
-                                  
-                                  // CRITICAL: Send grammar update to host client (source language)
-                                  broadcastWithSequence({
-                                    type: 'translation',
-                                    originalText: latestText,
-                                    correctedText: correctedText,
-                                    translatedText: correctedText,
-                                    sourceLang: currentSourceLang,
-                                    targetLang: currentSourceLang,
-                                    timestamp: Date.now(),
-                                    isTranscriptionOnly: true,
-                                    hasTranslation: false,
-                                    hasCorrection: true,
-                                    updateType: 'grammar',
-                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
-                                  }, true, currentSourceLang);
-                                  
-                                  // Broadcast grammar update to listener language groups - sequence IDs handle ordering
-                                  for (const targetLang of targetLanguages) {
-                                    broadcastWithSequence({
-                                      type: 'translation',
-                                      originalText: latestText,
-                                      correctedText: correctedText,
-                                      sourceLang: currentSourceLang,
-                                      targetLang: targetLang,
-                                      timestamp: Date.now(),
-                                      isTranscriptionOnly: false,
-                                      hasCorrection: true,
-                                      updateType: 'grammar',
-                                      isPartial: true // CRITICAL: Grammar updates for partials are still partials
-                                    }, true, targetLang);
-                                  }
-                                }
-                              }).catch(error => {
-                                if (error.name !== 'AbortError') {
-                                  console.error(`[HostMode] ❌ Delayed grammar error (${latestText.length} chars):`, error.message);
-                                }
-                              });
-                            }
-                          }
-
-                          delayedPartialTimer = null;
-                        } catch (error) {
-                          console.error(`[HostMode] ❌ Delayed partial processing error (${latestText.length} chars):`, error.message);
-                          delayedPartialTimer = null;
-                        }
-                      }, delayMs);
-                      // Also update pendingPartialTranslation for backward compatibility
-                      pendingPartialTranslation = delayedPartialTimer;
                     }
+                    // REMOVED: Delayed processing partial resend path - each Google interim result should emit at most once
                   }
                   return;
                 }
@@ -2574,6 +2603,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                             forcedCommitEngine.clearForcedFinalBuffer();
                             syncForcedFinalBuffer();
                             
+                            // Flush buffered normal-pipeline partial after recovery completes (with deduplication)
+                            flushBufferedNormalPartial(forcedFinalText);
+                            
                             console.log('[HostMode] ✅ Forced final committed immediately (no audio to recover)');
                             return; // Skip recovery attempt
                           }
@@ -2688,7 +2720,35 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         // Use finalTextToCommit (which may include recovery words) or fallback to bufferedText
                         // CRITICAL: bufferedText is captured in closure, so it's always available even if buffer is cleared
-                        const textToCommit = finalTextToCommit || bufferedText;
+                        let textToCommit = finalTextToCommit || bufferedText;
+                        
+                        // CRITICAL: During recovery, if final ends mid-word and we don't have continuation yet,
+                        // wait a short bounded delay (<=250ms) for continuation capture
+                        syncForcedFinalBuffer();
+                        const finalEndsCompleteWord = endsWithCompleteWord(textToCommit.trim());
+                        if (!finalEndsCompleteWord && forcedFinalBuffer?.recoveryInProgress && !forcedFinalBuffer?.pendingContinuationText) {
+                          console.log('[RecoveryGate] mid-word final during recovery - waiting up to 250ms for continuation capture');
+                          // Wait up to 250ms for continuation partials to arrive
+                          await new Promise(resolve => setTimeout(resolve, 250));
+                          // Re-check for pendingContinuationText after delay
+                          syncForcedFinalBuffer();
+                        }
+                        
+                        // Merge with pendingContinuationText if it exists
+                        syncForcedFinalBuffer();
+                        if (forcedFinalBuffer?.pendingContinuationText) {
+                          const pendingContinuation = forcedFinalBuffer.pendingContinuationText;
+                          // Merge with deduplication of boundary words
+                          const mergedFinal = partialTracker.mergeWithOverlap(textToCommit, pendingContinuation);
+                          if (mergedFinal) {
+                            textToCommit = mergedFinal;
+                            console.log(`[RecoveryGate] committing merged final: ${mergedFinal.length} chars (${pendingContinuation.length} chars from continuation)`);
+                          } else {
+                            // Merge failed - append with space
+                            textToCommit = (textToCommit + ' ' + pendingContinuation).trim();
+                            console.log(`[RecoveryGate] committing merged final: ${textToCommit.length} chars (${pendingContinuation.length} chars from continuation, mergeWithOverlap failed)`);
+                          }
+                        }
                         
                         if (!textToCommit || textToCommit.length === 0) {
                           console.error('[HostMode] ❌ No text to commit - forced final text is empty!');
@@ -2703,6 +2763,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Commit the forced final (with grammar correction via processFinalText)
                         console.log(`[HostMode] 📝 Committing forced final from timeout: "${textToCommit.substring(0, 80)}..." (${textToCommit.length} chars)`);
                         console.log(`[HostMode] 📊 Final text to commit: "${textToCommit}"`);
+                        
+                        // Clear pendingContinuationText after commit
+                        if (forcedFinalBuffer) {
+                          forcedFinalBuffer.pendingContinuationText = null;
+                          forcedFinalBuffer.lastContinuationAt = null;
+                        }
                         
                         // ✅ Extract segmentId from buffer if available
                         let segmentIdForCommit = null;
@@ -2722,6 +2788,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                           forcedCommitEngine.clearForcedFinalBuffer();
                           syncForcedFinalBuffer();
                         }
+                        
+                        // Flush buffered normal-pipeline partial after recovery completes (with deduplication)
+                        flushBufferedNormalPartial(textToCommit);
                         
                         // CRITICAL: If we didn't reset the partial tracker earlier (because new segment partials were detected),
                         // reset it now after committing the forced final
@@ -2815,9 +2884,26 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log(`[HostMode]   Recovered text: "${recoveredText?.substring(0, 60) || 'empty'}..."`);
 
                         // ✅ always commit forced-final first if recovery was related
-                        const forcedTextToCommit = (recoveredText && recoveredText.length > 0)
+                        let forcedTextToCommit = (recoveredText && recoveredText.length > 0)
                           ? recoveredText
                           : buffer.text;
+
+                        // Merge with pendingContinuationText if it exists
+                        syncForcedFinalBuffer();
+                        if (forcedFinalBuffer?.pendingContinuationText) {
+                          const pendingContinuation = forcedFinalBuffer.pendingContinuationText;
+                          const mergedFinal = partialTracker.mergeWithOverlap(forcedTextToCommit, pendingContinuation);
+                          if (mergedFinal) {
+                            forcedTextToCommit = mergedFinal;
+                            console.log(`[RecoveryGate] committing merged final: ${mergedFinal.length} chars (${pendingContinuation.length} chars from continuation)`);
+                          } else {
+                            forcedTextToCommit = (forcedTextToCommit + ' ' + pendingContinuation).trim();
+                            console.log(`[RecoveryGate] committing merged final: ${forcedTextToCommit.length} chars (${pendingContinuation.length} chars from continuation, mergeWithOverlap failed)`);
+                          }
+                          // Clear pendingContinuationText after merge
+                          forcedFinalBuffer.pendingContinuationText = null;
+                          forcedFinalBuffer.lastContinuationAt = null;
+                        }
 
                         console.log(`[HostMode] 📝 STEP 1: Committing forced final first: "${forcedTextToCommit.substring(0, 60)}..."`);
                         syncForcedFinalBuffer();
@@ -2828,6 +2914,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         forcedCommitEngine.clearForcedFinalBufferTimeout();
                         forcedCommitEngine.clearForcedFinalBuffer();
                         syncForcedFinalBuffer();
+
+                        // Flush buffered normal-pipeline partial after recovery completes (with deduplication)
+                        flushBufferedNormalPartial(forcedTextToCommit);
 
                         console.log(`[HostMode] 📝 STEP 2: Forced final committed, now continuing with new FINAL: "${transcriptText.substring(0, 60)}..."`);
                         // ✅ now continue: transcriptText will be processed by normal FINAL path below
