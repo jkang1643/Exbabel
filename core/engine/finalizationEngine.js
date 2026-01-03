@@ -19,7 +19,7 @@ import { FINALIZATION_CONSTANTS } from '../shared/types/config.js';
 export class FinalizationEngine {
   constructor(options = {}) {
     // Finalization state
-    this.pendingFinalization = null; // { seqId, text, timestamp, timeout, maxWaitTimestamp }
+    this.pendingFinalization = null; // { seqId, text, timestamp, timeout, maxWaitTimestamp, hardDeadlineAt, hardDeadlineTimeout }
     
     // Constants
     this.MAX_FINALIZATION_WAIT_MS = options.maxWaitMs || FINALIZATION_CONSTANTS.MAX_FINALIZATION_WAIT_MS;
@@ -54,12 +54,15 @@ export class FinalizationEngine {
    * @returns {Object} Pending finalization state
    */
   createPendingFinalization(text, seqId = null) {
+    const now = Date.now();
     this.pendingFinalization = {
       seqId,
       text,
-      timestamp: Date.now(),
-      maxWaitTimestamp: Date.now(), // Track when FINAL was first received
-      timeout: null
+      timestamp: now,
+      maxWaitTimestamp: now, // Track when FINAL was first received
+      hardDeadlineAt: now + this.MAX_FINALIZATION_WAIT_MS, // Immovable deadline
+      timeout: null,
+      hardDeadlineTimeout: null
     };
     return this.pendingFinalization;
   }
@@ -111,11 +114,58 @@ export class FinalizationEngine {
   }
 
   /**
-   * Clear pending finalization (reset state)
+   * Set hard deadline timeout (immovable - never cleared/rescheduled)
+   * 
+   * @param {Function} callback - Callback to execute when hard deadline fires
    */
-  clearPendingFinalization() {
-    if (this.pendingFinalization && this.pendingFinalization.timeout) {
-      clearTimeout(this.pendingFinalization.timeout);
+  setHardDeadlineTimeout(callback) {
+    if (!this.pendingFinalization) return;
+    
+    // Clear existing hard deadline timeout if any
+    if (this.pendingFinalization.hardDeadlineTimeout) {
+      clearTimeout(this.pendingFinalization.hardDeadlineTimeout);
+    }
+    
+    // Calculate delay until hard deadline
+    const now = Date.now();
+    const delay = Math.max(0, this.pendingFinalization.hardDeadlineAt - now);
+    
+    // Set timeout - this will fire even if debounce timer keeps getting rescheduled
+    this.pendingFinalization.hardDeadlineTimeout = setTimeout(() => {
+      if (this.pendingFinalization && this.pendingFinalization.hardDeadlineTimeout) {
+        console.warn(`[HostMode] ⏰ Hard deadline reached - forcing finalization`);
+        callback();
+      }
+    }, delay);
+  }
+
+  /**
+   * Check if hard deadline has been exceeded
+   * 
+   * @returns {boolean} True if hard deadline exceeded
+   */
+  hasExceededHardDeadline() {
+    if (!this.pendingFinalization) return false;
+    return Date.now() >= this.pendingFinalization.hardDeadlineAt;
+  }
+
+  /**
+   * Clear pending finalization (reset state)
+   * 
+   * @param {Object} options - Optional options object
+   * @param {string} options.reason - Reason for clearing (for logging)
+   */
+  clearPendingFinalization(options = {}) {
+    const reason = options.reason || (typeof options === 'string' ? options : 'unknown');
+    if (this.pendingFinalization) {
+      const textPreview = this.pendingFinalization.text?.slice(0, 60) || 'null';
+      console.warn(`[HostMode] 🧨 CLEAR pendingFinalization reason=${reason} text="${textPreview}..."`);
+      if (this.pendingFinalization.timeout) {
+        clearTimeout(this.pendingFinalization.timeout);
+      }
+      if (this.pendingFinalization.hardDeadlineTimeout) {
+        clearTimeout(this.pendingFinalization.hardDeadlineTimeout);
+      }
     }
     this.pendingFinalization = null;
   }

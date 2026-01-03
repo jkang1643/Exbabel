@@ -1276,7 +1276,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       finalizationEngine.clearPendingFinalizationTimeout();
                       const textToCommit = pendingFinalization.text;
                       // PHASE 8: Clear using engine
-                      finalizationEngine.clearPendingFinalization();
+                      finalizationEngine.clearPendingFinalization({ reason: 'new_segment_detected' });
                       syncPendingFinalization();
                       // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                       processFinalText(textToCommit);
@@ -1292,7 +1292,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       return; // Continue processing the new partial as a new segment
                     }
                     const timeSinceMaxWait = Date.now() - pendingFinalization.maxWaitTimestamp;
-                    if ((mightBeContinuation || mightBeFalseFinal) && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
+                    const hardDeadlineExceeded = finalizationEngine.hasExceededHardDeadline();
+                    if ((mightBeContinuation || mightBeFalseFinal) && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000 && !hardDeadlineExceeded) {
                       if (mightBeFalseFinal) {
                         console.log(`[HostMode] ⚠️ Possible false final - FINAL ends with period but very short partial arrived soon after (${timeSinceFinal}ms)`);
                         console.log(`[HostMode] ⏳ Waiting to see if partial grows into continuation: FINAL="${finalText}", partial="${partialText}"`);
@@ -1306,6 +1307,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                       syncPendingFinalization();
                       if (pendingFinalization) {
                         pendingFinalization.extendedWaitCount = (pendingFinalization.extendedWaitCount || 0) + 1;
+                        // Store continuation candidate so timeout callback can use it
+                        pendingFinalization.continuationCandidate = partialText;
+                        pendingFinalization.sawContinuation = true;
                       }
                       // Don't extend beyond max wait - cap at remaining time
                       const maxRemainingWait = MAX_FINALIZATION_WAIT_MS - timeSinceMaxWait;
@@ -1327,34 +1331,50 @@ export async function handleHostConnection(clientWs, sessionId) {
                         let finalTextToUse = pendingFinalization.text;
                         const finalTrimmed = pendingFinalization.text.trim();
                         
-                        if (longestExtends) {
-                          console.log(`[HostMode] ⚠️ Using LONGEST partial after continuation wait (${pendingFinalization.text.length} → ${longestExtends.extendedText.length} chars)`);
-                          console.log(`[HostMode] 📊 Recovered: "${longestExtends.missingWords}"`);
-                          finalTextToUse = longestExtends.extendedText;
-                        } else if (latestExtends) {
-                          console.log(`[HostMode] ⚠️ Using LATEST partial after continuation wait (${pendingFinalization.text.length} → ${latestExtends.extendedText.length} chars)`);
-                          console.log(`[HostMode] 📊 Recovered: "${latestExtends.missingWords}"`);
-                          finalTextToUse = latestExtends.extendedText;
-                        } else {
-                          // No extending partial found via checkLongestExtends/checkLatestExtends
-                          // But we might have partials that are continuations (don't start with final)
-                          // Check longestPartialText and latestPartialText directly for overlap merge
-                          syncPartialVariables();
-                          if (longestPartialText && longestPartialText.length > 0) {
-                            const longestTrimmed = longestPartialText.trim();
-                            const merged = partialTracker.mergeWithOverlap(finalTrimmed, longestTrimmed);
-                            if (merged && merged.length > finalTrimmed.length + 3) {
-                              console.log(`[HostMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
-                              console.log(`[HostMode] 📊 Merged: "${finalTrimmed}" + "${longestTrimmed}" = "${merged}"`);
-                              finalTextToUse = merged;
-                            }
-                          } else if (latestPartialText && latestPartialText.length > 0) {
-                            const latestTrimmed = latestPartialText.trim();
-                            const merged = partialTracker.mergeWithOverlap(finalTrimmed, latestTrimmed);
-                            if (merged && merged.length > finalTrimmed.length + 3) {
-                              console.log(`[HostMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
-                              console.log(`[HostMode] 📊 Merged: "${finalTrimmed}" + "${latestTrimmed}" = "${merged}"`);
-                              finalTextToUse = merged;
+                        // CRITICAL: Prefer continuationCandidate if available
+                        if (pendingFinalization.continuationCandidate) {
+                          const continuationTrimmed = pendingFinalization.continuationCandidate.trim();
+                          const merged = partialTracker.mergeWithOverlap(finalTrimmed, continuationTrimmed);
+                          if (merged && merged.length > finalTrimmed.length + 3) {
+                            console.log(`[HostMode] ⚠️ Using continuationCandidate after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                            console.log(`[HostMode] 📊 Merged: "${finalTrimmed}" + "${continuationTrimmed}" = "${merged}"`);
+                            finalTextToUse = merged;
+                            // Clear continuationCandidate after use
+                            pendingFinalization.continuationCandidate = null;
+                          }
+                        }
+                        
+                        if (finalTextToUse === pendingFinalization.text) {
+                          // No continuationCandidate merge, try extending partials
+                          if (longestExtends) {
+                            console.log(`[HostMode] ⚠️ Using LONGEST partial after continuation wait (${pendingFinalization.text.length} → ${longestExtends.extendedText.length} chars)`);
+                            console.log(`[HostMode] 📊 Recovered: "${longestExtends.missingWords}"`);
+                            finalTextToUse = longestExtends.extendedText;
+                          } else if (latestExtends) {
+                            console.log(`[HostMode] ⚠️ Using LATEST partial after continuation wait (${pendingFinalization.text.length} → ${latestExtends.extendedText.length} chars)`);
+                            console.log(`[HostMode] 📊 Recovered: "${latestExtends.missingWords}"`);
+                            finalTextToUse = latestExtends.extendedText;
+                          } else {
+                            // No extending partial found via checkLongestExtends/checkLatestExtends
+                            // But we might have partials that are continuations (don't start with final)
+                            // Check longestPartialText and latestPartialText directly for overlap merge
+                            syncPartialVariables();
+                            if (longestPartialText && longestPartialText.length > 0) {
+                              const longestTrimmed = longestPartialText.trim();
+                              const merged = partialTracker.mergeWithOverlap(finalTrimmed, longestTrimmed);
+                              if (merged && merged.length > finalTrimmed.length + 3) {
+                                console.log(`[HostMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                                console.log(`[HostMode] 📊 Merged: "${finalTrimmed}" + "${longestTrimmed}" = "${merged}"`);
+                                finalTextToUse = merged;
+                              }
+                            } else if (latestPartialText && latestPartialText.length > 0) {
+                              const latestTrimmed = latestPartialText.trim();
+                              const merged = partialTracker.mergeWithOverlap(finalTrimmed, latestTrimmed);
+                              if (merged && merged.length > finalTrimmed.length + 3) {
+                                console.log(`[HostMode] ⚠️ Found continuation via overlap merge after wait (${pendingFinalization.text.length} → ${merged.length} chars)`);
+                                console.log(`[HostMode] 📊 Merged: "${finalTrimmed}" + "${latestTrimmed}" = "${merged}"`);
+                                finalTextToUse = merged;
+                              }
                             }
                           }
                         }
@@ -1366,12 +1386,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         // PHASE 8: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'timeout_flush_continuation_wait' });
                         syncPendingFinalization();
                         console.log(`[HostMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
                         processFinalText(textToProcess);
                       }, remainingWait);
-                      // Continue tracking this partial (don't return - let it be tracked normally below)
+                      // CRITICAL: Do NOT emit this continuation partial - return early to prevent it from being tracked/emitted
+                      return;
                     }
                     
                       // If partials are still arriving and extending the final, update the pending text and extend the timeout
@@ -1411,15 +1432,21 @@ export async function handleHostConnection(clientWs, sessionId) {
                       const baseWait = extendedEndsWithCompleteSentence ? 1000 : 2000; // Shorter wait if sentence is complete
                       const remainingWait = Math.max(800, baseWait - timeSinceFinal);
                       console.log(`[HostMode] ⏱️ Extending finalization wait by ${remainingWait}ms (partial still growing: ${textToUpdate.length} chars, sentence complete: ${extendedEndsWithCompleteSentence})`);
+                      // CRITICAL: Capture scheduledText in closure so callback can process even if pendingFinalization is cleared
+                      const scheduledText = textToUpdate;
+                      const scheduledAt = Date.now();
                       // Reschedule with the same processing logic
                       // PHASE 8: Use engine to set timeout
                       finalizationEngine.setPendingFinalizationTimeout(() => {
                         // PHASE 8: Sync and null check (CRITICAL)
                         syncPendingFinalization();
-                        if (!pendingFinalization) {
-                          console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
-                          return;
-                        }
+                        syncPartialVariables();
+                        
+                        // Try to use latest partials if available, but always commit scheduledText as fallback
+                        let finalTextToUse = scheduledText;
+                        
+                        if (pendingFinalization && pendingFinalization.text === scheduledText) {
+                          // Pending still exists and matches - use latest partial logic
                         
                         // PHASE 8: Use tracker methods to check for extending partials
                         const longestExtends = partialTracker.checkLongestExtends(pendingFinalization.text, 10000);
@@ -1435,12 +1462,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                           console.log(`[HostMode] 📊 Recovered: "${latestExtends.missingWords}"`);
                           finalTextToUse = latestExtends.extendedText;
                         }
+                        } else {
+                          // Pending was cleared - use scheduled text directly
+                          console.log(`[HostMode] ⚠️ Pending cleared, using scheduled text: "${scheduledText.substring(0, 80)}..."`);
+                          finalTextToUse = scheduledText;
+                        }
                         
+                        // Always process, never skip
                         const textToProcess = finalTextToUse;
                         // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
-                        const waitTime = Date.now() - pendingFinalization.timestamp;
+                        const waitTime = pendingFinalization ? (Date.now() - pendingFinalization.timestamp) : (Date.now() - scheduledAt);
                         // PHASE 8: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
+                        if (pendingFinalization) {
+                          finalizationEngine.clearPendingFinalization({ reason: 'timeout_flush_extended_wait' });
+                        }
                         syncPendingFinalization();
                         console.log(`[HostMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                         // Process final (reuse the async function logic from the main timeout)
@@ -1514,7 +1549,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                         // PHASE 8: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'new_segment_during_finalization' });
                         syncPendingFinalization();
                         console.log(`[HostMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
                         processFinalText(textToProcess);
@@ -2073,7 +2108,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // PHASE 8: Clear using engine
                   if (finalizationEngine.hasPendingFinalization()) {
                     finalizationEngine.clearPendingFinalizationTimeout();
-                    finalizationEngine.clearPendingFinalization();
+                    finalizationEngine.clearPendingFinalization({ reason: 'forced_final_recovery' });
                     syncPendingFinalization();
                   }
                   
@@ -2147,7 +2182,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       if (pendingTrimmed === lastSentTrimmed || pendingTrimmed === newFinalTrimmed) {
                         console.log(`[HostMode] 🔄 Cancelling pending finalization (continuation merge occurred)`);
                         finalizationEngine.clearPendingFinalizationTimeout();
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'continuation_merge_occurred' });
                         syncPendingFinalization();
                       }
                     }
@@ -2267,16 +2302,35 @@ export async function handleHostConnection(clientWs, sessionId) {
                 if (!finalizationEngine.hasPendingFinalization()) {
                   finalizationEngine.createPendingFinalization(finalTextToUse, null);
                   syncPendingFinalization();
+                  
+                  // Set hard deadline timeout (immovable - prevents starvation)
+                  finalizationEngine.setHardDeadlineTimeout(() => {
+                    syncPendingFinalization();
+                    syncPartialVariables();
+                    if (pendingFinalization) {
+                      console.warn(`[HostMode] ⏰ Hard deadline reached - forcing finalization: "${pendingFinalization.text.substring(0, 80)}..."`);
+                      const textToProcess = pendingFinalization.text;
+                      finalizationEngine.clearPendingFinalization({ reason: 'hard_deadline_reached' });
+                      syncPendingFinalization();
+                      processFinalText(textToProcess);
+                    }
+                  });
                 }
+                
+                // CRITICAL: Capture scheduledText in closure so callback can process even if pendingFinalization is cleared
+                const scheduledText = finalTextToUse;
+                const scheduledAt = Date.now();
                 
                 // Schedule the timeout
                 finalizationEngine.setPendingFinalizationTimeout(() => {
                   syncPendingFinalization();
                   syncPartialVariables();
-                  if (!pendingFinalization) {
-                    console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
-                    return;
-                  }
+                  
+                  // Try to use latest partials if available, but always commit scheduledText as fallback
+                  let finalTextToUse2 = scheduledText;
+                  
+                  if (pendingFinalization && pendingFinalization.text === scheduledText) {
+                    // Pending still exists and matches - use latest partial logic
                   
                   // After waiting, check again for longer partials
                   let finalTextToUse2 = pendingFinalization.text;
@@ -2329,10 +2383,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                     }
                   }
+                  } else {
+                    // Pending was cleared - use scheduled text directly
+                    console.log(`[HostMode] ⚠️ Pending cleared, using scheduled text: "${scheduledText.substring(0, 80)}..."`);
+                    finalTextToUse2 = scheduledText;
+                  }
                   
+                  // Always process, never skip
                   const textToProcess = finalTextToUse2;
-                  const waitTime = Date.now() - pendingFinalization.timestamp;
-                  finalizationEngine.clearPendingFinalization();
+                  const waitTime = pendingFinalization ? (Date.now() - pendingFinalization.timestamp) : (Date.now() - scheduledAt);
+                  if (pendingFinalization) {
+                    finalizationEngine.clearPendingFinalization({ reason: 'timeout_flush_main' });
+                  }
                   syncPendingFinalization();
                   // CRITICAL: Don't reset partial tracking here - it will be reset in processFinalText after final is sent
                   console.log(`[HostMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);

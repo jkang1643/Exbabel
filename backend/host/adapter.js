@@ -1748,7 +1748,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       finalizationEngine.clearPendingFinalizationTimeout();
                       const textToCommit = pendingFinalization.text;
                       // PHASE 8: Clear using engine
-                      finalizationEngine.clearPendingFinalization();
+                      finalizationEngine.clearPendingFinalization({ reason: 'new_segment_detected' });
                       syncPendingFinalization();
                       // PHASE 8: Reset partial tracking using tracker
                       partialTracker.reset();
@@ -1812,7 +1812,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         syncPartialVariables();
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         // PHASE 8: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'timeout_flush_continuation_wait' });
                         syncPendingFinalization();
                         console.log(`[HostMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
                         processFinalText(textToProcess);
@@ -1890,7 +1890,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         syncPartialVariables();
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         // PHASE 8: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'timeout_flush_extended_wait' });
                         syncPendingFinalization();
                         console.log(`[HostMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                         // Process final (reuse the async function logic from the main timeout)
@@ -2000,7 +2000,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           syncPartialVariables();
                         }
                         // PHASE 8: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'new_segment_during_finalization' });
                         syncPendingFinalization();
                         console.log(`[HostMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
                         processFinalText(textToProcess);
@@ -2882,7 +2882,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // PHASE 8: Clear using engine
                   if (finalizationEngine.hasPendingFinalization()) {
                     finalizationEngine.clearPendingFinalizationTimeout();
-                    finalizationEngine.clearPendingFinalization();
+                    finalizationEngine.clearPendingFinalization({ reason: 'forced_final_recovery' });
                     syncPendingFinalization();
                   }
                   
@@ -3182,7 +3182,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       if (pendingTrimmed === lastSentTrimmed || pendingTrimmed === newFinalTrimmed) {
                         console.log(`[HostMode] 🔄 Cancelling pending finalization (continuation merge occurred)`);
                         finalizationEngine.clearPendingFinalizationTimeout();
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'continuation_merge_occurred' });
                         syncPendingFinalization();
                       }
                     }
@@ -3345,11 +3345,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                       WAIT_FOR_PARTIALS_MS = Math.min(1500, BASE_WAIT_MS + (finalTextToUse.length - VERY_LONG_TEXT_THRESHOLD) * CHAR_DELAY_MS);
                     }
                   } else {
-                    // Different final - cancel old one and start new
-                    // PHASE 8: Clear using engine
-                    finalizationEngine.clearPendingFinalizationTimeout();
-                    finalizationEngine.clearPendingFinalization();
-                    syncPendingFinalization();
+                    // Different final - FLUSH old one before starting new
+                    const oldPending = finalizationEngine.getPendingFinalization();
+                    
+                    if (oldPending) {
+                      console.warn(`[HostMode] 🧨 New FINAL arrived; flushing pending before replace. pending="${oldPending.text.slice(0,80)}..." newFinal="${finalTextToUse.slice(0,80)}..."`);
+                      
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      finalizationEngine.clearPendingFinalization({ reason: 'different_final_arrived' });
+                      syncPendingFinalization();
+                      
+                      // ✅ Process old pending immediately so it cannot be dropped
+                      const oldTrim = oldPending.text.trim();
+                      if (oldTrim && oldTrim !== lastSentFinalText?.trim()) {
+                        processFinalText(oldPending.text);
+                      } else {
+                        console.log(`[HostMode] ⏭️ Skipping duplicate: old pending matches last sent`);
+                      }
+                    } else {
+                      // No pending to flush - just clear
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      finalizationEngine.clearPendingFinalization({ reason: 'different_final_arrived_no_pending' });
+                      syncPendingFinalization();
+                    }
                   }
                 }
                 
@@ -3362,19 +3380,38 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // PHASE 8: Create using engine
                   finalizationEngine.createPendingFinalization(finalTextToUse, null);
                   syncPendingFinalization();
+                  
+                  // Set hard deadline timeout (immovable - prevents starvation)
+                  finalizationEngine.setHardDeadlineTimeout(() => {
+                    syncPendingFinalization();
+                    syncPartialVariables();
+                    if (pendingFinalization) {
+                      console.warn(`[HostMode] ⏰ Hard deadline reached - forcing finalization: "${pendingFinalization.text.substring(0, 80)}..."`);
+                      const textToProcess = pendingFinalization.text;
+                      finalizationEngine.clearPendingFinalization({ reason: 'hard_deadline_reached' });
+                      syncPendingFinalization();
+                      processFinalText(textToProcess);
+                    }
+                  });
                 }
                 
                 // Schedule or reschedule the timeout
+                // CRITICAL: Capture scheduledText in closure so callback can process even if pendingFinalization is cleared
+                const scheduledText = finalTextToUse;
+                const scheduledAt = Date.now();
+                
                 // PHASE 8: Use engine to set timeout
                 finalizationEngine.setPendingFinalizationTimeout(() => {
                   // PHASE 8: Sync and null check (CRITICAL)
                   syncPendingFinalization();
                   // CRITICAL: Sync partial variables to get fresh data before checking
                   syncPartialVariables();
-                  if (!pendingFinalization) {
-                    console.warn('[HostMode] ⚠️ Timeout fired but pendingFinalization is null - skipping');
-                    return;
-                  }
+                  
+                  // Try to use latest partials if available, but always commit scheduledText as fallback
+                  let finalTextToUse = scheduledText;
+                  
+                  if (pendingFinalization && pendingFinalization.text === scheduledText) {
+                    // Pending still exists and matches - use latest partial logic
                     // After waiting, check again for longer partials
                     // CRITICAL: Google Speech may send FINALs that are incomplete (missing words)
                     // Always prefer partials that extend the FINAL, even if FINAL appears "complete"
@@ -3383,7 +3420,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     
                     // Use the longest available partial (within reasonable time window)
                     // CRITICAL: Only use if it actually extends the final (not from a previous segment)
-                    let finalTextToUse = pendingFinalization.text;
+                    finalTextToUse = pendingFinalization.text;
                     const finalTrimmed = pendingFinalization.text.trim();
                     
                     // Check if FINAL ends with complete sentence
@@ -3450,12 +3487,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                     }
                     
-                    // CRITICAL: Check if we've exceeded MAX_FINALIZATION_WAIT_MS
+                    // CRITICAL: Check if we've exceeded MAX_FINALIZATION_WAIT_MS or hard deadline
                     // If so, commit even if sentence is incomplete (safety net)
                     const timeSinceMaxWait = Date.now() - pendingFinalization.maxWaitTimestamp;
                     finalEndsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(finalTextToUse);
+                    const hardDeadlineExceeded = finalizationEngine.hasExceededHardDeadline();
                     
-                    if (!finalEndsWithCompleteSentence && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS) {
+                    if (!finalEndsWithCompleteSentence && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS && !hardDeadlineExceeded) {
                       // Sentence is incomplete but we haven't hit max wait yet - wait a bit more
                       // CRITICAL: Update pendingFinalization.text with the latest finalTextToUse (may include partials)
                       // PHASE 8: Update using engine
@@ -3541,7 +3579,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         const waitTime = Date.now() - pendingFinalization.timestamp;
                         // CRITICAL: Clear pending finalization FIRST to prevent other timeouts from firing
                         // PHASE 8: Clear using engine
-                        finalizationEngine.clearPendingFinalization();
+                        finalizationEngine.clearPendingFinalization({ reason: 'timeout_flush_reschedule' });
                         syncPendingFinalization();
                         // CRITICAL: Reset partial tracking AFTER clearing finalization, but BEFORE processing
                         // This ensures no other timeout callbacks can use stale partials
@@ -3553,14 +3591,22 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }, remainingWait);
                       return; // Don't commit yet
                     }
-                    
-                    // Reset for next segment AFTER processing
-                    const textToProcess = finalTextToUse;
-                    const waitTime = Date.now() - pendingFinalization.timestamp;
-                    // CRITICAL: Clear pending finalization FIRST to prevent other timeouts from firing
-                    // PHASE 8: Clear using engine
-                    finalizationEngine.clearPendingFinalization();
-                    syncPendingFinalization();
+                  } else {
+                    // Pending was cleared - use scheduled text directly
+                    console.log(`[HostMode] ⚠️ Pending cleared, using scheduled text: "${scheduledText.substring(0, 80)}..."`);
+                    finalTextToUse = scheduledText;
+                  }
+                  
+                  // Always process, never skip
+                  // Reset for next segment AFTER processing
+                  const textToProcess = finalTextToUse;
+                  const waitTime = pendingFinalization ? (Date.now() - pendingFinalization.timestamp) : (Date.now() - scheduledAt);
+                  // CRITICAL: Clear pending finalization FIRST to prevent other timeouts from firing
+                  // PHASE 8: Clear using engine
+                  if (pendingFinalization) {
+                    finalizationEngine.clearPendingFinalization({ reason: 'timeout_flush_main' });
+                  }
+                  syncPendingFinalization();
                     // CRITICAL FIX: Reset partial tracking AFTER clearing finalization, but BEFORE processing
                     // This prevents accumulation of old partials from previous sentences
                     // and ensures no other timeout callbacks can use stale partials
