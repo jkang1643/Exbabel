@@ -95,12 +95,15 @@ export function HostPage({ onBackToHome }) {
   const [transcript, setTranscript] = useState([]);
   const transcriptRef = useRef([]); // Ref to access transcript synchronously
   const [currentTranscript, setCurrentTranscript] = useState(''); // Live partial transcription
+  const [uiOverlayText, setUiOverlayText] = useState(''); // UI-only overlay (separate from sequenced pipeline)
   const [isStreaming, setIsStreaming] = useState(false);
   const [listenerCount, setListenerCount] = useState(0);
   const [languageStats, setLanguageStats] = useState({});
   const [error, setError] = useState('');
 
   const wsRef = useRef(null);
+  const latestLiveSeqRef = useRef(0); // Independent from latestSeqIdRef (for live_partial gating)
+  const latestRecoveryEpochRef = useRef(null); // Track recovery epoch to reset liveSeq gating
   const isInitializedRef = useRef(false); // Prevent duplicate initialization in Strict Mode
   const sessionCreatedRef = useRef(false); // Prevent duplicate session creation
   const processedSeqIdsRef = useRef(new Set()); // Track processed seqIds to prevent duplicate processing
@@ -358,9 +361,55 @@ export function HostPage({ onBackToHome }) {
             }].slice(-10)); // Keep last 10 transcripts
             break;
           
-          case 'translation':
+          case 'live_partial': {
+            // UI-only live partial updates (does NOT affect sequenced pipeline)
+            // CRITICAL: Do NOT update latestSeqIdRef, lastPartialTextRef, or lastPartialTimeRef
+            // CRITICAL: Do NOT call segmenter.processPartial() - use raw text only
+            // CRITICAL: Do NOT commit to history
+            
+            // Reset gating when epoch changes (prevents "stuck forever" after restart)
+            if (message.recoveryEpoch !== undefined && message.recoveryEpoch !== latestRecoveryEpochRef.current) {
+              latestRecoveryEpochRef.current = message.recoveryEpoch;
+              latestLiveSeqRef.current = 0;
+            }
+            
+            // LiveSeq gating: drop out-of-order messages
+            if (message.liveSeq !== undefined && message.liveSeq <= latestLiveSeqRef.current) {
+              return; // Drop stale message (use return, not break)
+            }
+            
+            // Update ref
+            if (message.liveSeq !== undefined) {
+              latestLiveSeqRef.current = Math.max(latestLiveSeqRef.current, message.liveSeq);
+            }
+            
+            // Handle clear: stop UI-only overlay
+            if (message.clear) {
+              setUiOverlayText(''); // NO flushSync - let React batch
+              return; // use return, not break
+            }
+            
+            // Display raw text (no segmenter, NO flushSync)
+            const text = (message.text || '').trim();
+            if (text) {
+              setUiOverlayText(text); // Normal setState - React can batch these
+            }
+            return; // use return, not break
+          }
+          
+          case 'translation': {
             // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
             if (message.isPartial) {
+              // FAST PATH: During recovery, skip expensive segmenter/flushSync work
+              if (message.recoveryInProgress || message.pipeline === 'recovery' || message.ephemeral) {
+                // UI-only fast path: NO segmenter, NO flushSync
+                const raw = (message.correctedText || message.translatedText || message.originalText || '').trim();
+                if (raw) {
+                  setUiOverlayText(raw); // overlay, not currentTranscript (let React batch)
+                }
+                return; // IMPORTANT: do not run the heavy segmenter path
+              }
+              
               // CRITICAL: Merge grammar corrections with existing partial text
               // This ensures grammar corrections are applied live to the transcription
               const originalText = message.originalText || '';
@@ -393,6 +442,8 @@ export function HostPage({ onBackToHome }) {
                 return; // Do not push into history
               }
             } else {
+              // Final transcript - clear overlay when any final arrives
+              setUiOverlayText('');
               // Final transcript - use processFinal like solo mode (handles deduplication automatically)
               // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
               // This ensures grammar corrections and recovered text are applied to finals
@@ -815,6 +866,7 @@ export function HostPage({ onBackToHome }) {
               setCurrentTranscript('');
             }
             break;
+          }
           
           case 'session_stats':
             if (message.stats) {
@@ -1188,9 +1240,9 @@ export function HostPage({ onBackToHome }) {
                 )}
               </span>
             </div>
-            {currentTranscript && (
+            {(uiOverlayText || currentTranscript) && (
               <button
-                onClick={() => navigator.clipboard.writeText(currentTranscript)}
+                onClick={() => navigator.clipboard.writeText(uiOverlayText || currentTranscript)}
                 className="p-1 sm:p-1.5 text-white/80 hover:text-white transition-colors"
                 title="Copy live text"
               >
@@ -1200,9 +1252,9 @@ export function HostPage({ onBackToHome }) {
           </div>
           
           <div className="bg-white/95 backdrop-blur rounded-lg sm:rounded-xl p-3 sm:p-6 min-h-[100px] sm:min-h-[140px] max-h-[300px] sm:max-h-[400px] overflow-y-auto transition-none scroll-smooth">
-            {currentTranscript ? (
+            {(uiOverlayText || currentTranscript) ? (
               <p className="text-gray-900 font-semibold text-xl sm:text-2xl md:text-3xl leading-relaxed tracking-wide break-words">
-                {currentTranscript}
+                {uiOverlayText || currentTranscript}
                 {isStreaming && (
                   <span className="inline-block w-0.5 sm:w-1 h-6 sm:h-8 ml-1 sm:ml-2 bg-blue-600 animate-pulse"></span>
                 )}

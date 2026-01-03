@@ -286,6 +286,11 @@ export async function handleHostConnection(clientWs, sessionId) {
   let lastRecoveryEmitAt = null; // Track last recovery partial emission time
   let latestRecoveryPartialText = null; // Keep latest recovery partial for throttling
 
+  // Live partial stream state (UI-only, separate from sequenced pipeline)
+  let livePartialSeq = 0; // Separate counter (not timelineTracker)
+  let lastLivePartialEmitAt = 0; // Throttle timestamp
+  let lastLivePartialText = ''; // Duplicate suppression
+
   // Helper: Measure RTT from client timestamp
   const measureRTT = (clientTimestamp) => {
     return rttTracker.measureRTT(clientTimestamp);
@@ -466,6 +471,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                   const snippet = buffered.text.substring(0, 60);
                   console.log(`[RecoveryGate] FLUSH buffered normal partial after recovery (epoch: ${buffered.epoch}, pipeline: ${buffered.pipeline}, remainder: 0 chars - already covered by forced-final, text: "${snippet}...")`);
                 }
+                
+                // Clear UI-only overlay after recovery completes
+                sendLivePartial('', { clear: true, recoveryEpoch, recoveryInProgress: false });
               };
               
               // Helper functions for text processing (delegated to PartialTracker where possible)
@@ -590,6 +598,52 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
                 
                 return seqId;
+              };
+              
+              // Helper function to send UI-only live partial updates (does NOT use sequenced pipeline)
+              // This provides smooth UI updates during recovery without affecting ordering or history
+              const sendLivePartial = (text, extraMeta = {}) => {
+                if (!currentSessionId) return;
+                if (!clientWs || clientWs.readyState !== WebSocket.OPEN) return;
+                
+                const now = Date.now();
+                if (now - lastLivePartialEmitAt < 120) return;
+                
+                const isClear = extraMeta && extraMeta.clear === true;
+                const trimmed = (text || '').trim();
+                
+                // Allow empty text only for clear messages
+                if (!isClear && !trimmed) return;
+                
+                // Duplicate suppression: exact match first (fast), then normalized
+                if (!isClear && trimmed === lastLivePartialText) {
+                  return; // Skip exact duplicate (fast path)
+                }
+                
+                // Only normalize when needed (not for clear messages)
+                if (!isClear) {
+                  const normalized = normalizeForCompare(trimmed);
+                  if (normalized && normalized === normalizeForCompare(lastLivePartialText)) {
+                    return; // Skip normalized duplicate
+                  }
+                }
+                
+                lastLivePartialEmitAt = now;
+                if (!isClear) {
+                  lastLivePartialText = trimmed;
+                }
+                livePartialSeq += 1;
+
+                const msg = {
+                  type: 'live_partial',
+                  liveSeq: livePartialSeq,
+                  text: trimmed,
+                  timestamp: now,
+                  ...extraMeta
+                };
+
+                clientWs.send(JSON.stringify(msg));
+                console.log(`[LivePartial] sent live_partial len=${trimmed.length} epoch=${extraMeta.recoveryEpoch || 'N/A'} liveSeq=${livePartialSeq}${isClear ? ' (clear)' : ''}`);
               };
               
               // Grammar correction cache (from solo mode)
@@ -1622,6 +1676,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       const snippet = partialTextToSend.substring(0, 60);
                       console.log(`[RecoveryGate] BUFFER normal partial during recovery (epoch: ${recoveryEpoch}, pipeline: normal, text: "${snippet}...")`);
+                      // Send UI-only live partial update (does NOT affect sequenced pipeline)
+                      sendLivePartial(partialTextToSend, { recoveryEpoch, recoveryInProgress: true });
                       // Return early - do NOT emit, do NOT update "last emitted" trackers
                       return;
                     }
