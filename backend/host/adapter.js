@@ -279,6 +279,9 @@ export async function handleHostConnection(clientWs, sessionId) {
   let recoveryEpoch = 0;
   let previousRecoveryInProgress = false; // Track previous state to detect transitions
 
+  // NEW: Track when forced final buffer was last cleared (for cooldown quarantine)
+  let lastForcedFinalClearedAt = 0;
+
   // Buffer normal-pipeline partials while forced-final recovery is in progress
   let bufferedNormalPartialDuringRecovery = null; // { text, timestamp, epoch, pipeline }
 
@@ -575,6 +578,25 @@ export async function handleHostConnection(clientWs, sessionId) {
                 if (!currentSessionId) {
                   console.error(`[HostMode] ❌ ERROR: currentSessionId is not defined! Cannot broadcast message.`);
                   return -1;
+                }
+                
+                // --- QUARANTINE PATCH: prevent partials from being committable during recovery ---
+                if (isPartial) {
+                  syncForcedFinalBuffer();
+                  
+                  // Use forcedFinalBuffer directly (not recoveryInProgress variable which may not be in scope)
+                  const QUARANTINE_TAIL_MS = 750;
+                  const quarantineActive =
+                    (!!forcedFinalBuffer?.text && forcedFinalBuffer?.recoveryInProgress === true) ||
+                    (forcedFinalBuffer?.timestamp && (Date.now() - forcedFinalBuffer.timestamp) < QUARANTINE_TAIL_MS) ||
+                    (lastForcedFinalClearedAt && (Date.now() - lastForcedFinalClearedAt) < 3000);
+                  
+                  if (quarantineActive) {
+                    messageData.ephemeral = true;      // UI shows live, but must NOT commit to history
+                    messageData.quarantine = true;     // explicit marker
+                    messageData.suppressHistory = true; // NEW: hard flag to prevent history commit
+                    if (forcedFinalBuffer?.epoch) messageData.recoveryEpoch = forcedFinalBuffer.epoch;
+                  }
                 }
                 
                 // PHASE 8: Use CoreEngine timeline tracker for sequence IDs
@@ -1377,6 +1399,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       } catch (e) {
                         console.error('[HostMode] ❌ Forced-final commit failed (extending partial):', e);
                       }
+                      lastForcedFinalClearedAt = Date.now();
                       forcedCommitEngine.clearForcedFinalBuffer();
                       syncForcedFinalBuffer();
                       
@@ -1715,7 +1738,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // CRITICAL: Mark partials as ephemeral during recovery to prevent them from being committed to history
                     // They still update live text (no UI freeze), but won't leak into history
                     syncForcedFinalBuffer();
-                    const ephemeralDuringRecovery = recoveryInProgress;
+                    
+                    // NEW: quarantine partials not only during recovery, but also for a short cooldown
+                    const QUARANTINE_COOLDOWN_MS = 3000;
+                    const quarantineCooldownActive =
+                      lastForcedFinalClearedAt && (Date.now() - lastForcedFinalClearedAt) < QUARANTINE_COOLDOWN_MS;
+                    
+                    // Use forcedFinalBuffer directly instead of recoveryInProgress variable
+                    const quarantineActive = 
+                      (!!forcedFinalBuffer?.text && forcedFinalBuffer?.recoveryInProgress === true) ||
+                      quarantineCooldownActive;
+                    const ephemeralDuringRecovery = quarantineActive;
+                    
                     const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                     
                     const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
@@ -1731,6 +1765,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       hasCorrection: false, // Flag that correction is pending
                       isPartial: true, // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                       ephemeral: ephemeralDuringRecovery, // Mark as ephemeral during recovery (prevents history commit)
+                      suppressHistory: quarantineActive, // NEW: hard flag to prevent history commit
                       recoveryEpoch: currentRecoveryEpoch, // Include epoch for frontend tracking
                       pipeline: pipeline, // Pipeline metadata (normal or recovery)
                       recoveryInProgress: recoveryInProgress, // Recovery state metadata
@@ -2151,7 +2186,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                           lastPartialTranslation = capturedText;
                           // CRITICAL: Mark as ephemeral during recovery
                           syncForcedFinalBuffer();
-                          const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                          const QUARANTINE_COOLDOWN_MS = 3000;
+                          const quarantineCooldownActive =
+                            lastForcedFinalClearedAt && (Date.now() - lastForcedFinalClearedAt) < QUARANTINE_COOLDOWN_MS;
+                          const quarantineActive = 
+                            (!!forcedFinalBuffer?.text && forcedFinalBuffer?.recoveryInProgress === true) ||
+                            quarantineCooldownActive;
+                          const ephemeralDuringRecovery = quarantineActive;
                           const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                           broadcastWithSequence({
                             type: 'translation',
@@ -2164,6 +2205,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             hasCorrection: false,
                             isPartial: true, // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                             ephemeral: ephemeralDuringRecovery,
+                            suppressHistory: quarantineActive, // NEW: hard flag to prevent history commit
                             recoveryEpoch: currentRecoveryEpoch
                           }, true);
                           
@@ -2186,7 +2228,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 // Send grammar correction to host client
                                 // CRITICAL: Mark as ephemeral during recovery
                                 syncForcedFinalBuffer();
-                                const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                                const QUARANTINE_COOLDOWN_MS = 3000;
+                                const quarantineCooldownActive =
+                                  lastForcedFinalClearedAt && (Date.now() - lastForcedFinalClearedAt) < QUARANTINE_COOLDOWN_MS;
+                                const quarantineActive = 
+                                  (!!forcedFinalBuffer?.text && forcedFinalBuffer?.recoveryInProgress === true) ||
+                                  quarantineCooldownActive;
+                                const ephemeralDuringRecovery = quarantineActive;
                                 const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                                 broadcastWithSequence({
                                   type: 'translation',
@@ -2202,6 +2250,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   updateType: 'grammar',
                                   isPartial: true, // CRITICAL: Grammar updates for partials are still partials
                                   ephemeral: ephemeralDuringRecovery,
+                                  suppressHistory: quarantineActive, // NEW: hard flag to prevent history commit
                                   recoveryEpoch: currentRecoveryEpoch
                                 }, true, currentSourceLang);
                               })
@@ -2236,7 +2285,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                           // Send raw text immediately to same-language listeners
                           // CRITICAL: Mark as ephemeral during recovery
                           syncForcedFinalBuffer();
-                          const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                          const QUARANTINE_COOLDOWN_MS = 3000;
+                          const quarantineCooldownActive =
+                            lastForcedFinalClearedAt && (Date.now() - lastForcedFinalClearedAt) < QUARANTINE_COOLDOWN_MS;
+                          const quarantineActive = 
+                            (!!forcedFinalBuffer?.text && forcedFinalBuffer?.recoveryInProgress === true) ||
+                            quarantineCooldownActive;
+                          const ephemeralDuringRecovery = quarantineActive;
                           const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                           for (const targetLang of sameLanguageTargets) {
                             broadcastWithSequence({
@@ -2251,6 +2306,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                               hasCorrection: false,
                               isPartial: true, // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                               ephemeral: ephemeralDuringRecovery,
+                              suppressHistory: quarantineActive, // NEW: hard flag to prevent history commit
                               recoveryEpoch: currentRecoveryEpoch
                             }, true, targetLang);
                           }
@@ -2274,7 +2330,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 // CRITICAL: Send grammar update to host client (source language)
                                 // CRITICAL: Mark as ephemeral during recovery
                                 syncForcedFinalBuffer();
-                                const ephemeralDuringRecovery = !!forcedFinalBuffer?.recoveryInProgress;
+                                const QUARANTINE_COOLDOWN_MS = 3000;
+                                const quarantineCooldownActive =
+                                  lastForcedFinalClearedAt && (Date.now() - lastForcedFinalClearedAt) < QUARANTINE_COOLDOWN_MS;
+                                const quarantineActive = 
+                                  (!!forcedFinalBuffer?.text && forcedFinalBuffer?.recoveryInProgress === true) ||
+                                  quarantineCooldownActive;
+                                const ephemeralDuringRecovery = quarantineActive;
                                 const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
                                 broadcastWithSequence({
                                   type: 'translation',
@@ -2290,6 +2352,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   updateType: 'grammar',
                                   isPartial: true, // CRITICAL: Grammar updates for partials are still partials
                                   ephemeral: ephemeralDuringRecovery,
+                                  suppressHistory: quarantineActive, // NEW: hard flag to prevent history commit
                                   recoveryEpoch: currentRecoveryEpoch
                                 }, true, currentSourceLang);
                                 
@@ -2465,6 +2528,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                   if (forcedCommitEngine.hasForcedFinalBuffer()) {
                     console.log(`[HostMode] 🧹 Clearing existing forced final buffer before creating new one`);
                     forcedCommitEngine.clearForcedFinalBufferTimeout();
+                    lastForcedFinalClearedAt = Date.now();
                     forcedCommitEngine.clearForcedFinalBuffer();
                     syncForcedFinalBuffer();
                   }
@@ -2662,11 +2726,19 @@ export async function handleHostConnection(clientWs, sessionId) {
                           // Don't reset - let the new segment partials continue to be tracked
                           // The reset will happen when the forced final is committed
                         } else {
-                          // No new segment detected - safe to reset for next segment
-                          console.log(`[HostMode] 🧹 Resetting partial tracking for next segment`);
-                          // PHASE 8: Reset partial tracking using tracker (snapshot already taken above)
-                          partialTracker.reset();
-                          syncPartialVariables(); // Sync variables after reset
+                          // No new segment detected - but check if recovery is active before resetting
+                          syncForcedFinalBuffer();
+                          const recoveryActive = !!forcedFinalBuffer?.recoveryInProgress;
+                          
+                          if (recoveryActive) {
+                            console.log(`[HostMode] ⏳ Recovery in progress - deferring partial tracker reset until recovery completes`);
+                            // Don't reset - let recovery complete first
+                          } else {
+                            console.log(`[HostMode] 🧹 Resetting partial tracking for next segment`);
+                            // PHASE 8: Reset partial tracking using tracker (snapshot already taken above)
+                            partialTracker.reset();
+                            syncPartialVariables(); // Sync variables after reset
+                          }
                         }
 
                         // Calculate how much time has passed since forced final
@@ -2706,6 +2778,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             }
                             
                             // Clear the buffer
+                            lastForcedFinalClearedAt = Date.now();
                             forcedCommitEngine.clearForcedFinalBuffer();
                             syncForcedFinalBuffer();
                             
@@ -2903,6 +2976,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         // Clear buffer if it still exists
                         if (bufferStillExists) {
+                          lastForcedFinalClearedAt = Date.now();
                           forcedCommitEngine.clearForcedFinalBuffer();
                           syncForcedFinalBuffer();
                         }
@@ -3029,6 +3103,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                         processFinalText(forcedTextToCommit, { forceFinal: true });
 
+                        lastForcedFinalClearedAt = Date.now();
                         forcedCommitEngine.clearForcedFinalBufferTimeout();
                         forcedCommitEngine.clearForcedFinalBuffer();
                         syncForcedFinalBuffer();
@@ -3067,6 +3142,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // Merge failed - use the new FINAL transcript as-is
                       console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
                     }
+                    lastForcedFinalClearedAt = Date.now();
                     forcedCommitEngine.clearForcedFinalBuffer();
                     syncForcedFinalBuffer();
                     
