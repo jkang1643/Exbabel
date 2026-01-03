@@ -199,6 +199,80 @@ function isRecoveryStubPartial({ partialText, forcedBufferText }) {
 }
 
 /**
+ * Re-evaluate a queued FINAL that arrived during recovery
+ * Checks if it's related to the recovered text and processes accordingly
+ * @param {Object} params - Parameters
+ * @param {string} params.recoveredText - The recovered forced-final text (complete)
+ * @param {string} params.queuedFinalText - The queued FINAL text to re-evaluate
+ * @param {Object} params.partialTracker - Partial tracker instance for merging
+ * @param {Function} params.processFinalText - Function to process final text
+ * @returns {Object} { processed: boolean, merged: boolean }
+ */
+function reEvaluateQueuedFinalDuringRecovery({ recoveredText, queuedFinalText, partialTracker, processFinalText }) {
+  if (!queuedFinalText || !recoveredText) {
+    return { processed: false, merged: false };
+  }
+
+  const recoveredTextLower = recoveredText.trim().toLowerCase();
+  const queuedFinalLower = queuedFinalText.trim().toLowerCase();
+
+  // Re-run heuristics against the recovered text (not the incomplete buffer)
+  const isExtension =
+    queuedFinalLower.length > recoveredTextLower.length &&
+    recoveredTextLower.length > 0 &&
+    queuedFinalLower.startsWith(recoveredTextLower);
+
+  const isPrefix =
+    recoveredTextLower.length > queuedFinalLower.length &&
+    queuedFinalLower.length > 0 &&
+    recoveredTextLower.startsWith(queuedFinalLower);
+
+  const recoveredWords = recoveredTextLower.split(/\s+/).filter(w => w.length > 2);
+  const queuedWords = queuedFinalLower.split(/\s+/).filter(w => w.length > 2);
+  const sharedWords = recoveredWords.filter(w => queuedWords.includes(w));
+  const hasWordOverlap =
+    sharedWords.length >= Math.min(2, Math.floor(Math.min(recoveredWords.length, queuedWords.length) * 0.3));
+
+  const mightBeRelated = isExtension || isPrefix || hasWordOverlap;
+
+  console.log(`[RecoveryGate] Re-evaluating queued FINAL after recovery:`);
+  console.log(`[RecoveryGate]   Recovered text: "${recoveredText.substring(0, 60)}..."`);
+  console.log(`[RecoveryGate]   Queued FINAL: "${queuedFinalText.substring(0, 60)}..."`);
+  console.log(`[RecoveryGate]   Heuristics: isExtension=${isExtension}, isPrefix=${isPrefix}, hasWordOverlap=${hasWordOverlap}, mightBeRelated=${mightBeRelated}`);
+
+  if (mightBeRelated) {
+    // If recovered text already contains queued FINAL (prefix case), drop it as redundant
+    if (isPrefix) {
+      console.log(`[RecoveryGate] ✅ Queued FINAL is redundant (recovered text already contains it) - dropping`);
+      return { processed: true, merged: false };
+    }
+    
+    // Try merging with recovered final
+    const merged = partialTracker.mergeWithOverlap(recoveredText, queuedFinalText);
+    if (merged) {
+      console.log(`[RecoveryGate] ✅ Queued FINAL is related - merged with recovered text`);
+      console.log(`[RecoveryGate]   Merged result: "${merged.substring(0, 80)}..."`);
+      // The recovered final was already committed, so emit the merged (complete) version
+      // This provides the corrected/complete segment
+      processFinalText(merged, { forceFinal: true });
+      return { processed: true, merged: true };
+    } else {
+      // Merge failed but still related - append as continuation
+      const appended = (recoveredText + ' ' + queuedFinalText).trim();
+      console.log(`[RecoveryGate] ✅ Queued FINAL is related but merge failed - appending as continuation`);
+      console.log(`[RecoveryGate]   Appended result: "${appended.substring(0, 80)}..."`);
+      processFinalText(appended, { forceFinal: true });
+      return { processed: true, merged: false };
+    }
+  } else {
+    // Still unrelated - emit after recovered final (preserves ordering)
+    console.log(`[RecoveryGate] ⚠️ Queued FINAL still unrelated after recovery - emitting after recovered final`);
+    processFinalText(queuedFinalText, { forceFinal: false });
+    return { processed: true, merged: false };
+  }
+}
+
+/**
  * Handle host connection using CoreEngine
  * 
  * @param {WebSocket} clientWs - WebSocket connection for host
@@ -260,6 +334,11 @@ export async function handleHostConnection(clientWs, sessionId) {
   const syncForcedFinalBuffer = () => {
     forcedFinalBuffer = forcedCommitEngine.getForcedFinalBuffer();
   };
+  
+  // Queue for FINALs that arrive during forced-final recovery
+  // These are re-evaluated after recovery completes with the updated recovered text
+  let pendingFinalDuringRecovery = null;
+  let pendingFinalCapturedAt = 0;
   
   let pendingFinalization = null;
   const syncPendingFinalization = () => {
@@ -2611,6 +2690,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                     recoveryStartTime = Date.now();
                     nextFinalAfterRecovery = null; // Reset
                     
+                    // Clear any queued FINAL from previous recovery (new forced final means new segment)
+                    if (pendingFinalDuringRecovery) {
+                      console.log(`[RecoveryGate] Clearing queued FINAL - new forced final created`);
+                      pendingFinalDuringRecovery = null;
+                      pendingFinalCapturedAt = 0;
+                    }
+                    
                     // PHASE 8: Create forced final buffer using engine (for recovery tracking)
                     // Note: We've already committed the forced final above, so this buffer is just for recovery
                     forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp);
@@ -2797,12 +2883,13 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                         // CRITICAL: If audio recovery is in progress, wait for it to complete
                         // PHASE 8: Sync buffer and check recovery status
+                        let recoveredTextFromPromise = null;
                         syncForcedFinalBuffer();
                         if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress && forcedFinalBuffer.recoveryPromise) {
                           console.log('[HostMode] ⏳ Audio recovery still in progress, waiting for completion...');
                           try {
-                            const recoveredText = await forcedFinalBuffer.recoveryPromise;
-                            if (recoveredText && recoveredText.length > 0) {
+                            recoveredTextFromPromise = await forcedFinalBuffer.recoveryPromise;
+                            if (recoveredTextFromPromise && recoveredTextFromPromise.length > 0) {
                               console.log(`[HostMode] ✅ Audio recovery completed before timeout, text already updated`);
                             } else {
                               console.log(`[HostMode] ⚠️ Audio recovery completed but no text was recovered`);
@@ -2889,6 +2976,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         if (wasCommittedByRecovery) {
                           console.log('[HostMode] ⏭️ Skipping timeout commit - recovery already committed this forced final');
+                          
+                          // Re-evaluate any queued FINAL that arrived during recovery
+                          if (pendingFinalDuringRecovery) {
+                            console.log(`[RecoveryGate] Checking queued FINAL after recovery committed in timeout callback`);
+                            const queuedFinal = pendingFinalDuringRecovery;
+                            pendingFinalDuringRecovery = null; // Clear queue before processing
+                            pendingFinalCapturedAt = 0;
+                            
+                            // Use recovered text from promise if available, otherwise use finalTextToCommit
+                            const recoveredTextForReeval = recoveredTextFromPromise || finalTextToCommit || bufferedText;
+                            
+                            const result = reEvaluateQueuedFinalDuringRecovery({
+                              recoveredText: recoveredTextForReeval,
+                              queuedFinalText: queuedFinal.text,
+                              partialTracker,
+                              processFinalText
+                            });
+                            
+                            if (result.processed) {
+                              console.log(`[RecoveryGate] ✅ Processed queued FINAL (merged: ${result.merged})`);
+                            }
+                          }
+                          
                           // Clear buffer if it still exists
                           if (bufferStillExists) {
                             forcedCommitEngine.clearForcedFinalBuffer();
@@ -2947,6 +3057,25 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (forcedFinalBuffer) {
                           forcedFinalBuffer.pendingContinuationText = null;
                           forcedFinalBuffer.lastContinuationAt = null;
+                        }
+                        
+                        // Re-evaluate any queued FINAL that arrived during recovery
+                        if (pendingFinalDuringRecovery) {
+                          console.log(`[RecoveryGate] Checking queued FINAL after timeout commit`);
+                          const queuedFinal = pendingFinalDuringRecovery;
+                          pendingFinalDuringRecovery = null; // Clear queue before processing
+                          pendingFinalCapturedAt = 0;
+                          
+                          const result = reEvaluateQueuedFinalDuringRecovery({
+                            recoveredText: textToCommit,
+                            queuedFinalText: queuedFinal.text,
+                            partialTracker,
+                            processFinalText
+                          });
+                          
+                          if (result.processed) {
+                            console.log(`[RecoveryGate] ✅ Processed queued FINAL (merged: ${result.merged})`);
+                          }
                         }
                         
                         // ✅ Extract segmentId and forcedFinalSeqId from buffer if available
@@ -3051,16 +3180,33 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const mightBeRelated = isExtension || isPrefix || hasWordOverlap;
 
                     if (!mightBeRelated) {
-                      console.log('[HostMode] ✅ Forced final recovery in progress, but new FINAL is unrelated segment - processing immediately');
-                      console.log(`[HostMode]   Forced final: "${buffer.text?.substring(0, 50)}..."`);
-                      console.log(`[HostMode]   New FINAL (unrelated): "${transcriptText?.substring(0, 50)}..."`);
-                      console.log(`[HostMode]   Heuristics: isExtension=${isExtension}, isPrefix=${isPrefix}, hasWordOverlap=${hasWordOverlap}, mightBeRelated=${mightBeRelated}`);
-                      console.log(`[HostMode]   ⚡ FALLING THROUGH - will process transcriptText immediately without waiting for recovery`);
+                      // Safety valve: only queue if within 6 seconds of forced final start OR short (< 60 chars)
+                      const timeSinceForcedFinal = buffer.timestamp ? (Date.now() - buffer.timestamp) : 0;
+                      const isShortFinal = transcriptText.length < 60;
+                      const shouldQueue = timeSinceForcedFinal < 6000 || isShortFinal;
 
-                      // ✅ CRITICAL: Do NOT wait. Do NOT merge with forced-final. Just fall through and
-                      // let the normal FINAL handling commit transcriptText as its own segment.
-                      // (No return, no await, no touching forced buffer.)
-                      // The forced final will be handled by its own recovery promise and timeout independently.
+                      if (shouldQueue) {
+                        // Queue the FINAL that arrived during recovery and DO NOT emit it yet
+                        pendingFinalDuringRecovery = {
+                          text: transcriptText,
+                          meta,
+                          receivedAt: Date.now(),
+                        };
+                        pendingFinalCapturedAt = Date.now();
+                        console.log(`[RecoveryGate] Queued FINAL during recovery: "${transcriptText.substring(0, 60)}..."`);
+                        console.log(`[RecoveryGate]   Forced final: "${buffer.text?.substring(0, 50)}..."`);
+                        console.log(`[RecoveryGate]   Heuristics: isExtension=${isExtension}, isPrefix=${isPrefix}, hasWordOverlap=${hasWordOverlap}, mightBeRelated=${mightBeRelated}`);
+                        console.log(`[RecoveryGate]   Will re-evaluate after recovery completes with updated text`);
+                        return; // <- critical: do not fall through
+                      } else {
+                        // Outside safety window - process immediately as before
+                        console.log('[HostMode] ✅ Forced final recovery in progress, but new FINAL is unrelated segment - processing immediately');
+                        console.log(`[HostMode]   Forced final: "${buffer.text?.substring(0, 50)}..."`);
+                        console.log(`[HostMode]   New FINAL (unrelated): "${transcriptText?.substring(0, 50)}..."`);
+                        console.log(`[HostMode]   Heuristics: isExtension=${isExtension}, isPrefix=${isPrefix}, hasWordOverlap=${hasWordOverlap}, mightBeRelated=${mightBeRelated}`);
+                        console.log(`[HostMode]   ⚡ FALLING THROUGH - will process transcriptText immediately without waiting for recovery`);
+                        // Continue to normal processing below
+                      }
                     } else {
                       console.log('[HostMode] ⏳ Forced final recovery in progress - new FINAL appears related, waiting for completion (maintaining order)...');
                       console.log(`[HostMode]   Forced final: "${buffer.text?.substring(0, 50)}..."`);
@@ -3111,6 +3257,25 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Flush buffered normal-pipeline partial after recovery completes (with deduplication)
                         flushBufferedNormalPartial(forcedTextToCommit);
 
+                        // Re-evaluate any queued FINAL that arrived during recovery
+                        if (pendingFinalDuringRecovery) {
+                          console.log(`[RecoveryGate] Checking queued FINAL after recovery completed in related branch`);
+                          const queuedFinal = pendingFinalDuringRecovery;
+                          pendingFinalDuringRecovery = null; // Clear queue before processing
+                          pendingFinalCapturedAt = 0;
+                          
+                          const result = reEvaluateQueuedFinalDuringRecovery({
+                            recoveredText: forcedTextToCommit,
+                            queuedFinalText: queuedFinal.text,
+                            partialTracker,
+                            processFinalText
+                          });
+                          
+                          if (result.processed) {
+                            console.log(`[RecoveryGate] ✅ Processed queued FINAL (merged: ${result.merged})`);
+                          }
+                        }
+
                         console.log(`[HostMode] 📝 STEP 2: Forced final committed, now continuing with new FINAL: "${transcriptText.substring(0, 60)}..."`);
                         // ✅ now continue: transcriptText will be processed by normal FINAL path below
                         recoveryStartTime = 0;
@@ -3125,6 +3290,17 @@ export async function handleHostConnection(clientWs, sessionId) {
                         forcedCommitEngine.clearForcedFinalBufferTimeout();
                         forcedCommitEngine.clearForcedFinalBuffer();
                         syncForcedFinalBuffer();
+
+                        // Process any queued FINAL normally if recovery failed
+                        if (pendingFinalDuringRecovery) {
+                          console.log(`[RecoveryGate] Recovery failed - processing queued FINAL normally`);
+                          const queuedFinal = pendingFinalDuringRecovery;
+                          pendingFinalDuringRecovery = null;
+                          pendingFinalCapturedAt = 0;
+                          // Process the queued FINAL as a normal FINAL (will be handled by normal path below)
+                          transcriptText = queuedFinal.text;
+                          // Note: meta is preserved in queuedFinal.meta if needed
+                        }
 
                         recoveryStartTime = 0;
                         nextFinalAfterRecovery = null;
