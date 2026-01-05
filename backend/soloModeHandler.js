@@ -117,6 +117,28 @@ export async function handleSoloMode(clientWs) {
     return rttTracker.getAdaptiveLookahead();
   };
   
+  /**
+   * Check if a forced final commit should be suppressed because recovery expects a longer text
+   * @param {Object} forcedFinalBuffer - The forced final buffer object
+   * @param {string} textToCommit - The text we're about to commit
+   * @returns {boolean} True if commit should be suppressed
+   */
+  const shouldSuppressForcedFinalCommit = (forcedFinalBuffer, textToCommit) => {
+    if (!forcedFinalBuffer?.recoveryInProgress) {
+      return false; // No recovery in progress, allow commit
+    }
+    
+    // If recovery is in progress, check if textToCommit is a prefix of buffer.text
+    // The buffer.text represents what we're waiting for recovery to complete
+    const bufferText = forcedFinalBuffer.text || '';
+    if (bufferText.length > textToCommit.length && bufferText.startsWith(textToCommit.trim())) {
+      console.log(`[RecoveryGate] ⏸️ Suppressing prefix-only forced final: "${textToCommit}" (buffer expects: "${bufferText.substring(0, 60)}...")`);
+      return true; // Suppress - recovery expects longer text
+    }
+    
+    return false; // Allow commit
+  };
+  
   // PHASE 3: Send message with sequence info (uses Timeline Offset Tracker)
   // Helper: Send message with sequence info
   const sendWithSequence = (messageData, isPartial = true) => {
@@ -1094,6 +1116,7 @@ export async function handleSoloMode(clientWs) {
                             if (recoveredMerged) {
                               console.log('[SoloMode] 🔁 Merging recovered text with extending partial and committing');
                               forcedCommitEngine.clearForcedFinalBufferTimeout();
+                              // Extended text is longer than buffer, so no suppression needed
                               processFinalText(recoveredMerged, { forceFinal: true });
                               forcedCommitEngine.clearForcedFinalBuffer();
                               syncForcedFinalBuffer();
@@ -1109,7 +1132,18 @@ export async function handleSoloMode(clientWs) {
                       // No recovery or recovery completed - merge and commit normally
                       console.log('[SoloMode] 🔁 New partial extends forced final - merging and committing');
                       forcedCommitEngine.clearForcedFinalBufferTimeout();
-                      const mergedFinal = mergeWithOverlap(forcedCommitEngine.getForcedFinalBuffer().text, transcriptText);
+                      syncForcedFinalBuffer();
+                      const baseText = forcedFinalBuffer?.text || forcedCommitEngine.getForcedFinalBuffer().text;
+                      const mergedFinal = mergeWithOverlap(baseText, transcriptText);
+                      
+                      // 🚨 RECOVERY GATE: Only suppress if we're committing the original buffer text
+                      // (extending partials are OK - they're not prefixes since they're longer)
+                      if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, baseText)) {
+                        console.log('[SoloMode] ⏸️ Suppressing forced final commit - partial extends it, but recovery expects longer');
+                        // Still commit the extended text (it's longer than buffer) - this is defensive check
+                        // Extended text should not be suppressed since it's not a prefix
+                      }
+                      
                       if (mergedFinal) {
                         processFinalText(mergedFinal, { forceFinal: true });
                       } else {
@@ -2216,6 +2250,13 @@ export async function handleSoloMode(clientWs) {
                               const buffer = forcedCommitEngine.getForcedFinalBuffer();
                               const forcedFinalText = buffer.text;
                               
+                              // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+                              syncForcedFinalBuffer();
+                              if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+                                console.log('[SoloMode] ⏸️ Suppressing forced final commit (empty audio) - waiting for recovery to complete');
+                                return; // Skip commit - let recovery complete
+                              }
+                              
                               // Mark as committed to prevent timeout from also committing
                               if (forcedFinalBuffer) {
                                 forcedFinalBuffer.committedByRecovery = true;
@@ -2312,6 +2353,14 @@ export async function handleSoloMode(clientWs) {
                           // CRITICAL: bufferedText is captured in closure, so it's always available even if buffer is cleared
                           const textToCommit = finalTextToCommit || bufferedText;
                           
+                          // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+                          syncForcedFinalBuffer();
+                          if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, textToCommit)) {
+                            console.log('[SoloMode] ⏸️ Suppressing forced final commit - waiting for recovery to complete');
+                            // Don't clear buffer - let recovery complete and commit the full text
+                            return; // Skip commit
+                          }
+                          
                           if (!textToCommit || textToCommit.length === 0) {
                             console.error('[SoloMode] ❌ No text to commit - forced final text is empty!');
                             // Clear buffer if it still exists
@@ -2382,6 +2431,7 @@ export async function handleSoloMode(clientWs) {
                             forcedFinalBuffer.committedByRecovery = true;
                           }
                           
+                          // Recovery completed with text - this is the full recovered text, not a prefix
                           processFinalText(recoveredText, { forceFinal: true });
                           forcedCommitEngine.clearForcedFinalBuffer();
                           syncForcedFinalBuffer();
@@ -2407,6 +2457,14 @@ export async function handleSoloMode(clientWs) {
                           
                           // Commit the forced final (from buffer, since recovery found nothing)
                           const forcedFinalText = buffer.text;
+                          
+                          // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+                          // Note: Recovery already completed (found nothing), so this check is defensive
+                          if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+                            console.log('[SoloMode] ⏸️ Suppressing forced final commit (recovery found nothing) - but recovery is complete, allowing commit');
+                            // Recovery is complete, so allow commit even if it's a prefix (recovery found nothing)
+                          }
+                          
                           processFinalText(forcedFinalText, { forceFinal: true });
                           
                           // Now merge with new FINAL and process it
@@ -3050,6 +3108,16 @@ export async function handleSoloMode(clientWs) {
             
             // Commit the forced final immediately
             const forcedFinalText = buffer.text;
+            
+            // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+            syncForcedFinalBuffer();
+            if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+              console.log('[SoloMode] ⏸️ Suppressing forced final commit (stream end) - waiting for recovery to complete');
+              // Note: On stream end, we might want to wait a bit longer for recovery
+              // But for now, suppress to maintain invariant
+              return; // Skip commit
+            }
+            
             processFinalText(forcedFinalText, { forceFinal: true });
             
             // Clear the buffer
@@ -3113,6 +3181,16 @@ export async function handleSoloMode(clientWs) {
       
       // Commit the forced final immediately
       const forcedFinalText = buffer.text;
+      
+      // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+      syncForcedFinalBuffer();
+      if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+        console.log('[SoloMode] ⏸️ Suppressing forced final commit (connection close) - waiting for recovery to complete');
+        // Note: On connection close, we might want to wait a bit longer for recovery
+        // But for now, suppress to maintain invariant
+        return; // Skip commit
+      }
+      
       processFinalText(forcedFinalText, { forceFinal: true });
       
       // Clear the buffer

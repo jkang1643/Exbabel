@@ -71,5 +71,3 @@ If `resultEndTime` is missing from a response:
 - This is safer than clearing all chunks or clearing nothing
 
 ## Testing Considerations
-
-- Verify `resultEndTime` is present in actual Google Speech responses

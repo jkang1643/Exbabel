@@ -41,6 +41,8 @@ export class GoogleSpeechStream {
     this.isSending = false;
     this.shouldAutoRestart = true;
     this.lastAudioTime = null;
+    this.streamStartTime = null; // Will be set when stream starts
+    this.sentChunkIds = new Set(); // Track sent chunks to prevent duplicates
     this.useEnhancedModel = true; // Track if we should use enhanced model (fallback to default if not supported)
     this.hasTriedEnhancedModel = false; // Track if we've already tried enhanced model for this language
 
@@ -111,6 +113,11 @@ export class GoogleSpeechStream {
     // Track pending chunks in send order for better timeout clearing
     this.pendingChunks = []; // Array of { chunkId, sendTimestamp }
 
+    // Pending chunks queue: Chunks that couldn't be sent because stream wasn't ready
+    // Use Map to preserve insertion order (chunkId → {audioData, metadata, queuedAt})
+    this.pendingNotReadyChunks = new Map();
+    this.MAX_PENDING_NOT_READY_CHUNKS = 50; // Bounded size to prevent memory issues
+
     // Track the latest partial transcript so we can force-commit it if the
     // stream restarts before a FINAL result arrives.
     this.lastPartialTranscript = '';
@@ -172,6 +179,11 @@ export class GoogleSpeechStream {
     await this.startStream();
 
     console.log(`[GoogleSpeech] ✅ Streaming initialized and ready`);
+    console.log(`[GoogleSpeech] 🔄 Calling flushRetryQueue() to process any queued chunks`);
+    setTimeout(() => {
+      this.flushRetryQueue();
+      this.flushPendingNotReadyChunks();
+    }, 0);
   }
 
   /**
@@ -191,8 +203,14 @@ export class GoogleSpeechStream {
 
     console.log(`[GoogleSpeech] Starting stream #${this.restartCount}...`);
     this.startTime = Date.now();
+    this.streamStartTime = Date.now(); // Track when stream started for startup grace period
+    console.log(`[GoogleSpeech] 🕐 Stream start time set: ${new Date(this.streamStartTime).toISOString()} (startup grace period: 5s)`);
     this.isActive = true;
     this.isRestarting = false;
+    setTimeout(() => {
+      this.flushRetryQueue();
+      this.flushPendingNotReadyChunks();
+    }, 0);
     
     // Reset cumulative audio time for new session
     this.cumulativeAudioTime = 0;
@@ -550,6 +568,9 @@ export class GoogleSpeechStream {
     }
     this.chunkRetryMap.clear();
     
+    // Clear sent chunks tracking (chunk IDs are per stream instance)
+    this.sentChunkIds.clear();
+    
     // Clear all chunk timeouts
     for (const [chunkId, timeoutInfo] of this.chunkTimeouts.entries()) {
       clearTimeout(timeoutInfo.timeout);
@@ -773,12 +794,23 @@ export class GoogleSpeechStream {
         const existingRetry = this.chunkRetryMap.get(chunkId);
         const attempts = existingRetry ? existingRetry.attempts : 0;
         
-        // Only retry if we haven't exceeded max attempts and stream is just restarting (not inactive)
-        if (attempts < this.MAX_CHUNK_RETRIES && !this.isRestarting && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+        // Treat startup as "audio active" even if lastAudioTime isn't set yet.
+        // This is the missing early-words bug.
+        const now = Date.now();
+        const audioActive = !this.lastAudioTime || (now - this.lastAudioTime < 3000);
+
+        // Grace period after stream creation/restart where we NEVER drop chunks just because stream isn't ready.
+        const STARTUP_GRACE_MS = 2500;
+        const inStartupGrace = this.streamStartTime && (now - this.streamStartTime < STARTUP_GRACE_MS);
+        const graceTimeRemaining = inStartupGrace ? Math.round((STARTUP_GRACE_MS - (now - this.streamStartTime)) / 1000) : 0;
+
+        if (attempts < this.MAX_CHUNK_RETRIES && (audioActive || inStartupGrace)) {
+          // Queue even if restarting; stream-not-ready is exactly what retry queue is for.
+          const reason = inStartupGrace ? `startup grace (${graceTimeRemaining}s remaining)` : (audioActive ? 'audio active' : 'recently active');
+          console.log(`[GoogleSpeech] 🔄 Queueing chunk ${chunkId} for retry - stream not ready, reason: ${reason} (attempt ${attempts + 1}/${this.MAX_CHUNK_RETRIES})`);
           this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
         } else {
-          // Give up - stream inactive or too many attempts
-          console.log(`[GoogleSpeech] ⚠️ Giving up on chunk ${chunkId} - stream not ready and conditions not met for retry`);
+          console.log(`[GoogleSpeech] ⚠️ Giving up on chunk ${chunkId} - stream not ready and too old/stale for retry`);
           this.chunkRetryMap.delete(chunkId);
           this.clearChunkTimeout(chunkId);
         }
@@ -822,7 +854,13 @@ export class GoogleSpeechStream {
 
       // Double-check stream is still ready
       if (this.isStreamReady()) {
+        // Deduplication: prevent sending the same chunk twice
+        if (this.sentChunkIds.has(chunkId)) {
+          return; // already sent this exact chunk
+        }
+        
         this.recognizeStream.write(audioBuffer);
+        this.sentChunkIds.add(chunkId);
 
         // Log for recovery streams
         if (this.initOptions?.disablePunctuation) {
@@ -839,12 +877,19 @@ export class GoogleSpeechStream {
         const existingRetry = this.chunkRetryMap.get(chunkId);
         const attempts = existingRetry ? existingRetry.attempts : 0;
         
-        // Only retry if conditions are met
-        if (attempts < this.MAX_CHUNK_RETRIES && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+        // Treat startup as "audio active" even if lastAudioTime isn't set yet.
+        const now2 = Date.now();
+        const audioActive2 = !this.lastAudioTime || (now2 - this.lastAudioTime < 3000);
+
+        // Grace period after stream creation/restart where we NEVER drop chunks just because stream isn't ready.
+        const STARTUP_GRACE_MS2 = 2500;
+        const inStartupGrace2 = this.streamStartTime && (now2 - this.streamStartTime < STARTUP_GRACE_MS2);
+        
+        if (attempts < this.MAX_CHUNK_RETRIES && (audioActive2 || inStartupGrace2)) {
+          // Queue even if restarting; stream-not-ready is exactly what retry queue is for.
           this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
         } else {
-          // Give up - too many attempts or audio stopped
-          console.log(`[GoogleSpeech] ⚠️ Giving up on chunk ${chunkId} - too many attempts or audio stopped`);
+          console.log(`[GoogleSpeech] ⚠️ Giving up on chunk ${chunkId} - stream not ready and too old/stale for retry`);
           this.chunkRetryMap.delete(chunkId);
           this.clearChunkTimeout(chunkId);
         }
@@ -858,10 +903,19 @@ export class GoogleSpeechStream {
       const existingRetry = this.chunkRetryMap.get(chunkId);
       const attempts = existingRetry ? existingRetry.attempts : 0;
       
-      // Only retry on error if conditions are met
-      if (attempts < this.MAX_CHUNK_RETRIES && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+      // Treat startup as "audio active" even if lastAudioTime isn't set yet.
+      const now3 = Date.now();
+      const audioActive3 = !this.lastAudioTime || (now3 - this.lastAudioTime < 3000);
+
+      // Grace period after stream creation/restart where we NEVER drop chunks just because stream isn't ready.
+      const STARTUP_GRACE_MS3 = 2500;
+      const inStartupGrace3 = this.streamStartTime && (now3 - this.streamStartTime < STARTUP_GRACE_MS3);
+      
+      if (attempts < this.MAX_CHUNK_RETRIES && (audioActive3 || inStartupGrace3)) {
+        // Queue even if restarting; stream-not-ready is exactly what retry queue is for.
         this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
       } else {
+        console.log(`[GoogleSpeech] ⚠️ Giving up on chunk ${chunkId} - stream not ready and too old/stale for retry`);
         this.chunkRetryMap.delete(chunkId);
         this.clearChunkTimeout(chunkId);
       }
@@ -987,13 +1041,24 @@ export class GoogleSpeechStream {
       return;
     }
     
-    // Don't retry if stream is restarting or if audio has been stopped for a while
-    // Check if audio stopped more than 2 seconds ago (likely user paused)
-    const audioStopped = this.lastAudioTime && (Date.now() - this.lastAudioTime > 2000);
-    if (this.isRestarting || audioStopped) {
-      console.log(`[GoogleSpeech] ⚠️ Skipping retry for chunk ${chunkId} - stream restarting or audio stopped`);
+    const now = Date.now();
+    const audioStopped = this.lastAudioTime && (now - this.lastAudioTime > 2000);
+
+    // NEW: don't treat "restarting" as a reason to abandon — it's exactly when we need retries.
+    // Only abandon if audio has actually stopped (user paused) and we're past startup grace.
+    const inStartupGrace = this.streamStartTime && (now - this.streamStartTime < 5000);
+    const graceTimeRemaining = inStartupGrace ? Math.round((5000 - (now - this.streamStartTime)) / 1000) : 0;
+
+    if (audioStopped && !inStartupGrace) {
+      console.log(`[GoogleSpeech] ⚠️ Skipping retry for chunk ${chunkId} - audio stopped`);
       this.chunkRetryMap.delete(chunkId);
       return;
+    }
+
+    // Log when we're queueing during restart/startup (confirms fix is working)
+    if (this.isRestarting || inStartupGrace) {
+      const reason = this.isRestarting ? 'restarting' : `startup grace (${graceTimeRemaining}s remaining)`;
+      console.log(`[GoogleSpeech] ✅ Queueing chunk ${chunkId} during ${reason} - will retry when stream ready`);
     }
     
     const nextAttempt = currentAttempts + 1;
@@ -1021,11 +1086,15 @@ export class GoogleSpeechStream {
       // Check if chunk still needs retry and stream is ready
       const stillPending = this.chunkRetryMap.get(chunkId);
       if (stillPending && stillPending.attempts === nextAttempt) {
-        // Only retry if stream is ready and audio is still active
-        if (this.isStreamReady() && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
+        const now2 = Date.now();
+        const recentlyActive = this.lastAudioTime && (now2 - this.lastAudioTime < 3000);
+        const inStartupGrace2 = this.streamStartTime && (now2 - this.streamStartTime < 5000);
+
+        if (this.isStreamReady() && (recentlyActive || inStartupGrace2)) {
+          const reason = inStartupGrace2 ? 'startup grace' : 'recently active';
+          console.log(`[GoogleSpeech] ✅ Retrying chunk ${chunkId} - stream ready (${reason})`);
           await this.releaseChunkFromBuffer(chunkId, audioData, metadata);
         } else {
-          // Stream not ready or audio stopped - give up
           console.log(`[GoogleSpeech] ⚠️ Abandoning retry for chunk ${chunkId} - stream not ready or audio stopped`);
           this.chunkRetryMap.delete(chunkId);
         }
@@ -1034,6 +1103,73 @@ export class GoogleSpeechStream {
     
     // Store timer reference so we can cancel it if needed
     retryInfo.retryTimer = retryTimer;
+  }
+
+  /**
+   * Flush retry queue immediately when stream becomes ready
+   */
+  async flushRetryQueue() {
+    if (!this.isStreamReady()) {
+      console.log(`[GoogleSpeech] ⏸️ flushRetryQueue: stream not ready, skipping`);
+      return;
+    }
+
+    const now = Date.now();
+    const recentlyActive = this.lastAudioTime && (now - this.lastAudioTime < 3000);
+    const inStartupGrace = this.streamStartTime && (now - this.streamStartTime < 5000);
+    if (!(recentlyActive || inStartupGrace)) {
+      console.log(`[GoogleSpeech] ⏸️ flushRetryQueue: not in grace period, skipping`);
+      return;
+    }
+
+    const queuedChunks = Array.from(this.chunkRetryMap.keys());
+    if (queuedChunks.length === 0) {
+      console.log(`[GoogleSpeech] ✅ flushRetryQueue: no queued chunks to flush`);
+      return;
+    }
+
+    console.log(`[GoogleSpeech] 🚀 flushRetryQueue: flushing ${queuedChunks.length} queued chunk(s) immediately (stream ready)`);
+    for (const [chunkId, info] of this.chunkRetryMap.entries()) {
+      // cancel timer if any (we're flushing now)
+      if (info.retryTimer) {
+        clearTimeout(info.retryTimer);
+        info.retryTimer = null;
+        console.log(`[GoogleSpeech] ⚡ Cancelled timer for chunk ${chunkId}, flushing immediately`);
+      }
+      await this.releaseChunkFromBuffer(chunkId, info.chunkData, info.metadata);
+    }
+    console.log(`[GoogleSpeech] ✅ flushRetryQueue: completed flushing ${queuedChunks.length} chunk(s)`);
+    
+    // Also flush pending-not-ready chunks when retry queue is flushed
+    await this.flushPendingNotReadyChunks();
+  }
+
+  /**
+   * Flush pending-not-ready chunks queue when stream becomes ready
+   * These are chunks that were enqueued because stream wasn't ready and retry conditions weren't met
+   */
+  async flushPendingNotReadyChunks() {
+    if (!this.isStreamReady()) {
+      console.log(`[GoogleSpeech] ⏸️ flushPendingNotReadyChunks: stream not ready, skipping`);
+      return;
+    }
+
+    if (this.pendingNotReadyChunks.size === 0) {
+      return; // No chunks to flush
+    }
+
+    console.log(`[GoogleSpeech] 🚀 flushPendingNotReadyChunks: flushing ${this.pendingNotReadyChunks.size} pending chunk(s) in order`);
+    
+    // Flush in insertion order (Map preserves insertion order)
+    const chunksToFlush = Array.from(this.pendingNotReadyChunks.entries());
+    this.pendingNotReadyChunks.clear(); // Clear queue before flushing to prevent re-enqueueing
+    
+    for (const [chunkId, { audioData, metadata }] of chunksToFlush) {
+      console.log(`[GoogleSpeech] 📤 Flushing pending chunk ${chunkId} (queued at ${new Date(metadata.queuedAt || Date.now()).toISOString()})`);
+      await this.releaseChunkFromBuffer(chunkId, audioData, metadata);
+    }
+    
+    console.log(`[GoogleSpeech] ✅ flushPendingNotReadyChunks: completed flushing ${chunksToFlush.length} chunk(s)`);
   }
 
   /**

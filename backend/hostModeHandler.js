@@ -104,6 +104,28 @@ export async function handleHostConnection(clientWs, sessionId) {
   const getAdaptiveLookahead = () => {
     return rttTracker.getAdaptiveLookahead();
   };
+  
+  /**
+   * Check if a forced final commit should be suppressed because recovery expects a longer text
+   * @param {Object} forcedFinalBuffer - The forced final buffer object
+   * @param {string} textToCommit - The text we're about to commit
+   * @returns {boolean} True if commit should be suppressed
+   */
+  const shouldSuppressForcedFinalCommit = (forcedFinalBuffer, textToCommit) => {
+    if (!forcedFinalBuffer?.recoveryInProgress) {
+      return false; // No recovery in progress, allow commit
+    }
+    
+    // If recovery is in progress, check if textToCommit is a prefix of buffer.text
+    // The buffer.text represents what we're waiting for recovery to complete
+    const bufferText = forcedFinalBuffer.text || '';
+    if (bufferText.length > textToCommit.length && bufferText.startsWith(textToCommit.trim())) {
+      console.log(`[RecoveryGate] ⏸️ Suppressing prefix-only forced final: "${textToCommit}" (buffer expects: "${bufferText.substring(0, 60)}...")`);
+      return true; // Suppress - recovery expects longer text
+    }
+    
+    return false; // Allow commit
+  };
 
   // Handle client messages
   clientWs.on('message', async (msg) => {
@@ -1084,7 +1106,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // Partial extends the forced final - merge and commit
                       console.log('[HostMode] 🔁 New partial extends forced final - merging and committing');
                       forcedCommitEngine.clearForcedFinalBufferTimeout();
-                      const mergedFinal = partialTracker.mergeWithOverlap(buffer.text, transcriptText);
+                      syncForcedFinalBuffer();
+                      const baseText = forcedFinalBuffer?.text || buffer.text;
+                      const mergedFinal = partialTracker.mergeWithOverlap(baseText, transcriptText);
+                      
+                      // 🚨 RECOVERY GATE: Only suppress if we're committing the original buffer text
+                      // (extending partials are OK - they're not prefixes since they're longer)
+                      if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, baseText)) {
+                        console.log('[HostMode] ⏸️ Suppressing forced final commit - partial extends it, but recovery expects longer');
+                        // Still commit the extended text (it's longer than buffer) - this is defensive check
+                        // Extended text should not be suppressed since it's not a prefix
+                      }
+                      
                       if (mergedFinal) {
                         processFinalText(mergedFinal, { forceFinal: true });
                       } else {
@@ -1123,7 +1156,17 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // No recovery in progress and partial is clearly unrelated - commit forced final separately
                         console.log('[HostMode] 🔀 New segment detected - committing forced final separately');
                         forcedCommitEngine.clearForcedFinalBufferTimeout();
-                        processFinalText(buffer.text, { forceFinal: true });
+                        syncForcedFinalBuffer();
+                        const forcedFinalText = buffer.text;
+                        
+                        // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+                        if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+                          console.log('[HostMode] ⏸️ Suppressing forced final commit (new segment) - waiting for recovery to complete');
+                          // Don't clear buffer - let recovery complete
+                          return; // Skip commit
+                        }
+                        
+                        processFinalText(forcedFinalText, { forceFinal: true });
                         forcedCommitEngine.clearForcedFinalBuffer();
                         syncForcedFinalBuffer();
                         // Continue processing the new partial as a new segment
@@ -2074,6 +2117,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                   const endsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
                   if (endsWithPunctuation) {
                     console.log('[HostMode] ✅ Forced final already complete - committing immediately');
+                    
+                    // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+                    syncForcedFinalBuffer();
+                    if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, transcriptText)) {
+                      console.log('[HostMode] ⏸️ Suppressing forced final commit (complete) - waiting for recovery to complete');
+                      // Don't commit - let recovery complete
+                      return; // Skip commit
+                    }
+                    
                     processFinalText(transcriptText, { forceFinal: true });
                     // CRITICAL: Reset partial tracker after forced final is committed to prevent cross-segment contamination
                     partialTracker.reset();

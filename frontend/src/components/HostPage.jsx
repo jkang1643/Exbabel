@@ -484,6 +484,51 @@ export function HostPage({ onBackToHome }) {
                 return;
               }
               
+              // CRITICAL: If forced final extends a short prior history entry (e.g. "Be in town."),
+              // replace the older entry instead of skipping as duplicate.
+              if (isForcedFinal) {
+                const currentTranscript = transcriptRef.current || [];
+                const lastIdx = currentTranscript.length - 1;
+                if (lastIdx >= 0) {
+                  const lastEntry = currentTranscript[lastIdx];
+                  const lastText = lastEntry?.text || '';
+                  
+                  if (lastText.length > 0) {
+                    // Use same normalization as fallback for consistency
+                    const normalizeForComparison = (text) => text.toLowerCase().replace(/[.,!?;:'"]/g, ' ').replace(/\s+/g, ' ').trim();
+                    const finalNormalized = normalizeForComparison(fullFinalText);
+                    const lastNormalized = normalizeForComparison(lastText);
+                    
+                    // Check if final contains the last entry and is meaningfully longer
+                    if (lastNormalized.length > 0 && 
+                        finalNormalized.includes(lastNormalized) && 
+                        finalNormalized.length > lastNormalized.length + 10) {
+                      console.log(`[HostPage] 🔄 Forced final extends short entry - replacing (last: "${lastText.substring(0, 50)}..." → final: "${fullFinalText.substring(0, 50)}...")`);
+                      
+                      flushSync(() => {
+                        setTranscript(prev => {
+                          const next = [...prev];
+                          if (next[lastIdx]) {
+                            next[lastIdx] = {
+                              ...next[lastIdx],
+                              text: fullFinalText,
+                              timestamp: message.timestamp || Date.now(),
+                              seqId: finalSeqId
+                            };
+                            transcriptRef.current = next.slice(-50);
+                            return next.slice(-50);
+                          }
+                          return prev.slice(-50);
+                        });
+                      });
+                      setCurrentTranscript('');
+                      console.log(`[HostPage] ✅ Replaced short entry with forced final`);
+                      return; // IMPORTANT: don't run processFinal/dedupe paths
+                    }
+                  }
+                }
+              }
+              
               // CRITICAL: Check if this final extends the last partial text (same as solo mode)
               // If it does, we need to prevent duplication by marking the partial as already flushed
               const lastPartialText = lastPartialTextRef.current.trim();

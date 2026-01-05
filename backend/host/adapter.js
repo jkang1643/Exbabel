@@ -33,6 +33,52 @@ function normalizeForCompare(s = '') {
 }
 
 /**
+ * Check if a normal FINAL supersedes (overlaps significantly with) a forced-final buffer
+ * @param {string} normalFinalText - Normal FINAL text that arrived during recovery
+ * @param {string} forcedFinalText - Forced-final buffer text
+ * @returns {boolean} True if normal FINAL contains forced-final as prefix/subsequence with high overlap
+ */
+function checkForcedFinalSuperseded(normalFinalText, forcedFinalText) {
+  if (!normalFinalText || !forcedFinalText) {
+    return false;
+  }
+  
+  const normalizedNormal = normalizeForCompare(normalFinalText);
+  const normalizedForced = normalizeForCompare(forcedFinalText);
+  
+  if (normalizedForced.length === 0) {
+    return false;
+  }
+  
+  // Check if normalized normal FINAL contains normalized forced-final as prefix
+  // Use high overlap threshold: at least 80% of forced-final length must match
+  const minOverlapLength = Math.floor(normalizedForced.length * 0.8);
+  
+  if (normalizedNormal.length < minOverlapLength) {
+    return false;
+  }
+  
+  // Check if normalized normal FINAL starts with normalized forced-final (prefix match)
+  if (normalizedNormal.startsWith(normalizedForced)) {
+    return true;
+  }
+  
+  // Also check if normalized forced-final is a subsequence within normalized normal FINAL
+  // (for cases where there might be minor word order differences)
+  if (normalizedNormal.includes(normalizedForced)) {
+    return true;
+  }
+  
+  // Check prefix overlap: if first 80% of forced-final matches start of normal FINAL
+  const forcedPrefix = normalizedForced.substring(0, minOverlapLength);
+  if (normalizedNormal.startsWith(forcedPrefix)) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
  * Deduplicate buffered normal partial against committed forced-final text
  * Returns remainder text that extends beyond the forced-final
  * @param {string} bufferedText - Buffered normal partial text
@@ -270,6 +316,28 @@ function reEvaluateQueuedFinalDuringRecovery({ recoveredText, queuedFinalText, p
     processFinalText(queuedFinalText, { forceFinal: false });
     return { processed: true, merged: false };
   }
+}
+
+/**
+ * Check if a forced final commit should be suppressed because recovery expects a longer text
+ * @param {Object} forcedFinalBuffer - The forced final buffer object
+ * @param {string} textToCommit - The text we're about to commit
+ * @returns {boolean} True if commit should be suppressed
+ */
+function shouldSuppressForcedFinalCommit(forcedFinalBuffer, textToCommit) {
+  if (!forcedFinalBuffer?.recoveryInProgress) {
+    return false; // No recovery in progress, allow commit
+  }
+  
+  // If recovery is in progress, check if textToCommit is a prefix of buffer.text
+  // The buffer.text represents what we're waiting for recovery to complete
+  const bufferText = forcedFinalBuffer.text || '';
+  if (bufferText.length > textToCommit.length && bufferText.startsWith(textToCommit.trim())) {
+    console.log(`[RecoveryGate] ⏸️ Suppressing prefix-only forced final: "${textToCommit}" (buffer expects: "${bufferText.substring(0, 60)}...")`);
+    return true; // Suppress - recovery expects longer text
+  }
+  
+  return false; // Allow commit
 }
 
 /**
@@ -519,6 +587,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                 
                 const buffered = bufferedNormalPartialDuringRecovery;
                 bufferedNormalPartialDuringRecovery = null; // Clear buffer
+                
+                // STRICT PREFIX CHECK: Only flush if buffered text is a true continuation
+                // (strict prefix-extension) of the committed forced-final text
+                const committedBase = committedForcedFinalText || '';
+                const bufferedText = buffered.text;
+                
+                if (committedBase && bufferedText) {
+                  const normalizedCommitted = normalizeForCompare(committedBase);
+                  const normalizedBuffered = normalizeForCompare(bufferedText);
+                  
+                  // Only proceed if buffered text is a strict prefix-extension of committed text
+                  if (!normalizedBuffered.startsWith(normalizedCommitted)) {
+                    // Buffered text is NOT a continuation - it's a new segment
+                    // Skip flush to prevent emitting garbage remainders that overwrite the UI
+                    const snippet = bufferedText.substring(0, 60);
+                    console.log(`[RecoveryGate] Skip flush; buffered is not an extension of committed forced-final (buffered: "${snippet}...", committed: "${committedBase.substring(0, 60)}...")`);
+                    // Clear UI-only overlay after recovery completes
+                    sendLivePartial('', { clear: true, recoveryEpoch, recoveryInProgress: false });
+                    return;
+                  }
+                }
                 
                 // Dedupe buffered text against committed forced-final
                 const dedupeResult = dedupeBufferedPartialAgainstFinal(buffered.text, committedForcedFinalText || '');
@@ -1468,6 +1557,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                       
                       // Get committed text before processing
                       const committedText = mergedFinal || extension.extendedText;
+                      
+                      // 🚨 RECOVERY GATE: Only suppress if we're committing the original buffer text
+                      // (extending partials are OK - they're not prefixes since they're longer)
+                      syncForcedFinalBuffer();
+                      if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, baseText)) {
+                        console.log('[HostMode] ⏸️ Suppressing forced final commit - partial extends it, but recovery expects longer');
+                        // Still commit the extended text (it's longer than buffer) - this is defensive check
+                        // Extended text should not be suppressed since it's not a prefix
+                      }
+                      
                       try {
                         if (mergedFinal) {
                           processFinalText(mergedFinal, { forceFinal: true });
@@ -2851,6 +2950,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                             const buffer = forcedCommitEngine.getForcedFinalBuffer();
                             const forcedFinalText = buffer.text;
                             
+                            // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+                            syncForcedFinalBuffer();
+                            if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+                              console.log('[HostMode] ⏸️ Suppressing forced final commit (empty audio) - waiting for recovery to complete');
+                              return; // Skip commit - let recovery complete
+                            }
+                            
                             // Mark as committed to prevent timeout from also committing
                             if (forcedFinalBuffer) {
                               forcedFinalBuffer.committedByRecovery = true;
@@ -2946,6 +3052,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // CRITICAL: Check if recovery already committed before committing from timeout
                         syncForcedFinalBuffer();
                         const bufferStillExists = forcedCommitEngine.hasForcedFinalBuffer();
+                        
+                        // Check if forced-final buffer was superseded by a normal FINAL
+                        if (forcedFinalBuffer?.superseded === true) {
+                          console.log(`[Recovery] ⏭️ Skipping queued forced-final commit in related branch (superseded by normal FINAL)`);
+                          console.log(`[Recovery]   Forced-final: "${forcedFinalBuffer.text?.substring(0, 60)}..."`);
+                          console.log(`[Recovery]   Normal FINAL already committed this content`);
+                          if (bufferStillExists) {
+                            forcedCommitEngine.clearForcedFinalBuffer();
+                            syncForcedFinalBuffer();
+                          }
+                          return; // Skip commit - already superseded
+                        }
                         
                         // Check if recovery already committed by checking the buffer's committedByRecovery flag
                         // OR if buffer was cleared but recovery was in progress (recovery clears buffer after committing)
@@ -3047,6 +3165,26 @@ export async function handleHostConnection(clientWs, sessionId) {
                             syncForcedFinalBuffer();
                           }
                           return;
+                        }
+                        
+                        // Check if forced-final buffer was superseded by a normal FINAL
+                        syncForcedFinalBuffer();
+                        if (forcedFinalBuffer?.superseded === true) {
+                          console.log(`[Recovery] ⏭️ Skipping queued forced-final commit from timeout (superseded by normal FINAL)`);
+                          console.log(`[Recovery]   Forced-final: "${forcedFinalBuffer.text?.substring(0, 60)}..."`);
+                          console.log(`[Recovery]   Normal FINAL already committed this content`);
+                          forcedCommitEngine.clearForcedFinalBufferTimeout();
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
+                          return; // Skip commit - already superseded
+                        }
+                        
+                        // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+                        syncForcedFinalBuffer();
+                        if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, textToCommit)) {
+                          console.log('[HostMode] ⏸️ Suppressing forced final commit - waiting for recovery to complete');
+                          // Don't clear buffer - let recovery complete and commit the full text
+                          return; // Skip commit
                         }
                         
                         // Commit the forced final (with grammar correction via processFinalText)
@@ -3243,11 +3381,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                           forcedFinalBuffer.lastContinuationAt = null;
                         }
 
-                        console.log(`[HostMode] 📝 STEP 1: Committing forced final first: "${forcedTextToCommit.substring(0, 60)}..."`);
+                        // Check if forced-final buffer was superseded by a normal FINAL
                         syncForcedFinalBuffer();
-                        if (forcedFinalBuffer) forcedFinalBuffer.committedByRecovery = true;
+                        if (forcedFinalBuffer?.superseded === true) {
+                          console.log(`[Recovery] ⏭️ Skipping queued forced-final commit (superseded by normal FINAL)`);
+                          console.log(`[Recovery]   Forced-final: "${forcedFinalBuffer.text?.substring(0, 60)}..."`);
+                          console.log(`[Recovery]   Normal FINAL already committed this content`);
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
+                          // Continue to process the new FINAL below instead
+                        } else {
+                          console.log(`[HostMode] 📝 STEP 1: Committing forced final first: "${forcedTextToCommit.substring(0, 60)}..."`);
+                          syncForcedFinalBuffer();
+                          if (forcedFinalBuffer) forcedFinalBuffer.committedByRecovery = true;
 
-                        processFinalText(forcedTextToCommit, { forceFinal: true });
+                          processFinalText(forcedTextToCommit, { forceFinal: true });
+
+                          lastForcedFinalClearedAt = Date.now();
+                          forcedCommitEngine.clearForcedFinalBufferTimeout();
+                          forcedCommitEngine.clearForcedFinalBuffer();
+                          syncForcedFinalBuffer();
+                        }
 
                         lastForcedFinalClearedAt = Date.now();
                         forcedCommitEngine.clearForcedFinalBufferTimeout();
@@ -3350,6 +3504,26 @@ export async function handleHostConnection(clientWs, sessionId) {
                       timestamp: Date.now()
                     };
                     console.log(`[HostMode] 📌 Captured next final after recovery start: "${transcriptText.substring(0, 60)}..."`);
+                  }
+                  
+                  // Check if this normal FINAL supersedes the forced-final buffer
+                  syncForcedFinalBuffer();
+                  if (forcedFinalBuffer && forcedFinalBuffer.text && forcedFinalBuffer.recoveryInProgress) {
+                    if (checkForcedFinalSuperseded(transcriptText, forcedFinalBuffer.text)) {
+                      console.log(`[HostMode] 🏷️ Normal FINAL supersedes forced-final buffer - marking as superseded`);
+                      console.log(`[HostMode]   Normal FINAL: "${transcriptText.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   Forced-final: "${forcedFinalBuffer.text.substring(0, 60)}..."`);
+                      // Mark buffer as superseded (need to update through engine if it has a method, or directly)
+                      // Since we sync from engine, we'll need to check if engine supports this
+                      // For now, set directly on the synced buffer object
+                      forcedFinalBuffer.superseded = true;
+                      // Also update in engine if possible
+                      const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                      if (buffer) {
+                        buffer.superseded = true;
+                      }
+                      syncForcedFinalBuffer(); // Re-sync after marking
+                    }
                   }
                 }
                 
@@ -4003,6 +4177,16 @@ export async function handleHostConnection(clientWs, sessionId) {
             
             // Commit the forced final immediately
             const forcedFinalText = buffer.text;
+            
+            // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+            syncForcedFinalBuffer();
+            if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+              console.log('[HostMode] ⏸️ Suppressing forced final commit (stream end) - waiting for recovery to complete');
+              // Note: On stream end, we might want to wait a bit longer for recovery
+              // But for now, suppress to maintain invariant
+              return; // Skip commit
+            }
+            
             try {
               processFinalText(forcedFinalText, { forceFinal: true });
             } catch (e) {
@@ -4048,6 +4232,16 @@ export async function handleHostConnection(clientWs, sessionId) {
       
       // Commit the forced final immediately
       const forcedFinalText = buffer.text;
+      
+      // 🚨 RECOVERY GATE: Suppress prefix-only commits during recovery
+      syncForcedFinalBuffer();
+      if (shouldSuppressForcedFinalCommit(forcedFinalBuffer, forcedFinalText)) {
+        console.log('[HostMode] ⏸️ Suppressing forced final commit (connection close) - waiting for recovery to complete');
+        // Note: On connection close, we might want to wait a bit longer for recovery
+        // But for now, suppress to maintain invariant
+        return; // Skip commit
+      }
+      
       try {
         processFinalText(forcedFinalText, { forceFinal: true });
       } catch (e) {
