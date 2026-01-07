@@ -400,108 +400,114 @@ export async function handleHostConnection(clientWs, sessionId) {
                   console.error(`[HostMode] ❌ ERROR: currentSessionId is not defined! Cannot broadcast message.`);
                   return -1;
                 }
+
+                // ✅ CENTRAL INVARIANT: Remove sourceSeqId from same-language payloads (EN payloads)
+                const payloadToSend = { ...messageData };
+                if (payloadToSend.targetLang === payloadToSend.sourceLang) {
+                  delete payloadToSend.sourceSeqId;
+                }
                 
                 // Spanish emission stack tracer - catches every path that emits Spanish
-                const tl = messageData?.targetLang || targetLang;
-                const sl = messageData?.sourceLang;
-                const hasT = !!messageData?.hasTranslation;
-                const upd = messageData?.updateType;
-                const corr = messageData?.hasCorrection;
-                const hasOriginal = !!(messageData?.originalText && messageData.originalText.trim());
-                const hasTranslated = !!(messageData?.translatedText && messageData.translatedText.trim());
+                const tl = payloadToSend?.targetLang || targetLang;
+                const sl = payloadToSend?.sourceLang;
+                const hasT = !!payloadToSend?.hasTranslation;
+                const upd = payloadToSend?.updateType;
+                const corr = payloadToSend?.hasCorrection;
+                const hasOriginal = !!(payloadToSend?.originalText && payloadToSend.originalText.trim());
+                const hasTranslated = !!(payloadToSend?.translatedText && payloadToSend.translatedText.trim());
                 
                 // Catch ALL Spanish emissions to trace the source - log everything as warning for visibility
                 if (tl === 'es') {
                   const isProblematic = !hasT || sl !== 'en' || !hasOriginal;
-                  
+
                   console.warn(`[TRACE_ES] Spanish emission ${isProblematic ? 'PROBLEMATIC' : 'VALID'}`, {
-                    type: messageData?.type,
+                    type: payloadToSend?.type,
                     updateType: upd,
                     hasCorrection: corr,
-                    hasTranslation: messageData?.hasTranslation,
+                    hasTranslation: payloadToSend?.hasTranslation,
                     sourceLang: sl,
                     targetLang: tl,
                     targetLangParam: targetLang,
-                    payloadTargetLang: messageData?.targetLang,
+                    payloadTargetLang: payloadToSend?.targetLang,
                     hasOriginalText: hasOriginal,
                     hasTranslatedText: hasTranslated,
-                    sourceSeqId: messageData?.sourceSeqId,
-                    originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
-                    correctedPreview: String(messageData?.correctedText ?? '').slice(0, 80),
-                    translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+                    sourceSeqId: payloadToSend?.sourceSeqId,
+                    originalPreview: String(payloadToSend?.originalText ?? '').slice(0, 80),
+                    correctedPreview: String(payloadToSend?.correctedText ?? '').slice(0, 80),
+                    translatedPreview: String(payloadToSend?.translatedText ?? '').slice(0, 80),
                     isPartial: isPartial,
                     isProblematic: isProblematic,
                   });
 
                   // TEMP DEBUG LEDGER: Dump ledger for "Y grito" detection
-                  if (messageData?.translatedText?.includes('Y grito')) {
-                    console.log('[LEDGER_DUMP]', messageData.sourceSeqId, corrLedger.get(messageData.sourceSeqId));
+                  if (payloadToSend?.translatedText?.includes('Y grito')) {
+                    console.log('[LEDGER_DUMP]', payloadToSend.sourceSeqId, corrLedger.get(payloadToSend.sourceSeqId));
                   }
 
                   console.warn(new Error(`[TRACE_ES] ${isProblematic ? 'PROBLEMATIC' : 'VALID'} stack`).stack);
                 }
                 
                 // ✅ INVARIANT: Never allow non-source language emissions unless it actually has translation text
-                if ((messageData?.targetLang !== messageData?.sourceLang) && !messageData?.hasTranslation) {
+                if ((payloadToSend?.targetLang !== payloadToSend?.sourceLang) && !payloadToSend?.hasTranslation) {
                   console.warn('[HostMode] 🚫 [Invariant] Dropping non-source emission without translation', {
-                    sourceLang: messageData?.sourceLang,
-                    targetLang: messageData?.targetLang,
-                    updateType: messageData?.updateType,
-                    hasCorrection: messageData?.hasCorrection,
-                    seqId: messageData?.seqId
+                    sourceLang: payloadToSend?.sourceLang,
+                    targetLang: payloadToSend?.targetLang,
+                    updateType: payloadToSend?.updateType,
+                    hasCorrection: payloadToSend?.hasCorrection,
+                    seqId: payloadToSend?.seqId
                   });
                   return -1; // Return error code to indicate rejection
                 }
 
                 // ✅ NEW: Emergency guard - never allow translation broadcasts missing sourceSeqId
                 const missingSourceSeqId =
-                  messageData?.sourceSeqId === undefined ||
-                  messageData?.sourceSeqId === null ||
-                  messageData?.sourceSeqId === 0;
+                  payloadToSend?.sourceSeqId === undefined ||
+                  payloadToSend?.sourceSeqId === null ||
+                  payloadToSend?.sourceSeqId === 0;
 
-                if (messageData?.hasTranslation && messageData?.targetLang !== messageData?.sourceLang && missingSourceSeqId) {
+                if (payloadToSend?.hasTranslation && payloadToSend?.targetLang !== payloadToSend?.sourceLang && missingSourceSeqId) {
                   console.warn('[Invariant] Dropping translation missing sourceSeqId', {
-                    sourceLang: messageData?.sourceLang,
-                    targetLang: messageData?.targetLang,
-                    hasCorrection: messageData?.hasCorrection,
-                    isPartial: messageData?.isPartial,
-                    originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
-                    translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+                    sourceLang: payloadToSend?.sourceLang,
+                    targetLang: payloadToSend?.targetLang,
+                    hasCorrection: payloadToSend?.hasCorrection,
+                    isPartial: payloadToSend?.isPartial,
+                    originalPreview: String(payloadToSend?.originalText ?? '').slice(0, 80),
+                    translatedPreview: String(payloadToSend?.translatedText ?? '').slice(0, 80),
                   });
                   return null;
                 }
 
                 // PHASE 8: Use CoreEngine timeline tracker for sequence IDs
-                const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
+                const { message, seqId } = timelineTracker.createSequencedMessage(payloadToSend, isPartial);
 
                 // TEMP DEBUG LEDGER: Add to correlation ledger
-                const sid = messageData?.sourceSeqId ?? (messageData?.targetLang === messageData?.sourceLang ? seqId : null);
-                ledgerAdd(sid, messageData?.targetLang === 'es' ? 'ES_EMIT' : 'EN_EMIT', messageData, targetLang ? 'listeners' : 'host');
+                const sid = payloadToSend?.sourceSeqId ?? (payloadToSend?.targetLang === payloadToSend?.sourceLang ? seqId : null);
+                ledgerAdd(sid, payloadToSend?.targetLang === 'es' ? 'ES_EMIT' : 'EN_EMIT', payloadToSend, targetLang ? 'listeners' : 'host');
 
                 // Send to host
                 if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify(message));
-                  console.log(`[HostMode] 📤 Sent to host (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${messageData.targetLang || 'N/A'})`);
-                  
+                  console.log(`[HostMode] 📤 Sent to host (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${payloadToSend.targetLang || 'N/A'})`);
+
                   // Optional correlation logging
-                  if (messageData?.sourceSeqId !== undefined) {
-                    console.log(`[HostMode] 🔗 Correlate: seqId=${seqId} sourceSeqId=${messageData.sourceSeqId} target=${messageData.targetLang || 'N/A'}`);
+                  if (payloadToSend?.sourceSeqId !== undefined) {
+                    console.log(`[HostMode] 🔗 Correlate: seqId=${seqId} sourceSeqId=${payloadToSend.sourceSeqId} target=${payloadToSend.targetLang || 'N/A'}`);
                   }
                 }
                 
                 // Broadcast to listeners
                 if (targetLang) {
                   // Spanish routing tracer - check if routing parameter routes to Spanish
-                  if (targetLang === 'es' && (!messageData?.hasTranslation || messageData?.sourceLang !== 'en')) {
+                  if (targetLang === 'es' && (!payloadToSend?.hasTranslation || payloadToSend?.sourceLang !== 'en')) {
                     console.warn('[TRACE_ES_ROUTING] Spanish routing via targetLang parameter', {
                       targetLangParam: targetLang,
-                      payloadTargetLang: messageData?.targetLang,
-                      hasTranslation: messageData?.hasTranslation,
-                      sourceLang: messageData?.sourceLang,
-                      type: messageData?.type,
-                      updateType: messageData?.updateType,
-                      originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
-                      translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+                      payloadTargetLang: payloadToSend?.targetLang,
+                      hasTranslation: payloadToSend?.hasTranslation,
+                      sourceLang: payloadToSend?.sourceLang,
+                      type: payloadToSend?.type,
+                      updateType: payloadToSend?.updateType,
+                      originalPreview: String(payloadToSend?.originalText ?? '').slice(0, 80),
+                      translatedPreview: String(payloadToSend?.translatedText ?? '').slice(0, 80),
                     });
                     console.warn(new Error('[TRACE_ES_ROUTING] stack').stack);
                   }
@@ -2115,8 +2121,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.log(`[HostMode] ⏸️ Skipping REALTIME translation - restart cooldown active (${realtimeTranslationCooldownUntil - Date.now()}ms remaining)`);
                           } else {
                             console.log(`[HostMode] 🔀 Using ${workerType} API for partial translation to ${translationTargets.length} language(s) (${capturedText.length} chars)`);
+
+                            // ✅ Freeze correlation + text for THIS translation request
+                            const frozenSourceSeqId = sourceSeqId;     // freeze current anchor
+                            const frozenTranslationReadyText = translationReadyText;       // freeze exact text being translated
+
                             const translationPromise = partialWorker.translateToMultipleLanguages(
-                              translationReadyText,
+                              frozenTranslationReadyText,
                               currentSourceLang,
                               translationTargets,
                               process.env.OPENAI_API_KEY,
@@ -2127,12 +2138,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                             translationPromise.then(translations => {
                               // Validate translation results
                               if (!translations || Object.keys(translations).length === 0) {
-                                console.warn(`[HostMode] ⚠️ Translation returned empty for ${capturedText.length} char text`);
+                                console.warn(`[HostMode] ⚠️ Translation returned empty for ${frozenTranslationReadyText.length} char text`);
                                 return;
                               }
 
                               // CRITICAL: Only update lastPartialTranslation AFTER successful translation
-                              lastPartialTranslation = capturedText;
+                              lastPartialTranslation = frozenTranslationReadyText;
                               
                               console.log(`[HostMode] ✅ TRANSLATION (IMMEDIATE): Translated to ${Object.keys(translations).length} language(s)`);
                               
@@ -2140,44 +2151,46 @@ export async function handleHostConnection(clientWs, sessionId) {
                               for (const targetLang of translationTargets) {
                                 const translatedText = translations[targetLang];
                                 // Validate that translation is different from original (prevent English leak)
-                                const isSameAsOriginal = translatedText === translationReadyText || 
-                                                         translatedText.trim() === translationReadyText.trim() ||
-                                                         translatedText.toLowerCase() === translationReadyText.toLowerCase();
-                                
+                                const isSameAsOriginal = translatedText === frozenTranslationReadyText ||
+                                                         translatedText.trim() === frozenTranslationReadyText.trim() ||
+                                                         translatedText.toLowerCase() === frozenTranslationReadyText.toLowerCase();
+
                                 if (isSameAsOriginal) {
                                   console.warn(`[HostMode] ⚠️ Translation matches original (English leak detected) for ${targetLang}: "${translatedText.substring(0, 60)}..."`);
                                   continue; // Don't send English as translation
                                 }
-                                
+
                                 // ✅ HARD INVARIANT: never send translation with blank original
                                 const safeOriginal =
-                                  (rawCapturedText && rawCapturedText.trim()) ||
+                                  (frozenTranslationReadyText && frozenTranslationReadyText.trim()) ||
                                   (sourceOriginalText && sourceOriginalText.trim()) ||
-                                  (translationReadyText && translationReadyText.trim()) ||
+                                  (rawCapturedText && rawCapturedText.trim()) ||
                                   '';
                                 
                                 if (!safeOriginal) {
                                   console.warn(`[HostMode] 🚫 Dropping translation partial (blank originalText)`, {
-                                    sourceSeqId,
+                                    frozenSourceSeqId,
                                     targetLang,
                                     translatedPreview: (translatedText || '').slice(0, 80),
                                   });
                                   continue;
                                 }
-                                
+
                                 // ✅ HARD INVARIANT: never send translation with null sourceSeqId
-                                if (sourceSeqId == null) {
-                                  console.warn(`[HostMode] 🚫 Dropping translation: missing sourceSeqId`, {
+                                if (frozenSourceSeqId == null || frozenSourceSeqId === 0) {
+                                  console.warn(`[HostMode] 🚫 Dropping translation: missing frozenSourceSeqId`, {
                                     targetLang,
                                     originalPreview: safeOriginal.slice(0, 80),
                                     translatedPreview: (translatedText || '').slice(0, 80),
                                   });
                                   continue;
                                 }
-                                
+
+                                console.log('[DBG_TRANSLATE_EMIT]', { frozenSourceSeqId, targetLang, o: safeOriginal.slice(0,30), t: (translatedText||'').slice(0,30) });
+
                                 broadcastWithSequence({
                                   type: 'translation',
-                                  sourceSeqId,              // ✅ correlation key
+                                  sourceSeqId: frozenSourceSeqId,     // ✅ frozen correlation key
                                   originalText: safeOriginal,
                                   translatedText: translatedText,
                                   sourceLang: currentSourceLang,
@@ -2245,8 +2258,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 isTranscriptionOnly: false,
                                 hasCorrection: true,
                                 updateType: 'grammar', // Flag for grammar-only update
-                                isPartial: true, // CRITICAL: Grammar updates for partials are still partials
-                                sourceSeqId: sourceSeqId || undefined  // Optional: include if available for correlation
+                                isPartial: true // CRITICAL: Grammar updates for partials are still partials
                               }, true, currentSourceLang);
                             }).catch(error => {
                               if (error.name !== 'AbortError') {
@@ -2458,8 +2470,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (underRestartCooldown) {
                               console.log(`[HostMode] ⏸️ Skipping REALTIME translation (delayed) - restart cooldown active (${realtimeTranslationCooldownUntil - Date.now()}ms remaining)`);
                             } else {
+                              // ✅ Freeze correlation + text for THIS translation request
+                              const frozenSourceSeqId = sourceSeqId;     // freeze current anchor
+                              const frozenLatestText = latestText;       // freeze exact text being translated
+
                               const translationPromise = partialWorker.translateToMultipleLanguages(
-                                latestText,
+                                frozenLatestText,
                                 currentSourceLang,
                                 translationTargets,
                                 process.env.OPENAI_API_KEY,
@@ -2470,12 +2486,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                               translationPromise.then(translations => {
                                 // Validate translation results
                                 if (!translations || Object.keys(translations).length === 0) {
-                                  console.warn(`[HostMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
+                                  console.warn(`[HostMode] ⚠️ Delayed translation returned empty for ${frozenLatestText.length} char text`);
                                   return;
                                 }
 
                                 // CRITICAL: Update tracking and send translation
-                                lastPartialTranslation = latestText;
+                                lastPartialTranslation = frozenLatestText;
                                 lastPartialTranslationTime = Date.now();
                                 
                                 console.log(`[HostMode] ✅ TRANSLATION (DELAYED): Translated to ${Object.keys(translations).length} language(s)`);
@@ -2484,43 +2500,45 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 for (const targetLang of translationTargets) {
                                   const translatedText = translations[targetLang];
                                   // Validate that translation is different from original
-                                  const isSameAsOriginal = translatedText === latestText || 
-                                                           translatedText.trim() === latestText.trim() ||
-                                                           translatedText.toLowerCase() === latestText.toLowerCase();
-                                  
+                                  const isSameAsOriginal = translatedText === frozenLatestText ||
+                                                           translatedText.trim() === frozenLatestText.trim() ||
+                                                           translatedText.toLowerCase() === frozenLatestText.toLowerCase();
+
                                   if (isSameAsOriginal) {
                                     console.warn(`[HostMode] ⚠️ Translation matches original (English leak detected) for ${targetLang}`);
                                     continue; // Don't send English as translation
                                   }
-                                  
+
                                   // ✅ HARD INVARIANT: never send translation with blank original
                                   const safeOriginal =
-                                    (latestText && latestText.trim()) ||
+                                    (frozenLatestText && frozenLatestText.trim()) ||
                                     (sourceOriginalText && sourceOriginalText.trim()) ||
                                     '';
                                   
                                   if (!safeOriginal) {
                                     console.warn(`[HostMode] 🚫 Dropping delayed translation partial (blank originalText)`, {
-                                      sourceSeqId,
+                                      frozenSourceSeqId,
                                       targetLang,
                                       translatedPreview: (translatedText || '').slice(0, 80),
                                     });
                                     continue;
                                   }
-                                  
-                                  // ✅ HARD INVARIANT: never send translation with null sourceSeqId
-                                  if (sourceSeqId == null) {
-                                    console.warn(`[HostMode] 🚫 Dropping delayed translation: missing sourceSeqId`, {
+
+                                  // ✅ HARD INVARIANT: never send translation with missing sourceSeqId (covers stale/overwritten cases)
+                                  if (frozenSourceSeqId == null || frozenSourceSeqId === 0) {
+                                    console.warn(`[HostMode] 🚫 Dropping delayed translation: missing frozenSourceSeqId`, {
                                       targetLang,
                                       originalPreview: safeOriginal.slice(0, 80),
                                       translatedPreview: (translatedText || '').slice(0, 80),
                                     });
                                     continue;
                                   }
-                                  
+
+                                  console.log('[DBG_TRANSLATE_EMIT]', { frozenSourceSeqId, targetLang, o: safeOriginal.slice(0,30), t: (translatedText||'').slice(0,30) });
+
                                   broadcastWithSequence({
                                     type: 'translation',
-                                    sourceSeqId,              // ✅ correlation key
+                                    sourceSeqId: frozenSourceSeqId,     // ✅ frozen correlation key
                                     originalText: safeOriginal,
                                     translatedText: translatedText,
                                     sourceLang: currentSourceLang,
@@ -2581,8 +2599,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isTranscriptionOnly: false,
                                     hasCorrection: true,
                                     updateType: 'grammar',
-                                    isPartial: true, // CRITICAL: Grammar updates for partials are still partials
-                                    sourceSeqId: sourceSeqId || undefined  // Optional: include if available for correlation
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, currentSourceLang);
                                 }
                               }).catch(error => {
