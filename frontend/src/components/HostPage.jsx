@@ -57,7 +57,25 @@ const APP_URL = getAppUrl();
 
 const LANGUAGES = TRANSCRIPTION_LANGUAGES; // Host speaks - needs transcription support
 
+// Fingerprint helper for debugging ghost sentences
+const fp = (s) => {
+  if (!s) return null;
+  // stable-ish fingerprint for searching
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16);
+};
+
 export function HostPage({ onBackToHome }) {
+  // Track seen raw messages for invariant checking
+  const seenRawInFpsRef = useRef(new Set());
+
+  // Out-of-order partial prevention: track last seqId per sourceSeqId
+  const lastPartialSeqBySourceRef = useRef(new Map());
+
   const [sessionCode, setSessionCode] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState('');
@@ -77,6 +95,10 @@ export function HostPage({ onBackToHome }) {
   const isInitializedRef = useRef(false); // Prevent duplicate initialization in Strict Mode
   const sessionCreatedRef = useRef(false); // Prevent duplicate session creation
   const processedSeqIdsRef = useRef(new Set()); // Track processed seqIds to prevent duplicate processing
+
+  // Commit counter for tracing leaked rows
+  const commitCounterRef = useRef(0);
+  const nextCommitId = () => ++commitCounterRef.current;
   
   // Keep ref in sync with state
   useEffect(() => {
@@ -180,10 +202,43 @@ export function HostPage({ onBackToHome }) {
                 
                 // Update ref immediately to keep it in sync
                 transcriptRef.current = newHistory;
-                
+
+                // COMMIT LOGGING: Log exact final text being committed by segmenter onFlush
+                console.log('[HOST_COMMIT]', {
+                  commitId: nextCommitId(),
+                  path: 'SEGMENTER_ONFLUSH',
+                  side: 'HOST',
+                  commitOriginal: joinedText,
+                  commitTranslated: joinedText,
+                  originalFp: fp(joinedText),
+                  translatedFp: fp(joinedText),
+                  seqId: -1,
+                  sourceSeqId: -1,
+                  isPartial: false,
+                  ts: Date.now(),
+                  prevTail: prev.slice(-2),
+                  newItem: newItem
+                });
+
                 return newHistory;
               });
             });
+
+            // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+            const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
+            if (suspicious.length) {
+              console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                path: 'SEGMENTER_ONFLUSH',
+                suspicious: suspicious.map(it => ({
+                  text: it.text,
+                  fp: fp(it.text),
+                  seqId: it.seqId,
+                  sourceSeqId: it.sourceSeqId,
+                  isSegmented: it.isSegmented
+                }))
+              });
+            }
+
             console.log(`[HostPage] ✅ Flushed to history with paint: "${joinedText.substring(0, 40)}..."`);
           }, 0);
         }
@@ -313,7 +368,44 @@ export function HostPage({ onBackToHome }) {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
-        
+
+        // RAW_IN logging: canonical ingestion truth for ghost bug debugging
+        console.log('[HOST_RAW_IN]', {
+          type: message.type,
+          seqId: message.seqId,
+          sourceSeqId: message.sourceSeqId,
+          targetLang: message.targetLang,
+          originalFp: fp(message.originalText),
+          correctedFp: fp(message.correctedText),
+          translatedFp: fp(message.translatedText),
+          originalText: message.originalText,
+          correctedText: message.correctedText,
+          translatedText: message.translatedText,
+        });
+
+        // Track seen fingerprints for invariant checking
+        if (message.translatedText) {
+          seenRawInFpsRef.current.add(fp(message.translatedText));
+        }
+        if (message.originalText) {
+          seenRawInFpsRef.current.add(fp(message.originalText));
+        }
+
+        // Drop out-of-order PARTIAL translations (prevents delayed partial overwrites)
+        if (message?.isPartial && message?.sourceSeqId != null && message?.seqId != null) {
+          const last = lastPartialSeqBySourceRef.current.get(message.sourceSeqId) || 0;
+          if (message.seqId <= last) {
+            console.log('[DROP_OOO_PARTIAL]', {
+              sourceSeqId: message.sourceSeqId,
+              seqId: message.seqId,
+              last,
+              t: (message.translatedText || '').slice(0, 80)
+            });
+            return;
+          }
+          lastPartialSeqBySourceRef.current.set(message.sourceSeqId, message.seqId);
+        }
+
         switch (message.type) {
           case 'session_ready':
             console.log('[Host] Session ready:', message.sessionCode);
@@ -360,6 +452,11 @@ export function HostPage({ onBackToHome }) {
                 setCurrentTranscript(liveText);
               });
             } else {
+              // Lock finals to prevent partial overwrites
+              if (!message?.isPartial && message?.sourceSeqId != null && message?.seqId != null) {
+                lastPartialSeqBySourceRef.current.set(message.sourceSeqId, Number.MAX_SAFE_INTEGER);
+              }
+
               // Final transcript - use processFinal like solo mode (handles deduplication automatically)
               // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
               // This ensures grammar corrections and recovered text are applied to finals
@@ -615,11 +712,44 @@ export function HostPage({ onBackToHome }) {
                       
                       // Update ref immediately to keep it in sync
                       transcriptRef.current = newHistory.slice(-50);
-                      
+
+                      // COMMIT LOGGING: Log exact final text being committed to history
+                      console.log('[HOST_COMMIT]', {
+                        commitId: nextCommitId(),
+                        path: 'FINAL_HANDLER',
+                        side: 'HOST',
+                        commitOriginal: newItem.text,
+                        commitTranslated: newItem.text,
+                        originalFp: fp(newItem.text),
+                        translatedFp: fp(newItem.text),
+                        seqId: finalSeqId,
+                        sourceSeqId: message.sourceSeqId,
+                        isPartial: false,
+                        ts: Date.now(),
+                        prevTail: updatedPrev.slice(-2),
+                        newItem: newItem
+                      });
+
                       console.log(`[HostPage] ✅ STATE UPDATED - New history total: ${newHistory.length} items (sorted by seqId/timestamp)`);
                       return newHistory.slice(-50); // Keep last 50 entries
                     });
                   });
+
+                  // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+                  const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
+                  if (suspicious.length) {
+                    console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                      path: 'FINAL_HANDLER',
+                      suspicious: suspicious.map(it => ({
+                        text: it.text,
+                        fp: fp(it.text),
+                        seqId: it.seqId,
+                        sourceSeqId: it.sourceSeqId,
+                        isSegmented: it.isSegmented
+                      }))
+                    });
+                  }
+
                   console.log(`[HostPage] ✅ Added to history: "${joinedText.substring(0, 50)}..."`);
                 }
               } else {
@@ -730,6 +860,22 @@ export function HostPage({ onBackToHome }) {
                       return newHistory.slice(-50);
                     });
                   });
+
+                  // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+                  const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
+                  if (suspicious.length) {
+                    console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                      path: 'FINAL_HANDLER_FALLBACK',
+                      suspicious: suspicious.map(it => ({
+                        text: it.text,
+                        fp: fp(it.text),
+                        seqId: it.seqId,
+                        sourceSeqId: it.sourceSeqId,
+                        isSegmented: it.isSegmented
+                      }))
+                    });
+                  }
+
                   // Log after state update completes
                   const finalHistory = transcriptRef.current;
                   console.log(`[HostPage] ✅ FALLBACK STATE UPDATED - New history total: ${finalHistory.length} items (sorted by seqId/timestamp)`);

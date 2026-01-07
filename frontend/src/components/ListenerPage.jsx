@@ -49,6 +49,18 @@ const LANGUAGES = TRANSLATION_LANGUAGES; // Listeners choose their language - ca
 // TRACE: Frontend tracing helper
 const TRACE = import.meta.env.VITE_TRACE_REALTIME === '1';
 
+// Fingerprint helper for debugging ghost sentences
+const fp = (s) => {
+  if (!s) return null;
+  // stable-ish fingerprint for searching
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16);
+};
+
 function traceUI(stage, msg, extra = {}) {
   if (!TRACE) return;
   const now = Date.now();
@@ -71,6 +83,12 @@ function traceUI(stage, msg, extra = {}) {
 }
 
 export function ListenerPage({ sessionCodeProp, onBackToHome }) {
+  // Track seen raw messages for invariant checking
+  const seenRawInFpsRef = useRef(new Set());
+
+  // Out-of-order partial prevention: track last seqId per sourceSeqId
+  const lastPartialSeqBySourceRef = useRef(new Map());
+
   const [sessionCode, setSessionCode] = useState(sessionCodeProp || '');
   const [isJoined, setIsJoined] = useState(false);
   const [userName, setUserName] = useState('');
@@ -86,7 +104,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   const wsRef = useRef(null);
   const translationsEndRef = useRef(null);
-  
+
+  // Commit counter for tracing leaked rows
+  const commitCounterRef = useRef(0);
+  const nextCommitId = () => ++commitCounterRef.current;
+
   // Throttling refs for partial rendering (10-15 fps)
   const lastRenderTimeRef = useRef(0);
   const lastTextLengthRef = useRef(0);
@@ -157,9 +179,43 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   return (a.timestamp || 0) - (b.timestamp || 0);
                 });
 
+                // COMMIT LOGGING: Log exact final text being committed by segmenter onFlush
+                console.log('[LISTENER_COMMIT]', {
+                  commitId: nextCommitId(),
+                  path: 'SEGMENTER_ONFLUSH',
+                  side: 'LISTENER',
+                  commitOriginal: safeOriginal,
+                  commitTranslated: joinedText,
+                  originalFp: fp(safeOriginal),
+                  translatedFp: fp(joinedText),
+                  seqId: -1,
+                  sourceSeqId: lastStableKeyRef.current,
+                  isPartial: false,
+                  ts: Date.now(),
+                  prevTail: prev.slice(-2),
+                  lastStableKey: lastStableKeyRef.current,
+                  newItem: newItem
+                });
+
                 return newHistory;
               });
             });
+
+            // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+            const suspicious = newHistory.slice(-5).filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated)));
+            if (suspicious.length) {
+              console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                path: 'SEGMENTER_ONFLUSH',
+                suspicious: suspicious.map(it => ({
+                  translated: it.translated,
+                  fp: fp(it.translated),
+                  seqId: it.seqId,
+                  sourceSeqId: it.sourceSeqId,
+                  isSegmented: it.isSegmented
+                }))
+              });
+            }
+
             // Removed flush logging - reduces console noise
           }, 0);
         }
@@ -290,6 +346,28 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         // TRACE: Log WebSocket message received
         traceUI('WS_IN', message);
 
+        // RAW_IN logging: canonical ingestion truth for ghost bug debugging
+        console.log('[LISTENER_RAW_IN]', {
+          type: message.type,
+          seqId: message.seqId,
+          sourceSeqId: message.sourceSeqId,
+          targetLang: message.targetLang,
+          originalFp: fp(message.originalText),
+          correctedFp: fp(message.correctedText),
+          translatedFp: fp(message.translatedText),
+          originalText: message.originalText,
+          correctedText: message.correctedText,
+          translatedText: message.translatedText,
+        });
+
+        // Track seen fingerprints for invariant checking
+        if (message.translatedText) {
+          seenRawInFpsRef.current.add(fp(message.translatedText));
+        }
+        if (message.originalText) {
+          seenRawInFpsRef.current.add(fp(message.originalText));
+        }
+
         // A) LISTENER_IN logging: how listener receives messages
         console.log('[LISTENER_IN]', {
           seqId: message.seqId,
@@ -315,6 +393,21 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             recoveryEpoch: message.recoveryEpoch,
             translatedPreview: message.translatedText.slice(0, 50)
           });
+        }
+
+        // Drop out-of-order PARTIAL translations (prevents delayed partial overwrites)
+        if (message?.isPartial && message?.sourceSeqId != null && message?.seqId != null) {
+          const last = lastPartialSeqBySourceRef.current.get(message.sourceSeqId) || 0;
+          if (message.seqId <= last) {
+            console.log('[DROP_OOO_PARTIAL]', {
+              sourceSeqId: message.sourceSeqId,
+              seqId: message.seqId,
+              last,
+              t: (message.translatedText || '').slice(0, 80)
+            });
+            return;
+          }
+          lastPartialSeqBySourceRef.current.set(message.sourceSeqId, message.seqId);
         }
 
         switch (message.type) {
@@ -485,11 +578,44 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
                   console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
 
-                  // Removed history logging - reduces console noise
+                  // COMMIT LOGGING: Log exact final text being committed to history
+                  console.log('[LISTENER_COMMIT]', {
+                    commitId: nextCommitId(),
+                    path: 'FINAL_HANDLER',
+                    side: 'LISTENER',
+                    commitOriginal: safeOriginal,
+                    commitTranslated: finalText,
+                    originalFp: fp(safeOriginal),
+                    translatedFp: fp(finalText),
+                    rowKey,
+                    sourceSeqId: message.sourceSeqId,
+                    seqId: message.seqId,
+                    isSegmented: false,
+                    isPartial: false,
+                    ts: Date.now(),
+                    prevTail: prev.slice(-2),
+                    newItem: newEntry
+                  });
+
                   return [...prev, newEntry];
                 });
               });
-              
+
+              // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+              const suspicious = newEntry.translated ? [newEntry].filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated))) : [];
+              if (suspicious.length) {
+                console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                  path: 'FINAL_HANDLER',
+                  suspicious: suspicious.map(it => ({
+                    translated: it.translated,
+                    fp: fp(it.translated),
+                    seqId: it.seqId,
+                    sourceSeqId: it.sourceSeqId,
+                    isSegmented: it.isSegmented
+                  }))
+                });
+              }
+
               // CRITICAL: Reset throttling refs so new partials can immediately update after final
               // Without this, throttling might skip the first partials of the new segment
               lastRenderTimeRef.current = 0;
@@ -596,6 +722,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 }
               }
             } else {
+              // Lock finals to prevent partial overwrites
+              if (!message?.isPartial && message?.sourceSeqId != null && message?.seqId != null) {
+                lastPartialSeqBySourceRef.current.set(message.sourceSeqId, Number.MAX_SAFE_INTEGER);
+              }
+
               // Final translation - add to history directly (no segmenter needed for finals)
               // CRITICAL: Only use translatedText if hasTranslation is true - never fallback to English
               const finalText = message.hasTranslation ? (message.translatedText || undefined) : undefined;
