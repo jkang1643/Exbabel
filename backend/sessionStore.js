@@ -176,6 +176,11 @@ class SessionStore {
         try {
           listener.socket.send(messageStr);
           sentCount++;
+
+          // TEMP DEBUG: Log exact payload sent to ES listeners for "Y grito"
+          if (targetLang === 'es' && message?.hasTranslation && (message?.translatedText || '').includes('Y grito')) {
+            console.log('[ES_PAYLOAD_TO_LISTENER]', JSON.stringify(message));
+          }
         } catch (error) {
           console.error(`[SessionStore] Error sending to listener:`, error.message);
         }

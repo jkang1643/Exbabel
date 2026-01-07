@@ -590,8 +590,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               // CRITICAL: Use correctedText for original display (grammar corrections)
               const correctedOriginalText = message.correctedText || originalText;
 
-              // Cache original text if available
-              cacheOriginal(correctedOriginalText, message.seqId);
+              // ✅ Use stable correlation key for caching (sourceSeqId for translations)
+              const stableKey = (message.sourceSeqId ?? message.seqId);
+
+              // Cache original text if available (keyed by stableKey)
+              cacheOriginal(correctedOriginalText, stableKey);
 
               // CRITICAL: Check if this final is for this listener's target language
               const isForMyLanguage = message.hasTranslation && message.targetLang === targetLang;
@@ -636,21 +639,28 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     return prev;
                   }
 
-                  // Use fallback if original text is missing
-                  const cachedFromSeqId = message.seqId !== undefined ? originalBySeqIdRef.current.get(message.seqId) : undefined;
-                  const fallbackOriginal = cachedFromSeqId || lastNonEmptyOriginalRef.current || '';
+                  const stableKey = (message.sourceSeqId ?? message.seqId);
+                  const cachedFromKey = (stableKey !== undefined && stableKey !== null)
+                    ? originalBySeqIdRef.current.get(stableKey)
+                    : undefined;
+
+                  const fallbackOriginal = cachedFromKey || lastNonEmptyOriginalRef.current || '';
 
                   const safeOriginal = correctedOriginalText && correctedOriginalText.trim()
                     ? correctedOriginalText.trim()
                     : fallbackOriginal;
 
+                  // CRITICAL INVARIANT: Never render blank "Original:" if backend sent originalText
+                  const msgOriginal = (message.originalText || '').trim();
+                  const safeOriginalFinal = msgOriginal || safeOriginal;
+
                   // Diagnostic logging: log correlation info if original was missing
                   if (!correctedOriginalText || !correctedOriginalText.trim()) {
-                    console.log(`[ListenerPage] 🔗 Filled missing original: seqId=${message.seqId}, cachedFromSeqId=${!!cachedFromSeqId}, fallbackLen=${fallbackOriginal.length}, safeOriginalLen=${safeOriginal.length}`);
+                    console.log(`[ListenerPage] 🔗 Filled missing original: seqId=${message.seqId}, cachedFromSeqId=${!!cachedFromKey}, fallbackLen=${fallbackOriginal.length}, safeOriginalLen=${safeOriginalFinal.length}`);
                   }
 
                   const newEntry = {
-                    original: safeOriginal, // Use safeOriginal to fill missing originals from cache
+                    original: safeOriginalFinal, // Use safeOriginalFinal to guarantee non-blank originals
                     translated: textToDisplay,
                     timestamp: message.timestamp || Date.now()
                   };
