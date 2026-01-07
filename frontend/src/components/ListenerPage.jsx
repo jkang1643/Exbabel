@@ -15,29 +15,29 @@ import { TRANSLATION_LANGUAGES } from '../config/languages.js';
 const getBackendUrl = () => {
   const hostname = window.location.hostname;
   console.log('[ListenerPage] Detected hostname:', hostname);
-  
+
   // Validate IP address format
   const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  
+
   if (hostname !== 'localhost' && !ipv4Pattern.test(hostname)) {
     console.error('[ListenerPage] Invalid hostname format, using localhost');
     return 'http://localhost:3001';
   }
-  
+
   return `http://${hostname}:3001`;
 };
 
 const getWebSocketUrl = () => {
   const hostname = window.location.hostname;
-  
+
   // Validate IP address format
   const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-  
+
   if (hostname !== 'localhost' && !ipv4Pattern.test(hostname)) {
     console.error('[ListenerPage] Invalid hostname format, using localhost');
     return 'ws://localhost:3001';
   }
-  
+
   return `ws://${hostname}:3001`;
 };
 
@@ -45,6 +45,30 @@ const API_URL = import.meta.env.VITE_API_URL || getBackendUrl();
 const WS_URL = import.meta.env.VITE_WS_URL || getWebSocketUrl();
 
 const LANGUAGES = TRANSLATION_LANGUAGES; // Listeners choose their language - can use all translation languages
+
+// TRACE: Frontend tracing helper
+const TRACE = import.meta.env.VITE_TRACE_REALTIME === '1';
+
+function traceUI(stage, msg, extra = {}) {
+  if (!TRACE) return;
+  const now = Date.now();
+  console.log(`[UI_TRACE] ${stage}`, {
+    stage,
+    traceId: msg.traceId,
+    sessionId: msg.sessionId,
+    seqId: msg.seqId || msg.seq,
+    kind: msg.kind || (msg.isPartial ? (msg.hasTranslation ? 'translation_partial' : 'transcript_partial') : (msg.hasTranslation ? 'translation_final' : 'transcript_final')),
+    targetLang: msg.targetLang,
+    hasTranslation: msg.hasTranslation,
+    textLen: msg.text?.length || msg.originalText?.length || msg.translatedText?.length,
+    wsDelay: msg.t_pub ? (now - msg.t_pub) : undefined,
+    ...extra
+  });
+  // CRITICAL: Log full raw message JSON for WS_IN to help debug correlation issues
+  if (stage === 'WS_IN') {
+    console.log(`[UI_TRACE] WS_IN RAW JSON:`, JSON.stringify(msg, null, 2));
+  }
+}
 
 export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [sessionCode, setSessionCode] = useState(sessionCodeProp || '');
@@ -55,12 +79,41 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [translations, setTranslations] = useState([]);
   const [currentTranslation, setCurrentTranslation] = useState(''); // Live partial translation
   const [currentOriginal, setCurrentOriginal] = useState(''); // Live partial original text
+  const [isTranslationStalled, setIsTranslationStalled] = useState(false); // Track if translation is stalled
   const [sessionInfo, setSessionInfo] = useState(null);
   const [error, setError] = useState('');
   const [isJoining, setIsJoining] = useState(false);
 
   const wsRef = useRef(null);
   const translationsEndRef = useRef(null);
+  
+  // Throttling refs for partial rendering (10-15 fps)
+  const lastRenderTimeRef = useRef(0);
+  const lastTextLengthRef = useRef(0);
+  
+  // TRANSLATION STALL DETECTION: Track when source partials arrive vs when translations arrive
+  const lastSourcePartialTimeRef = useRef(null);
+  const lastTranslationTimeRef = useRef(null);
+  const translationStallCheckIntervalRef = useRef(null);
+
+  // Cache for original text correlation
+  const lastNonEmptyOriginalRef = useRef('');
+  const originalBySeqIdRef = useRef(new Map());
+
+  // Helper to cache original text with seqId correlation
+  const cacheOriginal = (text, seqId) => {
+    const t = (text || '').trim();
+    if (!t) return;
+    lastNonEmptyOriginalRef.current = t;
+    if (seqId !== undefined && seqId !== null && seqId !== -1) {
+      originalBySeqIdRef.current.set(seqId, t);
+      // Avoid unbounded growth - keep last 200 entries
+      if (originalBySeqIdRef.current.size > 200) {
+        const firstKey = originalBySeqIdRef.current.keys().next().value;
+        originalBySeqIdRef.current.delete(firstKey);
+      }
+    }
+  };
 
   // Sentence segmenter for smart text management
   // Enable auto-flush to history (same as solo mode) - partials that accumulate into complete sentences are committed
@@ -85,7 +138,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   seqId: -1, // Auto-segmented partials don't have seqId
                   isSegmented: true  // Flag to indicate this was auto-segmented
                 };
-                
+
                 // CRITICAL: Insert in correct position based on timestamp (sequenceId is -1 for auto-segmented)
                 const newHistory = [...prev, newItem].sort((a, b) => {
                   if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
@@ -93,11 +146,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   }
                   return (a.timestamp || 0) - (b.timestamp || 0);
                 });
-                
+
                 return newHistory;
               });
             });
-            console.log(`[ListenerPage] ✅ Flushed to history with paint: "${joinedText.substring(0, 40)}..."`);
+            // Removed flush logging - reduces console noise
           }, 0);
         }
       }
@@ -109,11 +162,50 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     translationsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [translations]);
 
+  // TRANSLATION STALL DETECTION: Check periodically if source partials arrive but translations don't
+  useEffect(() => {
+    if (!isJoined || connectionState !== 'open') {
+      return;
+    }
+
+    const checkStall = () => {
+      const now = Date.now();
+      const timeSinceLastSourcePartial = lastSourcePartialTimeRef.current ? (now - lastSourcePartialTimeRef.current) : Infinity;
+      const timeSinceLastTranslation = lastTranslationTimeRef.current ? (now - lastTranslationTimeRef.current) : Infinity;
+
+      // Check if source partials are flowing but translations stopped for >1s
+      const sourcePartialsFlowing = timeSinceLastSourcePartial < 2000; // Source partials within last 2 seconds
+      const translationsStopped = timeSinceLastTranslation > 1000; // No translations for >1s
+
+      // Only show stall if we've received at least one translation before (to avoid false positives on startup)
+      const hasReceivedTranslationBefore = lastTranslationTimeRef.current !== null;
+      
+      if (sourcePartialsFlowing && translationsStopped && hasReceivedTranslationBefore && currentOriginal) {
+        setIsTranslationStalled(true);
+      } else {
+        setIsTranslationStalled(false);
+      }
+    };
+
+    // Check every 500ms
+    translationStallCheckIntervalRef.current = setInterval(checkStall, 500);
+
+    return () => {
+      if (translationStallCheckIntervalRef.current) {
+        clearInterval(translationStallCheckIntervalRef.current);
+        translationStallCheckIntervalRef.current = null;
+      }
+    };
+  }, [isJoined, connectionState, currentOriginal]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
+      }
+      if (translationStallCheckIntervalRef.current) {
+        clearInterval(translationStallCheckIntervalRef.current);
       }
     };
   }, []);
@@ -139,11 +231,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       });
 
       const data = await response.json();
-      
+
       if (data.success) {
         setSessionInfo(data);
         setIsJoined(true);
-        
+
         // Connect WebSocket
         connectWebSocket(data.sessionId, targetLang, userName || 'Anonymous');
       } else {
@@ -161,32 +253,242 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     const ws = new WebSocket(
       `${WS_URL}/translate?role=listener&sessionId=${sessionId}&targetLang=${lang}&userName=${encodeURIComponent(name)}`
     );
-    
+
     ws.onopen = () => {
       console.log('[Listener] WebSocket connected');
       setConnectionState('open');
     };
-    
+
     ws.onclose = () => {
       console.log('[Listener] WebSocket disconnected');
       setConnectionState('closed');
       setError('Disconnected from session');
     };
-    
+
     ws.onerror = (error) => {
       console.error('[Listener] WebSocket error:', error);
       setConnectionState('error');
     };
-    
+
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
-        
+
+        // TRACE: Log WebSocket message received
+        traceUI('WS_IN', message);
+
+        // A) LISTENER_IN logging: how listener receives messages
+        console.log('[LISTENER_IN]', {
+          seqId: message.seqId,
+          sourceSeqId: message.sourceSeqId,
+          hasTranslation: message.hasTranslation,
+          isPartial: message.isPartial,
+          originalPreview: (message.originalText || '').slice(0, 50),
+          translatedPreview: (message.translatedText || '').slice(0, 50),
+        });
+
+        // BUG DETECTION: Check for translation messages missing originalText
+        if (
+          message?.type === 'translation' &&
+          message?.hasTranslation === true &&
+          (!message.originalText || message.originalText.trim() === '') &&
+          (message.translatedText && message.translatedText.trim().length > 0)
+        ) {
+          console.warn('[BUG] Translation message missing originalText', {
+            seqId: message.seqId,
+            targetLang: message.targetLang,
+            sourceLang: message.sourceLang,
+            pipeline: message.pipeline,
+            recoveryEpoch: message.recoveryEpoch,
+            translatedPreview: message.translatedText.slice(0, 50)
+          });
+        }
+
         switch (message.type) {
           case 'session_joined':
             console.log('[Listener] Joined session:', message.sessionCode);
             break;
-          
+
+          case 'TRANSCRIPT_PARTIAL':
+            // English source transcript partial - update original text for ALL listeners
+            if (message.isPartial) {
+              const correctedText = message.correctedText;
+              const originalText = message.originalText || '';
+              const textToDisplay = correctedText && correctedText.trim() ? correctedText : originalText;
+              
+              if (textToDisplay) {
+                // TRANSLATION STALL DETECTION: Track when source partials arrive
+                lastSourcePartialTimeRef.current = Date.now();
+                
+                // Removed partial logging - was causing event loop lag
+                setCurrentOriginal(textToDisplay);
+                cacheOriginal(textToDisplay, message.seqId);
+              }
+            }
+            break;
+
+          case 'TRANSLATION_PARTIAL':
+            // Translation partial - update translation text only if targetLang matches
+            if (message.isPartial) {
+              // Cache original text if present in message
+              const originalText = message.originalText || '';
+              const correctedText = message.correctedText;
+              const originalToCache = correctedText && correctedText.trim() ? correctedText : originalText;
+              if (originalToCache && originalToCache.trim()) {
+                cacheOriginal(originalToCache, message.seqId);
+              }
+              
+              const translatedText = message.translatedText || '';
+              const isForMyLanguage = message.targetLang === targetLang;
+              
+              // TRANSLATION STALL DETECTION: Track when translations arrive for my language
+              if (isForMyLanguage) {
+                lastTranslationTimeRef.current = Date.now();
+              }
+              
+              if (isForMyLanguage && translatedText.trim()) {
+                // Process translated text through segmenter (auto-flushes complete sentences)
+                const { liveText } = segmenterRef.current.processPartial(translatedText);
+
+                // THROTTLING: Limit render frequency to ~10-15 fps (66-100ms) to prevent UI freezes
+                const THROTTLE_MS = 66; // ~15 fps
+                const MIN_CHAR_DELTA = 3; // Minimum character growth to trigger render
+                const now = Date.now();
+                const timeSinceLastRender = now - lastRenderTimeRef.current;
+                const charDelta = liveText.length - lastTextLengthRef.current;
+                
+                // CRITICAL: Always render first partial after reset (when lastRenderTimeRef is 0)
+                // This ensures immediate display when new segment starts
+                const isFirstPartialAfterReset = lastRenderTimeRef.current === 0;
+                
+                // Always render if significant text growth or enough time passed
+                const shouldRender = 
+                  isFirstPartialAfterReset || // Always render first partial after reset
+                  charDelta >= MIN_CHAR_DELTA || // Significant text growth
+                  timeSinceLastRender >= THROTTLE_MS; // Enough time passed
+
+                if (shouldRender) {
+                  lastRenderTimeRef.current = now;
+                  lastTextLengthRef.current = liveText.length;
+                  // CRITICAL: Use flushSync for partial updates to ensure immediate responsiveness
+                  // Throttling limits frequency, but when we DO update, make it immediate
+                  flushSync(() => {
+                    setCurrentTranslation(liveText);
+                  });
+                }
+              }
+            }
+            break;
+
+          case 'TRANSCRIPT_FINAL':
+            // English source transcript final - update original text history
+            const originalText = message.originalText || '';
+            const correctedOriginalText = message.correctedText || originalText;
+            
+            if (correctedOriginalText) {
+              // Removed final transcript logging - reduces console noise
+              
+              // Update current original to show the final
+              setCurrentOriginal(correctedOriginalText);
+              cacheOriginal(correctedOriginalText, message.seqId);
+              
+              // Add to translations history (as original text entry)
+              setTranslations(prev => {
+                const recentEntries = prev.slice(-3);
+                const isDuplicate = recentEntries.some(entry => 
+                  entry.text === correctedOriginalText || 
+                  entry.originalText === correctedOriginalText
+                );
+                if (isDuplicate) {
+                  // Removed duplicate logging - reduces console noise
+                  return prev;
+                }
+                // B) LISTENER_ROW_KEY logging: how rows are keyed
+                const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
+                console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
+
+                return [...prev, {
+                  text: correctedOriginalText,
+                  originalText: correctedOriginalText,
+                  timestamp: message.timestamp || Date.now(),
+                  isTranscription: true
+                }];
+              });
+            }
+            break;
+
+          case 'TRANSLATION_FINAL':
+            // Translation final - add to history only if targetLang matches
+            const finalText = message.translatedText || undefined;
+            const finalOriginalText = message.originalText || '';
+            const finalCorrectedOriginalText = message.correctedText || finalOriginalText;
+            const isForMyLanguageFinal = message.targetLang === targetLang;
+            
+            // Cache original text if available
+            cacheOriginal(finalCorrectedOriginalText, message.seqId);
+            
+            if (isForMyLanguageFinal && finalText) {
+              // Removed final translation logging - reduces console noise
+              
+              // CRITICAL: Use flushSync for final updates to ensure immediate UI feedback
+              flushSync(() => {
+                // Update current translation to show the final
+                setCurrentTranslation(finalText);
+                
+                // Add to translations history
+                setTranslations(prev => {
+                  const recentEntries = prev.slice(-3);
+                  const isDuplicate = recentEntries.some(entry => 
+                    entry.text === finalText || 
+                    entry.translatedText === finalText
+                  );
+                  if (isDuplicate) {
+                    console.log('[ListenerPage] ⏭️ Skipping duplicate final translation');
+                    return prev;
+                  }
+                  
+                  // Use fallback if original text is missing
+                  const cachedFromSeqId = message.seqId !== undefined ? originalBySeqIdRef.current.get(message.seqId) : undefined;
+                  const fallbackOriginal = cachedFromSeqId || lastNonEmptyOriginalRef.current || '';
+
+                  const safeOriginal = finalCorrectedOriginalText && finalCorrectedOriginalText.trim()
+                    ? finalCorrectedOriginalText.trim()
+                    : fallbackOriginal;
+                  
+                  // Diagnostic logging: log correlation info if original was missing
+                  if (!finalCorrectedOriginalText || !finalCorrectedOriginalText.trim()) {
+                    console.log(`[ListenerPage] 🔗 Filled missing original: seqId=${message.seqId}, cachedFromSeqId=${!!cachedFromSeqId}, fallbackLen=${fallbackOriginal.length}, safeOriginalLen=${safeOriginal.length}`);
+                  }
+                  
+                  const newEntry = {
+                    text: finalText,
+                    originalText: safeOriginal,
+                    translatedText: finalText,
+                    timestamp: message.timestamp || Date.now(),
+                    hasTranslation: true
+                  };
+
+                  // B) LISTENER_ROW_KEY logging: how rows are keyed
+                  const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
+                  console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
+
+                  // Removed history logging - reduces console noise
+                  return [...prev, newEntry];
+                });
+              });
+              
+              // CRITICAL: Reset throttling refs so new partials can immediately update after final
+              // Without this, throttling might skip the first partials of the new segment
+              lastRenderTimeRef.current = 0;
+              lastTextLengthRef.current = 0;
+              
+              // Reset segmenter to clear any buffered partial text for new segment
+              if (segmenterRef.current) {
+                segmenterRef.current.reset();
+              }
+            }
+            break;
+
           case 'translation':
             // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
             if (message.isPartial) {
@@ -194,28 +496,54 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const correctedText = message.correctedText;
               const originalText = message.originalText || '';
               const textToDisplay = correctedText && correctedText.trim() ? correctedText : originalText;
-              // CRITICAL: Only use translatedText if hasTranslation is true - never fallback to English
-              const translatedText = message.hasTranslation ? (message.translatedText || undefined) : undefined;
+              
+              // ROBUST: Treat translatedText presence as valid translation signal even if hasTranslation flag is missing
+              const hasTranslatedText = typeof message.translatedText === 'string' && message.translatedText.trim().length > 0;
+              const hasTranslationFlag = message.hasTranslation === true || hasTranslatedText;
+              const translatedText = hasTranslationFlag ? (message.translatedText || undefined) : undefined;
 
               // Always update original text immediately (transcription, then corrected when available)
               if (textToDisplay) {
-                console.log(`[ListenerPage] 📝 Updating original: hasCorrection=${!!correctedText}, length=${textToDisplay.length}`);
+                // Removed partial logging - was causing event loop lag
                 setCurrentOriginal(textToDisplay);
+                cacheOriginal(textToDisplay, message.seqId);
+              }
+
+              // Only update translation if this message is actually intended for this listener's language
+              // Check if: 1) It has a real translation (hasTranslation flag or translatedText exists), AND
+              //           2) The message target language matches the listener's target language
+              const isForMyLanguage = hasTranslationFlag && message.targetLang === targetLang;
+
+              // TRANSLATION STALL DETECTION: Track when source partials arrive (msgTarget=en)
+              if (message.targetLang && message.targetLang !== targetLang && message.originalText) {
+                lastSourcePartialTimeRef.current = Date.now();
               }
               
-              // Only update translation if this message is actually intended for this listener's language
-              // Check if: 1) It has a real translation (hasTranslation: true), AND
-              //           2) The message target language matches the listener's target language
-              const isForMyLanguage = message.hasTranslation && message.targetLang === targetLang;
-              
+              // TRANSLATION STALL DETECTION: Track when translations arrive for my language
+              if (isForMyLanguage) {
+                lastTranslationTimeRef.current = Date.now();
+              }
+
               // Special case: If listener wants same language as source (transcription only)
               const isTranscriptionMode = targetLang === message.sourceLang;
-              
+
               const shouldUpdateTranslation = isForMyLanguage || isTranscriptionMode;
               
-              console.log(`[ListenerPage] 🔍 Partial: hasTranslation=${message.hasTranslation}, msgTarget=${message.targetLang}, myTarget=${targetLang}, shouldUpdate=${shouldUpdateTranslation}`);
-              
+              // TRACE: Log decision logic
+              const isXlatePartial = message.type === 'PARTIAL' && message.isPartial && hasTranslationFlag;
+              traceUI('DECIDE', message, {
+                myTarget: targetLang,
+                msgTarget: message.targetLang,
+                isXlatePartial,
+                shouldApply: shouldUpdateTranslation && isXlatePartial
+              });
+
+              // Removed partial logging - was causing event loop lag with high-frequency partials
+
               if (shouldUpdateTranslation) {
+                // TRACE: Log apply
+                traceUI('APPLY', message);
+                
                 // OPTIMIZATION: For transcription mode (same language), use correctedText if available
                 // For translation mode, use translatedText; for transcription mode, use correctedText or originalText
                 let textToDisplay = isTranscriptionMode
@@ -225,11 +553,34 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 // Process translated text through segmenter (auto-flushes complete sentences)
                 const { liveText } = segmenterRef.current.processPartial(textToDisplay);
 
-                // REAL-TIME STREAMING FIX: Update immediately on every delta for true real-time streaming
-                // No throttling - let React batch updates naturally for optimal performance
-                flushSync(() => {
-                  setCurrentTranslation(liveText);
-                });
+                // THROTTLING: Limit render frequency to ~10-15 fps (66-100ms) to prevent UI freezes
+                // Coalesce updates: only re-render if significant change or enough time passed
+                const THROTTLE_MS = 66; // ~15 fps
+                const MIN_CHAR_DELTA = 3; // Minimum character growth to trigger render
+                const now = Date.now();
+                const timeSinceLastRender = now - lastRenderTimeRef.current;
+                const charDelta = liveText.length - lastTextLengthRef.current;
+                
+                // CRITICAL: Always render first partial after reset (when lastRenderTimeRef is 0)
+                // This ensures immediate display when new segment starts
+                const isFirstPartialAfterReset = lastRenderTimeRef.current === 0;
+                
+                // Always render finals, or if significant text growth, or if enough time passed
+                const shouldRender = 
+                  message.isPartial === false || // Always render finals
+                  isFirstPartialAfterReset || // Always render first partial after reset
+                  charDelta >= MIN_CHAR_DELTA || // Significant text growth
+                  timeSinceLastRender >= THROTTLE_MS; // Enough time passed
+
+                if (shouldRender) {
+                  lastRenderTimeRef.current = now;
+                  lastTextLengthRef.current = liveText.length;
+                  // CRITICAL: Use flushSync for partial updates to ensure immediate responsiveness
+                  // Throttling limits frequency, but when we DO update, make it immediate
+                  flushSync(() => {
+                    setCurrentTranslation(liveText);
+                  });
+                }
               }
             } else {
               // Final translation - add to history directly (no segmenter needed for finals)
@@ -238,61 +589,102 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const originalText = message.originalText || '';
               // CRITICAL: Use correctedText for original display (grammar corrections)
               const correctedOriginalText = message.correctedText || originalText;
-              
-              // Skip if no translation and not transcription mode
+
+              // Cache original text if available
+              cacheOriginal(correctedOriginalText, message.seqId);
+
+              // CRITICAL: Check if this final is for this listener's target language
+              const isForMyLanguage = message.hasTranslation && message.targetLang === targetLang;
               const isTranscriptionMode = targetLang === message.sourceLang;
+              
+              // Skip if not for this listener's language and not transcription mode
+              if (!isForMyLanguage && !isTranscriptionMode) {
+                // Removed skip logging - reduces console noise
+                return;
+              }
+
+              // Skip if no translation and not transcription mode
               if (!finalText && !isTranscriptionMode) {
                 console.warn('[ListenerPage] ⚠️ Final received without translation, skipping (not transcription mode)');
                 return;
               }
-              
+
               // Use translatedText if available, otherwise use correctedText/originalText for transcription mode
               const textToDisplay = finalText || (isTranscriptionMode ? correctedOriginalText : undefined);
-              
+
               if (!textToDisplay) {
                 console.warn('[ListenerPage] ⚠️ Final received with no displayable text, skipping');
                 return;
               }
-              
-              console.log('[ListenerPage] 📝 Final received:', textToDisplay.substring(0, 50), `(hasTranslation: ${message.hasTranslation})`);
-              
-              // Deduplicate: Check if this exact text was already added recently
-              setTranslations(prev => {
-                // Check last 3 entries for duplicates
-                const recentEntries = prev.slice(-3);
-                const isDuplicate = recentEntries.some(entry => 
-                  entry.translated === textToDisplay || 
-                  (entry.original === correctedOriginalText && correctedOriginalText.length > 0)
-                );
-                
-                if (isDuplicate) {
-                  console.log('[ListenerPage] ⚠️ Duplicate final detected, skipping');
-                  return prev;
-                }
-                
-                return [...prev, {
-                  original: correctedOriginalText, // Use correctedText for grammar-corrected original
-                  translated: textToDisplay,
-                  timestamp: message.timestamp || Date.now()
-                }].slice(-50);
+
+              // Removed final logging - reduces console noise
+
+              // CRITICAL: Use flushSync for final updates to ensure immediate UI feedback
+              // This prevents flicker when clearing currentTranslation right after adding to history
+              flushSync(() => {
+                // Deduplicate: Check if this exact text was already added recently
+                setTranslations(prev => {
+                  // Check last 3 entries for duplicates
+                  const recentEntries = prev.slice(-3);
+                  const isDuplicate = recentEntries.some(entry =>
+                    entry.translated === textToDisplay ||
+                    (entry.original === correctedOriginalText && correctedOriginalText.length > 0)
+                  );
+
+                  if (isDuplicate) {
+                    // Removed duplicate logging - reduces console noise
+                    return prev;
+                  }
+
+                  // Use fallback if original text is missing
+                  const cachedFromSeqId = message.seqId !== undefined ? originalBySeqIdRef.current.get(message.seqId) : undefined;
+                  const fallbackOriginal = cachedFromSeqId || lastNonEmptyOriginalRef.current || '';
+
+                  const safeOriginal = correctedOriginalText && correctedOriginalText.trim()
+                    ? correctedOriginalText.trim()
+                    : fallbackOriginal;
+
+                  // Diagnostic logging: log correlation info if original was missing
+                  if (!correctedOriginalText || !correctedOriginalText.trim()) {
+                    console.log(`[ListenerPage] 🔗 Filled missing original: seqId=${message.seqId}, cachedFromSeqId=${!!cachedFromSeqId}, fallbackLen=${fallbackOriginal.length}, safeOriginalLen=${safeOriginal.length}`);
+                  }
+
+                  const newEntry = {
+                    original: safeOriginal, // Use safeOriginal to fill missing originals from cache
+                    translated: textToDisplay,
+                    timestamp: message.timestamp || Date.now()
+                  };
+
+                  // B) LISTENER_ROW_KEY logging: how rows are keyed
+                  const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
+                  console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
+
+                  // Removed history logging - reduces console noise
+                  return [...prev, newEntry].slice(-50);
+                });
+
+                // Clear live displays immediately after adding to history
+                setCurrentTranslation('');
+                setCurrentOriginal('');
               });
-              
-              // Clear live displays
-              setCurrentTranslation('');
-              setCurrentOriginal('');
-              
+
               // Reset segmenter to clear any buffered partial text
               if (segmenterRef.current) {
                 segmenterRef.current.reset();
               }
+              
+              // CRITICAL: Reset throttling refs so new partials can immediately update after final
+              // Without this, throttling might skip the first partials of the new segment
+              lastRenderTimeRef.current = 0;
+              lastTextLengthRef.current = 0;
             }
             break;
-          
+
           case 'session_ended':
             setError('The host has ended the session');
             setConnectionState('closed');
             break;
-          
+
           case 'error':
             console.error('[Listener] Error:', message.message);
             setError(message.message);
@@ -302,19 +694,19 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         console.error('[Listener] Failed to parse message:', err);
       }
     };
-    
+
     wsRef.current = ws;
   };
 
   const handleChangeLanguage = (newLang) => {
     setTargetLang(newLang);
-    
+
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'change_language',
         targetLang: newLang
       }));
-      
+
       // Clear old translations and current text when changing language
       setTranslations([]);
       setCurrentTranslation('');
@@ -339,7 +731,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100">
         <Header />
-        
+
         <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
           <button
             onClick={onBackToHome}
@@ -352,7 +744,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             <h2 className="text-2xl sm:text-3xl font-bold mb-4 sm:mb-6 text-gray-800 text-center">
               Join Translation Session
             </h2>
-            
+
             {error && (
               <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
                 {error}
@@ -418,7 +810,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100">
       <Header />
-      
+
       <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
         {/* Session Info Bar */}
         <div className="bg-white rounded-lg shadow-lg p-3 sm:p-4 mb-4 sm:mb-6">
@@ -427,7 +819,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               <p className="text-xs sm:text-sm text-gray-600">Session Code:</p>
               <p className="text-xl sm:text-2xl font-bold text-emerald-600">{sessionInfo?.sessionCode}</p>
             </div>
-            
+
             <div className="flex-1 sm:max-w-xs">
               <LanguageSelector
                 label="Your Language"
@@ -439,7 +831,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
             <div className="flex items-center justify-between sm:flex-col sm:items-end gap-3">
               <ConnectionStatus state={connectionState} />
-              
+
               <button
                 onClick={handleLeaveSession}
                 className="px-3 sm:px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm sm:text-base font-semibold rounded-lg transition-all"
@@ -463,8 +855,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               {connectionState === 'open' && (
                 <div className="flex space-x-1">
                   <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce"></div>
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{animationDelay: '0.15s'}}></div>
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{animationDelay: '0.3s'}}></div>
+                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.15s' }}></div>
+                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
                 </div>
               )}
               <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider flex items-center gap-1 sm:gap-2">
@@ -492,7 +884,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               </button>
             )}
           </div>
-          
+
           {/* Show both original and translation */}
           <div className="space-y-2 sm:space-y-3">
             {/* Original Text from Host */}
@@ -511,7 +903,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 <p className="text-white/40 text-xs sm:text-sm italic">Listening for host...</p>
               )}
             </div>
-            
+
             {/* Translated Text */}
             <div className="bg-white/15 backdrop-blur-sm rounded-lg sm:rounded-xl p-2 sm:p-3 border-2 border-white/20">
               <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-1 sm:mb-2 flex items-center gap-2">
@@ -530,13 +922,22 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     <span className="inline-block w-0.5 h-5 sm:h-6 ml-1 bg-emerald-300 animate-pulse"></span>
                   )}
                 </p>
+              ) : isTranslationStalled && currentOriginal ? (
+                <div className="space-y-2">
+                  <p className="text-white/70 text-sm sm:text-base leading-relaxed whitespace-pre-wrap italic">
+                    {currentOriginal}
+                  </p>
+                  <p className="text-white/50 text-xs sm:text-sm italic animate-pulse">
+                    ⏳ Waiting for translation...
+                  </p>
+                </div>
               ) : currentOriginal ? (
                 <p className="text-white/50 text-xs sm:text-sm italic animate-pulse">Translating...</p>
               ) : (
                 <p className="text-white/40 text-xs sm:text-sm italic">Waiting for host to speak...</p>
               )}
             </div>
-            
+
             <div className="mt-2 text-xs text-white/70 font-medium">
               {currentOriginal && currentTranslation && currentTranslation !== currentOriginal ? (
                 <>✨ Live translation updating...</>
@@ -566,7 +967,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             {translations.length > 0 && (
               <button
                 onClick={() => {
-                  const content = translations.map(t => 
+                  const content = translations.map(t =>
                     `Original: ${t.original}\nTranslation: ${t.translated}\n---`
                   ).join('\n')
                   const blob = new Blob([content], { type: 'text/plain' })
@@ -586,7 +987,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               </button>
             )}
           </div>
-          
+
           {translations.length === 0 ? (
             <div className="text-center py-8 sm:py-12 text-gray-500">
               <p className="text-base sm:text-lg">No translations yet</p>
@@ -611,7 +1012,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                       <p className="text-gray-700 text-sm sm:text-base leading-relaxed">{item.original}</p>
                     </div>
                   )}
-                  
+
                   <div>
                     <div className="flex items-center justify-between mb-1 sm:mb-1.5">
                       <span className="text-xs font-semibold text-green-600 uppercase">Translation</span>
@@ -637,7 +1038,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     </div>
                     <p className="text-gray-900 text-sm sm:text-base font-medium leading-relaxed">{item.translated}</p>
                   </div>
-                  
+
                   <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-gray-100 text-xs text-gray-400 flex items-center justify-between">
                     <span>{new Date(item.timestamp).toLocaleTimeString()}</span>
                     <span className="text-gray-300">#{translations.length - index}</span>

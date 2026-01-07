@@ -1,15 +1,44 @@
 /**
  * Host Mode Adapter - Uses CoreEngine for translation pipeline
- * 
+ *
  * PHASE 8: Migrate host mode to use CoreEngine
- * 
+ *
  * This adapter wraps CoreEngine and adds host-specific functionality:
  * - SessionStore integration for broadcasting
  * - Multi-language translation broadcasting
  * - Listener management
- * 
+ *
  * CRITICAL: Must maintain exact same behavior as current hostModeHandler
  */
+
+// --- TEMP DEBUG LEDGER (remove later) ---
+const corrLedger = new Map(); // sourceSeqId -> { en: [...], es: [...] }
+function ledgerAdd(sourceSeqId, kind, payload, route) {
+  if (sourceSeqId == null || sourceSeqId === 0) return;
+  const entry = corrLedger.get(sourceSeqId) || { en: [], es: [], other: [] };
+  const rec = {
+    t: Date.now(),
+    route, // 'host' | 'listeners'
+    kind,  // 'EN_ANCHOR' | 'ES_TRANSLATION' | etc
+    isPartial: payload?.isPartial,
+    hasTranslation: payload?.hasTranslation,
+    hasCorrection: payload?.hasCorrection,
+    targetLang: payload?.targetLang,
+    previewO: String(payload?.originalText ?? '').slice(0, 60),
+    previewT: String(payload?.translatedText ?? '').slice(0, 60),
+    updateType: payload?.updateType,
+  };
+  if (payload?.targetLang === 'en') entry.en.push(rec);
+  else if (payload?.targetLang === 'es') entry.es.push(rec);
+  else entry.other.push(rec);
+
+  // Keep small
+  entry.en = entry.en.slice(-5);
+  entry.es = entry.es.slice(-5);
+  entry.other = entry.other.slice(-5);
+
+  corrLedger.set(sourceSeqId, entry);
+}
 
 import { GoogleSpeechStream } from '../googleSpeechStream.js';
 import WebSocket from 'ws';
@@ -403,7 +432,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                     isPartial: isPartial,
                     isProblematic: isProblematic,
                   });
-                  
+
+                  // TEMP DEBUG LEDGER: Dump ledger for "Y grito" detection
+                  if (messageData?.translatedText?.includes('Y grito')) {
+                    console.log('[LEDGER_DUMP]', messageData.sourceSeqId, corrLedger.get(messageData.sourceSeqId));
+                  }
+
                   console.warn(new Error(`[TRACE_ES] ${isProblematic ? 'PROBLEMATIC' : 'VALID'} stack`).stack);
                 }
                 
@@ -418,10 +452,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                   });
                   return -1; // Return error code to indicate rejection
                 }
-                
+
+                // ✅ NEW: Emergency guard - never allow translation broadcasts missing sourceSeqId
+                const missingSourceSeqId =
+                  messageData?.sourceSeqId === undefined ||
+                  messageData?.sourceSeqId === null ||
+                  messageData?.sourceSeqId === 0;
+
+                if (messageData?.hasTranslation && messageData?.targetLang !== messageData?.sourceLang && missingSourceSeqId) {
+                  console.warn('[Invariant] Dropping translation missing sourceSeqId', {
+                    sourceLang: messageData?.sourceLang,
+                    targetLang: messageData?.targetLang,
+                    hasCorrection: messageData?.hasCorrection,
+                    isPartial: messageData?.isPartial,
+                    originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
+                    translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+                  });
+                  return null;
+                }
+
                 // PHASE 8: Use CoreEngine timeline tracker for sequence IDs
                 const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
-                
+
+                // TEMP DEBUG LEDGER: Add to correlation ledger
+                const sid = messageData?.sourceSeqId ?? (messageData?.targetLang === messageData?.sourceLang ? seqId : null);
+                ledgerAdd(sid, messageData?.targetLang === 'es' ? 'ES_EMIT' : 'EN_EMIT', messageData, targetLang ? 'listeners' : 'host');
+
                 // Send to host
                 if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify(message));
@@ -916,11 +972,40 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode]   translations: ${Object.keys(translations).length} language(s)`);
                       console.log(`[HostMode]   hasCorrection: ${hasCorrection}`);
 
+                      // ✅ NEW: Create a guaranteed source-language FINAL anchor seqId for correlation.
+                      // This does NOT change UI behavior (still same content), it only provides a stable join key.
+                      let finalSourceSeqId = null;
+                      try {
+                        const anchorPayload = {
+                          type: 'translation',
+                          originalText: textToProcess,
+                          correctedText: correctedText,
+                          sourceLang: currentSourceLang,
+                          targetLang: currentSourceLang,
+                          timestamp: Date.now(),
+                          hasTranslation: false,
+                          hasCorrection: hasCorrection,
+                          forceFinal: !!options.forceFinal,
+                          // Same-language: show corrected text as translatedText (existing behavior)
+                          translatedText: correctedText
+                        };
+
+                        const anchorSeqId = broadcastWithSequence(anchorPayload, false, currentSourceLang);
+                        // Treat 0/undefined/null as invalid
+                        if (anchorSeqId !== undefined && anchorSeqId !== null && anchorSeqId !== 0) {
+                          finalSourceSeqId = anchorSeqId;
+                        } else {
+                          console.warn(`[HostMode] ⚠️ FINAL anchor broadcast returned invalid seqId`, { anchorSeqId });
+                        }
+                      } catch (e) {
+                        console.warn(`[HostMode] ⚠️ FINAL anchor broadcast failed`, e?.message || e);
+                      }
+
                       // Broadcast to each language group
                       for (const targetLang of targetLanguages) {
                         // CRITICAL: Only use translation if it exists and is valid - never fallback to English transcriptText
                         const translatedText = translations[targetLang];
-                        
+
                         // Check if translation is valid:
                         // 1. Must exist and not be empty
                         // 2. Must not be the same as original or corrected text (no translation happened)
@@ -930,18 +1015,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                           translatedText.startsWith('[Translation error') ||
                           translatedText.includes('Translation error')
                         );
-                        
-                        const hasTranslationForLang = translatedText && 
-                                                      translatedText.trim() &&
-                                                      !isErrorMessage &&
-                                                      translatedText !== textToProcess &&
-                                                      translatedText !== correctedText;
-                        
+
+                        const hasTranslationForLang = translatedText &&
+                          translatedText.trim() &&
+                          !isErrorMessage &&
+                          translatedText !== textToProcess &&
+                          translatedText !== correctedText;
+
                         console.log(`[HostMode] 📤 Broadcasting FINAL to ${targetLang}:`);
                         console.log(`[HostMode]   translatedText: "${translatedText || 'undefined'}"`);
                         console.log(`[HostMode]   isErrorMessage: ${isErrorMessage}`);
                         console.log(`[HostMode]   hasTranslationForLang: ${hasTranslationForLang}`);
-                        
+
                         // CRITICAL: If translation is valid, send it. Otherwise, don't send translatedText at all
                         // The frontend will handle the absence of translatedText appropriately
                         const messageToSend = {
@@ -955,12 +1040,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                           hasCorrection: hasCorrection,
                           forceFinal: !!options.forceFinal
                         };
-                        
+
+                        // ✅ NEW: attach correlation key to *non-source language* FINAL translations only
+                        if (targetLang !== currentSourceLang && hasTranslationForLang) {
+                          messageToSend.sourceSeqId = finalSourceSeqId;
+
+                          // ✅ NEW: hard invariant — never broadcast a translated FINAL without a valid sourceSeqId
+                          if (messageToSend.sourceSeqId === undefined || messageToSend.sourceSeqId === null || messageToSend.sourceSeqId === 0) {
+                            console.warn(`[HostMode] 🚫 Dropping FINAL translation missing sourceSeqId`, {
+                              targetLang,
+                              finalSourceSeqId,
+                              originalPreview: (textToProcess || '').slice(0, 80),
+                              translatedPreview: (translatedText || '').slice(0, 80)
+                            });
+                            continue;
+                          }
+                        }
+
                         // CRITICAL: For same-language listeners, use correctedText as translatedText (like solo mode)
                         // This ensures grammar corrections appear in history
                         if (targetLang === currentSourceLang) {
                           messageToSend.translatedText = correctedText; // Same language = show corrected text
                           messageToSend.hasTranslation = false; // No translation needed
+                          // (No sourceSeqId needed for same-language)
                         }
                         // Only include translatedText if we have a valid translation
                         else if (hasTranslationForLang) {
@@ -971,7 +1073,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           messageToSend.translatedText = undefined;
                           messageToSend.translationError = true;
                         }
-                        
+
                         broadcastWithSequence(messageToSend, false, targetLang);
                       }
                       
