@@ -560,14 +560,47 @@ export async function handleHostConnection(clientWs, sessionId) {
                 syncForcedFinalBuffer();
               };
               
-              // Helper to detect recovery epoch transitions and increment epoch when recovery starts
+              // Helper to detect recovery epoch transitions and increment epoch when recovery starts/ends
               const checkRecoveryEpochTransition = () => {
                 const currentRecoveryInProgress = !!forcedFinalBuffer?.recoveryInProgress;
+                
+                // Recovery start detection
                 if (!previousRecoveryInProgress && currentRecoveryInProgress) {
                   // Recovery just started - increment epoch
                   recoveryEpoch++;
                   console.log(`[RecoveryGate] Recovery started - epoch incremented to ${recoveryEpoch}`);
                 }
+                
+                // Recovery end detection - CRITICAL: Always reset state when recovery ends
+                if (previousRecoveryInProgress && !currentRecoveryInProgress) {
+                  console.log(`[RecoveryGate] Recovery ended - forcing partial tracker reset & clearing overlays (epoch: ${recoveryEpoch})`);
+                  
+                  // Fix E: Increment segment epoch to ensure new segment identity
+                  segmentEpoch++;
+                  console.log(`[RecoveryGate] Segment epoch incremented to ${segmentEpoch} (recovery end)`);
+                  
+                  // Fix A: Clear emit guard cache for the old segment
+                  // Since we're using segment-based keys now, the old key becomes stale automatically
+                  // But we should clear any potential stale entries for safety
+                  const oldSegmentKey = `segment_${segmentEpoch - 1}`;
+                  clearLastEmittedText(oldSegmentKey);
+                  console.log(`[RecoveryGate] Cleared emit guard cache for old segment: ${oldSegmentKey}`);
+                  
+                  // Fix A: Reset partial tracker
+                  partialTracker.reset();
+                  
+                  // Fix C: Reset correction baseline
+                  latestPartialTextForCorrection = '';
+                  
+                  // Fix A: Sync variables after reset
+                  syncPartialVariables();
+                  
+                  // Fix A: Clear UI overlay
+                  sendLivePartial('', { clear: true, recoveryEpoch, recoveryInProgress: false });
+                  
+                  console.log(`[RecoveryGate] Recovery end cleanup complete - partial tracker reset, correction baseline cleared, segment epoch: ${segmentEpoch}`);
+                }
+                
                 previousRecoveryInProgress = currentRecoveryInProgress;
               };
               
@@ -621,6 +654,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                   segmentStartTime = Date.now();
                   segmentEpoch++;
                   
+                  // Fix B: Use segment-based key for emit guard (consistent with main partial emission)
+                  const partialSegmentId = `segment_${segmentEpoch}`;
+                  
                   // Emit as partial (same path as normal)
                   const seqId = broadcastWithSequence({
                     type: 'translation',
@@ -636,7 +672,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                     pipeline: 'normal' // Normal pipeline flag
                   }, true);
                   
-                  setLastEmittedText(seqId, dedupeResult.remainder);
+                  // Fix B: Track last emitted text using segment-based key (not seqId)
+                  setLastEmittedText(partialSegmentId, dedupeResult.remainder);
                 } else {
                   // No remainder - already covered by forced-final
                   const snippet = buffered.text.substring(0, 60);
@@ -1877,9 +1914,105 @@ export async function handleHostConnection(clientWs, sessionId) {
                       }
                       const snippet = partialTextToSend.substring(0, 60);
                       console.log(`[RecoveryGate] BUFFER normal partial during recovery (epoch: ${recoveryEpoch}, pipeline: normal, text: "${snippet}...")`);
-                      // Send UI-only live partial update (does NOT affect sequenced pipeline)
+                      
+                      // CRITICAL: Broadcast to listeners (and host) as ephemeral translation partial
+                      // This ensures listeners see live updates during recovery, not just the host
+                      syncForcedFinalBuffer();
+                      const currentRecoveryEpoch = forcedFinalBuffer?.epoch ?? recoveryEpoch;
+                      
+                      // Get target languages for translation
+                      const targetLanguages = sessionStore.getSessionLanguages(currentSessionId);
+                      const sameLanguageTargets = targetLanguages.filter(lang => lang === currentSourceLang);
+                      const translationTargets = targetLanguages.filter(lang => lang !== currentSourceLang);
+                      
+                      // Send original text immediately to same-language listeners and host
+                      for (const targetLang of sameLanguageTargets.length > 0 ? sameLanguageTargets : [currentSourceLang]) {
+                        broadcastWithSequence({
+                          type: 'translation',
+                          originalText: partialTextToSend,
+                          translatedText: partialTextToSend,
+                          sourceLang: currentSourceLang,
+                          targetLang: targetLang,
+                          timestamp: Date.now(),
+                          isTranscriptionOnly: true,
+                          hasTranslation: false,
+                          hasCorrection: false,
+                          isPartial: true,
+                          ephemeral: true, // Mark as ephemeral (prevents history commit)
+                          suppressHistory: true, // Hard flag to prevent history commit
+                          recoveryEpoch: currentRecoveryEpoch,
+                          pipeline: 'normal', // Pipeline metadata
+                          recoveryInProgress: true // Recovery state metadata
+                        }, true, targetLang);
+                      }
+                      
+                      // Trigger translation processing for translation targets (async, don't wait)
+                      if (translationTargets.length > 0) {
+                        const translationSeedText = applyCachedCorrections(partialTextToSend);
+                        const partialWorker = usePremiumTier 
+                          ? realtimePartialTranslationWorker 
+                          : partialTranslationWorker;
+                        const workerType = usePremiumTier ? 'REALTIME' : 'CHAT';
+                        const underRestartCooldown = usePremiumTier && Date.now() < realtimeTranslationCooldownUntil;
+                        
+                        if (!underRestartCooldown) {
+                          console.log(`[RecoveryGate] 🔀 Triggering ${workerType} translation for ephemeral partial (${translationTargets.length} language(s), ${partialTextToSend.length} chars)`);
+                          partialWorker.translateToMultipleLanguages(
+                            translationSeedText,
+                            currentSourceLang,
+                            translationTargets,
+                            process.env.OPENAI_API_KEY,
+                            currentSessionId
+                          ).then(translations => {
+                            if (!translations || Object.keys(translations).length === 0) {
+                              console.warn(`[RecoveryGate] ⚠️ Translation returned empty for ephemeral partial`);
+                              return;
+                            }
+                            
+                            console.log(`[RecoveryGate] ✅ TRANSLATION (EPHEMERAL): Translated to ${Object.keys(translations).length} language(s)`);
+                            
+                            // Broadcast translation results as ephemeral
+                            for (const targetLang of translationTargets) {
+                              const translatedText = translations[targetLang];
+                              const isSameAsOriginal = translatedText === translationSeedText || 
+                                                       translatedText.trim() === translationSeedText.trim() ||
+                                                       translatedText.toLowerCase() === translationSeedText.toLowerCase();
+                              
+                              if (isSameAsOriginal) {
+                                console.warn(`[RecoveryGate] ⚠️ Translation matches original (English leak) for ${targetLang}`);
+                                continue;
+                              }
+                              
+                              broadcastWithSequence({
+                                type: 'translation',
+                                originalText: partialTextToSend,
+                                translatedText: translatedText,
+                                sourceLang: currentSourceLang,
+                                targetLang: targetLang,
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasTranslation: true,
+                                hasCorrection: false,
+                                isPartial: true,
+                                ephemeral: true, // Mark as ephemeral (prevents history commit)
+                                suppressHistory: true, // Hard flag to prevent history commit
+                                recoveryEpoch: currentRecoveryEpoch,
+                                pipeline: 'normal',
+                                recoveryInProgress: true
+                              }, true, targetLang);
+                            }
+                          }).catch(error => {
+                            if (error.name !== 'AbortError') {
+                              console.error(`[RecoveryGate] ❌ Translation error for ephemeral partial:`, error.message);
+                            }
+                          });
+                        }
+                      }
+                      
+                      // Also send UI-only live partial update to host (for overlay)
                       sendLivePartial(partialTextToSend, { recoveryEpoch, recoveryInProgress: true });
-                      // Return early - do NOT emit, do NOT update "last emitted" trackers
+                      
+                      // Return early - do NOT update "last emitted" trackers (buffered, not committed)
                       return;
                     }
                   }
@@ -1888,14 +2021,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                   if (!shouldSkipSendingPartial) {
                     // Live partial transcript - send original immediately with sequence ID (solo mode style)
                     // Apply emit guards to prevent duplicate flashes and fragment spam
-                    const partialSegmentId = `partial_${Date.now()}`; // Temporary, will use seqId after send
+                    // Fix B: Use segment-based key instead of timestamp-based key
+                    // This ensures emit guard cache gets fresh key when segmentEpoch increments (e.g., on recovery end)
+                    const partialSegmentId = `segment_${segmentEpoch}`;
                     const emitCheck = shouldEmitPartial(partialSegmentId, partialTextToSend, {
                       allowCorrection: false,
                       mode: 'HostMode'
                     });
                     
                     if (!emitCheck.shouldEmit) {
-                      console.log(`[HostMode] ⏭️ ${emitCheck.reason}: "${partialTextToSend.substring(0, 50)}..."`);
+                      console.log(`[HostMode] ⏭️ ${emitCheck.reason}: "${partialTextToSend.substring(0, 50)}..." (segmentId: ${partialSegmentId})`);
                       return; // Skip emitting this partial
                     }
                     
@@ -1911,7 +2046,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const recoveryStub = isRecoveryStub || false;
                     
                     // Log emission before broadcasting
-                    console.log(`[HostMode] EMIT_PARTIAL pipeline=${pipeline}, recoveryInProgress=${recoveryInProgress}, recoveryStub=${recoveryStub}, text="${partialTextToSend.substring(0, 60)}..."`);
+                    console.log(`[HostMode] EMIT_PARTIAL pipeline=${pipeline}, recoveryInProgress=${recoveryInProgress}, recoveryStub=${recoveryStub}, segmentId=${partialSegmentId}, text="${partialTextToSend.substring(0, 60)}..."`);
                     
                     // CRITICAL: Mark partials as ephemeral during recovery to prevent them from being committed to history
                     // They still update live text (no UI freeze), but won't leak into history
@@ -1950,8 +2085,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                       recoveryStub: recoveryStub // Recovery stub metadata (false for continuations)
                     }, true);
                     
-                    // Track last emitted text for this seqId to prevent duplicates
-                    setLastEmittedText(seqId, partialTextToSend);
+                    // Fix B: Track last emitted text using segment-based key (not seqId)
+                    // This ensures emit guard cache is keyed by segment, so when segmentEpoch increments,
+                    // we automatically get a fresh cache key and don't block partials due to stale entries
+                    setLastEmittedText(partialSegmentId, partialTextToSend);
                   }
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
