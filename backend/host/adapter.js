@@ -157,6 +157,22 @@ export async function handleHostConnection(clientWs, sessionId) {
 
   // Helper: Broadcast message to all listeners
   const broadcastToListeners = (messageData, isPartial = true) => {
+    // Spanish emission tracer for bypass path
+    const tl = messageData?.targetLang;
+    const sl = messageData?.sourceLang;
+    const hasT = !!messageData?.hasTranslation;
+    if (tl === 'es') {
+      console.warn('[TRACE_ES_BYPASS] Spanish emission via broadcastToListeners (bypasses broadcastWithSequence)', {
+        type: messageData?.type,
+        hasTranslation: hasT,
+        sourceLang: sl,
+        targetLang: tl,
+        originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
+        translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+      });
+      console.warn(new Error('[TRACE_ES_BYPASS] stack').stack);
+    }
+    
     const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
     sessionStore.broadcastToListeners(currentSessionId, message);
     return seqId;
@@ -356,6 +372,53 @@ export async function handleHostConnection(clientWs, sessionId) {
                   return -1;
                 }
                 
+                // Spanish emission stack tracer - catches every path that emits Spanish
+                const tl = messageData?.targetLang || targetLang;
+                const sl = messageData?.sourceLang;
+                const hasT = !!messageData?.hasTranslation;
+                const upd = messageData?.updateType;
+                const corr = messageData?.hasCorrection;
+                const hasOriginal = !!(messageData?.originalText && messageData.originalText.trim());
+                const hasTranslated = !!(messageData?.translatedText && messageData.translatedText.trim());
+                
+                // Catch ALL Spanish emissions to trace the source - log everything as warning for visibility
+                if (tl === 'es') {
+                  const isProblematic = !hasT || sl !== 'en' || !hasOriginal;
+                  
+                  console.warn(`[TRACE_ES] Spanish emission ${isProblematic ? 'PROBLEMATIC' : 'VALID'}`, {
+                    type: messageData?.type,
+                    updateType: upd,
+                    hasCorrection: corr,
+                    hasTranslation: messageData?.hasTranslation,
+                    sourceLang: sl,
+                    targetLang: tl,
+                    targetLangParam: targetLang,
+                    payloadTargetLang: messageData?.targetLang,
+                    hasOriginalText: hasOriginal,
+                    hasTranslatedText: hasTranslated,
+                    sourceSeqId: messageData?.sourceSeqId,
+                    originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
+                    correctedPreview: String(messageData?.correctedText ?? '').slice(0, 80),
+                    translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+                    isPartial: isPartial,
+                    isProblematic: isProblematic,
+                  });
+                  
+                  console.warn(new Error(`[TRACE_ES] ${isProblematic ? 'PROBLEMATIC' : 'VALID'} stack`).stack);
+                }
+                
+                // ✅ INVARIANT: Never allow non-source language emissions unless it actually has translation text
+                if ((messageData?.targetLang !== messageData?.sourceLang) && !messageData?.hasTranslation) {
+                  console.warn('[HostMode] 🚫 [Invariant] Dropping non-source emission without translation', {
+                    sourceLang: messageData?.sourceLang,
+                    targetLang: messageData?.targetLang,
+                    updateType: messageData?.updateType,
+                    hasCorrection: messageData?.hasCorrection,
+                    seqId: messageData?.seqId
+                  });
+                  return -1; // Return error code to indicate rejection
+                }
+                
                 // PHASE 8: Use CoreEngine timeline tracker for sequence IDs
                 const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
                 
@@ -363,10 +426,30 @@ export async function handleHostConnection(clientWs, sessionId) {
                 if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify(message));
                   console.log(`[HostMode] 📤 Sent to host (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${messageData.targetLang || 'N/A'})`);
+                  
+                  // Optional correlation logging
+                  if (messageData?.sourceSeqId !== undefined) {
+                    console.log(`[HostMode] 🔗 Correlate: seqId=${seqId} sourceSeqId=${messageData.sourceSeqId} target=${messageData.targetLang || 'N/A'}`);
+                  }
                 }
                 
                 // Broadcast to listeners
                 if (targetLang) {
+                  // Spanish routing tracer - check if routing parameter routes to Spanish
+                  if (targetLang === 'es' && (!messageData?.hasTranslation || messageData?.sourceLang !== 'en')) {
+                    console.warn('[TRACE_ES_ROUTING] Spanish routing via targetLang parameter', {
+                      targetLangParam: targetLang,
+                      payloadTargetLang: messageData?.targetLang,
+                      hasTranslation: messageData?.hasTranslation,
+                      sourceLang: messageData?.sourceLang,
+                      type: messageData?.type,
+                      updateType: messageData?.updateType,
+                      originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
+                      translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+                    });
+                    console.warn(new Error('[TRACE_ES_ROUTING] stack').stack);
+                  }
+                  
                   // Broadcast to specific language group
                   console.log(`[HostMode] 📡 Broadcasting to ${targetLang} listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
                   sessionStore.broadcastToListeners(currentSessionId, message, targetLang);
@@ -1812,6 +1895,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                         const sameLanguageTargets = targetLanguages.filter(lang => lang === currentSourceLang);
                         const translationTargets = targetLanguages.filter(lang => lang !== currentSourceLang);
                         
+                        // ✅ Declare correlation variables before both blocks so they're accessible to translation handler
+                        let sourceSeqId = null;
+                        let sourceOriginalText = rawCapturedText; // Freeze the exact English you emitted
+                        
                         // TRANSLATION MODE: Decouple grammar and translation for lowest latency
                         // Fire both in parallel, but send results independently (grammar only for English)
                         // Route to appropriate worker based on tier
@@ -1828,7 +1915,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (sameLanguageTargets.length > 0) {
                           // Send raw text immediately to same-language listeners
                           for (const targetLang of sameLanguageTargets) {
-                            broadcastWithSequence({
+                            const seqId = broadcastWithSequence({
                               type: 'translation',
                               originalText: rawCapturedText,
                               translatedText: capturedText,
@@ -1840,7 +1927,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                               hasCorrection: false,
                               isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                             }, true, targetLang);
+                            sourceSeqId = seqId; // Capture the last seqId from same-language broadcast
                           }
+                          
+                          // ✅ sourceOriginalText already set above - freeze the exact English you emitted
                           
                           // Start grammar correction asynchronously (English only, don't wait for it)
                           if (currentSourceLang === 'en') {
@@ -1940,9 +2030,26 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   continue; // Don't send English as translation
                                 }
                                 
+                                // ✅ HARD INVARIANT: never send translation with blank original
+                                const safeOriginal =
+                                  (rawCapturedText && rawCapturedText.trim()) ||
+                                  (sourceOriginalText && sourceOriginalText.trim()) ||
+                                  (translationReadyText && translationReadyText.trim()) ||
+                                  '';
+                                
+                                if (!safeOriginal) {
+                                  console.warn(`[HostMode] 🚫 Dropping translation partial (blank originalText)`, {
+                                    sourceSeqId,
+                                    targetLang,
+                                    translatedPreview: (translatedText || '').slice(0, 80),
+                                  });
+                                  continue;
+                                }
+                                
                                 broadcastWithSequence({
                                   type: 'translation',
-                                  originalText: rawCapturedText,
+                                  sourceSeqId,              // ✅ correlation key
+                                  originalText: safeOriginal,
                                   translatedText: translatedText,
                                   sourceLang: currentSourceLang,
                                   targetLang: targetLang,
@@ -1998,21 +2105,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 isPartial: true // CRITICAL: Grammar updates for partials are still partials
                               }, true, currentSourceLang);
                               
-                              // Broadcast grammar correction to all listener language groups
-                              for (const targetLang of targetLanguages) {
-                                broadcastWithSequence({
-                                  type: 'translation',
-                                  originalText: rawCapturedText,
-                                  correctedText: correctedText,
-                                  sourceLang: currentSourceLang,
-                                  targetLang: targetLang,
-                                  timestamp: Date.now(),
-                                  isTranscriptionOnly: false,
-                                  hasCorrection: true,
-                                  updateType: 'grammar', // Flag for grammar-only update
-                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
-                                }, true, targetLang);
-                              }
+                              // Broadcast grammar correction to same-language listeners only
+                              broadcastWithSequence({
+                                type: 'translation',
+                                originalText: rawCapturedText,
+                                correctedText: correctedText,
+                                sourceLang: currentSourceLang,
+                                targetLang: currentSourceLang,  // ✅ Force source language only
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasCorrection: true,
+                                updateType: 'grammar', // Flag for grammar-only update
+                                isPartial: true, // CRITICAL: Grammar updates for partials are still partials
+                                sourceSeqId: sourceSeqId || undefined  // Optional: include if available for correlation
+                              }, true, currentSourceLang);
                             }).catch(error => {
                               if (error.name !== 'AbortError') {
                                 console.error(`[HostMode] ❌ Grammar error (${rawCapturedText.length} chars):`, error.message);
@@ -2111,6 +2217,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                           const sameLanguageTargets = targetLanguages.filter(lang => lang === currentSourceLang);
                           const translationTargets = targetLanguages.filter(lang => lang !== currentSourceLang);
                           
+                          // ✅ Declare correlation variables before both blocks so they're accessible to translation handler
+                          let sourceSeqId = null;
+                          let sourceOriginalText = latestText; // Freeze the exact English you emitted
+                          
                           // Handle same-language targets
                           if (sameLanguageTargets.length > 0) {
                             lastPartialTranslation = latestText;
@@ -2120,7 +2230,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             
                             // Send transcription immediately
                             for (const targetLang of sameLanguageTargets) {
-                              broadcastWithSequence({
+                              const seqId = broadcastWithSequence({
                                 type: 'translation',
                                 originalText: latestText,
                                 translatedText: latestText,
@@ -2132,6 +2242,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 hasCorrection: false,
                                 isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                               }, true, targetLang);
+                              sourceSeqId = seqId; // Capture the last seqId from same-language broadcast
                             }
                             
                             // Start grammar correction asynchronously (English only)
@@ -2236,9 +2347,25 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     continue; // Don't send English as translation
                                   }
                                   
+                                  // ✅ HARD INVARIANT: never send translation with blank original
+                                  const safeOriginal =
+                                    (latestText && latestText.trim()) ||
+                                    (sourceOriginalText && sourceOriginalText.trim()) ||
+                                    '';
+                                  
+                                  if (!safeOriginal) {
+                                    console.warn(`[HostMode] 🚫 Dropping delayed translation partial (blank originalText)`, {
+                                      sourceSeqId,
+                                      targetLang,
+                                      translatedPreview: (translatedText || '').slice(0, 80),
+                                    });
+                                    continue;
+                                  }
+                                  
                                   broadcastWithSequence({
                                     type: 'translation',
-                                    originalText: latestText,
+                                    sourceSeqId,              // ✅ correlation key
+                                    originalText: safeOriginal,
                                     translatedText: translatedText,
                                     sourceLang: currentSourceLang,
                                     targetLang: targetLang,
@@ -2287,21 +2414,20 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, currentSourceLang);
                                   
-                                  // Broadcast grammar update to listener language groups - sequence IDs handle ordering
-                                  for (const targetLang of targetLanguages) {
-                                    broadcastWithSequence({
-                                      type: 'translation',
-                                      originalText: latestText,
-                                      correctedText: correctedText,
-                                      sourceLang: currentSourceLang,
-                                      targetLang: targetLang,
-                                      timestamp: Date.now(),
-                                      isTranscriptionOnly: false,
-                                      hasCorrection: true,
-                                      updateType: 'grammar',
-                                      isPartial: true // CRITICAL: Grammar updates for partials are still partials
-                                    }, true, targetLang);
-                                  }
+                                  // Broadcast grammar update to same-language listeners only
+                                  broadcastWithSequence({
+                                    type: 'translation',
+                                    originalText: latestText,
+                                    correctedText: correctedText,
+                                    sourceLang: currentSourceLang,
+                                    targetLang: currentSourceLang,  // ✅ Force source language only
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: false,
+                                    hasCorrection: true,
+                                    updateType: 'grammar',
+                                    isPartial: true, // CRITICAL: Grammar updates for partials are still partials
+                                    sourceSeqId: sourceSeqId || undefined  // Optional: include if available for correlation
+                                  }, true, currentSourceLang);
                                 }
                               }).catch(error => {
                                 if (error.name !== 'AbortError') {
