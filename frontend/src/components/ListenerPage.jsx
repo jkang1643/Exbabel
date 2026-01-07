@@ -99,6 +99,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // Cache for original text correlation
   const lastNonEmptyOriginalRef = useRef('');
   const originalBySeqIdRef = useRef(new Map());
+  const lastStableKeyRef = useRef(null); // last seen (sourceSeqId ?? seqId)
 
   // Helper to cache original text with seqId correlation
   const cacheOriginal = (text, seqId) => {
@@ -131,12 +132,21 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           setTimeout(() => {
             flushSync(() => {
               setTranslations(prev => {
+                // ✅ Fill original for auto-segmented rows using stable correlation key
+                const key = lastStableKeyRef.current;
+                const cachedOriginal =
+                  (key !== null && key !== undefined)
+                    ? originalBySeqIdRef.current.get(key)
+                    : undefined;
+
+                const safeOriginal = (cachedOriginal || lastNonEmptyOriginalRef.current || '').trim();
+
                 const newItem = {
-                  original: '', // Auto-segmented partials don't have original text (will be available in finals)
+                  original: safeOriginal,   // ✅ was '' (this caused Spanish-only rows)
                   translated: joinedText,
                   timestamp: Date.now(),
-                  seqId: -1, // Auto-segmented partials don't have seqId
-                  isSegmented: true  // Flag to indicate this was auto-segmented
+                  seqId: -1,
+                  isSegmented: true
                 };
 
                 // CRITICAL: Insert in correct position based on timestamp (sequenceId is -1 for auto-segmented)
@@ -274,6 +284,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       try {
         const message = JSON.parse(event.data);
 
+        // Track last stable key for onFlush correlation
+        lastStableKeyRef.current = (message.sourceSeqId ?? message.seqId ?? null);
+
         // TRACE: Log WebSocket message received
         traceUI('WS_IN', message);
 
@@ -319,10 +332,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               if (textToDisplay) {
                 // TRANSLATION STALL DETECTION: Track when source partials arrive
                 lastSourcePartialTimeRef.current = Date.now();
-                
+
                 // Removed partial logging - was causing event loop lag
                 setCurrentOriginal(textToDisplay);
-                cacheOriginal(textToDisplay, message.seqId);
+                cacheOriginal(textToDisplay, message.sourceSeqId ?? message.seqId);
               }
             }
             break;
@@ -335,7 +348,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const correctedText = message.correctedText;
               const originalToCache = correctedText && correctedText.trim() ? correctedText : originalText;
               if (originalToCache && originalToCache.trim()) {
-                cacheOriginal(originalToCache, message.seqId);
+                cacheOriginal(originalToCache, message.sourceSeqId ?? message.seqId);
               }
               
               const translatedText = message.translatedText || '';
@@ -390,7 +403,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               
               // Update current original to show the final
               setCurrentOriginal(correctedOriginalText);
-              cacheOriginal(correctedOriginalText, message.seqId);
+              cacheOriginal(correctedOriginalText, message.sourceSeqId ?? message.seqId);
               
               // Add to translations history (as original text entry)
               setTranslations(prev => {
@@ -425,7 +438,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             const isForMyLanguageFinal = message.targetLang === targetLang;
             
             // Cache original text if available
-            cacheOriginal(finalCorrectedOriginalText, message.seqId);
+            cacheOriginal(finalCorrectedOriginalText, message.sourceSeqId ?? message.seqId);
             
             if (isForMyLanguageFinal && finalText) {
               // Removed final translation logging - reduces console noise
@@ -506,7 +519,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               if (textToDisplay) {
                 // Removed partial logging - was causing event loop lag
                 setCurrentOriginal(textToDisplay);
-                cacheOriginal(textToDisplay, message.seqId);
+                cacheOriginal(textToDisplay, message.sourceSeqId ?? message.seqId);
               }
 
               // Only update translation if this message is actually intended for this listener's language
