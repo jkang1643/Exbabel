@@ -1899,6 +1899,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                         let sourceSeqId = null;
                         let sourceOriginalText = rawCapturedText; // Freeze the exact English you emitted
                         
+                        // ✅ ALWAYS create an EN anchor seqId for correlation (even if sameLanguageTargets is empty)
+                        const anchorSeqId = broadcastWithSequence({
+                          type: 'translation',
+                          originalText: rawCapturedText,
+                          translatedText: capturedText,
+                          sourceLang: currentSourceLang,
+                          targetLang: currentSourceLang,
+                          timestamp: Date.now(),
+                          isTranscriptionOnly: true,
+                          hasTranslation: false,
+                          hasCorrection: false,
+                          isPartial: true
+                        }, true, currentSourceLang);
+                        if (anchorSeqId > 0) {
+                          sourceSeqId = anchorSeqId; // Only set if broadcast succeeded
+                        }
+                        
                         // TRANSLATION MODE: Decouple grammar and translation for lowest latency
                         // Fire both in parallel, but send results independently (grammar only for English)
                         // Route to appropriate worker based on tier
@@ -2041,6 +2058,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   console.warn(`[HostMode] 🚫 Dropping translation partial (blank originalText)`, {
                                     sourceSeqId,
                                     targetLang,
+                                    translatedPreview: (translatedText || '').slice(0, 80),
+                                  });
+                                  continue;
+                                }
+                                
+                                // ✅ HARD INVARIANT: never send translation with null sourceSeqId
+                                if (sourceSeqId == null) {
+                                  console.warn(`[HostMode] 🚫 Dropping translation: missing sourceSeqId`, {
+                                    targetLang,
+                                    originalPreview: safeOriginal.slice(0, 80),
                                     translatedPreview: (translatedText || '').slice(0, 80),
                                   });
                                   continue;
@@ -2221,6 +2248,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                           let sourceSeqId = null;
                           let sourceOriginalText = latestText; // Freeze the exact English you emitted
                           
+                          // ✅ ALWAYS create an EN anchor seqId for correlation (even if sameLanguageTargets is empty)
+                          const anchorSeqId = broadcastWithSequence({
+                            type: 'translation',
+                            originalText: latestText,
+                            translatedText: latestText,
+                            sourceLang: currentSourceLang,
+                            targetLang: currentSourceLang,
+                            timestamp: Date.now(),
+                            isTranscriptionOnly: true,
+                            hasTranslation: false,
+                            hasCorrection: false,
+                            isPartial: true
+                          }, true, currentSourceLang);
+                          if (anchorSeqId > 0) {
+                            sourceSeqId = anchorSeqId; // Only set if broadcast succeeded
+                          }
+                          
                           // Handle same-language targets
                           if (sameLanguageTargets.length > 0) {
                             lastPartialTranslation = latestText;
@@ -2357,6 +2401,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     console.warn(`[HostMode] 🚫 Dropping delayed translation partial (blank originalText)`, {
                                       sourceSeqId,
                                       targetLang,
+                                      translatedPreview: (translatedText || '').slice(0, 80),
+                                    });
+                                    continue;
+                                  }
+                                  
+                                  // ✅ HARD INVARIANT: never send translation with null sourceSeqId
+                                  if (sourceSeqId == null) {
+                                    console.warn(`[HostMode] 🚫 Dropping delayed translation: missing sourceSeqId`, {
+                                      targetLang,
+                                      originalPreview: safeOriginal.slice(0, 80),
                                       translatedPreview: (translatedText || '').slice(0, 80),
                                     });
                                     continue;
