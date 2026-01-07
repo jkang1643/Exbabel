@@ -908,7 +908,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                           broadcastWithSequence({
                             type: 'translation',
-                            originalText: textToProcess,
+                            originalText: correctedText,
                             correctedText: correctedText,
                             translatedText: correctedText,
                             sourceLang: currentSourceLang,
@@ -984,7 +984,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       try {
                         const anchorPayload = {
                           type: 'translation',
-                          originalText: textToProcess,
+                          originalText: correctedText,
                           correctedText: correctedText,
                           sourceLang: currentSourceLang,
                           targetLang: currentSourceLang,
@@ -1037,7 +1037,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // The frontend will handle the absence of translatedText appropriately
                         const messageToSend = {
                           type: 'translation',
-                          originalText: textToProcess,
+                          originalText: correctedText,
                           correctedText: correctedText,
                           sourceLang: currentSourceLang,
                           targetLang: targetLang,
