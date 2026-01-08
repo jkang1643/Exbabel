@@ -73,6 +73,49 @@ The application is now working correctly with improved reliability:
 
 ## 1) What we did (bug fixes / changes) — newest first
 
+### 2026-01-09 — FIXED: Listener ordering was random (1, 4, 2, 3) due to missing seqId/sourceSeqId in committed rows
+**Status:** ✅ IMPLEMENTED - Translation rows now have stable ordering
+
+**Bug name:** Missing sequence IDs causing random ordering in listener translation history
+
+**Symptom:**
+- Translation rows appeared in random order (e.g., "1, 4, 2, 3") instead of chronological order
+- UI sorting logic couldn't order rows because `seqId` and `sourceSeqId` were `undefined` in committed entries
+- Non-deterministic row ordering made it difficult to follow conversation flow
+
+**Root cause:**
+- In `ListenerPage.jsx`, the `newEntry` object for final translations was missing `seqId` and `sourceSeqId` properties
+- Without these sequence identifiers, the UI's sorting logic had no stable keys to order rows chronologically
+- This caused rows to appear in insertion order rather than logical sequence order
+
+**The fix (surgical, 3 lines):**
+Added sequence ID properties to the translation entry object:
+
+```js
+const newEntry = {
+  original: safeOriginalFinal,
+  translated: textToDisplay,
+  timestamp: message.timestamp || Date.now(),
+  // ✅ critical: give the UI a stable ordering key
+  seqId: (message.sourceSeqId ?? message.seqId),
+  sourceSeqId: message.sourceSeqId
+};
+```
+
+**Where implemented:**
+- **File:** `frontend/src/components/ListenerPage.jsx`
+- **Lines:** ~886-890 (newEntry object creation in PARTIAL_FINAL handler)
+
+**Result:**
+- ✅ Translation rows now have populated `seqId` and `sourceSeqId` values
+- ✅ UI sorting logic can maintain proper chronological order (1, 2, 3, 4...)
+- ✅ Conversation flow is now predictable and logical
+- ✅ Bug immediately resolved after applying the 3-line fix
+
+**Key lesson:** All committed UI entries must include stable ordering keys; undefined sequence IDs break chronological display.
+
+---
+
 ### 2026-01-08 — FIXED: Listener segmenter TIME-FLUSH committing partial fragments into history
 **Status:** ✅ IMPLEMENTED - Bug eliminated, listener behavior now matches host
 

@@ -886,7 +886,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   const newEntry = {
                     original: safeOriginalFinal, // Use safeOriginalFinal to guarantee non-blank originals
                     translated: textToDisplay,
-                    timestamp: message.timestamp || Date.now()
+                    timestamp: message.timestamp || Date.now(),
+                    // ✅ critical: give the UI a stable ordering key
+                    seqId: (message.sourceSeqId ?? message.seqId),
+                    sourceSeqId: message.sourceSeqId
                   };
 
                   // B) LISTENER_ROW_KEY logging: how rows are keyed
