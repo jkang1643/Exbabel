@@ -203,22 +203,53 @@ export function HostPage({ onBackToHome }) {
                 // Update ref immediately to keep it in sync
                 transcriptRef.current = newHistory;
 
-                // COMMIT LOGGING: Log exact final text being committed by segmenter onFlush
-                console.log('[HOST_COMMIT]', {
-                  commitId: nextCommitId(),
-                  path: 'SEGMENTER_ONFLUSH',
-                  side: 'HOST',
-                  commitOriginal: joinedText,
-                  commitTranslated: joinedText,
-                  originalFp: fp(joinedText),
-                  translatedFp: fp(joinedText),
-                  seqId: -1,
-                  sourceSeqId: -1,
-                  isPartial: false,
-                  ts: Date.now(),
-                  prevTail: prev.slice(-2),
-                  newItem: newItem
-                });
+                // LOG ONLY THE NEW/CHANGED ROW(S)
+                const added = newHistory.length - prev.length;
+                if (added > 0) {
+                  const last = newHistory[newHistory.length - 1];
+                  console.log('[COMMIT]', {
+                    page: 'HOST',
+                    path: 'SEGMENTER_ONFLUSH',
+                    added,
+                    last: {
+                      seqId: last.seqId,
+                      sourceSeqId: last.sourceSeqId,
+                      isSegmented: last.isSegmented,
+                      isPartial: last.isPartial,
+                      o: (last.text || '').slice(0, 140),
+                      t: (last.text || '').slice(0, 140),
+                    }
+                  });
+                } else {
+                  // also log replaces where length unchanged but last row text changed
+                  const pLast = prev[prev.length - 1];
+                  const nLast = newHistory[newHistory.length - 1];
+                  if (pLast && nLast && (pLast.text !== nLast.text)) {
+                    console.log('[COMMIT]', {
+                      page: 'HOST',
+                      path: 'REPLACE',
+                      prevLast: { seqId: pLast.seqId, o: (pLast.text||'').slice(0,120), t:(pLast.text||'').slice(0,120) },
+                      nextLast: { seqId: nLast.seqId, o: (nLast.text||'').slice(0,120), t:(nLast.text||'').slice(0,120) },
+                    });
+                  }
+                }
+
+                // COMMIT filter print for history commits only
+                const last = newHistory[newHistory.length - 1];
+                const blob = `${last?.text || ''}`;
+                if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
+                  console.log('[HOST_COMMIT_MATCH]', {
+                    path: 'SEGMENTER_ONFLUSH',
+                    last: {
+                      seqId: last.seqId,
+                      sourceSeqId: last.sourceSeqId,
+                      isPartial: last.isPartial,
+                      isSegmented: last.isSegmented,
+                      original: (last.text || '').slice(0, 220),
+                      translated: (last.text || '').slice(0, 220),
+                    }
+                  });
+                }
 
                 return newHistory;
               });
@@ -370,17 +401,19 @@ export function HostPage({ onBackToHome }) {
         const message = JSON.parse(event.data);
 
         // RAW_IN logging: canonical ingestion truth for ghost bug debugging
-        console.log('[HOST_RAW_IN]', {
+        console.log('[RAW_IN]', {
+          page: 'HOST',
           type: message.type,
+          updateType: message.updateType,
           seqId: message.seqId,
           sourceSeqId: message.sourceSeqId,
-          targetLang: message.targetLang,
-          originalFp: fp(message.originalText),
-          correctedFp: fp(message.correctedText),
-          translatedFp: fp(message.translatedText),
-          originalText: message.originalText,
-          correctedText: message.correctedText,
-          translatedText: message.translatedText,
+          isPartial: message.isPartial,
+          forceFinal: message.forceFinal,
+          hasTranslation: message.hasTranslation,
+          hasCorrection: message.hasCorrection,
+          o: (message.originalText || '').slice(0, 120),
+          c: (message.correctedText || '').slice(0, 120),
+          t: (message.translatedText || '').slice(0, 120),
         });
 
         // Track seen fingerprints for invariant checking
@@ -713,22 +746,53 @@ export function HostPage({ onBackToHome }) {
                       // Update ref immediately to keep it in sync
                       transcriptRef.current = newHistory.slice(-50);
 
-                      // COMMIT LOGGING: Log exact final text being committed to history
-                      console.log('[HOST_COMMIT]', {
-                        commitId: nextCommitId(),
-                        path: 'FINAL_HANDLER',
-                        side: 'HOST',
-                        commitOriginal: newItem.text,
-                        commitTranslated: newItem.text,
-                        originalFp: fp(newItem.text),
-                        translatedFp: fp(newItem.text),
-                        seqId: finalSeqId,
-                        sourceSeqId: message.sourceSeqId,
-                        isPartial: false,
-                        ts: Date.now(),
-                        prevTail: updatedPrev.slice(-2),
-                        newItem: newItem
-                      });
+                      // LOG ONLY THE NEW/CHANGED ROW(S)
+                      const added = newHistory.length - updatedPrev.length;
+                      if (added > 0) {
+                        const last = newHistory[newHistory.length - 1];
+                        console.log('[COMMIT]', {
+                          page: 'HOST',
+                          path: 'FINAL_HANDLER',
+                          added,
+                          last: {
+                            seqId: last.seqId,
+                            sourceSeqId: last.sourceSeqId,
+                            isSegmented: last.isSegmented,
+                            isPartial: last.isPartial,
+                            o: (last.text || '').slice(0, 140),
+                            t: (last.text || '').slice(0, 140),
+                          }
+                        });
+                      } else {
+                        // also log replaces where length unchanged but last row text changed
+                        const pLast = updatedPrev[updatedPrev.length - 1];
+                        const nLast = newHistory[newHistory.length - 1];
+                        if (pLast && nLast && (pLast.text !== nLast.text)) {
+                          console.log('[COMMIT]', {
+                            page: 'HOST',
+                            path: 'REPLACE',
+                            prevLast: { seqId: pLast.seqId, o: (pLast.text||'').slice(0,120), t:(pLast.text||'').slice(0,120) },
+                            nextLast: { seqId: nLast.seqId, o: (nLast.text||'').slice(0,120), t:(nLast.text||'').slice(0,120) },
+                          });
+                        }
+                      }
+
+                      // COMMIT filter print for history commits only
+                      const last = newHistory[newHistory.length - 1];
+                      const blob = `${last?.text || ''}`;
+                      if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
+                        console.log('[HOST_COMMIT_MATCH]', {
+                          path: 'FINAL_HANDLER',
+                          last: {
+                            seqId: last.seqId,
+                            sourceSeqId: last.sourceSeqId,
+                            isPartial: last.isPartial,
+                            isSegmented: last.isSegmented,
+                            original: (last.text || '').slice(0, 220),
+                            translated: (last.text || '').slice(0, 220),
+                          }
+                        });
+                      }
 
                       console.log(`[HostPage] ✅ STATE UPDATED - New history total: ${newHistory.length} items (sorted by seqId/timestamp)`);
                       return newHistory.slice(-50); // Keep last 50 entries
@@ -856,7 +920,26 @@ export function HostPage({ onBackToHome }) {
                       
                       // Update ref immediately to keep it in sync
                       transcriptRef.current = newHistory.slice(-50);
-                      
+
+                      // LOG ONLY THE NEW/CHANGED ROW(S)
+                      const added = newHistory.length - filteredPrev.length;
+                      if (added > 0) {
+                        const last = newHistory[newHistory.length - 1];
+                        console.log('[COMMIT]', {
+                          page: 'HOST',
+                          path: 'FINAL_HANDLER_FALLBACK',
+                          added,
+                          last: {
+                            seqId: last.seqId,
+                            sourceSeqId: last.sourceSeqId,
+                            isSegmented: last.isSegmented,
+                            isPartial: last.isPartial,
+                            o: (last.text || '').slice(0, 140),
+                            t: (last.text || '').slice(0, 140),
+                          }
+                        });
+                      }
+
                       return newHistory.slice(-50);
                     });
                   });

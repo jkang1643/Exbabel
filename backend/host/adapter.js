@@ -401,6 +401,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                   return -1;
                 }
 
+                // TRACE_ALL: Universal broadcast logging (compact for all, detailed for filtered)
+                const TRACE_ALL = process.env.TRACE_ALL_EMIT === '1';
+                const TRACE_STACK = process.env.TRACE_ALL_STACK === '1';
+                const TRACE_FILTER = process.env.TRACE_FILTER || '';
+
+                function shouldTracePayload(p) {
+                  if (!TRACE_ALL) return false;
+                  if (!TRACE_FILTER) return true;
+                  const blob = `${p?.originalText || ''} ${p?.correctedText || ''} ${p?.translatedText || ''}`;
+                  return blob.includes(TRACE_FILTER);
+                }
+
                 // ✅ CENTRAL INVARIANT: Remove sourceSeqId from same-language payloads (EN payloads)
                 const payloadToSend = { ...messageData };
                 if (payloadToSend.targetLang === payloadToSend.sourceLang) {
@@ -477,6 +489,35 @@ export async function handleHostConnection(clientWs, sessionId) {
                   return null;
                 }
 
+                // TRACE_ALL: Log all broadcasts before sequencing
+                if (TRACE_ALL) {
+                  const preview = (s) => (s ? String(s).slice(0, 90).replace(/\n/g, '\\n') : '');
+                  const isPartialFinal = !!payloadToSend?.isPartial; // from payload
+                  const forceFinal = !!payloadToSend?.forceFinal;
+
+                  console.log(`[TRACE_ALL_EMIT]`, {
+                    type: payloadToSend?.type,
+                    updateType: payloadToSend?.updateType,
+                    sourceLang: payloadToSend?.sourceLang,
+                    targetLang: payloadToSend?.targetLang,
+                    targetLangParam: targetLang,
+                    seqId_before: 'pending', // seqId not assigned yet
+                    sourceSeqId: payloadToSend?.sourceSeqId,
+                    isPartial: isPartialFinal,
+                    forceFinal,
+                    hasOriginal: !!payloadToSend?.originalText,
+                    hasCorrected: !!payloadToSend?.correctedText,
+                    hasTranslated: !!payloadToSend?.translatedText,
+                    o: preview(payloadToSend?.originalText),
+                    c: preview(payloadToSend?.correctedText),
+                    t: preview(payloadToSend?.translatedText),
+                  });
+
+                  if (shouldTracePayload(payloadToSend) && TRACE_STACK) {
+                    console.log(new Error('[TRACE_ALL_EMIT] stack').stack);
+                  }
+                }
+
                 // PHASE 8: Use CoreEngine timeline tracker for sequence IDs
                 const { message, seqId } = timelineTracker.createSequencedMessage(payloadToSend, isPartial);
 
@@ -487,7 +528,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // Send to host
                 if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify(message));
-                  console.log(`[HostMode] 📤 Sent to host (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${payloadToSend.targetLang || 'N/A'})`);
+                  console.log(`[HostMode] 📤 SENT_TO_HOST (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${payloadToSend.targetLang || 'N/A'})`);
+
+                  if (TRACE_ALL) {
+                    console.log(`[TRACE_ALL_EMIT] SENT_TO_HOST: seqId=${seqId}, listeners=0`);
+                  }
 
                   // Optional correlation logging
                   if (payloadToSend?.sourceSeqId !== undefined) {
@@ -511,14 +556,22 @@ export async function handleHostConnection(clientWs, sessionId) {
                     });
                     console.warn(new Error('[TRACE_ES_ROUTING] stack').stack);
                   }
-                  
+
                   // Broadcast to specific language group
-                  console.log(`[HostMode] 📡 Broadcasting to ${targetLang} listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
-                  sessionStore.broadcastToListeners(currentSessionId, message, targetLang);
+                  console.log(`[HostMode] 📡 SENT_TO_GROUP ${targetLang} (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
+                  const listenerCount = sessionStore.broadcastToListeners(currentSessionId, message, targetLang);
+
+                  if (TRACE_ALL) {
+                    console.log(`[TRACE_ALL_EMIT] SENT_TO_GROUP: targetLang=${targetLang}, seqId=${seqId}, listeners=${listenerCount || 'unknown'}`);
+                  }
                 } else {
                   // Broadcast to all listeners
-                  console.log(`[HostMode] 📡 Broadcasting to ALL listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
-                  sessionStore.broadcastToListeners(currentSessionId, message);
+                  console.log(`[HostMode] 📡 SENT_TO_ALL_LISTENERS (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
+                  const listenerCount = sessionStore.broadcastToListeners(currentSessionId, message);
+
+                  if (TRACE_ALL) {
+                    console.log(`[TRACE_ALL_EMIT] SENT_TO_ALL_LISTENERS: seqId=${seqId}, listeners=${listenerCount || 'unknown'}`);
+                  }
                 }
                 
                 return seqId;

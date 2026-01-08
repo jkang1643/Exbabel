@@ -122,6 +122,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const lastNonEmptyOriginalRef = useRef('');
   const originalBySeqIdRef = useRef(new Map());
   const lastStableKeyRef = useRef(null); // last seen (sourceSeqId ?? seqId)
+  const lastWasPartialRef = useRef(false);
 
   // Helper to cache original text with seqId correlation
   const cacheOriginal = (text, seqId) => {
@@ -149,6 +150,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       onFlush: (flushedSentences) => {
         // Move flushed sentences to history with forced paint (same as solo mode)
         const joinedText = flushedSentences.join(' ').trim();
+        if (lastWasPartialRef?.current) return; // 🚫 don't TIME-FLUSH into history while stream is partial
         if (joinedText) {
           // Schedule flush for next tick to allow browser paint between flushes
           setTimeout(() => {
@@ -168,7 +170,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   translated: joinedText,
                   timestamp: Date.now(),
                   seqId: -1,
-                  isSegmented: true
+                  isSegmented: true,
+                  isPartial: lastWasPartialRef.current
                 };
 
                 // CRITICAL: Insert in correct position based on timestamp (sequenceId is -1 for auto-segmented)
@@ -179,42 +182,58 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   return (a.timestamp || 0) - (b.timestamp || 0);
                 });
 
-                // COMMIT LOGGING: Log exact final text being committed by segmenter onFlush
-                console.log('[LISTENER_COMMIT]', {
-                  commitId: nextCommitId(),
-                  path: 'SEGMENTER_ONFLUSH',
-                  side: 'LISTENER',
-                  commitOriginal: safeOriginal,
-                  commitTranslated: joinedText,
-                  originalFp: fp(safeOriginal),
-                  translatedFp: fp(joinedText),
-                  seqId: -1,
-                  sourceSeqId: lastStableKeyRef.current,
-                  isPartial: false,
-                  ts: Date.now(),
-                  prevTail: prev.slice(-2),
-                  lastStableKey: lastStableKeyRef.current,
-                  newItem: newItem
-                });
+                // LOG ONLY THE NEW/CHANGED ROW(S)
+                const added = newHistory.length - prev.length;
+                if (added > 0) {
+                  const last = newHistory[newHistory.length - 1];
+                  console.log('[COMMIT]', {
+                    page: 'LISTENER',
+                    path: 'SEGMENTER_ONFLUSH',
+                    added,
+                    last: {
+                      seqId: last.seqId,
+                      sourceSeqId: last.sourceSeqId,
+                      isSegmented: last.isSegmented,
+                      isPartial: last.isPartial,
+                      o: (last.original || '').slice(0, 140),
+                      t: (last.translated || '').slice(0, 140),
+                    }
+                  });
+                } else {
+                  // also log replaces where length unchanged but last row text changed
+                  const pLast = prev[prev.length - 1];
+                  const nLast = newHistory[newHistory.length - 1];
+                  if (pLast && nLast && (pLast.original !== nLast.original || pLast.translated !== nLast.translated)) {
+                    console.log('[COMMIT]', {
+                      page: 'LISTENER',
+                      path: 'REPLACE',
+                      prevLast: { seqId: pLast.seqId, o: (pLast.original||'').slice(0,120), t:(pLast.translated||'').slice(0,120) },
+                      nextLast: { seqId: nLast.seqId, o: (nLast.original||'').slice(0,120), t:(nLast.translated||'').slice(0,120) },
+                    });
+                  }
+                }
+
+                // COMMIT filter print for history commits only
+                const last = newHistory[newHistory.length - 1];
+                const blob = `${last?.original || ''} ${last?.translated || ''}`;
+                if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
+                  console.log('[LISTENER_COMMIT_MATCH]', {
+                    path: 'SEGMENTER_ONFLUSH',
+                    last: {
+                      seqId: last.seqId,
+                      sourceSeqId: last.sourceSeqId,
+                      isPartial: last.isPartial,
+                      isSegmented: last.isSegmented,
+                      original: (last.original || '').slice(0, 220),
+                      translated: (last.translated || '').slice(0, 220),
+                    }
+                  });
+                }
 
                 return newHistory;
               });
             });
 
-            // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-            const suspicious = newHistory.slice(-5).filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated)));
-            if (suspicious.length) {
-              console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-                path: 'SEGMENTER_ONFLUSH',
-                suspicious: suspicious.map(it => ({
-                  translated: it.translated,
-                  fp: fp(it.translated),
-                  seqId: it.seqId,
-                  sourceSeqId: it.sourceSeqId,
-                  isSegmented: it.isSegmented
-                }))
-              });
-            }
 
             // Removed flush logging - reduces console noise
           }, 0);
@@ -343,22 +362,43 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         // Track last stable key for onFlush correlation
         lastStableKeyRef.current = (message.sourceSeqId ?? message.seqId ?? null);
 
+        // Track if last message was partial for flush guard
+        lastWasPartialRef.current = !!message.isPartial;
+
         // TRACE: Log WebSocket message received
         traceUI('WS_IN', message);
 
         // RAW_IN logging: canonical ingestion truth for ghost bug debugging
-        console.log('[LISTENER_RAW_IN]', {
+        console.log('[RAW_IN]', {
+          page: 'LISTENER',
           type: message.type,
+          updateType: message.updateType,
           seqId: message.seqId,
           sourceSeqId: message.sourceSeqId,
-          targetLang: message.targetLang,
-          originalFp: fp(message.originalText),
-          correctedFp: fp(message.correctedText),
-          translatedFp: fp(message.translatedText),
-          originalText: message.originalText,
+          isPartial: message.isPartial,
+          forceFinal: message.forceFinal,
+          hasTranslation: message.hasTranslation,
+          hasCorrection: message.hasCorrection,
+          o: (message.originalText || '').slice(0, 120),
+          c: (message.correctedText || '').slice(0, 120),
+          t: (message.translatedText || '').slice(0, 120),
           correctedText: message.correctedText,
           translatedText: message.translatedText,
         });
+
+        // RAW_IN filter print for the exact escaped phrase
+        const s = `${message?.originalText || ''} ${message?.translatedText || ''} ${message?.correctedText || ''}`;
+        if (s.includes('Own self-centered desires cordoned') || s.includes('Centered desires cordoned')) {
+          console.log('[LISTENER_RAW_IN_MATCH]', {
+            seqId: message.seqId,
+            sourceSeqId: message.sourceSeqId,
+            isPartial: message.isPartial,
+            forceFinal: message.forceFinal,
+            targetLang: message.targetLang,
+            o: (message.originalText || '').slice(0, 180),
+            t: (message.translatedText || '').slice(0, 180),
+          });
+        }
 
         // Track seen fingerprints for invariant checking
         if (message.translatedText) {
@@ -513,12 +553,33 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
                 console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
 
-                return [...prev, {
+                const next = [...prev, {
                   text: correctedOriginalText,
                   originalText: correctedOriginalText,
                   timestamp: message.timestamp || Date.now(),
                   isTranscription: true
                 }];
+
+                // LOG ONLY THE NEW/CHANGED ROW(S)
+                const added = next.length - prev.length;
+                if (added > 0) {
+                  const last = next[next.length - 1];
+                  console.log('[COMMIT]', {
+                    page: 'LISTENER',
+                    path: 'TRANSCRIPT_FINAL',
+                    added,
+                    last: {
+                      seqId: last.seqId,
+                      sourceSeqId: last.sourceSeqId,
+                      isSegmented: last.isSegmented,
+                      isPartial: last.isPartial,
+                      o: (last.original || last.originalText || '').slice(0, 140),
+                      t: (last.translated || last.text || '').slice(0, 140),
+                    }
+                  });
+                }
+
+                return next;
               });
             }
             break;
@@ -578,26 +639,45 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
                   console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
 
-                  // COMMIT LOGGING: Log exact final text being committed to history
-                  console.log('[LISTENER_COMMIT]', {
-                    commitId: nextCommitId(),
-                    path: 'FINAL_HANDLER',
-                    side: 'LISTENER',
-                    commitOriginal: safeOriginal,
-                    commitTranslated: finalText,
-                    originalFp: fp(safeOriginal),
-                    translatedFp: fp(finalText),
-                    rowKey,
-                    sourceSeqId: message.sourceSeqId,
-                    seqId: message.seqId,
-                    isSegmented: false,
-                    isPartial: false,
-                    ts: Date.now(),
-                    prevTail: prev.slice(-2),
-                    newItem: newEntry
-                  });
+                  const next = [...prev, newEntry];
 
-                  return [...prev, newEntry];
+                  // LOG ONLY THE NEW/CHANGED ROW(S)
+                  const added = next.length - prev.length;
+                  if (added > 0) {
+                    const last = next[next.length - 1];
+                    console.log('[COMMIT]', {
+                      page: 'LISTENER',
+                      path: 'FINAL_HANDLER',
+                      added,
+                      last: {
+                        seqId: last.seqId,
+                        sourceSeqId: last.sourceSeqId,
+                        isSegmented: last.isSegmented,
+                        isPartial: last.isPartial,
+                        o: (last.original || last.originalText || '').slice(0, 140),
+                        t: (last.translated || last.translatedText || last.text || '').slice(0, 140),
+                      }
+                    });
+                  }
+
+                  // COMMIT filter print for history commits only
+                  const last = next[next.length - 1];
+                  const blob = `${last?.original || last?.originalText || ''} ${last?.translated || last?.translatedText || last?.text || ''}`;
+                  if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
+                    console.log('[LISTENER_COMMIT_MATCH]', {
+                      path: 'FINAL_HANDLER',
+                      last: {
+                        seqId: last.seqId,
+                        sourceSeqId: last.sourceSeqId,
+                        isPartial: last.isPartial,
+                        isSegmented: last.isSegmented,
+                        original: (last.original || last.originalText || '').slice(0, 220),
+                        translated: (last.translated || last.translatedText || last.text || '').slice(0, 220),
+                      }
+                    });
+                  }
+
+                  return next;
                 });
               });
 
@@ -813,8 +893,45 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
                   console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
 
-                  // Removed history logging - reduces console noise
-                  return [...prev, newEntry].slice(-50);
+                  const next = [...prev, newEntry].slice(-50);
+
+                  // LOG ONLY THE NEW/CHANGED ROW(S)
+                  const added = next.length - prev.length;
+                  if (added > 0) {
+                    const last = next[next.length - 1];
+                    console.log('[COMMIT]', {
+                      page: 'LISTENER',
+                      path: 'PARTIAL_FINAL',
+                      added,
+                      last: {
+                        seqId: last.seqId,
+                        sourceSeqId: last.sourceSeqId,
+                        isSegmented: last.isSegmented,
+                        isPartial: last.isPartial,
+                        o: (last.original || '').slice(0, 140),
+                        t: (last.translated || '').slice(0, 140),
+                      }
+                    });
+                  }
+
+                  // COMMIT filter print for history commits only
+                  const last = next[next.length - 1];
+                  const blob = `${last?.original || ''} ${last?.translated || ''}`;
+                  if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
+                    console.log('[LISTENER_COMMIT_MATCH]', {
+                      path: 'PARTIAL_FINAL',
+                      last: {
+                        seqId: last.seqId,
+                        sourceSeqId: last.sourceSeqId,
+                        isPartial: last.isPartial,
+                        isSegmented: last.isSegmented,
+                        original: (last.original || '').slice(0, 220),
+                        translated: (last.translated || '').slice(0, 220),
+                      }
+                    });
+                  }
+
+                  return next;
                 });
 
                 // Clear live displays immediately after adding to history
