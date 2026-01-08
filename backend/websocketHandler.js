@@ -494,20 +494,200 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           }
         }
         else if (message.type === 'tts/synthesize') {
-          console.log(`[Listener] ${userName} requesting TTS synthesis (not implemented)`);
+          console.log(`[Listener] ${userName} requesting TTS synthesis`);
 
-          // PR1: Return NOT_IMPLEMENTED error
-          // PR2: Implement actual synthesis
-          if (clientWs.readyState === WebSocket.OPEN) {
-            clientWs.send(JSON.stringify({
-              type: 'tts/error',
-              code: 'NOT_IMPLEMENTED',
-              message: 'TTS synthesis not implemented yet (PR2)',
-              details: {
-                segmentId: message.segmentId,
-                textLength: message.text?.length || 0
+          // Validate payload
+          if (!message.segmentId || !message.text || !message.languageCode) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'INVALID_REQUEST',
+                message: 'Missing required fields: segmentId, text, languageCode',
+                details: {
+                  segmentId: message.segmentId,
+                  hasText: !!message.text,
+                  hasLanguageCode: !!message.languageCode
+                }
+              }));
+            }
+            return;
+          }
+
+          // Check if streaming mode (not implemented yet)
+          if (message.mode === 'streaming') {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_STREAMING_NOT_IMPLEMENTED',
+                message: 'TTS streaming mode not implemented yet (future PR)',
+                details: {
+                  segmentId: message.segmentId
+                }
+              }));
+            }
+            return;
+          }
+
+          // Import TTS modules
+          const { GoogleTtsService } = await import('./tts/ttsService.js');
+          const { validateTtsRequest } = await import('./tts/ttsPolicy.js');
+          const { canSynthesize } = await import('./tts/ttsQuota.js');
+          const { recordUsage } = await import('./tts/ttsUsage.js');
+
+          try {
+            // Build TTS request
+            const ttsRequest = {
+              sessionId: sessionId,
+              userId: userName || 'anonymous',
+              orgId: 'default', // TODO: Get from session/auth
+              languageCode: message.languageCode,
+              voiceName: message.voiceName || null,
+              tier: message.tier || 'gemini',
+              mode: message.mode || 'unary',
+              text: message.text,
+              segmentId: message.segmentId
+            };
+
+            // Check quota
+            const quotaCheck = canSynthesize({
+              orgId: ttsRequest.orgId,
+              userId: ttsRequest.userId,
+              sessionId: ttsRequest.sessionId,
+              characters: ttsRequest.text.length
+            });
+
+            if (!quotaCheck.allowed) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: quotaCheck.error.code,
+                  message: quotaCheck.error.message,
+                  details: quotaCheck.error.details,
+                  segmentId: message.segmentId
+                }));
               }
-            }));
+
+              // Record failed usage
+              await recordUsage({
+                orgId: ttsRequest.orgId,
+                userId: ttsRequest.userId,
+                sessionId: ttsRequest.sessionId,
+                languageCode: ttsRequest.languageCode,
+                modelTier: ttsRequest.tier,
+                voiceName: ttsRequest.voiceName || 'default',
+                characters: ttsRequest.text.length,
+                audioSeconds: null,
+                status: 'failed',
+                errorCode: quotaCheck.error.code,
+                errorMessage: quotaCheck.error.message
+              });
+
+              return;
+            }
+
+            // Validate policy
+            const policyError = await validateTtsRequest(ttsRequest);
+            if (policyError) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: policyError.code,
+                  message: policyError.message,
+                  details: policyError.details,
+                  segmentId: message.segmentId
+                }));
+              }
+
+              // Record failed usage
+              await recordUsage({
+                orgId: ttsRequest.orgId,
+                userId: ttsRequest.userId,
+                sessionId: ttsRequest.sessionId,
+                languageCode: ttsRequest.languageCode,
+                modelTier: ttsRequest.tier,
+                voiceName: ttsRequest.voiceName || 'default',
+                characters: ttsRequest.text.length,
+                audioSeconds: null,
+                status: 'failed',
+                errorCode: policyError.code,
+                errorMessage: policyError.message
+              });
+
+              return;
+            }
+
+            // Synthesize audio
+            const ttsService = new GoogleTtsService();
+            const response = await ttsService.synthesizeUnary(ttsRequest);
+
+            // Send audio response
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/audio',
+                segmentId: message.segmentId,
+                format: process.env.TTS_AUDIO_FORMAT_UNARY || 'MP3',
+                mimeType: response.mimeType,
+                audioContentBase64: response.audioContentBase64,
+                sampleRateHz: response.sampleRateHz
+              }));
+            }
+
+            // Record successful usage
+            await recordUsage({
+              orgId: ttsRequest.orgId,
+              userId: ttsRequest.userId,
+              sessionId: ttsRequest.sessionId,
+              languageCode: ttsRequest.languageCode,
+              modelTier: ttsRequest.tier,
+              voiceName: ttsRequest.voiceName || 'default',
+              characters: ttsRequest.text.length,
+              audioSeconds: response.durationMs ? response.durationMs / 1000 : null,
+              status: 'success'
+            });
+
+            console.log(`[Listener] ${userName} TTS synthesis successful: ${message.segmentId}`);
+
+          } catch (error) {
+            console.error(`[Listener] ${userName} TTS synthesis error:`, error);
+
+            // Parse error if it's a JSON string
+            let errorCode = 'SYNTHESIS_FAILED';
+            let errorMessage = error.message;
+            let errorDetails = {};
+
+            try {
+              const parsedError = JSON.parse(error.message);
+              errorCode = parsedError.code || errorCode;
+              errorMessage = parsedError.message || errorMessage;
+              errorDetails = parsedError.details || {};
+            } catch (e) {
+              // Not a JSON error, use as-is
+            }
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: errorCode,
+                message: errorMessage,
+                details: errorDetails,
+                segmentId: message.segmentId
+              }));
+            }
+
+            // Record failed usage
+            await recordUsage({
+              orgId: 'default',
+              userId: userName || 'anonymous',
+              sessionId: sessionId,
+              languageCode: message.languageCode,
+              modelTier: message.tier || 'gemini',
+              voiceName: message.voiceName || 'default',
+              characters: message.text.length,
+              audioSeconds: null,
+              status: 'failed',
+              errorCode: errorCode,
+              errorMessage: errorMessage
+            });
           }
         }
         // Listeners might send language changes

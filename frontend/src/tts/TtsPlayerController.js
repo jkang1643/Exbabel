@@ -72,9 +72,13 @@ export class TtsPlayerController {
 
         this.state = TtsPlayerState.STOPPED;
 
-        // PR3: Stop current audio and clear queue
+        // Stop current audio and clear queue
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio = null;
+        }
+
         this.audioQueue = [];
-        this.currentAudio = null;
 
         // Send WebSocket message to backend
         if (this.sendMessage) {
@@ -179,9 +183,9 @@ export class TtsPlayerController {
 
             case 'tts/audio':
                 // Unary audio response
-                console.log('[TtsPlayerController] Received audio (not implemented)');
+                console.log('[TtsPlayerController] Received audio for segment:', msg.segmentId);
 
-                // PR1: Store in queue but don't play
+                // Store in queue
                 this.audioQueue.push({
                     type: 'unary',
                     segmentId: msg.segmentId,
@@ -190,9 +194,19 @@ export class TtsPlayerController {
                     audioContentBase64: msg.audioContentBase64
                 });
 
-                // PR3: Decode and play audio
-                // const audioBlob = this._base64ToBlob(msg.audioContentBase64, msg.mimeType);
-                // this._playAudio(audioBlob);
+                // Decode and play audio
+                const audioBlob = this._base64ToBlob(msg.audioContentBase64, msg.mimeType);
+                if (audioBlob) {
+                    this._playAudio(audioBlob);
+                } else {
+                    console.error('[TtsPlayerController] Failed to decode audio');
+                    if (this.onError) {
+                        this.onError({
+                            code: 'DECODE_ERROR',
+                            message: 'Failed to decode audio content'
+                        });
+                    }
+                }
                 break;
 
             case 'tts/audio_chunk':
@@ -229,33 +243,116 @@ export class TtsPlayerController {
     }
 
     /**
+     * Request synthesis for specific text (manual trigger)
+     * 
+     * @param {string} text - Text to synthesize
+     * @param {string} segmentId - Segment identifier
+     */
+    speakTextNow(text, segmentId) {
+        if (!this.currentLanguageCode) {
+            console.error('[TtsPlayerController] Cannot speak: language not set');
+            if (this.onError) {
+                this.onError({
+                    code: 'INVALID_STATE',
+                    message: 'TTS not initialized. Call start() first.'
+                });
+            }
+            return;
+        }
+
+        console.log(`[TtsPlayerController] Requesting synthesis for segment: ${segmentId}`);
+
+        // Send synthesis request
+        if (this.sendMessage) {
+            this.sendMessage({
+                type: 'tts/synthesize',
+                segmentId,
+                text,
+                languageCode: this.currentLanguageCode,
+                voiceName: this.currentVoiceName,
+                tier: this.tier,
+                mode: this.mode
+            });
+        }
+    }
+
+    /**
      * Convert base64 to Blob
      * @private
-     * PR3: Implement audio decoding
      */
     _base64ToBlob(base64, mimeType) {
-        // PR3: Implement
-        // const byteCharacters = atob(base64);
-        // const byteNumbers = new Array(byteCharacters.length);
-        // for (let i = 0; i < byteCharacters.length; i++) {
-        //   byteNumbers[i] = byteCharacters.charCodeAt(i);
-        // }
-        // const byteArray = new Uint8Array(byteNumbers);
-        // return new Blob([byteArray], { type: mimeType });
-        return null;
+        try {
+            const byteCharacters = atob(base64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            return new Blob([byteArray], { type: mimeType });
+        } catch (error) {
+            console.error('[TtsPlayerController] Failed to decode base64:', error);
+            return null;
+        }
     }
 
     /**
      * Play audio blob
      * @private
-     * PR3: Implement audio playback
      */
     _playAudio(audioBlob) {
-        // PR3: Implement
-        // const audioUrl = URL.createObjectURL(audioBlob);
-        // const audio = new Audio(audioUrl);
-        // audio.play();
-        // this.currentAudio = audio;
+        try {
+            // Stop current audio if playing
+            if (this.currentAudio) {
+                this.currentAudio.pause();
+                this.currentAudio = null;
+            }
+
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+
+            audio.onended = () => {
+                console.log('[TtsPlayerController] Audio playback ended');
+                URL.revokeObjectURL(audioUrl);
+                this.currentAudio = null;
+            };
+
+            audio.onerror = (error) => {
+                console.error('[TtsPlayerController] Audio playback error:', error);
+                URL.revokeObjectURL(audioUrl);
+                this.currentAudio = null;
+
+                if (this.onError) {
+                    this.onError({
+                        code: 'PLAYBACK_ERROR',
+                        message: 'Failed to play audio'
+                    });
+                }
+            };
+
+            audio.play().catch(error => {
+                console.error('[TtsPlayerController] Failed to start playback:', error);
+                URL.revokeObjectURL(audioUrl);
+
+                if (this.onError) {
+                    this.onError({
+                        code: 'PLAYBACK_ERROR',
+                        message: `Failed to start playback: ${error.message}`
+                    });
+                }
+            });
+
+            this.currentAudio = audio;
+            console.log('[TtsPlayerController] Audio playback started');
+        } catch (error) {
+            console.error('[TtsPlayerController] Error in _playAudio:', error);
+
+            if (this.onError) {
+                this.onError({
+                    code: 'PLAYBACK_ERROR',
+                    message: error.message
+                });
+            }
+        }
     }
 
     /**

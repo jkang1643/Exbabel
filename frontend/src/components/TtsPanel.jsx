@@ -108,8 +108,8 @@ export function TtsPanel({ sendMessage, targetLang, isConnected }) {
                                 onClick={() => setSelectedMode(TtsMode.UNARY)}
                                 disabled={!isConnected}
                                 className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-colors ${selectedMode === TtsMode.UNARY
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                                     } disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                                 Unary
@@ -118,8 +118,8 @@ export function TtsPanel({ sendMessage, targetLang, isConnected }) {
                                 onClick={() => setSelectedMode(TtsMode.STREAMING)}
                                 disabled={!isConnected}
                                 className={`flex-1 px-3 py-2 rounded-md text-sm font-medium transition-colors ${selectedMode === TtsMode.STREAMING
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                                     } disabled:opacity-50 disabled:cursor-not-allowed`}
                             >
                                 Streaming
@@ -148,6 +148,25 @@ export function TtsPanel({ sendMessage, targetLang, isConnected }) {
                             </button>
                         )}
                     </div>
+
+                    {/* PR2: Temporary Manual Test Button */}
+                    {/* TODO PR3: Remove this and integrate auto-synthesis */}
+                    {isPlaying && (
+                        <div className="pt-2 border-t border-gray-200">
+                            <p className="text-xs text-gray-500 mb-2">Manual Test (PR2):</p>
+                            <button
+                                onClick={() => {
+                                    const testText = "Hello, this is a test of the text to speech system.";
+                                    const testSegmentId = `test-${Date.now()}`;
+                                    controller.speakTextNow(testText, testSegmentId);
+                                }}
+                                disabled={!isConnected}
+                                className="w-full px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                🔊 Speak Test Segment
+                            </button>
+                        </div>
+                    )}
 
                     {/* Status */}
                     <div className="text-xs text-gray-500 text-center">
