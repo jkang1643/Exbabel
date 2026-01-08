@@ -1,0 +1,181 @@
+# PR 3 — TTS Player Queue + Radio Mode (Auto-speak finalized segments while playing)
+
+Implement the “radio-like experience” for Exbabel TTS playback:
+- TTS is opt-in and only generates audio while PLAYING.
+- Start playback from the “current transcript position” (“now”) when user clicks Play.
+- As NEW finalized translated segments arrive, automatically request unary TTS and enqueue playback.
+- Support Pause/Resume/Stop.
+- Support immediate language switch mid-playback: stop current audio, clear queue, restart with new language.
+- Do NOT change STT/translation/core engine logic.
+
+Keep the architecture compatible with future streaming TTS (PCM/OGG_OPUS/etc), but PR3 can use unary only.
+
+---
+
+## Guardrails
+- Do not alter transcription/translation emission or ordering logic.
+- Do not refactor existing segment data structures unless required for queueing.
+- No caching (S3/Redis) in this PR.
+- No speed controls in this PR.
+- Must be safe behind feature flags; current app must behave identically when disabled.
+
+---
+
+## A) Backend — Support “radio mode” usage safely (minimal)
+
+### 1) Add “playing lease” enforcement server-side
+In WS connection state, track:
+- ttsState: STOPPED|PLAYING|PAUSED
+- ttsLeaseExpiresAt (now + TTS_PLAYING_LEASE_SECONDS)
+- ttsConfig: languageCode, voiceName, tier, mode
+
+Rules:
+- On `tts/start`: set PLAYING and refresh lease.
+- On `tts/pause`: set PAUSED and refresh lease (or short lease).
+- On `tts/stop`: STOPPED, clear config.
+- On `tts/synthesize`: only allow if connection state is PLAYING and lease not expired.
+  - If expired: respond `TTS_NOT_PLAYING` or `TTS_LEASE_EXPIRED`.
+This prevents runaway billing if the client disconnects or state desyncs.
+
+### 2) Add server-side language/voice/tier validation per request (authoritative)
+Even if client sends language/voice/tier in each synth request, server must validate:
+- org flag enabled
+- tier allowed
+- voice allowed for language
+- quotas not exceeded
+
+(Policy already exists from PR1/PR2—just ensure WS handler uses it consistently.)
+
+No streaming implementation here; streaming requests return NOT_IMPLEMENTED.
+
+---
+
+## B) Frontend — Real Player Queue + Auto-advance
+
+### 1) Implement `TtsPlayerController` queue
+Enhance frontend/tts/TtsPlayerController with:
+State:
+- playbackState: STOPPED|PLAYING|PAUSED
+- activeLanguageCode
+- activeVoiceName
+- tier (gemini for now)
+- mode ("unary" for v1)
+- queue: Array<{ segmentId, text, status: "pending"|"requesting"|"ready"|"playing"|"done"|"failed", audioUrl?, mimeType? }>
+- lastSeenSegmentId (or lastSeenSequence if available)
+- currentAudio: HTMLAudioElement | null
+- inFlight: Map<segmentId, abortToken> (for cancel on stop/lang switch)
+- queueLimit: e.g. 25 (avoid unbounded growth)
+- dedupeSet: Set<segmentId> (avoid requesting twice)
+
+Core behaviors:
+- start(): 
+  - sets PLAYING, clears queue, sets lastSeen = "now" marker
+  - sends WS `{ type:"tts/start", languageCode, voiceName, tier, mode }`
+- stop():
+  - stops audio, clears queue, clears inflight, sends `tts/stop`
+- pause():
+  - pauses audio element, sets PAUSED, sends `tts/pause`
+- resume():
+  - resumes audio if possible; if no audio but queue has ready items, begin playing next
+  - sends `tts/resume` (or reuse start + keep config)
+- switchLanguage(newLang):
+  - immediate: stop audio, clear queue/inflight, set activeLanguageCode=newLang, start() again
+
+### 2) “Start from current transcript position”
+Define “current position” as:
+- the most recently displayed finalized segment at the moment user presses Play
+Implementation:
+- In Listener page, when user hits Play, pass the controller a `getCurrentFinalSegmentId()` or `getLatestFinalSegment()` from existing state.
+- Controller should treat anything older than that as out-of-scope for v1 (do not backfill older history).
+- Only enqueue segments whose arrival time is >= the captured “start marker”.
+
+If the app uses sequence IDs for ordering, prefer sequence IDs. Otherwise use the segmentId timestamp order if stable.
+
+### 3) Hook into finalized segment stream (without touching CoreEngine)
+Locate where listener receives translated FINAL segments (ws.onmessage path).
+Add a non-invasive hook:
+- if `ttsController.playbackState === PLAYING` and message is FINAL translated segment for active language:
+  call `ttsController.onFinalSegment({segmentId, text})`
+
+IMPORTANT: ensure you do not hook partials; only finals.
+
+### 4) Enqueue + Request audio only when needed
+Controller.onFinalSegment:
+- if STOPPED or PAUSED: ignore.
+- if segment already seen: ignore.
+- push into queue as pending.
+- if queue too large: drop oldest pending/done items.
+- Then attempt to request audio for the earliest pending item(s), but only allow:
+  - MAX_CONCURRENT_TTS_REQUESTS = 1 (simple; prevents spikes)
+- For each request:
+  - mark status=requesting
+  - send WS `tts/synthesize` with segmentId, text, languageCode, voiceName, tier, mode:"unary"
+  - when response arrives, attach audio blob URL and mark ready.
+
+### 5) Sequential playback + auto-advance
+Implement `playNextIfIdle()`:
+- if currentAudio is playing -> return
+- choose earliest queue item with status=ready not done
+- create HTMLAudioElement from blob URL
+- set status=playing
+- onended:
+  - set item done
+  - revokeObjectURL
+  - clear currentAudio
+  - call playNextIfIdle() again (auto-advance)
+- onerror:
+  - mark failed, clear currentAudio, continue to next
+
+When new ready items arrive while playing, they should just wait in queue.
+
+### 6) Smoothness controls (v1)
+To reduce gaps without prefetch v2:
+- While an item is playing, request TTS for the next pending item (still max 1 concurrent).
+- Always keep at least 1 “next” ready if possible.
+
+No buffering UI required, but add a small “Speaking…” indicator if easy.
+
+### 7) Immediate language switch semantics
+When user changes language while playing:
+- call controller.switchLanguage(newLang):
+  - stop audio immediately
+  - clear queue + inflight
+  - send `tts/stop`
+  - send `tts/start` with new config
+  - from that moment, only accept segments in new language
+
+### 8) Error handling UX (minimal)
+- If WS returns `TTS_QUOTA_EXCEEDED`:
+  - stop playback automatically
+  - show toast/banner “TTS quota reached”
+- If `TTS_DISABLED` or `TTS_TIER_NOT_ALLOWED`:
+  - stop playback, show banner
+- If a segment fails synthesis:
+  - mark failed and continue; do not stop entire queue.
+
+---
+
+## C) Acceptance Criteria for PR3
+- When TTS flags enabled, user presses Play:
+  - playback enters PLAYING and starts speaking from “now” (no history backfill).
+- As new finalized translated segments arrive for selected language:
+  - system requests unary TTS and plays them sequentially.
+- Pause/Resume works.
+- Stop works and prevents further synthesis requests.
+- Language switch restarts immediately.
+- Lease enforcement prevents synthesis if client goes stale or state desyncs.
+- No changes when feature flags are disabled.
+
+---
+
+## D) Deliverables
+- Robust `TtsPlayerController` queue + playback implementation.
+- Minimal UI controls on Listener page: Play/Pause/Stop + Language selector (existing) integration.
+- Structured logs for queue events helpful for debugging (guard behind debug flag).
+- Short README note describing:
+  - unary uses MP3; streaming will use PCM/OGG_OPUS/etc
+  - why “one segment = one audio” in v1
+  - v2 prefetch and v3 streaming path (brief)
+
+Commit message:
+"feat(tts): add radio playback queue for finalized segments"

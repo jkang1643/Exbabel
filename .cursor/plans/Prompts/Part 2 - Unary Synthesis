@@ -1,0 +1,149 @@
+
+# PR 2 — Google TTS Unary Synthesis (Gemini tier) + WS “tts/synthesize” working
+
+You are working in the Exbabel repo. Implement Google Text-to-Speech **unary** synthesis for v1.
+This PR should make the backend able to return **one audio blob per finalized segment** when the client requests it.
+Streaming synthesis is NOT implemented in this PR, but the code must remain **streaming-ready** from PR1.
+
+Important constraint from Google TTS docs:
+- Unary formats include MP3.
+- Streaming formats do NOT include MP3 (streaming supports PCM/ALAW/MULAW/OGG_OPUS).
+So: keep MP3 as default for unary only; do NOT reuse it for streaming. 
+
+DO NOT modify transcription/translation/partials/CoreEngine behavior. This PR is only about unary TTS generation and wiring.
+
+---
+
+## A) Backend: Implement Google Unary Synthesis
+
+### 1) Add Google TTS client
+Use the official Node client:
+- package: `@google-cloud/text-to-speech`
+Add it to backend dependencies.
+
+Credentials:
+- Support `GOOGLE_APPLICATION_CREDENTIALS` (path) OR ADC (default creds).
+- Document in backend/tts/README.md how to run locally.
+
+### 2) Implement `GoogleTtsService.synthesizeUnary`
+File: backend/tts/googleTtsService.js (or .ts)
+Implement:
+- `async synthesizeUnary(req:TtsRequest): Promise<TtsUnaryResponse>`
+
+Input:
+- req.text (required)
+- req.languageCode (required)
+- req.voiceName (optional; if missing use defaults resolved by policy)
+- req.tier: gemini | chirp_hd | custom_voice (for PR2 implement gemini only)
+- req.mode must be "unary" for this function
+
+Behavior:
+- Enforce server-side policy checks (PR1 `ttsPolicy`):
+  - org enabled
+  - tier allowed
+  - voice allowed
+- Validate text length > 0.
+- Call Google `synthesizeSpeech` with:
+  - input: `{ text: req.text }`
+  - voice: `{ languageCode: req.languageCode, name: req.voiceName?, model?: or model_name? }`
+  - audioConfig: `{ audioEncoding: <from TTS_AUDIO_FORMAT_UNARY> }`
+
+Tier mapping (PR2):
+- If tier == "gemini": set model/model_name to Gemini TTS model (per your repo convention/config).
+- If tier != "gemini": return structured error `TTS_TIER_NOT_IMPLEMENTED` (we’ll implement chirp_hd in a later PR).
+
+Audio format handling:
+- Default unary format: MP3
+- Return:
+  - `audioContentBase64` (from Google response)
+  - `mimeType` derived from encoding:
+    - MP3 => "audio/mpeg"
+    - OGG_OPUS => "audio/ogg"
+    - LINEAR16/PCM/ALAW/MULAW => "audio/wav" or "audio/L16" (pick one consistent mapping; document it)
+  - Include `sampleRateHz` if available.
+
+### 3) Retry + fallback logic
+Implement minimal reliability:
+- Retry once on transient errors (network / 5xx / rate-limits if safe).
+- If retry fails AND tier was gemini => return error.
+- (Scaffold) If tier higher in the future fails => fallback to gemini (keep TODO).
+
+### 4) Wire the WebSocket command: `tts/synthesize`
+In the existing WS handler (where PR1 added stubs):
+- When receiving:
+  `{ type:"tts/synthesize", segmentId, text, languageCode, voiceName, tier, mode:"unary" }`
+- Validate payload (segmentId present, text present).
+- Call `ttsService.synthesizeUnary(req)`
+- Respond:
+  `{ type:"tts/audio", segmentId, format, mimeType, audioContentBase64 }`
+- On errors respond:
+  `{ type:"tts/error", code, message, segmentId }`
+
+Leave streaming message types intact but still return NOT_IMPLEMENTED for streaming mode:
+- `{ type:"tts/error", code:"TTS_STREAMING_NOT_IMPLEMENTED" }`
+
+### 5) Usage metering (minimal but real)
+Implement `ttsUsage.recordUsage` to at least compute:
+- characters = req.text.length
+- audio_seconds: if we can’t compute duration from response, set null/undefined for now (but keep field)
+- tier, voiceName, languageCode, orgId, userId, sessionId
+Write to console.debug structured JSON in PR2.
+Add a TODO for DB write in later PR.
+
+### 6) Hard quota stop (server authoritative, minimal)
+Add a simple, pluggable quota check:
+- `ttsQuota.canSynthesize({orgId,userId,characters})`
+For PR2:
+- Implement as a stub that always allows UNLESS env var `TTS_MAX_CHARS_PER_SESSION` is set and exceeded.
+- Track per sessionId in memory.
+- If exceeded: return `TTS_QUOTA_EXCEEDED` and do NOT call Google.
+
+---
+
+## B) Frontend: Enable requesting unary audio + play it (minimal)
+
+### 1) Update `TtsPlayerController` to request unary audio
+When user presses Play:
+- send `{ type:"tts/start", ... }` (already in PR1)
+For each finalized segment while PLAYING (DO NOT change core pipeline):
+- For PR2, do NOT auto-hook into “every final segment” globally.
+- Instead: implement a temporary manual trigger button “Speak last segment” OR
+  implement controller method `speakTextNow(text, segmentId)` and call it from an existing per-segment play button.
+Pick the least invasive integration to avoid touching core logic.
+
+Send:
+`{ type:"tts/synthesize", segmentId, text, languageCode, voiceName, tier:"gemini", mode:"unary" }`
+
+### 2) Handle `tts/audio` messages and play MP3
+When receiving `{ type:"tts/audio", audioContentBase64, mimeType }`:
+- Create a Blob from base64 and play via HTMLAudioElement.
+- Ensure stop/pause works.
+
+Keep the queue abstraction from PR1, but it’s OK if PR2 only plays a single requested segment (v1 stepping stone).
+Do not implement fancy sequencing in PR2; that’s PR3.
+
+---
+
+## C) Acceptance Criteria for PR2
+- With feature flags on and valid Google credentials:
+  - Client can request unary TTS for a segment and receive audio.
+  - Audio plays in the browser.
+- No behavior changes when flags are off.
+- Streaming mode requests return a structured NOT_IMPLEMENTED error (no crashes).
+- MP3 is only used for unary; streaming formats remain separated in config.
+- Retry-once works for transient failures.
+- Quota env var blocks synthesis when exceeded (server authoritative).
+
+---
+
+## D) Deliverables
+- Working unary TTS path: WS `tts/synthesize` -> Google -> `tts/audio`.
+- README updates for local credentials + env vars.
+- Minimal tests:
+  - Unit test for quota check
+  - Unit test for policy gating error codes
+(If repo lacks test framework, add lightweight assertions or a small node script under tests/.)
+
+Commit with message:
+"feat(tts): implement google unary synthesize (gemini) behind flags"
+```
