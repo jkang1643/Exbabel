@@ -15,7 +15,7 @@
  * @param {string} event.userId - User ID
  * @param {string} event.sessionId - Session ID
  * @param {string} event.languageCode - Language code
- * @param {string} event.modelTier - TTS tier used
+ * @param {string} event.engine - TTS engine used
  * @param {string} event.voiceName - Voice name used
  * @param {number} event.characters - Number of characters synthesized
  * @param {number} [event.audioSeconds] - Audio duration in seconds (if available)
@@ -36,7 +36,7 @@ export async function recordUsage(event) {
         userId: event.userId,
         sessionId: event.sessionId,
         languageCode: event.languageCode,
-        modelTier: event.modelTier,
+        engine: event.engine,
         voiceName: event.voiceName,
         characters: event.characters,
         audioSeconds: event.audioSeconds || null,

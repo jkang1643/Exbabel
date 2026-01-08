@@ -535,18 +535,43 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           const { recordUsage } = await import('./tts/ttsUsage.js');
 
           try {
-            // Build TTS request
+            // Determine appropriate engine
+            let engine = message.engine;
+            if (!engine) {
+              if (message.tier === 'chirp_hd') {
+                engine = 'chirp3_hd';
+              } else if (message.voiceName && (message.voiceName.includes('Neural2') || message.voiceName.includes('-Standard-') || message.voiceName.includes('-Wavenet-') || message.voiceName.includes('-Studio-'))) {
+                engine = 'chirp3_hd'; // Map native Google voices to the engine that supports full names
+              } else {
+                engine = 'gemini_tts';
+              }
+            }
+
+            // Build TTS request with profile
             const ttsRequest = {
               sessionId: sessionId,
               userId: userName || 'anonymous',
               orgId: 'default', // TODO: Get from session/auth
-              languageCode: message.languageCode,
-              voiceName: message.voiceName || null,
-              tier: message.tier || 'gemini',
-              mode: message.mode || 'unary',
               text: message.text,
-              segmentId: message.segmentId
+              segmentId: message.segmentId,
+              profile: {
+                engine: engine,
+                languageCode: message.languageCode,
+                voiceName: message.voiceName || (engine === 'gemini_tts' ? 'Kore' : undefined),
+                modelName: message.modelName || (engine === 'gemini_tts' ? 'gemini-2.5-flash-tts' : undefined),
+                encoding: message.encoding || process.env.TTS_AUDIO_FORMAT_UNARY || 'MP3',
+                streaming: message.mode === 'streaming',
+                prompt: message.prompt
+              }
             };
+
+            // Fix for Chirp 3 HD voice name if not provided
+            if (ttsRequest.profile.engine === 'chirp3_hd' && !ttsRequest.profile.voiceName) {
+              // Default Chirp 3 HD voice for the language
+              const langCode = ttsRequest.profile.languageCode;
+              if (langCode.startsWith('es')) ttsRequest.profile.voiceName = 'es-ES-Chirp3-HD-Kore';
+              else ttsRequest.profile.voiceName = 'en-US-Chirp3-HD-Kore';
+            }
 
             // Check quota
             const quotaCheck = canSynthesize({
@@ -572,9 +597,9 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 orgId: ttsRequest.orgId,
                 userId: ttsRequest.userId,
                 sessionId: ttsRequest.sessionId,
-                languageCode: ttsRequest.languageCode,
-                modelTier: ttsRequest.tier,
-                voiceName: ttsRequest.voiceName || 'default',
+                languageCode: ttsRequest.profile.languageCode,
+                engine: ttsRequest.profile.engine,
+                voiceName: ttsRequest.profile.voiceName || 'default',
                 characters: ttsRequest.text.length,
                 audioSeconds: null,
                 status: 'failed',
@@ -603,9 +628,9 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 orgId: ttsRequest.orgId,
                 userId: ttsRequest.userId,
                 sessionId: ttsRequest.sessionId,
-                languageCode: ttsRequest.languageCode,
-                modelTier: ttsRequest.tier,
-                voiceName: ttsRequest.voiceName || 'default',
+                languageCode: ttsRequest.profile.languageCode,
+                engine: ttsRequest.profile.engine,
+                voiceName: ttsRequest.profile.voiceName || 'default',
                 characters: ttsRequest.text.length,
                 audioSeconds: null,
                 status: 'failed',
@@ -625,7 +650,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               clientWs.send(JSON.stringify({
                 type: 'tts/audio',
                 segmentId: message.segmentId,
-                format: process.env.TTS_AUDIO_FORMAT_UNARY || 'MP3',
+                format: ttsRequest.profile.encoding,
                 mimeType: response.mimeType,
                 audioContentBase64: response.audioContentBase64,
                 sampleRateHz: response.sampleRateHz
@@ -637,9 +662,9 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               orgId: ttsRequest.orgId,
               userId: ttsRequest.userId,
               sessionId: ttsRequest.sessionId,
-              languageCode: ttsRequest.languageCode,
-              modelTier: ttsRequest.tier,
-              voiceName: ttsRequest.voiceName || 'default',
+              languageCode: ttsRequest.profile.languageCode,
+              engine: ttsRequest.profile.engine,
+              voiceName: ttsRequest.profile.voiceName || 'default',
               characters: ttsRequest.text.length,
               audioSeconds: response.durationMs ? response.durationMs / 1000 : null,
               status: 'success'
@@ -680,7 +705,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               userId: userName || 'anonymous',
               sessionId: sessionId,
               languageCode: message.languageCode,
-              modelTier: message.tier || 'gemini',
+              engine: message.engine || (message.tier === 'chirp_hd' ? 'chirp3_hd' : 'gemini_tts'),
               voiceName: message.voiceName || 'default',
               characters: message.text.length,
               audioSeconds: null,

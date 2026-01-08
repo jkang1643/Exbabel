@@ -152,19 +152,19 @@ apiAuth.loadKeys();
 // Handle WebSocket upgrades
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || '';
-  
+
   // API endpoint - requires authentication
   if (url.startsWith("/api/translate")) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
-  } 
+  }
   // Existing frontend endpoint
   else if (url.startsWith("/translate")) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
     });
-  } 
+  }
   else {
     socket.destroy();
   }
@@ -173,14 +173,14 @@ server.on("upgrade", (req, socket, head) => {
 // Handle WebSocket connections
 wss.on("connection", async (clientWs, req) => {
   const url = req.url || '';
-  
+
   // Route API connections to secure API handler
   if (url.startsWith("/api/translate")) {
     console.log("[Backend] API WebSocket connection");
     handleAPIConnection(clientWs, req);
     return;
   }
-  
+
   // Existing frontend connections
   console.log("[Backend] New WebSocket client connected");
 
@@ -218,7 +218,7 @@ app.post('/session/start', (req, res) => {
   try {
     // Input validation
     const clientIP = inputValidator.getClientIP(req);
-    
+
     // Rate limiting - check message rate (permissive)
     const rateCheck = rateLimiter.checkMessageRate(`http_${clientIP}_session_start`);
     if (!rateCheck.allowed) {
@@ -228,9 +228,9 @@ app.post('/session/start', (req, res) => {
         retryAfter: rateCheck.retryAfter
       });
     }
-    
+
     const { sessionId, sessionCode } = sessionStore.createSession();
-    
+
     res.json({
       success: true,
       sessionId,
@@ -255,7 +255,7 @@ app.post('/session/join', (req, res) => {
     // Input validation
     const clientIP = inputValidator.getClientIP(req);
     const { sessionCode, targetLang, userName } = req.body;
-    
+
     // Validate sessionCode
     const sessionCodeValidation = inputValidator.validateString(sessionCode, {
       required: true,
@@ -268,7 +268,7 @@ app.post('/session/join', (req, res) => {
         error: sessionCodeValidation.error || 'Session code is required'
       });
     }
-    
+
     // Validate targetLang if provided
     // targetLang is used for translation, so it can be any translation-supported language (131+ languages)
     if (targetLang) {
@@ -280,7 +280,7 @@ app.post('/session/join', (req, res) => {
         });
       }
     }
-    
+
     // Validate userName if provided
     if (userName) {
       const userNameValidation = inputValidator.validateString(userName, {
@@ -295,7 +295,7 @@ app.post('/session/join', (req, res) => {
         });
       }
     }
-    
+
     // Rate limiting - check message rate (permissive)
     const rateCheck = rateLimiter.checkMessageRate(`http_${clientIP}_session_join`);
     if (!rateCheck.allowed) {
@@ -305,26 +305,26 @@ app.post('/session/join', (req, res) => {
         retryAfter: rateCheck.retryAfter
       });
     }
-    
+
     const session = sessionStore.getSessionByCode(sessionCodeValidation.sanitized);
-    
+
     if (!session) {
       return res.status(404).json({
         success: false,
         error: 'Session not found. Please check the code and try again.'
       });
     }
-    
+
     if (!session.isActive) {
       return res.status(400).json({
         success: false,
         error: 'Session is not active yet. The host needs to start broadcasting.'
       });
     }
-    
+
     const sanitizedTargetLang = targetLang || 'en';
     const sanitizedUserName = userName ? inputValidator.validateString(userName, { maxLength: 50 }).sanitized || 'Anonymous' : 'Anonymous';
-    
+
     res.json({
       success: true,
       sessionId: session.sessionId,
@@ -350,16 +350,16 @@ app.get('/session/:sessionCode/info', (req, res) => {
   try {
     const { sessionCode } = req.params;
     const session = sessionStore.getSessionByCode(sessionCode);
-    
+
     if (!session) {
       return res.status(404).json({
         success: false,
         error: 'Session not found'
       });
     }
-    
+
     const stats = sessionStore.getSessionStats(session.sessionId);
-    
+
     res.json({
       success: true,
       session: stats
@@ -388,7 +388,7 @@ app.get('/sessions', (req, res) => {
         error: 'Authentication required. Provide valid API key via X-API-Key header or ?apiKey=xxx'
       });
     }
-    
+
     const sessions = sessionStore.getAllSessions();
     res.json({
       success: true,
@@ -424,7 +424,7 @@ app.get('/health', (req, res) => {
 app.post('/test-translation', async (req, res) => {
   try {
     const { text, sourceLang, targetLang } = req.body;
-    
+
     const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang || 'auto-detect';
     const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang || 'English';
 
@@ -495,6 +495,10 @@ console.log("[Backend] Features: Live streaming with partial results");
 console.log("[Backend] ===== TRANSLATION SERVICE =====");
 console.log("[Backend] Provider: OpenAI");
 console.log("[Backend] Model: gpt-4o-mini");
+console.log("[Backend] ===== TEXT TO SPEECH SERVICE =====");
+console.log("[Backend] Provider: Google Cloud Text-to-Speech");
+console.log("[Backend] Model: Studio (Multi-Speaker)");
+console.log("[Backend] Features: High-quality unary synthesis");
 console.log("[Backend] ===== API KEYS =====");
 console.log("[Backend] OpenAI API Key:", process.env.OPENAI_API_KEY ? 'Yes ✓' : 'No ✗ (WARNING: Translation disabled)');
 
@@ -520,7 +524,7 @@ console.log("[Backend] =====================================");
 process.on('uncaughtException', (error) => {
   console.error('[Backend] 🚨 Uncaught Exception:', error);
   console.error('[Backend] Stack:', error.stack);
-  
+
   // Handle Google Speech gRPC connection errors specifically
   if (error.code === 14 || (error.details && error.details.includes('ECONNRESET'))) {
     console.error('[Backend] ⚠️ Google Speech connection reset detected - this is usually recoverable');
@@ -528,7 +532,7 @@ process.on('uncaughtException', (error) => {
     // Don't exit - let the stream restart mechanism handle it
     return;
   }
-  
+
   // For other errors, log but don't exit - keep server running
   console.error('[Backend]    Error type:', error.constructor.name);
   if (error.code) {
@@ -542,12 +546,12 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[Backend] 🚨 Unhandled Rejection at:', promise);
   console.error('[Backend] Reason:', reason);
-  
+
   // Handle Google Speech gRPC connection errors in promises
   if (reason && (reason.code === 14 || (reason.details && reason.details.includes('ECONNRESET')))) {
     console.error('[Backend] ⚠️ Google Speech connection reset in promise - this is usually recoverable');
     return;
   }
-  
+
   // Don't exit - keep server running
 });

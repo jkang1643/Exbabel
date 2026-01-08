@@ -4,7 +4,8 @@
  * Run with: node ttsPolicy.test.js
  */
 
-import { validateTtsRequest, checkOrgEnabled, resolveTierForUser, isVoiceAllowed } from '../ttsPolicy.js';
+import { validateTtsRequest, checkOrgEnabled, resolveEnginesForUser, isVoiceAllowed } from '../../../tts/ttsPolicy.js';
+import { TtsEngine } from '../../../tts/tts.types.js';
 
 // Test counter
 let passed = 0;
@@ -36,9 +37,14 @@ process.env.TTS_ENABLED_DEFAULT = 'false';
 const result1 = await validateTtsRequest({
     orgId: 'org1',
     userId: 'user1',
-    tier: 'gemini',
-    languageCode: 'en-US',
-    voiceName: 'Kore'
+    profile: {
+        engine: TtsEngine.GEMINI_TTS,
+        languageCode: 'en-US',
+        voiceName: 'Kore',
+        modelName: 'gemini-2.5-flash-tts',
+        encoding: 'MP3',
+        streaming: false
+    }
 });
 assert(result1 !== null, 'Should return error when TTS disabled');
 assertEquals(result1?.code, 'TTS_DISABLED', 'Should return TTS_DISABLED error code');
@@ -49,9 +55,14 @@ process.env.TTS_ENABLED_DEFAULT = 'true';
 const result2 = await validateTtsRequest({
     orgId: 'org1',
     userId: 'user1',
-    tier: 'gemini',
-    languageCode: 'en-US',
-    voiceName: 'Kore'
+    profile: {
+        engine: TtsEngine.GEMINI_TTS,
+        languageCode: 'en-US',
+        voiceName: 'Kore',
+        modelName: 'gemini-2.5-flash-tts',
+        encoding: 'MP3',
+        streaming: false
+    }
 });
 assert(result2 === null, 'Should return null for valid request');
 
@@ -65,27 +76,22 @@ process.env.TTS_ENABLED_DEFAULT = 'false';
 const disabled = await checkOrgEnabled('org1');
 assert(disabled === false, 'Should return false when TTS_ENABLED_DEFAULT is false');
 
-// Test 4: Resolve tier for user
-console.log('\n=== Test 4: Resolve tier for user ===');
-const tiers = resolveTierForUser({}, {});
-assert(Array.isArray(tiers), 'Should return array of tiers');
-assert(tiers.includes('gemini'), 'Should include gemini tier');
+// Test 4: Resolve engines for user
+console.log('\n=== Test 4: Resolve engines for user ===');
+const engines = resolveEnginesForUser({}, {});
+assert(Array.isArray(engines), 'Should return array of engines');
+assert(engines.includes(TtsEngine.GEMINI_TTS), 'Should include gemini_tts engine');
 
 // Test 5: Voice allowed validation
 console.log('\n=== Test 5: Voice allowed validation ===');
-const voiceAllowed1 = isVoiceAllowed('gemini', 'en-US', 'Kore');
+const voiceAllowed1 = isVoiceAllowed(TtsEngine.GEMINI_TTS, 'en-US', 'Kore');
 assert(voiceAllowed1 === true, 'Should allow valid voice');
 
 const voiceAllowed2 = isVoiceAllowed('', '', '');
 assert(voiceAllowed2 === false, 'Should reject empty parameters');
 
-const voiceAllowed3 = isVoiceAllowed('gemini', 'en-US', null);
+const voiceAllowed3 = isVoiceAllowed(TtsEngine.GEMINI_TTS, 'en-US', null);
 assert(voiceAllowed3 === false, 'Should reject null voice name');
-
-// Test 6: Tier not allowed (future test when tier validation is implemented)
-console.log('\n=== Test 6: Tier validation (placeholder) ===');
-// This will be tested in PR4 when tier validation is fully implemented
-console.log('  (Skipped - tier validation not fully implemented in PR2)');
 
 // Summary
 console.log('\n=== Test Summary ===');

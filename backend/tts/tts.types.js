@@ -6,15 +6,13 @@
  */
 
 /**
- * TTS Model Tier
- * - gemini: Standard Gemini TTS (default, cost-efficient)
- * - chirp_hd: High-definition Chirp 3 voices (premium)
- * - custom_voice: Custom voice cloning (future)
+ * TTS Engine
+ * - gemini_tts: Next-gen Gemini-powered TTS
+ * - chirp3_hd: High-definition Chirp 3 voices
  */
-export const TtsTier = {
-    GEMINI: 'gemini',
-    CHIRP_HD: 'chirp_hd',
-    CUSTOM_VOICE: 'custom_voice'
+export const TtsEngine = {
+    GEMINI_TTS: 'gemini_tts',
+    CHIRP3_HD: 'chirp3_hd'
 };
 
 /**
@@ -28,27 +26,15 @@ export const TtsMode = {
 };
 
 /**
- * Audio formats for unary synthesis
- * All formats supported by Google TTS for batch synthesis
+ * TTS Audio Encoding
  */
-export const TtsFormatUnary = {
-    MP3: 'MP3',
-    OGG_OPUS: 'OGG_OPUS',
-    LINEAR16: 'LINEAR16',
-    ALAW: 'ALAW',
-    MULAW: 'MULAW',
-    PCM: 'PCM'
-};
-
-/**
- * Audio formats for streaming synthesis
- * IMPORTANT: MP3 is NOT supported for streaming per Google TTS API
- */
-export const TtsFormatStreaming = {
+export const TtsEncoding = {
     PCM: 'PCM',
     OGG_OPUS: 'OGG_OPUS',
     ALAW: 'ALAW',
-    MULAW: 'MULAW'
+    MULAW: 'MULAW',
+    MP3: 'MP3',
+    LINEAR16: 'LINEAR16'
 };
 
 /**
@@ -67,16 +53,28 @@ export const TtsErrorCode = {
 };
 
 /**
+ * TTS Profile
+ * Unified configuration for TTS synthesis
+ * @typedef {Object} TtsProfile
+ * @property {string} engine - TTS engine (gemini_tts | chirp3_hd)
+ * @property {string} languageCode - BCP-47 language code (e.g., 'es-ES', 'en-US')
+ * @property {string} voiceName - Voice name ('Kore' for Gemini, full name for Chirp3 HD)
+ * @property {string} [modelName] - Required for Gemini-TTS (e.g., 'gemini-2.5-flash-tts')
+ * @property {string} encoding - Audio encoding (PCM | OGG_OPUS | ALAW | MULAW | MP3 | LINEAR16)
+ * @property {boolean} streaming - Whether to use streaming mode
+ * @property {string} [prompt] - Optional style control for Gemini-TTS
+ * @property {Object} [customVoice] - Future: custom voice handle
+ * @property {string} customVoice.voiceId - Custom voice identifier
+ */
+
+/**
  * TTS Request
  * @typedef {Object} TtsRequest
  * @property {string} sessionId - Session identifier
  * @property {string} userId - User identifier
  * @property {string} orgId - Organization identifier
- * @property {string} languageCode - BCP-47 language code (e.g., 'en-US', 'es-ES')
- * @property {string} voiceName - Voice name (e.g., 'Kore', 'Charon')
- * @property {string} tier - TTS tier (gemini | chirp_hd | custom_voice)
- * @property {string} mode - Synthesis mode (unary | streaming)
  * @property {string} text - Text to synthesize
+ * @property {TtsProfile} profile - Unified TTS configuration profile
  * @property {string} [segmentId] - Optional segment identifier for tracking
  */
 
@@ -107,12 +105,12 @@ export const TtsErrorCode = {
  */
 
 /**
- * Helper function to validate TTS tier
- * @param {string} tier - Tier to validate
+ * Helper function to validate TTS engine
+ * @param {string} engine - Engine to validate
  * @returns {boolean} True if valid
  */
-export function isValidTier(tier) {
-    return Object.values(TtsTier).includes(tier);
+export function isValidEngine(engine) {
+    return Object.values(TtsEngine).includes(engine);
 }
 
 /**
@@ -126,17 +124,39 @@ export function isValidMode(mode) {
 
 /**
  * Helper function to validate audio format for given mode
- * @param {string} format - Format to validate
- * @param {string} mode - Synthesis mode
+ * @param {string} encoding - Encoding to validate
+ * @param {boolean} streaming - Whether using streaming mode
  * @returns {boolean} True if valid
  */
-export function isValidFormat(format, mode) {
-    if (mode === TtsMode.UNARY) {
-        return Object.values(TtsFormatUnary).includes(format);
-    } else if (mode === TtsMode.STREAMING) {
-        return Object.values(TtsFormatStreaming).includes(format);
+export function isValidEncoding(encoding, streaming) {
+    if (!Object.values(TtsEncoding).includes(encoding)) return false;
+
+    // MP3 is NOT supported for streaming
+    if (streaming && encoding === TtsEncoding.MP3) {
+        return false;
     }
-    return false;
+
+    return true;
+}
+
+/**
+ * Validate a TTS profile
+ * @param {TtsProfile} profile 
+ * @throws {Error} If invalid
+ */
+export function validateTtsProfile(profile) {
+    if (!profile) throw new Error('TTS profile is required');
+    if (!isValidEngine(profile.engine)) throw new Error(`Invalid TTS engine: ${profile.engine}`);
+    if (!profile.languageCode) throw new Error('Language code is required');
+    if (!profile.voiceName) throw new Error('Voice name is required');
+
+    if (profile.engine === TtsEngine.GEMINI_TTS && !profile.modelName) {
+        throw new Error('modelName is required for gemini_tts engine');
+    }
+
+    if (!isValidEncoding(profile.encoding, profile.streaming)) {
+        throw new Error(`Invalid encoding ${profile.encoding} for ${profile.streaming ? 'streaming' : 'unary'} mode`);
+    }
 }
 
 /**

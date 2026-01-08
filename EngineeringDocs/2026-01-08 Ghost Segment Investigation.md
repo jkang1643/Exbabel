@@ -6,7 +6,36 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ---
 
-## 0) BUG FIX: WORKING — Core Functionality Restored (2026-01-09)
+## 0) BUG FIX: IMPLEMENTED — Spanish TTS & Google Engine Routing (2026-01-08)
+**Status:** ✅ IMPLEMENTED - Spanish TTS successfully synthesizing with native voices
+
+Resolved critical synthesis errors for Spanish TTS by implementing language-aware engine routing and voice name normalization.
+
+### Key Fixes Implemented:
+
+#### 1. Language-Aware Engine Routing
+**Problem:** Frontend requested native Google voices (Neural2) but they were incorrectly mapped to the `gemini_tts` engine, which doesn't support fully-qualified names.
+**Solution:** Improved `websocketHandler.js` to detect native Google voice patterns (`Neural2`, `Wavenet`, etc.) and route them to the `chirp3_hd` engine.
+
+#### 2. Spanish Voice Fallbacks (Kore -> Neural2)
+**Problem:** The default "Kore" persona (Gemini Studio voice) currently requires Vertex AI API enablement for Spanish.
+**Solution:** Implemented `_resolveVoiceConfig` in `GoogleTtsService`. If persona "Kore" is requested in Spanish, it automatically falls back to `es-ES-Neural2-A`.
+
+#### 3. Library Upgrade for Gemini Support
+**Problem:** `@google-cloud/text-to-speech` version 5.0.0 lacked the `modelName` field, causing `INVALID_ARGUMENT` errors.
+**Solution:** Upgraded to `6.4.0` to support `modelName` (e.g., `gemini-2.5-flash-tts`).
+
+#### 4. Voice Name Normalization
+**Problem:** Names like `es-Neural2-A` caused "Voice not found" errors (missing locale prefix `es-ES-`).
+**Solution:** Added normalization logic to automatically correct `es-` to `es-ES-`.
+
+### Result:
+- ✅ Spanish TTS functional for all tiers.
+- ✅ Robust fallback from Gemini Studio to Neural2 for non-English locales.
+
+---
+
+## 1) BUG FIX: WORKING — Core Functionality Restored (2026-01-09)
 **Status:** ✅ IMPLEMENTED - Application now fully functional
 
 This comprehensive bug fix addressed critical issues preventing the real-time translation application from functioning properly. The fixes restore core functionality and ensure reliable operation across all modes.
@@ -321,9 +350,13 @@ This intentionally makes "Spanish-only" rows which can look like leaks/mis-order
 
 ---
 
-## 3) What's next (highest-confidence plan)
+### Next Step A — Auto-synthesis Integration (TTS)
 
-### Next Step A — Implement frontend out-of-order PARTIAL drop guard
+**Goal:** Automatically trigger TTS synthesis for finalized segments without manual "Speak" clicks.
+- Integrate `TtsPlayerController` into the main translation commit loop.
+- Ensure audio is queued and played sequentially for a smooth experience.
+
+### Next Step B — Implement frontend out-of-order PARTIAL drop guard (Transcription)
 
 **Goal:** Prevent delayed PARTIALs from overwriting newer partials/finals for the same `sourceSeqId`.
 

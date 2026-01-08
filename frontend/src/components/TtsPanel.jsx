@@ -13,7 +13,7 @@ import { Volume2, VolumeX, Play, Square } from 'lucide-react';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
 
-export function TtsPanel({ sendMessage, targetLang, isConnected }) {
+export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerReady }) {
     const [controller] = useState(() => new TtsPlayerController(sendMessage));
     const [playerState, setPlayerState] = useState(TtsPlayerState.STOPPED);
     const [enabled, setEnabled] = useState(false);
@@ -30,7 +30,12 @@ export function TtsPanel({ sendMessage, targetLang, isConnected }) {
             console.error('[TtsPanel] Error:', error);
             alert(`TTS Error: ${error.message}`);
         };
-    }, [controller]);
+
+        // Expose controller to parent component
+        if (onControllerReady) {
+            onControllerReady(controller);
+        }
+    }, [controller, onControllerReady]);
 
     const handleToggleEnabled = () => {
         setEnabled(!enabled);

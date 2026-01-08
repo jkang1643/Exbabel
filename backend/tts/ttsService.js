@@ -8,7 +8,7 @@
  * PR2: Google TTS API integration
  */
 
-import { TtsErrorCode, TtsMode } from './tts.types.js';
+import { TtsErrorCode, TtsMode, TtsEngine, TtsEncoding, validateTtsProfile } from './tts.types.js';
 
 /**
  * TTS Service Class
@@ -19,9 +19,6 @@ export class TtsService {
     constructor(config = {}) {
         this.config = {
             provider: config.provider || process.env.TTS_PROVIDER || 'google',
-            defaultTier: config.defaultTier || process.env.TTS_MODEL_TIER || 'gemini',
-            unaryFormat: config.unaryFormat || process.env.TTS_AUDIO_FORMAT_UNARY || 'MP3',
-            streamingFormat: config.streamingFormat || process.env.TTS_AUDIO_FORMAT_STREAMING || 'PCM',
             playingLeaseSeconds: parseInt(config.playingLeaseSeconds || process.env.TTS_PLAYING_LEASE_SECONDS || '30', 10)
         };
     }
@@ -30,31 +27,16 @@ export class TtsService {
      * Synthesize speech in unary mode (batch)
      * Returns one complete audio file for the entire text.
      * 
-     * @param {Object} request - TTS request
-     * @param {string} request.sessionId - Session identifier
-     * @param {string} request.userId - User identifier
-     * @param {string} request.orgId - Organization identifier
-     * @param {string} request.languageCode - BCP-47 language code
-     * @param {string} request.voiceName - Voice name
-     * @param {string} request.tier - TTS tier
-     * @param {string} request.text - Text to synthesize
-     * @param {string} [request.segmentId] - Optional segment identifier
-     * @returns {Promise<Object>} TtsUnaryResponse
-     * @throws {Error} NOT_IMPLEMENTED in PR1
-     * 
-     * TODO PR2: Implement Google TTS unary synthesis
+     * @param {TtsRequest} request - TTS request
+     * @returns {Promise<TtsUnaryResponse>}
+     * @throws {Error} If synthesis fails or is not implemented
      */
     async synthesizeUnary(request) {
-        // Validate text
-        if (!request.text || request.text.length === 0) {
-            throw new Error(JSON.stringify({
-                code: TtsErrorCode.INVALID_REQUEST,
-                message: 'Text is required and must not be empty',
-                details: { request }
-            }));
-        }
+        // Validate request
+        this._validateRequest(request);
+        validateTtsProfile(request.profile);
 
-        console.log(`[TtsService] Synthesizing unary: ${request.text.length} chars, tier: ${request.tier}, lang: ${request.languageCode}`);
+        console.log(`[TtsService] Synthesizing unary: ${request.text.length} chars, engine: ${request.profile.engine}, lang: ${request.profile.languageCode}`);
 
         // This is the base class - should be overridden by GoogleTtsService
         throw new Error(JSON.stringify({
@@ -63,9 +45,9 @@ export class TtsService {
             details: {
                 request: {
                     sessionId: request.sessionId,
-                    tier: request.tier,
-                    languageCode: request.languageCode,
-                    voiceName: request.voiceName,
+                    engine: request.profile.engine,
+                    languageCode: request.profile.languageCode,
+                    voiceName: request.profile.voiceName,
                     textLength: request.text?.length || 0
                 }
             }
@@ -76,22 +58,16 @@ export class TtsService {
      * Synthesize speech in streaming mode
      * Calls onChunk callback for each audio chunk as it becomes available.
      * 
-     * @param {Object} request - TTS request
-     * @param {string} request.sessionId - Session identifier
-     * @param {string} request.userId - User identifier
-     * @param {string} request.orgId - Organization identifier
-     * @param {string} request.languageCode - BCP-47 language code
-     * @param {string} request.voiceName - Voice name
-     * @param {string} request.tier - TTS tier
-     * @param {string} request.text - Text to synthesize
-     * @param {string} [request.segmentId] - Optional segment identifier
+     * @param {TtsRequest} request - TTS request
      * @param {Function} onChunk - Callback function(chunk: TtsStreamChunk)
      * @returns {Promise<void>}
-     * @throws {Error} NOT_IMPLEMENTED in PR1
-     * 
-     * TODO PR2: Implement Google TTS streaming synthesis
+     * @throws {Error} If synthesis fails or is not implemented
      */
     async synthesizeStream(request, onChunk) {
+        // Validate request
+        this._validateRequest(request);
+        validateTtsProfile(request.profile);
+
         // PR1: Stub implementation
         throw new Error(JSON.stringify({
             code: TtsErrorCode.NOT_IMPLEMENTED,
@@ -99,76 +75,76 @@ export class TtsService {
             details: {
                 request: {
                     sessionId: request.sessionId,
-                    tier: request.tier,
-                    languageCode: request.languageCode,
-                    voiceName: request.voiceName,
+                    engine: request.profile.engine,
+                    languageCode: request.profile.languageCode,
+                    voiceName: request.profile.voiceName,
                     textLength: request.text?.length || 0
                 }
             }
         }));
+    }
 
-        // TODO PR2: Implement actual streaming synthesis
-        // const stream = await this._callGoogleTtsStreaming(request);
-        // let seq = 0;
-        // for await (const chunk of stream) {
-        //   onChunk({
-        //     chunkBase64: chunk.audioContent.toString('base64'),
-        //     mimeType: this._getMimeType(this.config.streamingFormat),
-        //     seq: seq++,
-        //     isLast: chunk.isLast || false
-        //   });
-        // }
+    /**
+     * Validate basic request fields
+     * @private
+     */
+    _validateRequest(request) {
+        if (!request.text || request.text.length === 0) {
+            throw new Error(JSON.stringify({
+                code: TtsErrorCode.INVALID_REQUEST,
+                message: 'Text is required and must not be empty',
+                details: { request }
+            }));
+        }
     }
 
     /**
      * Get MIME type for audio format
-     * @private
+     * @protected
      */
-    _getMimeType(format) {
+    _getMimeType(encoding) {
         const mimeTypes = {
-            MP3: 'audio/mpeg',
-            OGG_OPUS: 'audio/ogg',
-            LINEAR16: 'audio/wav',
-            ALAW: 'audio/alaw',
-            MULAW: 'audio/mulaw',
-            PCM: 'audio/pcm'
+            [TtsEncoding.MP3]: 'audio/mpeg',
+            [TtsEncoding.OGG_OPUS]: 'audio/ogg',
+            [TtsEncoding.LINEAR16]: 'audio/wav',
+            [TtsEncoding.ALAW]: 'audio/alaw',
+            [TtsEncoding.MULAW]: 'audio/mulaw',
+            [TtsEncoding.PCM]: 'audio/pcm'
         };
-        return mimeTypes[format] || 'application/octet-stream';
+        return mimeTypes[encoding] || 'application/octet-stream';
     }
 }
 
 /**
  * Google TTS Service (extends TtsService)
- * 
- * TODO PR2: Implement Google-specific TTS logic
  */
 export class GoogleTtsService extends TtsService {
     constructor(config = {}) {
         super(config);
-
-        // Lazy-load Google TTS client (will be initialized on first use)
         this.client = null;
         this.clientInitialized = false;
     }
 
     /**
      * Initialize Google TTS client
-     * Supports GOOGLE_APPLICATION_CREDENTIALS or ADC
      * @private
      */
     async _initClient() {
         if (this.clientInitialized) return;
 
         try {
-            // Dynamic import to avoid loading if not needed
             const { TextToSpeechClient } = await import('@google-cloud/text-to-speech');
 
-            // Client will automatically use:
-            // 1. GOOGLE_APPLICATION_CREDENTIALS env var if set
-            // 2. Application Default Credentials (ADC) otherwise
-            this.client = new TextToSpeechClient();
-            this.clientInitialized = true;
+            const clientOptions = {};
+            if (process.env.GOOGLE_SPEECH_API_KEY) {
+                console.log('[GoogleTtsService] Using API Key authentication');
+                clientOptions.apiKey = process.env.GOOGLE_SPEECH_API_KEY;
+            } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+                console.log('[GoogleTtsService] Using Service Account JSON authentication');
+            }
 
+            this.client = new TextToSpeechClient(clientOptions);
+            this.clientInitialized = true;
             console.log('[GoogleTtsService] Google TTS client initialized');
         } catch (error) {
             console.error('[GoogleTtsService] Failed to initialize Google TTS client:', error);
@@ -177,35 +153,148 @@ export class GoogleTtsService extends TtsService {
     }
 
     /**
-     * Map TTS tier to Google TTS model
+     * Build Google TTS request from TtsProfile
      * @private
      */
-    _getTtsModel(tier) {
-        const models = {
-            'gemini': 'en-US-Studio-MultiSpeaker', // Gemini TTS model
-            // Future tiers:
-            // 'chirp_hd': 'chirp-3-hd',
-            // 'custom_voice': 'custom-voice-model'
+    _buildGoogleRequest(request) {
+        const { profile, text } = request;
+        const { engine, languageCode, voiceName, modelName, encoding, streaming, prompt } = profile;
+
+        // Normalize language code to full locale format (e.g., 'es' -> 'es-ES')
+        const normalizedLanguageCode = this._normalizeLanguageCode(languageCode);
+
+        // Resolve voice configuration (handles tier-to-voice mapping and language fallbacks)
+        const resolvedVoiceName = this._resolveVoiceConfig(engine, normalizedLanguageCode, voiceName);
+
+        const googleRequest = {
+            input: { text },
+            voice: {
+                languageCode: normalizedLanguageCode,
+                name: resolvedVoiceName
+            },
+            audioConfig: {
+                audioEncoding: this._getAudioEncoding(encoding)
+            }
         };
 
-        return models[tier] || null;
+        if (engine === TtsEngine.GEMINI_TTS) {
+            // Gemini-TTS requires modelName
+            googleRequest.voice.modelName = modelName;
+
+            // Streaming-specific Gemini config
+            if (streaming) {
+                googleRequest.streamingConfig = {
+                    voice: googleRequest.voice,
+                    audioConfig: googleRequest.audioConfig
+                };
+                // Prompt is supported for Gemini-TTS
+                if (prompt) {
+                    googleRequest.streamingConfig.prompt = prompt;
+                }
+            }
+        }
+
+        // Future: custom voice handling
+        if (profile.customVoice?.voiceId) {
+            // This would be populated differently based on Google's requirements for custom voices
+            // googleRequest.voice.customVoice = { ... }
+        }
+
+        return googleRequest;
     }
 
     /**
-     * Get Google audio encoding from format string
+     * Normalize language code to full locale format
      * @private
      */
-    _getAudioEncoding(format) {
-        const encodings = {
-            'MP3': 'MP3',
-            'OGG_OPUS': 'OGG_OPUS',
-            'LINEAR16': 'LINEAR16',
-            'ALAW': 'ALAW',
-            'MULAW': 'MULAW',
-            'PCM': 'LINEAR16' // PCM maps to LINEAR16 in Google TTS
+    _normalizeLanguageCode(languageCode) {
+        // If already in full format (e.g., 'es-ES'), return as-is
+        if (languageCode && languageCode.includes('-')) {
+            return languageCode;
+        }
+
+        // Map short codes to full locale codes
+        const languageMap = {
+            'es': 'es-ES',
+            'en': 'en-US',
+            'fr': 'fr-FR',
+            'de': 'de-DE',
+            'it': 'it-IT',
+            'pt': 'pt-BR',
+            'ja': 'ja-JP',
+            'ko': 'ko-KR',
+            'zh': 'zh-CN',
+            'ar': 'ar-XA',
+            'hi': 'hi-IN',
+            'ru': 'ru-RU'
         };
 
-        return encodings[format] || 'MP3';
+        return languageMap[languageCode] || `${languageCode}-${languageCode.toUpperCase()}`;
+    }
+
+    /**
+     * Resolves voice name based on engine, language, and persona
+     * Implements intelligent fallback for languages not supported by specific models
+     * @private
+     */
+    _resolveVoiceConfig(engine, languageCode, voiceName) {
+        // Default mappings for the "Kore" persona across different engines/languages
+        const IS_SPANISH = languageCode && languageCode.startsWith('es');
+
+        // --- PRE-RESOLUTION NORMALIZATION ---
+        let resolvedName = voiceName;
+        if (resolvedName && resolvedName.includes('-')) {
+            // Fix for common shorthand: es-Neural2-A -> es-ES-Neural2-A
+            if (resolvedName.startsWith('es-') && !resolvedName.startsWith('es-ES-') && !resolvedName.startsWith('es-US-')) {
+                resolvedName = resolvedName.replace('es-', 'es-ES-');
+            }
+        }
+
+        // 1. CHIRP 3 HD Resolution
+        if (engine === TtsEngine.CHIRP3_HD) {
+            if (resolvedName && (resolvedName.includes('-Chirp3-') || resolvedName.includes('-Neural2-') || resolvedName.includes('-Standard-'))) {
+                return resolvedName; // Already a full name
+            }
+            // Default Chirp 3 HD voices
+            if (IS_SPANISH) return 'es-ES-Chirp3-HD-Kore';
+            return 'en-US-Chirp3-HD-Kore';
+        }
+
+        // 2. GEMINI TTS Resolution
+        if (engine === TtsEngine.GEMINI_TTS) {
+            // If it's a full Google voice name, use it as is
+            if (resolvedName && resolvedName.includes('-')) {
+                return resolvedName;
+            }
+
+            // If it's the "Kore" persona in Spanish, fall back to Neural2 since Studio/Gemini voices
+            // are primarily English-optimized at this time.
+            if (IS_SPANISH && (resolvedName === 'Kore' || !resolvedName)) {
+                return 'es-ES-Neural2-A';
+            }
+
+            // Default Gemini voice
+            return resolvedName || 'Kore';
+        }
+
+        return resolvedName;
+    }
+
+    /**
+     * Get Google audio encoding from TtsEncoding enum
+     * @private
+     */
+    _getAudioEncoding(encoding) {
+        const encodings = {
+            [TtsEncoding.MP3]: 'MP3',
+            [TtsEncoding.OGG_OPUS]: 'OGG_OPUS',
+            [TtsEncoding.LINEAR16]: 'LINEAR16',
+            [TtsEncoding.ALAW]: 'ALAW',
+            [TtsEncoding.MULAW]: 'MULAW',
+            [TtsEncoding.PCM]: 'LINEAR16' // PCM maps to LINEAR16 in Google TTS
+        };
+
+        return encodings[encoding] || 'MP3';
     }
 
     /**
@@ -213,89 +302,42 @@ export class GoogleTtsService extends TtsService {
      * @override
      */
     async synthesizeUnary(request) {
-        // Initialize client if needed
         await this._initClient();
+        this._validateRequest(request);
+        validateTtsProfile(request.profile);
 
-        // Validate text
-        if (!request.text || request.text.length === 0) {
-            throw new Error(JSON.stringify({
-                code: TtsErrorCode.INVALID_REQUEST,
-                message: 'Text is required and must not be empty',
-                details: { request }
-            }));
-        }
+        console.log(`[GoogleTtsService] Synthesizing unary: ${request.text.length} chars, engine: ${request.profile.engine}, voice: ${request.profile.voiceName}`);
 
-        // Check if tier is implemented
-        const model = this._getTtsModel(request.tier);
-        if (!model) {
-            throw new Error(JSON.stringify({
-                code: TtsErrorCode.TTS_TIER_NOT_IMPLEMENTED,
-                message: `TTS tier '${request.tier}' is not implemented yet`,
-                details: {
-                    tier: request.tier,
-                    implementedTiers: ['gemini']
-                }
-            }));
-        }
+        const googleRequest = this._buildGoogleRequest(request);
 
-        console.log(`[GoogleTtsService] Synthesizing: ${request.text.length} chars, tier: ${request.tier}, voice: ${request.voiceName}, lang: ${request.languageCode}`);
-
-        // Prepare Google TTS request
-        const audioEncoding = this._getAudioEncoding(this.config.unaryFormat);
-        const googleRequest = {
-            input: { text: request.text },
-            voice: {
-                languageCode: request.languageCode,
-                name: request.voiceName || undefined
-            },
-            audioConfig: {
-                audioEncoding: audioEncoding
-            }
-        };
-
-        // Retry logic
         let lastError = null;
         for (let attempt = 0; attempt < 2; attempt++) {
             try {
                 const [response] = await this.client.synthesizeSpeech(googleRequest);
-
-                // Convert audio content to base64
                 const audioContentBase64 = response.audioContent.toString('base64');
-                const mimeType = this._getMimeType(this.config.unaryFormat);
-
-                console.log(`[GoogleTtsService] Synthesis successful: ${audioContentBase64.length} bytes (base64)`);
+                const mimeType = this._getMimeType(request.profile.encoding);
 
                 return {
                     audioContentBase64,
                     mimeType,
                     sampleRateHz: response.sampleRateHz || undefined,
-                    // TODO: Calculate duration from audio content
                     durationMs: undefined
                 };
             } catch (error) {
                 lastError = error;
                 console.error(`[GoogleTtsService] Synthesis attempt ${attempt + 1} failed:`, error.message);
-
-                // Check if error is retryable
-                const isRetryable = this._isRetryableError(error);
-                if (!isRetryable || attempt === 1) {
-                    // Don't retry or last attempt
-                    break;
-                }
-
-                // Wait before retry
+                if (!this._isRetryableError(error) || attempt === 1) break;
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
 
-        // All retries failed
         throw new Error(JSON.stringify({
             code: TtsErrorCode.SYNTHESIS_FAILED,
             message: `Google TTS synthesis failed: ${lastError.message}`,
             details: {
-                tier: request.tier,
-                languageCode: request.languageCode,
-                voiceName: request.voiceName,
+                engine: request.profile.engine,
+                languageCode: request.profile.languageCode,
+                voiceName: request.profile.voiceName,
                 textLength: request.text.length,
                 error: lastError.message
             }
@@ -307,21 +349,12 @@ export class GoogleTtsService extends TtsService {
      * @private
      */
     _isRetryableError(error) {
-        // Retry on network errors, 5xx errors, rate limits
-        if (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
-            return true;
-        }
-
-        if (error.code >= 500 && error.code < 600) {
-            return true;
-        }
-
-        if (error.code === 429) {
-            return true;
-        }
-
+        const retryableCodes = ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND'];
+        if (retryableCodes.includes(error.code)) return true;
+        if (error.code >= 500 && error.code < 600) return true;
+        if (error.code === 429) return true;
         return false;
     }
 
-    // TODO PR2: Override synthesizeStream with Google TTS implementation
+    // Streaming implementation will be added in PR3
 }

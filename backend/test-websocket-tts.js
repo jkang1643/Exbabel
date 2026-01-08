@@ -21,29 +21,26 @@ const ws = new WebSocket(WS_URL);
 ws.on('open', () => {
     console.log('[Test] ✅ WebSocket connected');
 
-    // Test 1: Send tts/start command
-    console.log('\n[Test] Sending tts/start command...');
+    // Test 1: Send tts/synthesize command with default Gemini (should fallback to Neural2 for ES)
+    console.log('\n[Test] Sending tts/synthesize command (Gemini Fallback)...');
     ws.send(JSON.stringify({
-        type: 'tts/start',
-        languageCode: 'es-ES',
-        voiceName: 'Kore',
-        tier: 'gemini',
-        mode: 'unary'
+        type: 'tts/synthesize',
+        segmentId: 'test-gemini',
+        text: 'Hola, esta es una prueba de Gemini.',
+        languageCode: 'es-ES'
     }));
 
-    // Test 2: Send tts/synthesize command (should return NOT_IMPLEMENTED)
+    // Test 2: Send tts/synthesize command with explicit Neural2 (should auto-route to chirp3_hd)
     setTimeout(() => {
-        console.log('\n[Test] Sending tts/synthesize command...');
+        console.log('\n[Test] Sending tts/synthesize command (Neural2 Routing)...');
         ws.send(JSON.stringify({
             type: 'tts/synthesize',
-            segmentId: 'test-segment-1',
-            text: 'Hello, this is a test.',
+            segmentId: 'test-neural2',
+            text: 'Hola, esta es una prueba de Neural 2.',
             languageCode: 'es-ES',
-            voiceName: 'Kore',
-            tier: 'gemini',
-            mode: 'unary'
+            voiceName: 'es-ES-Neural2-A'
         }));
-    }, 1000);
+    }, 1500);
 
     // Test 3: Send tts/stop command
     setTimeout(() => {

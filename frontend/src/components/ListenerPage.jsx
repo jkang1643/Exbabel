@@ -7,6 +7,7 @@ import { flushSync } from 'react-dom';
 import { Header } from './Header';
 import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
+import { TtsPanel } from './TtsPanel';
 import { SentenceSegmenter } from '../utils/sentenceSegmenter';
 import { TRANSLATION_LANGUAGES } from '../config/languages.js';
 
@@ -48,6 +49,9 @@ const LANGUAGES = TRANSLATION_LANGUAGES; // Listeners choose their language - ca
 
 // TRACE: Frontend tracing helper
 const TRACE = import.meta.env.VITE_TRACE_REALTIME === '1';
+
+// TTS UI feature flag
+const TTS_UI_ENABLED = import.meta.env.VITE_TTS_UI_ENABLED === 'true';
 
 // Fingerprint helper for debugging ghost sentences
 const fp = (s) => {
@@ -104,6 +108,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   const wsRef = useRef(null);
   const translationsEndRef = useRef(null);
+  const ttsControllerRef = useRef(null); // TTS controller for audio playback
 
   // Commit counter for tracing leaked rows
   const commitCounterRef = useRef(0);
@@ -112,7 +117,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // Throttling refs for partial rendering (10-15 fps)
   const lastRenderTimeRef = useRef(0);
   const lastTextLengthRef = useRef(0);
-  
+
   // TRANSLATION STALL DETECTION: Track when source partials arrive vs when translations arrive
   const lastSourcePartialTimeRef = useRef(null);
   const lastTranslationTimeRef = useRef(null);
@@ -207,8 +212,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     console.log('[COMMIT]', {
                       page: 'LISTENER',
                       path: 'REPLACE',
-                      prevLast: { seqId: pLast.seqId, o: (pLast.original||'').slice(0,120), t:(pLast.translated||'').slice(0,120) },
-                      nextLast: { seqId: nLast.seqId, o: (nLast.original||'').slice(0,120), t:(nLast.translated||'').slice(0,120) },
+                      prevLast: { seqId: pLast.seqId, o: (pLast.original || '').slice(0, 120), t: (pLast.translated || '').slice(0, 120) },
+                      nextLast: { seqId: nLast.seqId, o: (nLast.original || '').slice(0, 120), t: (nLast.translated || '').slice(0, 120) },
                     });
                   }
                 }
@@ -264,7 +269,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
       // Only show stall if we've received at least one translation before (to avoid false positives on startup)
       const hasReceivedTranslationBefore = lastTranslationTimeRef.current !== null;
-      
+
       if (sourcePartialsFlowing && translationsStopped && hasReceivedTranslationBefore && currentOriginal) {
         setIsTranslationStalled(true);
       } else {
@@ -461,7 +466,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const correctedText = message.correctedText;
               const originalText = message.originalText || '';
               const textToDisplay = correctedText && correctedText.trim() ? correctedText : originalText;
-              
+
               if (textToDisplay) {
                 // TRANSLATION STALL DETECTION: Track when source partials arrive
                 lastSourcePartialTimeRef.current = Date.now();
@@ -483,15 +488,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               if (originalToCache && originalToCache.trim()) {
                 cacheOriginal(originalToCache, message.sourceSeqId ?? message.seqId);
               }
-              
+
               const translatedText = message.translatedText || '';
               const isForMyLanguage = message.targetLang === targetLang;
-              
+
               // TRANSLATION STALL DETECTION: Track when translations arrive for my language
               if (isForMyLanguage) {
                 lastTranslationTimeRef.current = Date.now();
               }
-              
+
               if (isForMyLanguage && translatedText.trim()) {
                 // Process translated text through segmenter (auto-flushes complete sentences)
                 const { liveText } = segmenterRef.current.processPartial(translatedText);
@@ -502,13 +507,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 const now = Date.now();
                 const timeSinceLastRender = now - lastRenderTimeRef.current;
                 const charDelta = liveText.length - lastTextLengthRef.current;
-                
+
                 // CRITICAL: Always render first partial after reset (when lastRenderTimeRef is 0)
                 // This ensures immediate display when new segment starts
                 const isFirstPartialAfterReset = lastRenderTimeRef.current === 0;
-                
+
                 // Always render if significant text growth or enough time passed
-                const shouldRender = 
+                const shouldRender =
                   isFirstPartialAfterReset || // Always render first partial after reset
                   charDelta >= MIN_CHAR_DELTA || // Significant text growth
                   timeSinceLastRender >= THROTTLE_MS; // Enough time passed
@@ -530,19 +535,19 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             // English source transcript final - update original text history
             const originalText = message.originalText || '';
             const correctedOriginalText = message.correctedText || originalText;
-            
+
             if (correctedOriginalText) {
               // Removed final transcript logging - reduces console noise
-              
+
               // Update current original to show the final
               setCurrentOriginal(correctedOriginalText);
               cacheOriginal(correctedOriginalText, message.sourceSeqId ?? message.seqId);
-              
+
               // Add to translations history (as original text entry)
               setTranslations(prev => {
                 const recentEntries = prev.slice(-3);
-                const isDuplicate = recentEntries.some(entry => 
-                  entry.text === correctedOriginalText || 
+                const isDuplicate = recentEntries.some(entry =>
+                  entry.text === correctedOriginalText ||
                   entry.originalText === correctedOriginalText
                 );
                 if (isDuplicate) {
@@ -590,30 +595,30 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             const finalOriginalText = message.originalText || '';
             const finalCorrectedOriginalText = message.correctedText || finalOriginalText;
             const isForMyLanguageFinal = message.targetLang === targetLang;
-            
+
             // Cache original text if available
             cacheOriginal(finalCorrectedOriginalText, message.sourceSeqId ?? message.seqId);
-            
+
             if (isForMyLanguageFinal && finalText) {
               // Removed final translation logging - reduces console noise
-              
+
               // CRITICAL: Use flushSync for final updates to ensure immediate UI feedback
               flushSync(() => {
                 // Update current translation to show the final
                 setCurrentTranslation(finalText);
-                
+
                 // Add to translations history
                 setTranslations(prev => {
                   const recentEntries = prev.slice(-3);
-                  const isDuplicate = recentEntries.some(entry => 
-                    entry.text === finalText || 
+                  const isDuplicate = recentEntries.some(entry =>
+                    entry.text === finalText ||
                     entry.translatedText === finalText
                   );
                   if (isDuplicate) {
                     console.log('[ListenerPage] ⏭️ Skipping duplicate final translation');
                     return prev;
                   }
-                  
+
                   // Use fallback if original text is missing
                   const cachedFromSeqId = message.seqId !== undefined ? originalBySeqIdRef.current.get(message.seqId) : undefined;
                   const fallbackOriginal = cachedFromSeqId || lastNonEmptyOriginalRef.current || '';
@@ -621,12 +626,12 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   const safeOriginal = finalCorrectedOriginalText && finalCorrectedOriginalText.trim()
                     ? finalCorrectedOriginalText.trim()
                     : fallbackOriginal;
-                  
+
                   // Diagnostic logging: log correlation info if original was missing
                   if (!finalCorrectedOriginalText || !finalCorrectedOriginalText.trim()) {
                     console.log(`[ListenerPage] 🔗 Filled missing original: seqId=${message.seqId}, cachedFromSeqId=${!!cachedFromSeqId}, fallbackLen=${fallbackOriginal.length}, safeOriginalLen=${safeOriginal.length}`);
                   }
-                  
+
                   const newEntry = {
                     text: finalText,
                     originalText: safeOriginal,
@@ -700,7 +705,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               // Without this, throttling might skip the first partials of the new segment
               lastRenderTimeRef.current = 0;
               lastTextLengthRef.current = 0;
-              
+
               // Reset segmenter to clear any buffered partial text for new segment
               if (segmenterRef.current) {
                 segmenterRef.current.reset();
@@ -715,7 +720,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const correctedText = message.correctedText;
               const originalText = message.originalText || '';
               const textToDisplay = correctedText && correctedText.trim() ? correctedText : originalText;
-              
+
               // ROBUST: Treat translatedText presence as valid translation signal even if hasTranslation flag is missing
               const hasTranslatedText = typeof message.translatedText === 'string' && message.translatedText.trim().length > 0;
               const hasTranslationFlag = message.hasTranslation === true || hasTranslatedText;
@@ -737,7 +742,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               if (message.targetLang && message.targetLang !== targetLang && message.originalText) {
                 lastSourcePartialTimeRef.current = Date.now();
               }
-              
+
               // TRANSLATION STALL DETECTION: Track when translations arrive for my language
               if (isForMyLanguage) {
                 lastTranslationTimeRef.current = Date.now();
@@ -747,7 +752,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const isTranscriptionMode = targetLang === message.sourceLang;
 
               const shouldUpdateTranslation = isForMyLanguage || isTranscriptionMode;
-              
+
               // TRACE: Log decision logic
               const isXlatePartial = message.type === 'PARTIAL' && message.isPartial && hasTranslationFlag;
               traceUI('DECIDE', message, {
@@ -762,7 +767,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               if (shouldUpdateTranslation) {
                 // TRACE: Log apply
                 traceUI('APPLY', message);
-                
+
                 // OPTIMIZATION: For transcription mode (same language), use correctedText if available
                 // For translation mode, use translatedText; for transcription mode, use correctedText or originalText
                 let textToDisplay = isTranscriptionMode
@@ -779,13 +784,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 const now = Date.now();
                 const timeSinceLastRender = now - lastRenderTimeRef.current;
                 const charDelta = liveText.length - lastTextLengthRef.current;
-                
+
                 // CRITICAL: Always render first partial after reset (when lastRenderTimeRef is 0)
                 // This ensures immediate display when new segment starts
                 const isFirstPartialAfterReset = lastRenderTimeRef.current === 0;
-                
+
                 // Always render finals, or if significant text growth, or if enough time passed
-                const shouldRender = 
+                const shouldRender =
                   message.isPartial === false || // Always render finals
                   isFirstPartialAfterReset || // Always render first partial after reset
                   charDelta >= MIN_CHAR_DELTA || // Significant text growth
@@ -823,7 +828,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               // CRITICAL: Check if this final is for this listener's target language
               const isForMyLanguage = message.hasTranslation && message.targetLang === targetLang;
               const isTranscriptionMode = targetLang === message.sourceLang;
-              
+
               // Skip if not for this listener's language and not transcription mode
               if (!isForMyLanguage && !isTranscriptionMode) {
                 // Removed skip logging - reduces console noise
@@ -946,7 +951,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               if (segmenterRef.current) {
                 segmenterRef.current.reset();
               }
-              
+
               // CRITICAL: Reset throttling refs so new partials can immediately update after final
               // Without this, throttling might skip the first partials of the new segment
               lastRenderTimeRef.current = 0;
@@ -962,6 +967,16 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           case 'error':
             console.error('[Listener] Error:', message.message);
             setError(message.message);
+            break;
+
+          // TTS messages - route to TTS controller
+          case 'tts/audio':
+          case 'tts/audio_chunk':
+          case 'tts/error':
+          case 'tts/ack':
+            if (ttsControllerRef.current) {
+              ttsControllerRef.current.onWsMessage(message);
+            }
             break;
         }
       } catch (err) {
@@ -1225,6 +1240,23 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             </div>
           </div>
         </div>
+
+        {/* TTS Panel - Only shown when feature flag enabled */}
+        {TTS_UI_ENABLED && (
+          <TtsPanel
+            sendMessage={(msg) => {
+              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify(msg));
+              }
+            }}
+            targetLang={targetLang}
+            isConnected={connectionState === 'open'}
+            onControllerReady={(controller) => {
+              ttsControllerRef.current = controller;
+              console.log('[ListenerPage] TTS controller ready');
+            }}
+          />
+        )}
 
         {/* Translation History */}
         <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-2 sm:mx-0">

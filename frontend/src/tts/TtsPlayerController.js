@@ -249,6 +249,8 @@ export class TtsPlayerController {
      * @param {string} segmentId - Segment identifier
      */
     speakTextNow(text, segmentId) {
+        console.log('[TtsPlayerController] speakTextNow called', { text, segmentId, currentLanguageCode: this.currentLanguageCode });
+
         if (!this.currentLanguageCode) {
             console.error('[TtsPlayerController] Cannot speak: language not set');
             if (this.onError) {
@@ -264,7 +266,7 @@ export class TtsPlayerController {
 
         // Send synthesis request
         if (this.sendMessage) {
-            this.sendMessage({
+            const message = {
                 type: 'tts/synthesize',
                 segmentId,
                 text,
@@ -272,7 +274,11 @@ export class TtsPlayerController {
                 voiceName: this.currentVoiceName,
                 tier: this.tier,
                 mode: this.mode
-            });
+            };
+            console.log('[TtsPlayerController] Sending synthesis request:', message);
+            this.sendMessage(message);
+        } else {
+            console.error('[TtsPlayerController] sendMessage is not defined!');
         }
     }
 
