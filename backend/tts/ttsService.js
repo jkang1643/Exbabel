@@ -140,11 +140,16 @@ export class GoogleTtsService extends TtsService {
             const { TextToSpeechClient } = await import('@google-cloud/text-to-speech');
 
             const clientOptions = {};
-            if (process.env.GOOGLE_SPEECH_API_KEY) {
-                console.log('[GoogleTtsService] Using API Key authentication');
-                clientOptions.apiKey = process.env.GOOGLE_SPEECH_API_KEY;
-            } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+
+            // Prioritize Service Account JSON for advanced voice support (Gemini/Chirp/Studio)
+            if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
                 console.log('[GoogleTtsService] Using Service Account JSON authentication');
+                // The client library automatically picks up the path from process.env.GOOGLE_APPLICATION_CREDENTIALS
+            } else if (process.env.GOOGLE_SPEECH_API_KEY) {
+                console.log('[GoogleTtsService] Using API Key authentication (Note: Advanced voices may fail)');
+                clientOptions.apiKey = process.env.GOOGLE_SPEECH_API_KEY;
+            } else {
+                console.log('[GoogleTtsService] Using default credentials (GCP environment)');
             }
 
             // Support explicit project ID and API endpoint for advanced voices/Vertex AI

@@ -111,6 +111,7 @@ const FALLBACK_VOICES = {
     "chirp3_hd": "fr-CA-Chirp3-HD-Kore"
   },
   "fr-FR": {
+    "gemini": "Kore",
     "neural2": "fr-FR-Neural2-F",
     "standard": "fr-FR-Standard-F",
     "chirp3_hd": "fr-FR-Chirp3-HD-Kore"
@@ -119,6 +120,7 @@ const FALLBACK_VOICES = {
     "standard": "gl-ES-Standard-B"
   },
   "de-DE": {
+    "gemini": "Kore",
     "neural2": "de-DE-Neural2-G",
     "standard": "de-DE-Standard-G",
     "chirp3_hd": "de-DE-Chirp3-HD-Kore"
@@ -157,11 +159,13 @@ const FALLBACK_VOICES = {
     "neural2": "id-ID-Wavenet-A"
   },
   "it-IT": {
+    "gemini": "Kore",
     "neural2": "it-IT-Neural2-A",
     "standard": "it-IT-Standard-E",
     "chirp3_hd": "it-IT-Chirp3-HD-Kore"
   },
   "ja-JP": {
+    "gemini": "Kore",
     "neural2": "ja-JP-Neural2-C",
     "standard": "ja-JP-Standard-A",
     "chirp3_hd": "ja-JP-Chirp3-HD-Kore"
@@ -172,6 +176,7 @@ const FALLBACK_VOICES = {
     "neural2": "kn-IN-Wavenet-A"
   },
   "ko-KR": {
+    "gemini": "Kore",
     "neural2": "ko-KR-Neural2-A",
     "standard": "ko-KR-Standard-A",
     "chirp3_hd": "ko-KR-Chirp3-HD-Kore"
@@ -194,6 +199,7 @@ const FALLBACK_VOICES = {
     "neural2": "ml-IN-Wavenet-A"
   },
   "cmn-CN": {
+    "gemini": "Kore",
     "standard": "cmn-CN-Standard-A",
     "chirp3_hd": "cmn-CN-Chirp3-HD-Kore",
     "neural2": "cmn-CN-Wavenet-A"
@@ -223,6 +229,7 @@ const FALLBACK_VOICES = {
     "neural2": "pl-PL-Wavenet-F"
   },
   "pt-BR": {
+    "gemini": "Kore",
     "neural2": "pt-BR-Neural2-A",
     "standard": "pt-BR-Standard-A",
     "chirp3_hd": "pt-BR-Chirp3-HD-Kore"
@@ -242,6 +249,7 @@ const FALLBACK_VOICES = {
     "neural2": "ro-RO-Wavenet-B"
   },
   "ru-RU": {
+    "gemini": "Kore",
     "standard": "ru-RU-Standard-A",
     "chirp3_hd": "ru-RU-Chirp3-HD-Kore",
     "neural2": "ru-RU-Wavenet-A"
@@ -259,6 +267,7 @@ const FALLBACK_VOICES = {
     "chirp3_hd": "sl-SI-Chirp3-HD-Kore"
   },
   "es-ES": {
+    "gemini": "Kore",
     "neural2": "es-ES-Neural2-A",
     "standard": "es-ES-Standard-E",
     "chirp3_hd": "es-ES-Chirp3-HD-Kore"

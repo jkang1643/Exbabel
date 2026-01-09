@@ -11,22 +11,17 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ---
 
-### BUG 6: BLOCKED — GCP Service Agent Generation Failure
-**Status:** ⛔ BLOCKED (EXTERNAL PLATFORM ISSUE)
-
-Requests for Gemini and Chirp 3 HD voices fail with `PERMISSION_DENIED: Permission 'aiplatform.endpoints.predict' denied`. This has been traced to a failure at the Google Cloud Platform infrastructure level.
-
-#### Technical Details:
-- **Core Blocker:** The Google-managed service agent (`service-222662040787@gcp-sa-texttospeech.iam.gserviceaccount.com`) does not exist and cannot be generated.
-- **Symptom:** Without this agent, the TTS service cannot be granted `roles/aiplatform.user` permissions, making it impossible for Cloud TTS to call Vertex AI on behalf of the project.
-- **Manual Creation Failure:** Attempts to force creation via `gcloud beta services identity create --service=texttospeech.googleapis.com` fail with:
-  `IAM_SERVICE_NOT_CONFIGURED_FOR_IDENTITIES`
-  `reason: SU_INTERNAL_GENERATE_SERVICE_IDENTITY`
-
-#### Impact:
-- **Chirp 3 HD & Gemini voices are currently UNREACHABLE.**
-- A support ticket has been prepared/sent to Google Cloud Support to investigate why the service identity cannot be generated for project `gen-lang-client-0417618073`.
-- The application automatically routes all high-tier requests to **Neural2** fallbacks to maintain service availability.
+### BUG 6: 🟢 RESOLVED — Google TTS Identity & Project Alignment
+- **Status:** RESOLVED
+- **Root Cause:**
+  1. `GoogleTtsService` was prioritizing `GOOGLE_SPEECH_API_KEY` over `GOOGLE_APPLICATION_CREDENTIALS`. Since API Keys are tied to projects but do not provide an identity (Service Account), Vertex AI calls for Gemini/Chirp voices defaulted to the API key's project (the old managed project `222662040787`) and failed.
+  2. Multiple utility scripts had the old project number `222662040787` hardcoded as a fallback.
+- **Resolution:**
+  1. Updated `GoogleTtsService._initClient()` to prioritize `GOOGLE_APPLICATION_CREDENTIALS`. Advanced voices now correctly use the service account identity from `exbabel-tts-prod`.
+  2. Standardized environment variables: Now prefers `GOOGLE_PROJECT_ID` across all services.
+  3. Updated `backend/googleSpeechStream.js` and all `backend/scripts/` to use dynamic project resolution.
+  4. Verified that PhraseSets now correctly target `projects/exbabel-tts-prod/...`.
+- **Outcome:** Gemini and Chirp 3 HD voices now authenticate correctly against the new project. No more `PERMISSION_DENIED` errors on the old resource!
 
 #### Current state:
 - Implemented graceful fallback to `neural2` so synthesis doesn't crash.
@@ -162,13 +157,14 @@ Implemented the complete scaffolding for Google TTS integration, supporting both
 - **Scaffolding:** Feature flags, policy engine, and WebSocket command architecture.
 - **Unary synthesis:** Functional Google TTS integration for multiple tiers.
 - **Voice Routing:** Robust routing for Gemini, Chirp3 HD, Neural2, and Standard tiers.
+- **Best Defaults (Part 4):** Standardized best-in-class defaults for major languages (Kore, etc.) across all premium tiers.
 - **Language Support:** Comprehensive mapping for 80+ language locales.
 - **Audio Playback:** Frontend queuing and playback for unary audio chunks.
 
 ### 🔍 Known / Remaining
-- **BLOCKER:** Chirp 3 HD and Gemini voices are currently blocked due to GCP `PERMISSION_DENIED` errors (Service Agent IAM issue).
+- **Database Persistence:** Usage tracking is currently in-memory (Map); database persistence is next.
 - **Streaming Mode:** Currently returns `NOT_IMPLEMENTED`.
-- **Persistence:** Usage tracking is currently in-memory (Map); database persistence is next.
+- **Auto-synthesis Integration:** Hooking synthesis into the main translation loop.
 
 ---
 
