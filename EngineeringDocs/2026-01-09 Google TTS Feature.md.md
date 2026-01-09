@@ -1,5 +1,5 @@
 # Exbabel — Feat/Google TTS Integration
-**Last updated:** 2026-01-08 (America/Chicago)
+**Last updated:** 2026-01-09 (America/Chicago)
 
 This is a running "what is done" document capturing what we changed, why, and where we are now regarding the Google Text-to-Speech integration.
 **Newest items are at the top.**
@@ -8,6 +8,54 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+
+---
+
+### BUG 5: FIXED — TTS Routing Logic Flaws & Tier Mismatch
+**Status:** ✅ RESOLVED
+
+Fixed critical flaws in the TTS routing logic where user-selected voices (Chirp3 HD, Standard) were being incorrectly routed or forced to Neural2 fallbacks.
+
+#### Root Cause:
+1. **Engine-to-Tier Mapping Lag:** The backend `ttsService.js` was incorrectly mapping the `CHIRP3_HD` engine to the `neural2` tier by default.
+2. **Forced Neural2 Fallback:** The `_resolveVoice` function in `ttsRouting.js` contained logic that forced `chirp3_hd` requests to use `neural2` discovery and mappings.
+3. **Frontend Tier Ignorance:** The `TtsPanel.jsx` component was hardcoding `tier: 'gemini'` for all synthesis requests, regardless of whether the user selected a Chirp3, Neural2, or Standard voice.
+
+#### Key Fixes:
+1. **Unified Mapping Matrix:** Generated a comprehensive mapping of 80+ language locales to their specific `neural2`, `standard`, and `chirp3_hd` voice names in `ttsRouting.js`.
+2. **Backend Engine Correction:** Updated `_tierFromEngine` in `ttsService.js` to correctly distinguish between `chirp3_hd` and `neural2` tiers.
+3. **Routing Refactor:** Rewrote `_resolveVoice` to correctly handle all tiers based on user selection, respecting the requested tier before falling back.
+4. **Metadata-Driven UI:** Updated `TtsPanel.jsx` to include explicit `tier` metadata for every voice option and propagated this tier to the synthesis request.
+5. **Controller Overrides:** Added tier override support to `speakTextNow` in `TtsPlayerController.js`.
+
+#### Impact:
+- ✅ **Chirp3 HD** voices can now be selected and heard correctly.
+- ✅ **Standard** voices are correctly routed using the standard tier instead of falling back.
+- ✅ **Automatic Tier Discovery:** The system now intelligently picks the right tier based on the user's selected voice.
+- ✅ **Expanded Language Support:** Support for over 80 language locales added via the comprehensive mapping matrix.
+
+---
+
+### BUG 4: FIXED — "Speak Last Final Segment" Button Data Structure Mismatch
+**Status:** ✅ RESOLVED
+
+Fixed the "Speak Last Final Segment" button in the TTS panel that was failing to find and speak real transcript segments despite translations being present in the history.
+
+#### Root Cause:
+The TTS panel logic was checking for translation object properties that didn't match the actual data structure used by the ListenerPage. The code expected `text`/`translatedText` properties, but the actual translation history used `original`/`translated` properties.
+
+#### Key Fixes:
+1. **Data Structure Analysis:** Identified that translation history entries have `original` and `translated` properties (from auto-segmented final translations) rather than `text` and `translatedText` properties (from manual FINAL messages).
+2. **Logic Correction:** Updated `TtsPanel.jsx` segment detection logic to properly handle both data structure types:
+   - Auto-segmented entries: `{original, translated, timestamp, seqId, ...}`
+   - Manual entries: `{text, translatedText, originalText, ...}`
+3. **Property Priority:** Implemented fallback logic prioritizing translated text over original text for TTS synthesis.
+4. **Debug Infrastructure:** Added comprehensive console logging to troubleshoot data flow issues between ListenerPage and TtsPanel components.
+
+#### Impact:
+- ✅ "Speak Last Final Segment" button now correctly identifies and speaks the most recent final translation
+- ✅ TTS can now synthesize real transcript content instead of only test strings
+- ✅ Improved debugging capabilities for future TTS-related issues
 
 ---
 
@@ -88,13 +136,14 @@ Implemented the complete scaffolding for Google TTS integration, supporting both
 
 ### ✅ Implemented
 - **Scaffolding:** Feature flags, policy engine, and WebSocket command architecture.
-- **Unary synthesis:** Functional Google TTS integration for the Gemini tier.
-- **Voice Fallback:** Intelligent mapping for non-English languages.
+- **Unary synthesis:** Functional Google TTS integration for multiple tiers.
+- **Voice Routing:** Robust routing for Gemini, Chirp3 HD, Neural2, and Standard tiers.
+- **Language Support:** Comprehensive mapping for 80+ language locales.
 - **Audio Playback:** Frontend queuing and playback for unary audio chunks.
 
 ### 🔍 Known / Remaining
 - **Streaming Mode:** Currently returns `NOT_IMPLEMENTED`.
-- **Tier Support:** Only Gemini tier is implemented; `chirp_hd` and `custom_voice` are pending.
+- **Vertex AI Permissions:** Some Gemini voices fail with `PERMISSION_DENIED` on Vertex AI endpoints (fix: add Vertex AI User role to service account).
 - **Persistence:** Usage tracking is currently in-memory (Map); database persistence is next.
 
 ---

@@ -20,6 +20,9 @@ export class TtsPlayerController {
         this.tier = TtsTier.GEMINI;
         this.mode = TtsMode.UNARY;
 
+        // Resolved routing info (from last synthesis)
+        this.lastResolvedRoute = null;
+
         // Audio queue (PR1: stored but not played)
         this.audioQueue = [];
         this.currentAudio = null;
@@ -27,6 +30,7 @@ export class TtsPlayerController {
         // Callbacks
         this.onStateChange = null;
         this.onError = null;
+        this.onRouteResolved = null; // New callback for routing updates
     }
 
     /**
@@ -185,13 +189,25 @@ export class TtsPlayerController {
                 // Unary audio response
                 console.log('[TtsPlayerController] Received audio for segment:', msg.segmentId);
 
+                // Store resolved routing information
+                if (msg.resolvedRoute) {
+                    this.lastResolvedRoute = msg.resolvedRoute;
+                    console.log('[TtsPlayerController] Resolved route:', msg.resolvedRoute);
+
+                    // Notify listeners of routing resolution
+                    if (this.onRouteResolved) {
+                        this.onRouteResolved(msg.resolvedRoute);
+                    }
+                }
+
                 // Store in queue
                 this.audioQueue.push({
                     type: 'unary',
                     segmentId: msg.segmentId,
                     format: msg.format,
                     mimeType: msg.mimeType,
-                    audioContentBase64: msg.audioContentBase64
+                    audioContentBase64: msg.audioContentBase64,
+                    resolvedRoute: msg.resolvedRoute // Include routing info in queue item
                 });
 
                 // Decode and play audio
@@ -247,8 +263,10 @@ export class TtsPlayerController {
      * 
      * @param {string} text - Text to synthesize
      * @param {string} segmentId - Segment identifier
+     * @param {Object} [options] - Optional overrides
+     * @param {string} [options.tier] - Optional tier override
      */
-    speakTextNow(text, segmentId) {
+    speakTextNow(text, segmentId, options = {}) {
         console.log('[TtsPlayerController] speakTextNow called', { text, segmentId, currentLanguageCode: this.currentLanguageCode });
 
         if (!this.currentLanguageCode) {
@@ -262,7 +280,8 @@ export class TtsPlayerController {
             return;
         }
 
-        console.log(`[TtsPlayerController] Requesting synthesis for segment: ${segmentId}`);
+        const resolvedTier = options.tier || this.tier;
+        console.log(`[TtsPlayerController] Requesting synthesis for segment: ${segmentId} with tier: ${resolvedTier}`);
 
         // Send synthesis request
         if (this.sendMessage) {
@@ -272,7 +291,7 @@ export class TtsPlayerController {
                 text,
                 languageCode: this.currentLanguageCode,
                 voiceName: this.currentVoiceName,
-                tier: this.tier,
+                tier: resolvedTier,
                 mode: this.mode
             };
             console.log('[TtsPlayerController] Sending synthesis request:', message);
@@ -380,7 +399,8 @@ export class TtsPlayerController {
             voiceName: this.currentVoiceName,
             tier: this.tier,
             mode: this.mode,
-            queueLength: this.audioQueue.length
+            queueLength: this.audioQueue.length,
+            lastResolvedRoute: this.lastResolvedRoute
         };
     }
 }

@@ -1,0 +1,966 @@
+/**
+ * TTS Routing Resolver
+ *
+ * Single source of truth for TTS routing decisions.
+ * Determines which provider, engine, tier, voice, and encoding to use based on:
+ * - Requested tier (user preference)
+ * - Language availability
+ * - Subscription/org permissions
+ * - Fallback logic
+ *
+ * Uses dynamic voice discovery from Google TTS API for accurate voice mappings.
+ */
+
+import { TtsEngine, TtsEncoding } from './tts.types.js';
+
+// Global voice cache - will be populated by dynamic discovery
+let VOICE_CACHE = new Map();
+let VOICE_CACHE_TIMESTAMP = null;
+const VOICE_CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Fallback voices for when API discovery fails
+// Based on Google TTS documentation - conservative, known-working voice names
+const FALLBACK_VOICES = {
+  "af-ZA": {
+    "standard": "af-ZA-Standard-A"
+  },
+  "ar-XA": {
+    "standard": "ar-XA-Standard-A",
+    "chirp3_hd": "ar-XA-Chirp3-HD-Kore",
+    "neural2": "ar-XA-Wavenet-A"
+  },
+  "eu-ES": {
+    "standard": "eu-ES-Standard-B"
+  },
+  "bn-IN": {
+    "standard": "bn-IN-Standard-A",
+    "chirp3_hd": "bn-IN-Chirp3-HD-Kore",
+    "neural2": "bn-IN-Wavenet-A"
+  },
+  "bg-BG": {
+    "standard": "bg-BG-Standard-B",
+    "chirp3_hd": "bg-BG-Chirp3-HD-Kore"
+  },
+  "ca-ES": {
+    "standard": "ca-ES-Standard-B"
+  },
+  "yue-HK": {
+    "standard": "yue-HK-Standard-A",
+    "chirp3_hd": "yue-HK-Chirp3-HD-Kore"
+  },
+  "hr-HR": {
+    "chirp3_hd": "hr-HR-Chirp3-HD-Kore"
+  },
+  "cs-CZ": {
+    "standard": "cs-CZ-Standard-B",
+    "chirp3_hd": "cs-CZ-Chirp3-HD-Kore",
+    "neural2": "cs-CZ-Wavenet-B"
+  },
+  "da-DK": {
+    "neural2": "da-DK-Neural2-F",
+    "standard": "da-DK-Standard-F",
+    "chirp3_hd": "da-DK-Chirp3-HD-Kore"
+  },
+  "nl-BE": {
+    "standard": "nl-BE-Standard-C",
+    "chirp3_hd": "nl-BE-Chirp3-HD-Kore",
+    "neural2": "nl-BE-Wavenet-C"
+  },
+  "nl-NL": {
+    "standard": "nl-NL-Standard-F",
+    "chirp3_hd": "nl-NL-Chirp3-HD-Kore",
+    "neural2": "nl-NL-Wavenet-F"
+  },
+  "en-AU": {
+    "neural2": "en-AU-Neural2-A",
+    "standard": "en-AU-Standard-A",
+    "chirp3_hd": "en-AU-Chirp3-HD-Kore"
+  },
+  "en-IN": {
+    "neural2": "en-IN-Neural2-A",
+    "standard": "en-IN-Standard-A",
+    "chirp3_hd": "en-IN-Chirp3-HD-Kore"
+  },
+  "en-GB": {
+    "neural2": "en-GB-Neural2-A",
+    "standard": "en-GB-Standard-A",
+    "chirp3_hd": "en-GB-Chirp3-HD-Kore"
+  },
+  "en-US": {
+    "gemini": "Kore",
+    "neural2": "en-US-Neural2-A",
+    "standard": "en-US-Standard-A",
+    "chirp3_hd": "en-US-Chirp3-HD-Kore"
+  },
+  "et-EE": {
+    "standard": "et-EE-Standard-A",
+    "chirp3_hd": "et-EE-Chirp3-HD-Kore"
+  },
+  "fil-PH": {
+    "neural2": "fil-ph-Neural2-A",
+    "standard": "fil-PH-Standard-A"
+  },
+  "fi-FI": {
+    "standard": "fi-FI-Standard-B",
+    "chirp3_hd": "fi-FI-Chirp3-HD-Kore",
+    "neural2": "fi-FI-Wavenet-B"
+  },
+  "fr-CA": {
+    "neural2": "fr-CA-Neural2-A",
+    "standard": "fr-CA-Standard-A",
+    "chirp3_hd": "fr-CA-Chirp3-HD-Kore"
+  },
+  "fr-FR": {
+    "neural2": "fr-FR-Neural2-F",
+    "standard": "fr-FR-Standard-F",
+    "chirp3_hd": "fr-FR-Chirp3-HD-Kore"
+  },
+  "gl-ES": {
+    "standard": "gl-ES-Standard-B"
+  },
+  "de-DE": {
+    "neural2": "de-DE-Neural2-G",
+    "standard": "de-DE-Standard-G",
+    "chirp3_hd": "de-DE-Chirp3-HD-Kore"
+  },
+  "el-GR": {
+    "standard": "el-GR-Standard-B",
+    "chirp3_hd": "el-GR-Chirp3-HD-Kore",
+    "neural2": "el-GR-Wavenet-B"
+  },
+  "gu-IN": {
+    "standard": "gu-IN-Standard-A",
+    "chirp3_hd": "gu-IN-Chirp3-HD-Kore",
+    "neural2": "gu-IN-Wavenet-A"
+  },
+  "he-IL": {
+    "standard": "he-IL-Standard-A",
+    "chirp3_hd": "he-IL-Chirp3-HD-Kore",
+    "neural2": "he-IL-Wavenet-A"
+  },
+  "hi-IN": {
+    "neural2": "hi-IN-Neural2-A",
+    "standard": "hi-IN-Standard-A",
+    "chirp3_hd": "hi-IN-Chirp3-HD-Kore"
+  },
+  "hu-HU": {
+    "standard": "hu-HU-Standard-B",
+    "chirp3_hd": "hu-HU-Chirp3-HD-Kore",
+    "neural2": "hu-HU-Wavenet-B"
+  },
+  "is-IS": {
+    "standard": "is-IS-Standard-B"
+  },
+  "id-ID": {
+    "standard": "id-ID-Standard-A",
+    "chirp3_hd": "id-ID-Chirp3-HD-Kore",
+    "neural2": "id-ID-Wavenet-A"
+  },
+  "it-IT": {
+    "neural2": "it-IT-Neural2-A",
+    "standard": "it-IT-Standard-E",
+    "chirp3_hd": "it-IT-Chirp3-HD-Kore"
+  },
+  "ja-JP": {
+    "neural2": "ja-JP-Neural2-C",
+    "standard": "ja-JP-Standard-A",
+    "chirp3_hd": "ja-JP-Chirp3-HD-Kore"
+  },
+  "kn-IN": {
+    "standard": "kn-IN-Standard-A",
+    "chirp3_hd": "kn-IN-Chirp3-HD-Kore",
+    "neural2": "kn-IN-Wavenet-A"
+  },
+  "ko-KR": {
+    "neural2": "ko-KR-Neural2-A",
+    "standard": "ko-KR-Standard-A",
+    "chirp3_hd": "ko-KR-Chirp3-HD-Kore"
+  },
+  "lv-LV": {
+    "standard": "lv-LV-Standard-B",
+    "chirp3_hd": "lv-LV-Chirp3-HD-Kore"
+  },
+  "lt-LT": {
+    "standard": "lt-LT-Standard-B",
+    "chirp3_hd": "lt-LT-Chirp3-HD-Kore"
+  },
+  "ms-MY": {
+    "standard": "ms-MY-Standard-A",
+    "neural2": "ms-MY-Wavenet-A"
+  },
+  "ml-IN": {
+    "standard": "ml-IN-Standard-A",
+    "chirp3_hd": "ml-IN-Chirp3-HD-Kore",
+    "neural2": "ml-IN-Wavenet-A"
+  },
+  "cmn-CN": {
+    "standard": "cmn-CN-Standard-A",
+    "chirp3_hd": "cmn-CN-Chirp3-HD-Kore",
+    "neural2": "cmn-CN-Wavenet-A"
+  },
+  "zh-CN": {
+    "standard": "cmn-CN-Standard-A",
+    "chirp3_hd": "cmn-CN-Chirp3-HD-Kore",
+    "neural2": "cmn-CN-Wavenet-A"
+  },
+  "cmn-TW": {
+    "standard": "cmn-TW-Standard-A",
+    "neural2": "cmn-TW-Wavenet-A"
+  },
+  "mr-IN": {
+    "standard": "mr-IN-Standard-A",
+    "chirp3_hd": "mr-IN-Chirp3-HD-Kore",
+    "neural2": "mr-IN-Wavenet-A"
+  },
+  "nb-NO": {
+    "standard": "nb-NO-Standard-F",
+    "chirp3_hd": "nb-NO-Chirp3-HD-Kore",
+    "neural2": "nb-NO-Wavenet-F"
+  },
+  "pl-PL": {
+    "standard": "pl-PL-Standard-F",
+    "chirp3_hd": "pl-PL-Chirp3-HD-Kore",
+    "neural2": "pl-PL-Wavenet-F"
+  },
+  "pt-BR": {
+    "neural2": "pt-BR-Neural2-A",
+    "standard": "pt-BR-Standard-A",
+    "chirp3_hd": "pt-BR-Chirp3-HD-Kore"
+  },
+  "pt-PT": {
+    "standard": "pt-PT-Standard-E",
+    "neural2": "pt-PT-Wavenet-E"
+  },
+  "pa-IN": {
+    "standard": "pa-IN-Standard-A",
+    "chirp3_hd": "pa-IN-Chirp3-HD-Kore",
+    "neural2": "pa-IN-Wavenet-A"
+  },
+  "ro-RO": {
+    "standard": "ro-RO-Standard-B",
+    "chirp3_hd": "ro-RO-Chirp3-HD-Kore",
+    "neural2": "ro-RO-Wavenet-B"
+  },
+  "ru-RU": {
+    "standard": "ru-RU-Standard-A",
+    "chirp3_hd": "ru-RU-Chirp3-HD-Kore",
+    "neural2": "ru-RU-Wavenet-A"
+  },
+  "sr-RS": {
+    "standard": "sr-RS-Standard-B",
+    "chirp3_hd": "sr-RS-Chirp3-HD-Kore"
+  },
+  "sk-SK": {
+    "standard": "sk-SK-Standard-B",
+    "chirp3_hd": "sk-SK-Chirp3-HD-Kore",
+    "neural2": "sk-SK-Wavenet-B"
+  },
+  "sl-SI": {
+    "chirp3_hd": "sl-SI-Chirp3-HD-Kore"
+  },
+  "es-ES": {
+    "neural2": "es-ES-Neural2-A",
+    "standard": "es-ES-Standard-E",
+    "chirp3_hd": "es-ES-Chirp3-HD-Kore"
+  },
+  "es-US": {
+    "neural2": "es-US-Neural2-A",
+    "standard": "es-US-Standard-A",
+    "chirp3_hd": "es-US-Chirp3-HD-Kore"
+  },
+  "sv-SE": {
+    "standard": "sv-SE-Standard-A",
+    "chirp3_hd": "sv-SE-Chirp3-HD-Kore",
+    "neural2": "sv-SE-Wavenet-A"
+  },
+  "ta-IN": {
+    "standard": "ta-IN-Standard-A",
+    "chirp3_hd": "ta-IN-Chirp3-HD-Kore",
+    "neural2": "ta-IN-Wavenet-A"
+  },
+  "te-IN": {
+    "standard": "te-IN-Standard-A",
+    "chirp3_hd": "te-IN-Chirp3-HD-Kore"
+  },
+  "th-TH": {
+    "neural2": "th-TH-Neural2-C",
+    "standard": "th-TH-Standard-A",
+    "chirp3_hd": "th-TH-Chirp3-HD-Kore"
+  },
+  "tr-TR": {
+    "standard": "tr-TR-Standard-A",
+    "chirp3_hd": "tr-TR-Chirp3-HD-Kore",
+    "neural2": "tr-TR-Wavenet-A"
+  },
+  "uk-UA": {
+    "standard": "uk-UA-Standard-B",
+    "chirp3_hd": "uk-UA-Chirp3-HD-Kore",
+    "neural2": "uk-UA-Wavenet-B"
+  },
+  "ur-IN": {
+    "standard": "ur-IN-Standard-A",
+    "chirp3_hd": "ur-IN-Chirp3-HD-Kore",
+    "neural2": "ur-IN-Wavenet-A"
+  },
+  "vi-VN": {
+    "neural2": "vi-VN-Neural2-A",
+    "standard": "vi-VN-Standard-A",
+    "chirp3_hd": "vi-VN-Chirp3-HD-Kore"
+  }
+};
+
+
+/**
+ * Get Google TTS service instance for voice discovery
+ * @private
+ */
+let _ttsService = null;
+async function _getTtsService() {
+  if (!_ttsService) {
+    const { GoogleTtsService } = await import('./ttsService.js');
+    _ttsService = new GoogleTtsService();
+  }
+  return _ttsService;
+}
+
+/**
+ * Tier capabilities and mappings
+ *
+ * Defines which tiers are available and their characteristics.
+ */
+const TIER_CONFIG = {
+  gemini: {
+    provider: 'google',
+    tier: 'gemini',
+    engine: TtsEngine.GEMINI_TTS,
+    model: 'gemini-2.5-flash-tts',
+    supportsAllLanguages: false, // Primarily English-optimized
+    fallbackTier: 'neural2'
+  },
+  chirp3_hd: {
+    provider: 'google',
+    tier: 'chirp3_hd',
+    engine: TtsEngine.CHIRP3_HD,
+    model: 'chirp_3_hd',
+    supportsAllLanguages: false, // Limited language support
+    fallbackTier: 'neural2'
+  },
+  neural2: {
+    provider: 'google',
+    tier: 'neural2',
+    engine: TtsEngine.CHIRP3_HD, // Neural2 voices use Chirp3 HD engine
+    model: null,
+    supportsAllLanguages: true,
+    fallbackTier: 'standard'
+  },
+  standard: {
+    provider: 'google',
+    tier: 'standard',
+    engine: TtsEngine.CHIRP3_HD, // Standard voices use Chirp3 HD engine
+    model: null,
+    supportsAllLanguages: true,
+    fallbackTier: null // Last resort
+  }
+};
+
+/**
+ * Language-specific tier availability
+ *
+ * Which tiers are available for which languages.
+ * null means check subscription/org config.
+ */
+const LANGUAGE_TIER_AVAILABILITY = {
+  "af-ZA": [
+    "standard"
+  ],
+  "ar-XA": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "eu-ES": [
+    "standard"
+  ],
+  "bn-IN": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "bg-BG": [
+    "chirp3_hd",
+    "standard"
+  ],
+  "ca-ES": [
+    "standard"
+  ],
+  "yue-HK": [
+    "chirp3_hd",
+    "standard"
+  ],
+  "hr-HR": [
+    "chirp3_hd"
+  ],
+  "cs-CZ": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "da-DK": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "nl-BE": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "nl-NL": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "en-AU": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "en-IN": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "en-GB": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "en-US": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "et-EE": [
+    "chirp3_hd",
+    "standard"
+  ],
+  "fil-PH": [
+    "neural2",
+    "standard"
+  ],
+  "fi-FI": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "fr-CA": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "fr-FR": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "gl-ES": [
+    "standard"
+  ],
+  "de-DE": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "el-GR": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "gu-IN": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "he-IL": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "hi-IN": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "hu-HU": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "is-IS": [
+    "standard"
+  ],
+  "id-ID": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "it-IT": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "ja-JP": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "kn-IN": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "ko-KR": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "lv-LV": [
+    "chirp3_hd",
+    "standard"
+  ],
+  "lt-LT": [
+    "chirp3_hd",
+    "standard"
+  ],
+  "ms-MY": [
+    "neural2",
+    "standard"
+  ],
+  "ml-IN": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "cmn-CN": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "zh-CN": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "cmn-TW": [
+    "neural2",
+    "standard"
+  ],
+  "mr-IN": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "nb-NO": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "pl-PL": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "pt-BR": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "pt-PT": [
+    "gemini",
+    "neural2",
+    "standard"
+  ],
+  "pa-IN": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "ro-RO": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "ru-RU": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "sr-RS": [
+    "chirp3_hd",
+    "standard"
+  ],
+  "sk-SK": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "sl-SI": [
+    "chirp3_hd"
+  ],
+  "es-ES": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "es-US": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "sv-SE": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "ta-IN": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "te-IN": [
+    "gemini",
+    "chirp3_hd",
+    "standard"
+  ],
+  "th-TH": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "tr-TR": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "uk-UA": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "ur-IN": [
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ],
+  "vi-VN": [
+    "gemini",
+    "chirp3_hd",
+    "neural2",
+    "standard"
+  ]
+};
+
+
+/**
+ * Normalize language code to full locale format
+ * @private
+ */
+function _normalizeLanguageCode(languageCode) {
+  if (!languageCode) return null;
+
+  // If already in full format (e.g., 'es-ES'), return as-is
+  if (languageCode.includes('-')) {
+    return languageCode;
+  }
+
+  // Map short codes to full locale codes
+  const languageMap = {
+    'es': 'es-ES',
+    'en': 'en-US',
+    'fr': 'fr-FR',
+    'de': 'de-DE',
+    'it': 'it-IT',
+    'pt': 'pt-BR',
+    'ja': 'ja-JP',
+    'ko': 'ko-KR',
+    'zh': 'cmn-CN', // Map Chinese to Mandarin Chinese
+    'ar': 'ar-XA',
+    'hi': 'hi-IN',
+    'ru': 'ru-RU'
+  };
+
+  return languageMap[languageCode] || `${languageCode}-${languageCode.toUpperCase()}`;
+}
+
+/**
+ * Get available tiers for a language
+ * @private
+ */
+function _getAvailableTiersForLanguage(languageCode) {
+  const normalizedCode = _normalizeLanguageCode(languageCode);
+  return LANGUAGE_TIER_AVAILABILITY[normalizedCode] || ['neural2', 'standard'];
+}
+
+/**
+ * Check if tier is available for language
+ * @private
+ */
+function _isTierAvailableForLanguage(tier, languageCode) {
+  const availableTiers = _getAvailableTiersForLanguage(languageCode);
+  return availableTiers.includes(tier);
+}
+
+/**
+ * Resolve tier based on user request, language, and availability
+ * @private
+ */
+function _resolveTier(requestedTier, languageCode, orgConfig = {}) {
+  // Start with requested tier
+  let resolvedTier = requestedTier;
+
+  // Check if requested tier is available for this language
+  if (!_isTierAvailableForLanguage(resolvedTier, languageCode)) {
+    // Fallback to next available tier
+    const availableTiers = _getAvailableTiersForLanguage(languageCode);
+    const requestedIndex = availableTiers.indexOf(requestedTier);
+
+    if (requestedIndex > 0) {
+      // Use the next highest available tier
+      resolvedTier = availableTiers[requestedIndex - 1];
+    } else {
+      // Use the first available tier
+      resolvedTier = availableTiers[0];
+    }
+  }
+
+  // TODO: Check org/subscription restrictions
+  // For now, allow all tiers
+
+  return resolvedTier;
+}
+
+/**
+ * Resolve voice based on tier, language, and requested voice
+ * @private
+ */
+/**
+ * Get available voices for a language and tier using dynamic discovery
+ * @private
+ */
+async function _getAvailableVoicesForLanguageAndTier(languageCode, tier) {
+  // Option 2 (Dynamic Discovery) disabled for MVP - using manual mapping (Option 1)
+  return [];
+
+  /* Dynamic discovery code preserved for future use
+  const cacheKey = `${languageCode}:${tier}`;
+  ...
+  */
+}
+
+/**
+ * Resolve voice based on tier, language, and requested voice
+ * @private
+ */
+async function _resolveVoice(tier, languageCode, requestedVoiceName) {
+  const normalizedCode = _normalizeLanguageCode(languageCode);
+
+  // 1. Try dynamic discovery first (API discovery)
+  // This is currently disabled in our discovery function, returning []
+  const availableVoices = await _getAvailableVoicesForLanguageAndTier(normalizedCode, tier);
+  if (availableVoices.length > 0) {
+    // If requested voice is available, use it
+    if (requestedVoiceName && availableVoices.includes(requestedVoiceName)) {
+      return requestedVoiceName;
+    }
+    // Otherwise use the first available voice
+    return availableVoices[0];
+  }
+
+  // 2. Fallback to hardcoded mappings if discovery fails (Option 1)
+  const fallbackVoicesForLang = FALLBACK_VOICES[normalizedCode];
+  if (fallbackVoicesForLang && fallbackVoicesForLang[tier]) {
+    return fallbackVoicesForLang[tier];
+  }
+
+  // 3. Special handling for Gemini if no specific mapping found in FALLBACK_VOICES
+  if (tier === 'gemini') {
+    const GEMINI_VOICES = [
+      'Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
+      'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam',
+      'Autonoe', 'Callirrhoe', 'Despina', 'Erinome',
+      'Gacrux', 'Iapetus', 'Laomedeia', 'Orus', 'Pulcherrima',
+      'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar',
+      'Sulafat', 'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
+    ];
+
+    if (requestedVoiceName && GEMINI_VOICES.includes(requestedVoiceName)) {
+      return requestedVoiceName;
+    }
+    return 'Kore';
+  }
+
+  // 4. Last resort: generic patterns based on tier
+  if (tier === 'neural2' || tier === 'chirp3_hd') {
+    // Note: Most Neural2 voices follow this pattern
+    return `${normalizedCode}-Neural2-A`;
+  } else if (tier === 'standard') {
+    return `${normalizedCode}-Standard-A`;
+  }
+
+  return requestedVoiceName || `${normalizedCode}-Standard-A`;
+}
+
+/**
+ * TTS Route Resolver
+ *
+ * Single source of truth for TTS routing decisions.
+ *
+ * @param {Object} params - Routing parameters
+ * @param {string} params.requestedTier - User's preferred tier (gemini | chirp3_hd | neural2 | standard)
+ * @param {string} params.requestedVoice - User's preferred voice name
+ * @param {string} params.languageCode - BCP-47 language code
+ * @param {string} [params.mode='unary'] - Synthesis mode (unary | streaming)
+ * @param {Object} [params.orgConfig={}] - Organization configuration
+ * @param {Object} [params.userSubscription={}] - User subscription details
+ * @returns {Promise<Object>} Resolved routing decision
+ */
+export async function resolveTtsRoute({
+  requestedTier = 'neural2',
+  requestedVoice,
+  languageCode,
+  mode = 'unary',
+  orgConfig = {},
+  userSubscription = {}
+}) {
+  // Normalize inputs
+  const normalizedLanguageCode = _normalizeLanguageCode(languageCode);
+  let resolvedTier = _resolveTier(requestedTier, normalizedLanguageCode, orgConfig);
+  let resolvedVoiceName = await _resolveVoice(resolvedTier, normalizedLanguageCode, requestedVoice);
+
+  // Get tier configuration
+  const tierConfig = TIER_CONFIG[resolvedTier];
+  if (!tierConfig) {
+    throw new Error(`Invalid resolved tier: ${resolvedTier}`);
+  }
+
+  // Determine if this was a fallback
+  const wasFallback = resolvedTier !== requestedTier;
+  const fallbackFrom = wasFallback ? {
+    tier: requestedTier,
+    voiceName: requestedVoice
+  } : null;
+
+  // Determine reason for routing decision
+  let reason = 'direct_match';
+  if (wasFallback) {
+    if (!_isTierAvailableForLanguage(requestedTier, normalizedLanguageCode)) {
+      reason = `tier_not_available_for_language; fallback_to_${resolvedTier}`;
+    } else {
+      reason = `tier_restricted_by_subscription; fallback_to_${resolvedTier}`;
+    }
+  }
+
+  // Determine audio encoding
+  const audioEncoding = mode === 'streaming' ? TtsEncoding.OGG_OPUS : TtsEncoding.MP3;
+
+  return {
+    // Provider and engine info
+    provider: tierConfig.provider,
+    tier: tierConfig.tier,
+    engine: tierConfig.engine,
+    model: tierConfig.model,
+
+    // Voice and language info
+    languageCode: normalizedLanguageCode,
+    voiceName: resolvedVoiceName,
+
+    // Audio config
+    audioEncoding,
+
+    // Fallback tracking
+    fallbackFrom,
+    reason,
+
+    // Metadata for debugging
+    requested: {
+      tier: requestedTier,
+      voiceName: requestedVoice,
+      languageCode
+    }
+  };
+}
+
+/**
+ * Validate that a resolved route is valid
+ * @param {Object} route - Resolved route from resolveTtsRoute
+ * @throws {Error} If route is invalid
+ */
+export function validateResolvedRoute(route) {
+  const required = ['provider', 'tier', 'engine', 'languageCode', 'voiceName', 'audioEncoding'];
+  for (const field of required) {
+    if (!route[field]) {
+      throw new Error(`Missing required route field: ${field}`);
+    }
+  }
+
+  // Validate tier exists in config
+  if (!TIER_CONFIG[route.tier]) {
+    throw new Error(`Invalid tier in route: ${route.tier}`);
+  }
+
+  // Validate language has voice mapping (for Neural2/Standard)
+  if (route.tier !== 'gemini' && !FALLBACK_VOICES[route.languageCode]) {
+    console.warn(`No voice mapping found for language ${route.languageCode}, using fallback`);
+  }
+}
+
+/**
+ * Get all supported languages
+ * @returns {string[]} Array of supported language codes
+ */
+export function getSupportedLanguages() {
+  return Object.keys(FALLBACK_VOICES);
+}
+
+/**
+ * Check if language is supported
+ * @param {string} languageCode - Language code to check
+ * @returns {boolean} True if supported
+ */
+export function isLanguageSupported(languageCode) {
+  const normalizedCode = _normalizeLanguageCode(languageCode);
+  return normalizedCode in FALLBACK_VOICES;
+}
+
+/**
+ * Get available tiers for a language
+ * @param {string} languageCode - Language code
+ * @returns {string[]} Array of available tier names
+ */
+export function getAvailableTiersForLanguage(languageCode) {
+  return _getAvailableTiersForLanguage(languageCode);
+}
