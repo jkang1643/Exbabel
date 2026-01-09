@@ -11,6 +11,19 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ---
 
+### BUG 3: FIXED — Language Switching and Translation Routing
+**Status:** ✅ RESOLVED
+
+Resolved critical issues preventing proper translation delivery when listeners switched languages dynamically. Both partial and final translations were failing for non-English/Spanish languages after language switches.
+
+#### Key Fixes:
+1. **Backend Translation Validation:** Fixed null pointer crashes in `hostModeHandler.js` when processing failed translations, which caused routing to break for all languages.
+2. **Language Group Management:** Fixed `sessionStore.js` and `websocketHandler.js` to properly remove listeners from old language groups and add them to new ones during language switches.
+3. **Frontend State Closure:** Fixed React closure issue in `ListenerPage.jsx` where WebSocket message handlers captured old `targetLang` values, preventing proper language filtering after switches.
+4. **Translation Processing:** Ensured both partial and final translation logic uses current language state, allowing history updates to work correctly for all languages.
+
+---
+
 ### BUG 2: FIXED — TTS Audio Playback & Locale Errors
 **Status:** ✅ RESOLVED
 
