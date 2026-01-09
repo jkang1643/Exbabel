@@ -1694,11 +1694,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                               // Broadcast translation results immediately - sequence IDs handle ordering
                               for (const targetLang of translationTargets) {
                                 const translatedText = translations[targetLang];
+
+                                // Skip if no translation available (failed translation)
+                                if (!translatedText) {
+                                  console.warn(`[HostMode] ⚠️ No translation available for ${targetLang} (translation failed)`);
+                                  continue;
+                                }
+
                                 // Validate that translation is different from original (prevent English leak)
-                                const isSameAsOriginal = translatedText === translationReadyText || 
+                                const isSameAsOriginal = translatedText === translationReadyText ||
                                                          translatedText.trim() === translationReadyText.trim() ||
                                                          translatedText.toLowerCase() === translationReadyText.toLowerCase();
-                                
+
                                 if (isSameAsOriginal) {
                                   console.warn(`[HostMode] ⚠️ Translation matches original (English leak detected) for ${targetLang}: "${translatedText.substring(0, 60)}..."`);
                                   continue; // Don't send English as translation
@@ -1921,11 +1928,18 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 // Broadcast immediately - sequence IDs handle ordering
                                 for (const targetLang of translationTargets) {
                                   const translatedText = translations[targetLang];
+
+                                  // Skip if no translation available (failed translation)
+                                  if (!translatedText) {
+                                    console.warn(`[HostMode] ⚠️ No translation available for ${targetLang} (translation failed)`);
+                                    continue;
+                                  }
+
                                   // Validate that translation is different from original
-                                  const isSameAsOriginal = translatedText === latestText || 
+                                  const isSameAsOriginal = translatedText === latestText ||
                                                            translatedText.trim() === latestText.trim() ||
                                                            translatedText.toLowerCase() === latestText.toLowerCase();
-                                  
+
                                   if (isSameAsOriginal) {
                                     console.warn(`[HostMode] ⚠️ Translation matches original (English leak detected) for ${targetLang}`);
                                     continue; // Don't send English as translation

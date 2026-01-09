@@ -97,6 +97,12 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [isJoined, setIsJoined] = useState(false);
   const [userName, setUserName] = useState('');
   const [targetLang, setTargetLang] = useState('es');
+  const targetLangRef = useRef('es'); // Ref to avoid closure issues in WebSocket handler
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    targetLangRef.current = targetLang;
+  }, [targetLang]);
   const [connectionState, setConnectionState] = useState('disconnected');
   const [translations, setTranslations] = useState([]);
   const [currentTranslation, setCurrentTranslation] = useState(''); // Live partial translation
@@ -490,7 +496,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               }
 
               const translatedText = message.translatedText || '';
-              const isForMyLanguage = message.targetLang === targetLang;
+              const isForMyLanguage = message.targetLang === targetLangRef.current;
 
               // TRANSLATION STALL DETECTION: Track when translations arrive for my language
               if (isForMyLanguage) {
@@ -594,7 +600,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             const finalText = message.translatedText || undefined;
             const finalOriginalText = message.originalText || '';
             const finalCorrectedOriginalText = message.correctedText || finalOriginalText;
-            const isForMyLanguageFinal = message.targetLang === targetLang;
+            const isForMyLanguageFinal = message.targetLang === targetLangRef.current;
 
             // Cache original text if available
             cacheOriginal(finalCorrectedOriginalText, message.sourceSeqId ?? message.seqId);
@@ -714,6 +720,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             break;
 
           case 'translation':
+            console.log('[LISTENER_CASE_TRANSLATION]', { type: message.type, isPartial: message.isPartial });
             // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
             if (message.isPartial) {
               // Use correctedText if available, otherwise use originalText (raw STT)
@@ -736,10 +743,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               // Only update translation if this message is actually intended for this listener's language
               // Check if: 1) It has a real translation (hasTranslation flag or translatedText exists), AND
               //           2) The message target language matches the listener's target language
-              const isForMyLanguage = hasTranslationFlag && message.targetLang === targetLang;
+              const isForMyLanguage = hasTranslationFlag && message.targetLang === targetLangRef.current;
 
               // TRANSLATION STALL DETECTION: Track when source partials arrive (msgTarget=en)
-              if (message.targetLang && message.targetLang !== targetLang && message.originalText) {
+              if (message.targetLang && message.targetLang !== targetLangRef.current && message.originalText) {
                 lastSourcePartialTimeRef.current = Date.now();
               }
 
@@ -749,14 +756,28 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               }
 
               // Special case: If listener wants same language as source (transcription only)
-              const isTranscriptionMode = targetLang === message.sourceLang;
+              const isTranscriptionMode = targetLangRef.current === message.sourceLang;
 
               const shouldUpdateTranslation = isForMyLanguage || isTranscriptionMode;
+
+              // DEBUG: Log decision logic
+              console.log('[LISTENER_DECISION]', {
+                listenerTargetLang: targetLangRef.current,
+                messageTargetLang: message.targetLang,
+                messageSourceLang: message.sourceLang,
+                hasTranslationFlag,
+                hasTranslatedText,
+                isForMyLanguage,
+                isTranscriptionMode,
+                shouldUpdateTranslation,
+                messageType: message.type,
+                isPartial: message.isPartial
+              });
 
               // TRACE: Log decision logic
               const isXlatePartial = message.type === 'PARTIAL' && message.isPartial && hasTranslationFlag;
               traceUI('DECIDE', message, {
-                myTarget: targetLang,
+                myTarget: targetLangRef.current,
                 msgTarget: message.targetLang,
                 isXlatePartial,
                 shouldApply: shouldUpdateTranslation && isXlatePartial
@@ -767,6 +788,17 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               if (shouldUpdateTranslation) {
                 // TRACE: Log apply
                 traceUI('APPLY', message);
+
+                // DEBUG: Log translation processing
+                console.log('[LISTENER_TRANSLATION_PROCESSING]', {
+                  targetLang: targetLang,
+                  messageTargetLang: message.targetLang,
+                  isForMyLanguage,
+                  isTranscriptionMode,
+                  shouldUpdateTranslation,
+                  hasTranslatedText: !!translatedText,
+                  translatedText: translatedText?.substring(0, 50)
+                });
 
                 // OPTIMIZATION: For transcription mode (same language), use correctedText if available
                 // For translation mode, use translatedText; for transcription mode, use correctedText or originalText
@@ -797,11 +829,19 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   timeSinceLastRender >= THROTTLE_MS; // Enough time passed
 
                 if (shouldRender) {
+                  console.log('[LISTENER_RENDER_TRIGGER]', {
+                    liveText: liveText.substring(0, 50),
+                    shouldRender,
+                    charDelta,
+                    timeSinceLastRender,
+                    isFirstPartialAfterReset
+                  });
                   lastRenderTimeRef.current = now;
                   lastTextLengthRef.current = liveText.length;
                   // CRITICAL: Use flushSync for partial updates to ensure immediate responsiveness
                   // Throttling limits frequency, but when we DO update, make it immediate
                   flushSync(() => {
+                    console.log('[LISTENER_UI_UPDATE]', { liveText: liveText.substring(0, 30) });
                     setCurrentTranslation(liveText);
                   });
                 }
@@ -826,12 +866,28 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               cacheOriginal(correctedOriginalText, stableKey);
 
               // CRITICAL: Check if this final is for this listener's target language
-              const isForMyLanguage = message.hasTranslation && message.targetLang === targetLang;
-              const isTranscriptionMode = targetLang === message.sourceLang;
+              const isForMyLanguage = message.hasTranslation && message.targetLang === targetLangRef.current;
+              const isTranscriptionMode = targetLangRef.current === message.sourceLang;
+
+              // DEBUG: Log final translation decision
+              console.log('[LISTENER_FINAL_DECISION]', {
+                listenerTargetLang: targetLangRef.current,
+                messageTargetLang: message.targetLang,
+                messageSourceLang: message.sourceLang,
+                isForMyLanguage,
+                isTranscriptionMode,
+                hasTranslation: message.hasTranslation,
+                finalText: message.translatedText?.substring(0, 30),
+                isPartial: message.isPartial
+              });
 
               // Skip if not for this listener's language and not transcription mode
               if (!isForMyLanguage && !isTranscriptionMode) {
-                // Removed skip logging - reduces console noise
+                console.log('[LISTENER_FINAL_SKIP]', {
+                  reason: 'not for this language',
+                  listenerLang: targetLangRef.current,
+                  messageLang: message.targetLang
+                });
                 return;
               }
 
@@ -854,6 +910,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               // CRITICAL: Use flushSync for final updates to ensure immediate UI feedback
               // This prevents flicker when clearing currentTranslation right after adding to history
               flushSync(() => {
+                console.log('[LISTENER_FINAL_ADD_TO_HISTORY]', {
+                  text: textToDisplay?.substring(0, 50),
+                  targetLang: message.targetLang,
+                  isTranscriptionMode
+                });
                 // Deduplicate: Check if this exact text was already added recently
                 setTranslations(prev => {
                   // Check last 3 entries for duplicates
@@ -978,6 +1039,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               ttsControllerRef.current.onWsMessage(message);
             }
             break;
+
+          default:
+            console.log('[LISTENER_UNKNOWN_TYPE]', {
+              type: message.type,
+              isPartial: message.isPartial,
+              hasTranslation: message.hasTranslation,
+              targetLang: message.targetLang
+            });
+            break;
         }
       } catch (err) {
         console.error('[Listener] Failed to parse message:', err);
@@ -988,9 +1058,12 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   };
 
   const handleChangeLanguage = (newLang) => {
+    console.log('[LISTENER_LANGUAGE_CHANGE]', { from: targetLangRef.current, to: newLang });
     setTargetLang(newLang);
+    targetLangRef.current = newLang; // Update ref immediately for WebSocket handler
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('[LISTENER_SENDING_CHANGE]', { type: 'change_language', targetLang: newLang });
       wsRef.current.send(JSON.stringify({
         type: 'change_language',
         targetLang: newLang
@@ -1000,6 +1073,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       setTranslations([]);
       setCurrentTranslation('');
       setCurrentOriginal('');
+    } else {
+      console.warn('[LISTENER_WS_NOT_OPEN]', { readyState: wsRef.current?.readyState });
     }
   };
 

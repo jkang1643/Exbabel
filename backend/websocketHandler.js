@@ -719,11 +719,8 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
         else if (message.type === 'change_language' && message.targetLang) {
           console.log(`[Listener] ${userName} changing language to ${message.targetLang}`);
 
-          // Remove from old language group
-          sessionStore.removeListener(sessionId, socketId);
-
-          // Add to new language group
-          sessionStore.addListener(sessionId, socketId, clientWs, message.targetLang, userName);
+          // Update listener's language (removes from old group, adds to new group)
+          sessionStore.updateListenerLanguage(sessionId, socketId, message.targetLang);
 
           // Notify host about language change
           const updatedSession = sessionStore.getSession(sessionId);
