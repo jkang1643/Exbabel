@@ -9,11 +9,12 @@
 
 /**
  * Record TTS usage event
- * 
+ *
  * @param {Object} event - Usage event details
  * @param {string} event.orgId - Organization ID
  * @param {string} event.userId - User ID
  * @param {string} event.sessionId - Session ID
+ * @param {string} event.segmentId - Segment ID for tracking
  * @param {string} event.languageCode - Language code
  * @param {string} event.engine - TTS engine used
  * @param {string} event.voiceName - Voice name used
@@ -22,8 +23,10 @@
  * @param {string} event.status - Status (success | failed | fallback)
  * @param {string} [event.errorCode] - Error code if failed
  * @param {string} [event.errorMessage] - Error message if failed
+ * @param {Object} [event.route] - Resolved routing decision
+ * @param {Object} [event.requested] - Original requested parameters
  * @returns {Promise<void>}
- * 
+ *
  * TODO PR5: Implement database writes to tts_usage_events table
  */
 export async function recordUsage(event) {
@@ -35,9 +38,31 @@ export async function recordUsage(event) {
         orgId: event.orgId,
         userId: event.userId,
         sessionId: event.sessionId,
-        languageCode: event.languageCode,
-        engine: event.engine,
-        voiceName: event.voiceName,
+        segmentId: event.segmentId || null,
+        // Requested parameters
+        requested: event.requested ? {
+            tier: event.requested.tier,
+            voiceName: event.requested.voiceName,
+            languageCode: event.requested.languageCode,
+            mode: event.requested.mode || 'unary'
+        } : null,
+        // Resolved routing
+        resolved: event.route ? {
+            provider: event.route.provider,
+            resolvedTier: event.route.tier,
+            resolvedEngine: event.route.engine,
+            providerModel: event.route.model,
+            resolvedLanguageCode: event.route.languageCode,
+            resolvedVoiceName: event.route.voiceName,
+            audioEncoding: event.route.audioEncoding,
+            reason: event.route.reason,
+            fallbackFrom: event.route.fallbackFrom
+        } : null,
+        // Legacy fields (for backwards compatibility)
+        languageCode: event.languageCode || (event.route ? event.route.languageCode : null),
+        engine: event.engine || (event.route ? event.route.engine : null),
+        voiceName: event.voiceName || (event.route ? event.route.voiceName : null),
+        // Usage metrics
         characters: event.characters,
         audioSeconds: event.audioSeconds || null,
         status: event.status,

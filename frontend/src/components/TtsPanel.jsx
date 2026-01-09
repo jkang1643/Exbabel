@@ -13,187 +13,7 @@ import { Volume2, VolumeX, Play, Square } from 'lucide-react';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
 
-// Voice mappings by language (matching backend FALLBACK_VOICES)
-const VOICE_OPTIONS_BY_LANG = {
-    // Spanish - Gemini support added
-    'es-ES': [
-        // Gemini voices (language-agnostic)
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
-        // Chirp3 HD voices
-        { value: 'es-ES-Chirp3-HD-Kore', label: 'Chirp3 HD Kore (Female)', tier: 'chirp3_hd' },
-        // Neural2 voices
-        { value: 'es-ES-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        // Standard voices
-        { value: 'es-ES-Standard-E', label: 'Standard-E (Female)', tier: 'standard' }
-    ],
-    'es-US': [
-        { value: 'es-US-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'es-US-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // English
-    'en-US': [
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'en-US-Chirp3-HD-Kore', label: 'Chirp3 HD Kore (Female)', tier: 'chirp3_hd' },
-        { value: 'en-US-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'en-US-Standard-A', label: 'Standard-A (Female)', tier: 'standard' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' }
-    ],
-    'en-GB': [
-        { value: 'en-GB-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'en-GB-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // French - Gemini support added
-    'fr-FR': [
-        // Gemini voices (language-agnostic)
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
-        // Neural2 voices
-        { value: 'fr-FR-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        // Standard voices
-        { value: 'fr-FR-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // German - Gemini support added
-    'de-DE': [
-        // Gemini voices (language-agnostic)
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
-        // Neural2 voices
-        { value: 'de-DE-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        // Standard voices
-        { value: 'de-DE-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Italian - Gemini support added
-    'it-IT': [
-        // Gemini voices (language-agnostic)
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
-        // Neural2 voices
-        { value: 'it-IT-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        // Standard voices
-        { value: 'it-IT-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Portuguese - Gemini support added
-    'pt-BR': [
-        // Gemini voices (language-agnostic)
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
-        // Neural2 voices
-        { value: 'pt-BR-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        // Standard voices
-        { value: 'pt-BR-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-    'pt-PT': [
-        { value: 'pt-PT-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'pt-PT-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Japanese - Gemini support added
-    'ja-JP': [
-        // Gemini voices (language-agnostic)
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
-        // Neural2 voices
-        { value: 'ja-JP-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        // Standard voices
-        { value: 'ja-JP-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Korean - Gemini support added
-    'ko-KR': [
-        // Gemini voices (language-agnostic)
-        { value: 'Kore', label: 'Kore (Gemini, Female)', tier: 'gemini' },
-        { value: 'Charon', label: 'Charon (Gemini, Male)', tier: 'gemini' },
-        { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
-        { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
-        // Neural2 voices
-        { value: 'ko-KR-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        // Standard voices
-        { value: 'ko-KR-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Chinese
-    'cmn-CN': [
-        { value: 'cmn-CN-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'cmn-CN-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-    'zh-CN': [ // Alias for cmn-CN
-        { value: 'cmn-CN-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'cmn-CN-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Arabic
-    'ar-XA': [
-        { value: 'ar-XA-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'ar-XA-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Hindi
-    'hi-IN': [
-        { value: 'hi-IN-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'hi-IN-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ],
-
-    // Russian
-    'ru-RU': [
-        { value: 'ru-RU-Neural2-A', label: 'Neural2-A (Female)', tier: 'neural2' },
-        { value: 'ru-RU-Standard-A', label: 'Standard-A (Female)', tier: 'standard' }
-    ]
-};
-
-// Helper function to normalize language code (e.g., 'es' -> 'es-ES')
-const normalizeLanguageCode = (languageCode) => {
-    if (!languageCode) return null;
-
-    // If already in full format (e.g., 'es-ES'), return as-is
-    if (languageCode.includes('-')) {
-        return languageCode;
-    }
-
-    // Map short codes to full locale codes
-    const languageMap = {
-        'es': 'es-ES',
-        'en': 'en-US',
-        'fr': 'fr-FR',
-        'de': 'de-DE',
-        'it': 'it-IT',
-        'pt': 'pt-BR',
-        'ja': 'ja-JP',
-        'ko': 'ko-KR',
-        'zh': 'cmn-CN', // Map Chinese to Mandarin Chinese
-        'ar': 'ar-XA',
-        'hi': 'hi-IN',
-        'ru': 'ru-RU'
-    };
-
-    return languageMap[languageCode] || `${languageCode}-${languageCode.toUpperCase()}`;
-};
-
-// Helper function to get available voices for a language
-const getVoicesForLanguage = (languageCode) => {
-    const normalizedCode = normalizeLanguageCode(languageCode);
-    return VOICE_OPTIONS_BY_LANG[normalizedCode] || [
-        { value: `${normalizedCode}-Neural2-A`, label: 'Neural2-A (Default)' }
-    ];
-};
+import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
 
 export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerReady, translations }) {
     const [controller] = useState(() => new TtsPlayerController(sendMessage));
@@ -490,19 +310,22 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                     {resolvedRoute && (
                         <div className="pt-3 border-t border-gray-200">
                             <h4 className="text-sm font-medium text-gray-700 mb-2">Resolved Route</h4>
-                            <div className="text-xs space-y-1 bg-gray-50 p-2 rounded">
-                                <div><strong>Tier:</strong> {resolvedRoute.tier}</div>
-                                <div><strong>Voice:</strong> {resolvedRoute.voiceName}</div>
-                                <div><strong>Language:</strong> {resolvedRoute.languageCode}</div>
-                                <div><strong>Model:</strong> {resolvedRoute.model || 'N/A'}</div>
-                                <div><strong>Encoding:</strong> {resolvedRoute.audioEncoding}</div>
+                            <div className="text-[10px] space-y-1 bg-gray-50 p-2 rounded border border-gray-100 font-mono">
+                                <div><span className="text-gray-500">resolvedEngine:</span> {resolvedRoute.engine} ({resolvedRoute.provider})</div>
+                                <div><span className="text-gray-500">resolvedTier:</span> {resolvedRoute.tier}</div>
+                                <div><span className="text-gray-500">resolvedModel:</span> {resolvedRoute.model || 'N/A'}</div>
+                                <div><span className="text-gray-500">resolvedVoiceName:</span> {resolvedRoute.voiceName}</div>
+                                <div><span className="text-gray-500">resolvedLanguageCode:</span> {resolvedRoute.languageCode}</div>
+                                <div><span className="text-gray-500">audioEncoding:</span> {resolvedRoute.audioEncoding}</div>
+
                                 {resolvedRoute.fallbackFrom && (
-                                    <div className="text-orange-600">
-                                        <strong>Fallback from:</strong> {resolvedRoute.fallbackFrom.tier} → {resolvedRoute.tier}
+                                    <div className="text-orange-600 mt-1 pt-1 border-t border-orange-100">
+                                        <span className="font-bold">FALLBACK:</span> {resolvedRoute.fallbackFrom.tier} &rarr; {resolvedRoute.tier}
                                     </div>
                                 )}
-                                <div className="text-gray-500 mt-1">
-                                    <strong>Reason:</strong> {resolvedRoute.reason}
+
+                                <div className="text-blue-600 mt-1 italic">
+                                    <span className="text-gray-500 font-bold not-italic">reason:</span> {resolvedRoute.reason}
                                 </div>
                             </div>
                         </div>

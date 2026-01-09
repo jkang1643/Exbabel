@@ -147,6 +147,16 @@ export class GoogleTtsService extends TtsService {
                 console.log('[GoogleTtsService] Using Service Account JSON authentication');
             }
 
+            // Support explicit project ID and API endpoint for advanced voices/Vertex AI
+            if (process.env.GOOGLE_PROJECT_ID) {
+                clientOptions.projectId = process.env.GOOGLE_PROJECT_ID;
+                console.log(`[GoogleTtsService] Using explicit Project ID: ${process.env.GOOGLE_PROJECT_ID}`);
+            }
+            if (process.env.GOOGLE_TTS_API_ENDPOINT) {
+                clientOptions.apiEndpoint = process.env.GOOGLE_TTS_API_ENDPOINT;
+                console.log(`[GoogleTtsService] Using explicit API Endpoint: ${process.env.GOOGLE_TTS_API_ENDPOINT}`);
+            }
+
             this.client = new TextToSpeechClient(clientOptions);
             this.clientInitialized = true;
             console.log('[GoogleTtsService] Google TTS client initialized');
@@ -457,23 +467,29 @@ export class GoogleTtsService extends TtsService {
     /**
      * Synthesize speech in unary mode using Google TTS
      * @override
+     * @param {TtsRequest} request - TTS request
+     * @param {Object} [preResolvedRoute] - Optional pre-resolved route from resolveTtsRoute
      */
-    async synthesizeUnary(request) {
+    async synthesizeUnary(request, preResolvedRoute = null) {
         await this._initClient();
         this._validateRequest(request);
-        validateTtsProfile(request.profile);
 
-        console.log(`[GoogleTtsService] Synthesizing unary: ${request.text.length} chars, engine: ${request.profile.engine}, voice: ${request.profile.voiceName}`);
+        let route = preResolvedRoute;
 
-        // Resolve TTS routing (single source of truth)
-        const route = await resolveTtsRoute({
-            requestedTier: request.profile.requestedTier || this._tierFromEngine(request.profile.engine),
-            requestedVoice: request.profile.voiceName,
-            languageCode: request.profile.languageCode,
-            mode: 'unary',
-            orgConfig: {}, // TODO: Pass actual org config
-            userSubscription: {} // TODO: Pass actual subscription
-        });
+        // Resolve TTS routing if not provided (fallback for backward compatibility)
+        if (!route) {
+            validateTtsProfile(request.profile);
+            route = await resolveTtsRoute({
+                requestedTier: request.profile.requestedTier || this._tierFromEngine(request.profile.engine),
+                requestedVoice: request.profile.voiceName,
+                languageCode: request.profile.languageCode,
+                mode: 'unary',
+                orgConfig: {}, // TODO: Pass actual org config
+                userSubscription: {} // TODO: Pass actual subscription
+            });
+        }
+
+        console.log(`[GoogleTtsService] Synthesizing unary: ${request.text.length} chars, tier: ${route.tier}, voice: ${route.voiceName}`);
 
         // Validate resolved route
         validateResolvedRoute(route);
@@ -515,8 +531,8 @@ export class GoogleTtsService extends TtsService {
                 const isVertexError = errorMessage.includes('Vertex AI') || errorMessage.includes('aiplatform.googleapis.com');
                 const isStudioError = errorMessage.includes('Studio voice');
 
-                if (isPermissionError && (isVertexError || isStudioError) && route.tier === 'gemini') {
-                    console.warn('[GoogleTtsService] Gemini/Studio voices disabled (API not enabled). Falling back to Neural2.');
+                if (isPermissionError && (isVertexError || isStudioError) && (route.tier === 'gemini' || route.tier === 'chirp3_hd')) {
+                    console.warn(`[GoogleTtsService] ${route.tier.toUpperCase()} voices disabled (Vertex AI API not enabled or permissions missing). Falling back to Neural2.`);
 
                     try {
                         // Re-resolve route with forced fallback to neural2
@@ -527,13 +543,23 @@ export class GoogleTtsService extends TtsService {
                             mode: 'unary'
                         });
 
+                        // Log the original route that failed for troubleshooting
+                        const originalRoute = { ...route };
+
                         // Update request for the next attempt
                         const newGoogleRequest = this._buildGoogleRequestFromRoute(request, fallbackRoute);
 
                         // Update tracking variables to use the fallback for next attempts and response
                         Object.assign(googleRequest, newGoogleRequest);
                         Object.assign(route, fallbackRoute);
-                        route.reason = 'vertex_ai_not_enabled_fallback_to_neural2';
+
+                        // Set the reason to explicitly mention why we fell back
+                        route.reason = `vertex_ai_not_enabled_fallback_from_${originalRoute.tier}_to_${route.tier}`;
+                        route.fallbackFrom = {
+                            tier: originalRoute.tier,
+                            voiceName: originalRoute.voiceName,
+                            reason: 'vertex_ai_permission_denied'
+                        };
 
                         // Reset attempt counter or just continue - if attempt was 0, it will try again with fallback
                         continue;

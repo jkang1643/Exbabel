@@ -11,6 +11,30 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ---
 
+### BUG 6: BLOCKED — GCP Service Agent Generation Failure
+**Status:** ⛔ BLOCKED (EXTERNAL PLATFORM ISSUE)
+
+Requests for Gemini and Chirp 3 HD voices fail with `PERMISSION_DENIED: Permission 'aiplatform.endpoints.predict' denied`. This has been traced to a failure at the Google Cloud Platform infrastructure level.
+
+#### Technical Details:
+- **Core Blocker:** The Google-managed service agent (`service-222662040787@gcp-sa-texttospeech.iam.gserviceaccount.com`) does not exist and cannot be generated.
+- **Symptom:** Without this agent, the TTS service cannot be granted `roles/aiplatform.user` permissions, making it impossible for Cloud TTS to call Vertex AI on behalf of the project.
+- **Manual Creation Failure:** Attempts to force creation via `gcloud beta services identity create --service=texttospeech.googleapis.com` fail with:
+  `IAM_SERVICE_NOT_CONFIGURED_FOR_IDENTITIES`
+  `reason: SU_INTERNAL_GENERATE_SERVICE_IDENTITY`
+
+#### Impact:
+- **Chirp 3 HD & Gemini voices are currently UNREACHABLE.**
+- A support ticket has been prepared/sent to Google Cloud Support to investigate why the service identity cannot be generated for project `gen-lang-client-0417618073`.
+- The application automatically routes all high-tier requests to **Neural2** fallbacks to maintain service availability.
+
+#### Current state:
+- Implemented graceful fallback to `neural2` so synthesis doesn't crash.
+- Added explicit `reason` visibility in the frontend.
+- Added support for `GOOGLE_PROJECT_ID` and `GOOGLE_TTS_API_ENDPOINT` in `GoogleTtsService` for project disambiguation.
+
+---
+
 ### BUG 5: FIXED — TTS Routing Logic Flaws & Tier Mismatch
 **Status:** ✅ RESOLVED
 
@@ -142,8 +166,8 @@ Implemented the complete scaffolding for Google TTS integration, supporting both
 - **Audio Playback:** Frontend queuing and playback for unary audio chunks.
 
 ### 🔍 Known / Remaining
+- **BLOCKER:** Chirp 3 HD and Gemini voices are currently blocked due to GCP `PERMISSION_DENIED` errors (Service Agent IAM issue).
 - **Streaming Mode:** Currently returns `NOT_IMPLEMENTED`.
-- **Vertex AI Permissions:** Some Gemini voices fail with `PERMISSION_DENIED` on Vertex AI endpoints (fix: add Vertex AI User role to service account).
 - **Persistence:** Usage tracking is currently in-memory (Map); database persistence is next.
 
 ---

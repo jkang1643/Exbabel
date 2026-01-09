@@ -547,7 +547,18 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               }
             }
 
-            // Build TTS request with profile
+            // 1. Resolve TTS routing (single source of truth)
+            const { resolveTtsRoute } = await import('./tts/ttsRouting.js');
+            const route = await resolveTtsRoute({
+              requestedTier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+              requestedVoice: message.voiceName,
+              languageCode: message.languageCode,
+              mode: 'unary',
+              orgConfig: {}, // TODO: Pass actual org config
+              userSubscription: {} // TODO: Pass actual subscription
+            });
+
+            // 2. Build TTS request
             const ttsRequest = {
               sessionId: sessionId,
               userId: userName || 'anonymous',
@@ -555,25 +566,18 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               text: message.text,
               segmentId: message.segmentId,
               profile: {
-                engine: engine,
+                engine: route.engine,
+                requestedTier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
                 languageCode: message.languageCode,
-                voiceName: message.voiceName || (engine === 'gemini_tts' ? 'Kore' : undefined),
-                modelName: message.modelName || (engine === 'gemini_tts' ? 'gemini-2.5-flash-tts' : undefined),
+                voiceName: message.voiceName || (route.engine === 'gemini_tts' ? 'Kore' : undefined),
+                modelName: message.modelName || (route.engine === 'gemini_tts' ? 'gemini-2.5-flash-tts' : undefined),
                 encoding: message.encoding || process.env.TTS_AUDIO_FORMAT_UNARY || 'MP3',
                 streaming: message.mode === 'streaming',
                 prompt: message.prompt
               }
             };
 
-            // Fix for Chirp 3 HD voice name if not provided
-            if (ttsRequest.profile.engine === 'chirp3_hd' && !ttsRequest.profile.voiceName) {
-              // Default Chirp 3 HD voice for the language
-              const langCode = ttsRequest.profile.languageCode;
-              if (langCode.startsWith('es')) ttsRequest.profile.voiceName = 'es-ES-Chirp3-HD-Kore';
-              else ttsRequest.profile.voiceName = 'en-US-Chirp3-HD-Kore';
-            }
-
-            // Check quota
+            // 3. Check quota
             const quotaCheck = canSynthesize({
               orgId: ttsRequest.orgId,
               userId: ttsRequest.userId,
@@ -597,9 +601,13 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 orgId: ttsRequest.orgId,
                 userId: ttsRequest.userId,
                 sessionId: ttsRequest.sessionId,
-                languageCode: ttsRequest.profile.languageCode,
-                engine: ttsRequest.profile.engine,
-                voiceName: ttsRequest.profile.voiceName || 'default',
+                segmentId: message.segmentId,
+                requested: {
+                  tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                  voiceName: message.voiceName,
+                  languageCode: message.languageCode
+                },
+                route: route, // Include even if failed (best effort)
                 characters: ttsRequest.text.length,
                 audioSeconds: null,
                 status: 'failed',
@@ -610,7 +618,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               return;
             }
 
-            // Validate policy
+            // 4. Validate policy
             const policyError = await validateTtsRequest(ttsRequest);
             if (policyError) {
               if (clientWs.readyState === WebSocket.OPEN) {
@@ -628,9 +636,13 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 orgId: ttsRequest.orgId,
                 userId: ttsRequest.userId,
                 sessionId: ttsRequest.sessionId,
-                languageCode: ttsRequest.profile.languageCode,
-                engine: ttsRequest.profile.engine,
-                voiceName: ttsRequest.profile.voiceName || 'default',
+                segmentId: message.segmentId,
+                requested: {
+                  tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                  voiceName: message.voiceName,
+                  languageCode: message.languageCode
+                },
+                route: route,
                 characters: ttsRequest.text.length,
                 audioSeconds: null,
                 status: 'failed',
@@ -641,30 +653,36 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               return;
             }
 
-            // Synthesize audio
+            // 5. Synthesize audio using the resolved route
             const ttsService = new GoogleTtsService();
-            const response = await ttsService.synthesizeUnary(ttsRequest);
+            const response = await ttsService.synthesizeUnary(ttsRequest, route);
 
-            // Send audio response
+            // Send audio response with resolved routing info
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'tts/audio',
                 segmentId: message.segmentId,
-                format: ttsRequest.profile.encoding,
+                format: response.route.audioEncoding, // Use resolved encoding
                 mimeType: response.mimeType,
                 audioContentBase64: response.audioContentBase64,
-                sampleRateHz: response.sampleRateHz
+                sampleRateHz: response.sampleRateHz,
+                // Include resolved routing for frontend visibility
+                resolvedRoute: response.route
               }));
             }
 
-            // Record successful usage
+            // Record successful usage with routing details
             await recordUsage({
               orgId: ttsRequest.orgId,
               userId: ttsRequest.userId,
               sessionId: ttsRequest.sessionId,
-              languageCode: ttsRequest.profile.languageCode,
-              engine: ttsRequest.profile.engine,
-              voiceName: ttsRequest.profile.voiceName || 'default',
+              segmentId: message.segmentId,
+              requested: {
+                tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                voiceName: message.voiceName,
+                languageCode: message.languageCode
+              },
+              route: response.route,
               characters: ttsRequest.text.length,
               audioSeconds: response.durationMs ? response.durationMs / 1000 : null,
               status: 'success'
@@ -704,9 +722,14 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               orgId: 'default',
               userId: userName || 'anonymous',
               sessionId: sessionId,
-              languageCode: message.languageCode,
-              engine: message.engine || (message.tier === 'chirp_hd' ? 'chirp3_hd' : 'gemini_tts'),
-              voiceName: message.voiceName || 'default',
+              segmentId: message.segmentId,
+              requested: {
+                tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                voiceName: message.voiceName,
+                languageCode: message.languageCode
+              },
+              // No resolved route in error case
+              route: null,
               characters: message.text.length,
               audioSeconds: null,
               status: 'failed',
