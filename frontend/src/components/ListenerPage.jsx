@@ -1326,6 +1326,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             }}
             targetLang={targetLang}
             isConnected={connectionState === 'open'}
+            translations={translations}
             onControllerReady={(controller) => {
               ttsControllerRef.current = controller;
               console.log('[ListenerPage] TTS controller ready');

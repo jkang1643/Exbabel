@@ -75,9 +75,12 @@ class TranslationIntegrationTester {
                     const message = JSON.parse(data.toString());
                     listenerData.messages.push(message);
 
+                    // Log ALL messages for debugging
+                    console.log(`📨 ${targetLang} received: ${message.type} - ${JSON.stringify(message).substring(0, 100)}...`);
+
                     // Log translation messages
                     if (message.type === 'translation' && message.hasTranslation) {
-                        console.log(`📨 ${targetLang} received: "${message.translatedText?.substring(0, 30)}..." (${message.isPartial ? 'partial' : 'final'})`);
+                        console.log(`✅ ${targetLang} TRANSLATION: "${message.translatedText?.substring(0, 30)}..." (${message.isPartial ? 'partial' : 'final'})`);
                     }
                 } catch (error) {
                     console.error(`Error parsing message for ${targetLang}:`, error);
