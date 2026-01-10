@@ -20,26 +20,19 @@ const getBackendUrl = () => {
   // Validate IP address format
   const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
-  if (hostname !== 'localhost' && !ipv4Pattern.test(hostname)) {
-    console.error('[ListenerPage] Invalid hostname format, using localhost');
-    return 'http://localhost:3001';
+  if (hostname !== '127.0.0.1' && !ipv4Pattern.test(hostname)) {
+    console.error('[ListenerPage] Invalid hostname format, using 127.0.0.1');
+    return 'http://127.0.0.1:3001';
   }
 
   return `http://${hostname}:3001`;
 };
 
 const getWebSocketUrl = () => {
-  const hostname = window.location.hostname;
-
-  // Validate IP address format
-  const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
-
-  if (hostname !== 'localhost' && !ipv4Pattern.test(hostname)) {
-    console.error('[ListenerPage] Invalid hostname format, using localhost');
-    return 'ws://localhost:3001';
-  }
-
-  return `ws://${hostname}:3001`;
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  // Use current host which includes port (e.g. localhost:3000)
+  // This ensures we go through the Vite proxy
+  return `${wsProtocol}//${window.location.host}/translate`;
 };
 
 const API_URL = import.meta.env.VITE_API_URL || getBackendUrl();
@@ -346,8 +339,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   };
 
   const connectWebSocket = (sessionId, lang, name) => {
+    const websocketUrl = WS_URL;
+    const finalWsUrl = (websocketUrl.endsWith('/translate') || websocketUrl.endsWith('/translate/'))
+      ? websocketUrl
+      : (websocketUrl.endsWith('/') ? `${websocketUrl}translate` : `${websocketUrl}/translate`);
+
     const ws = new WebSocket(
-      `${WS_URL}/translate?role=listener&sessionId=${sessionId}&targetLang=${lang}&userName=${encodeURIComponent(name)}`
+      `${finalWsUrl}?role=listener&sessionId=${sessionId}&targetLang=${lang}&userName=${encodeURIComponent(name)}`
     );
 
     ws.onopen = () => {

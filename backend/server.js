@@ -152,6 +152,8 @@ apiAuth.loadKeys();
 // Handle WebSocket upgrades
 server.on("upgrade", (req, socket, head) => {
   const url = req.url || '';
+  const clientIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  console.log(`[Backend] 🟢 Upgrade request: ${url} (from ${clientIP})`);
 
   // API endpoint - requires authentication
   if (url.startsWith("/api/translate")) {
@@ -166,6 +168,7 @@ server.on("upgrade", (req, socket, head) => {
     });
   }
   else {
+    console.warn(`[Backend] 🔴 Rejected upgrade: ${url} (Unknown path)`);
     socket.destroy();
   }
 });

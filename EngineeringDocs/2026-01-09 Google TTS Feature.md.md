@@ -11,6 +11,26 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ---
 
+### BUG 7: FIXED — WebSocket Disconnects & Proxy Enforcement
+**Status:** ✅ RESOLVED
+
+Resolved persistent "Disconnected" errors and `404 Not Found` API failures in Host Mode by enforcing strict proxy usage through Vite.
+
+#### Root Cause:
+1. **IPv6 Resolution Ambiguity:** Browsers were resolving `localhost` to IPv6 (`::1`) while the Node backend listened on IPv4 (`127.0.0.1`), causing `ECONNREFUSED` or immediate disconnects (Close Code 1006).
+2. **Proxy Bypass:** Host and Listener pages were hardcoding direct backend URLs (e.g., `ws://localhost:3001`), bypassing the Vite development proxy. This triggered browser security restrictions and cross-origin issues.
+3. **Missing Proxy Rules:** The Vite proxy only handled `/translate` and `/api`, missing the critical `/session` endpoints used by Host Mode.
+4. **Logic Crash:** A missing `DEBUG` variable in `useWebSocket.js` caused a runtime crash during connection attempts.
+
+#### Key Fixes:
+1.  **Vite Proxy Architecture:**
+    -   Configured `server.proxy` in `vite.config.js` to route all `/translate` (WS), `/api` (HTTP), and `/session` (HTTP) traffic to `127.0.0.1:3001`.
+    -   Standardized on `127.0.0.1` everywhere to eliminate IPv6 ambiguity.
+2.  **Relative URLs:** Updated `HostPage.jsx` and `ListenerPage.jsx` to use relative paths (e.g., `ws://${window.location.host}/translate`), ensuring all traffic flows through the proxy.
+3.  **Crash Fix:** Removed the undefined `DEBUG` check in `useWebSocket.js`.
+
+---
+
 ### BUG 6: 🟢 RESOLVED — Google TTS Identity & Project Alignment
 - **Status:** RESOLVED
 - **Root Cause:**

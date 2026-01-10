@@ -152,11 +152,11 @@ function TranslationInterface({ onBackToHome }) {
       // Validate IP address format
       const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
-      if (hostname !== 'localhost' && !ipv4Pattern.test(hostname)) {
-        return 'ws://localhost:3001/translate';
+      if (hostname !== '127.0.0.1' && !ipv4Pattern.test(hostname)) {
+        return 'ws://127.0.0.1:3001/translate';
       }
 
-      return `ws://${hostname}:3001/translate`;
+      return `ws://${hostname === '127.0.0.1' ? '127.0.0.1' : hostname}:3001/translate`;
     };
 
     const websocketUrl = import.meta.env.VITE_WS_URL || getWebSocketUrl();
@@ -433,6 +433,10 @@ function TranslationInterface({ onBackToHome }) {
     }
 
     switch (message.type) {
+      case 'info':
+        // Info messages from backend (e.g. connection status)
+        if (DEBUG) console.log('[TranslationInterface] ℹ️ Info:', message.message);
+        break;
       case 'session_ready':
         if (DEBUG) console.log('[TranslationInterface] ✅ Translation session ready')
         break
@@ -442,7 +446,7 @@ function TranslationInterface({ onBackToHome }) {
           const originalText = message.originalText || '';
           const correctedText = message.correctedText;
           const textToDisplay = mergeTextWithCorrection(originalText, correctedText);
-          
+
           if (textToDisplay) {
             // Use flushSync for consistent real-time updates
             flushSync(() => {
@@ -457,7 +461,7 @@ function TranslationInterface({ onBackToHome }) {
         if (message.isPartial) {
           const translatedText = message.translatedText || '';
           const isForMyLanguage = message.targetLang === targetLang;
-          
+
           if (isForMyLanguage && translatedText.trim() && isTranslationDifferent(translatedText, livePartialOriginal)) {
             flushSync(() => {
               setLivePartial(translatedText);
@@ -477,25 +481,25 @@ function TranslationInterface({ onBackToHome }) {
           console.warn(`[TranslationInterface] ⚠️ SAFEGUARD: Received TRANSCRIPT_FINAL marked as partial - ignoring`);
           return;
         }
-        
+
         const transcriptFinalText = message.correctedText || message.originalText || '';
         const transcriptSeqId = message.seqId;
         const isForcedTranscriptFinal = message.forceFinal === true;
-        
+
         if (DEBUG) console.log(`[TranslationInterface] 📝 TRANSCRIPT_FINAL received seqId=${transcriptSeqId}: "${transcriptFinalText.substring(0, 50)}..."`);
-        
+
         if (transcriptFinalText) {
           // Update live partial original to show the final
           flushSync(() => {
             setLivePartialOriginal(transcriptFinalText);
           });
-          
+
           // Commit to history (similar to translation final logic)
           if (pendingFinalRef.current && pendingFinalRef.current.timeout) {
             clearTimeout(pendingFinalRef.current.timeout);
             pendingFinalRef.current = null;
           }
-          
+
           // Add to history
           setTranslationHistory(prev => {
             const recentEntries = prev.slice(-3);
@@ -522,37 +526,37 @@ function TranslationInterface({ onBackToHome }) {
           console.warn(`[TranslationInterface] ⚠️ SAFEGUARD: Received TRANSLATION_FINAL marked as partial - ignoring`);
           return;
         }
-        
+
         const translationFinalText = message.translatedText || '';
         const translationSeqId = message.seqId;
         const isForcedTranslationFinal = message.forceFinal === true;
         const isForMyLanguageFinal = message.targetLang === targetLang;
-        
+
         if (!isForMyLanguageFinal) {
           return; // Not for this listener's language
         }
-        
+
         if (DEBUG) console.log(`[TranslationInterface] 📝 TRANSLATION_FINAL received seqId=${translationSeqId}: "${translationFinalText.substring(0, 50)}..."`);
-        
+
         if (isForcedTranslationFinal) {
           console.warn('[TranslationInterface] ⚠️ Forced TRANSLATION_FINAL received from backend (may be incomplete)');
         }
-        
+
         if (translationFinalText) {
           // Cancel any pending final timeout
           if (pendingFinalRef.current && pendingFinalRef.current.timeout) {
             clearTimeout(pendingFinalRef.current.timeout);
             pendingFinalRef.current = null;
           }
-          
+
           // Update live partial to show the final
           flushSync(() => {
             setLivePartial(translationFinalText);
           });
-          
+
           // Commit to history (use existing final handling logic)
           const finalOriginalText = message.correctedText || message.originalText || '';
-          
+
           setTranslationHistory(prev => {
             const recentEntries = prev.slice(-3);
             const isDuplicate = recentEntries.some(entry => entry.text === translationFinalText);
@@ -1046,7 +1050,7 @@ function TranslationInterface({ onBackToHome }) {
                   {sourceLang === targetLang ? 'Voice Transcription' : 'Voice Translation'} - Solo Mode
                 </h2>
                 <ConnectionStatus
-                  isConnected={isConnected}
+                  state={connectionState}
                   latency={latency}
                 />
               </div>
@@ -1086,8 +1090,8 @@ function TranslationInterface({ onBackToHome }) {
                   </label>
                   <div className="space-y-2">
                     <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${audioSource === 'microphone'
-                        ? 'bg-blue-50 border-blue-300'
-                        : 'bg-white border-gray-300 hover:bg-gray-50'
+                      ? 'bg-blue-50 border-blue-300'
+                      : 'bg-white border-gray-300 hover:bg-gray-50'
                       } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       <input
                         type="radio"
@@ -1101,10 +1105,10 @@ function TranslationInterface({ onBackToHome }) {
                       <span className="text-sm text-gray-700">🎤 Microphone</span>
                     </label>
                     <label className={`flex items-center space-x-2 p-2 rounded-lg border transition-colors ${!systemAudioSupported
-                        ? 'bg-gray-100 border-gray-200 cursor-not-allowed opacity-60'
-                        : audioSource === 'system'
-                          ? 'bg-blue-50 border-blue-300 cursor-pointer'
-                          : 'bg-white border-gray-300 hover:bg-gray-50 cursor-pointer'
+                      ? 'bg-gray-100 border-gray-200 cursor-not-allowed opacity-60'
+                      : audioSource === 'system'
+                        ? 'bg-blue-50 border-blue-300 cursor-pointer'
+                        : 'bg-white border-gray-300 hover:bg-gray-50 cursor-pointer'
                       } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       <input
                         type="radio"
@@ -1174,8 +1178,8 @@ function TranslationInterface({ onBackToHome }) {
                   </label>
                   <div className="space-y-2">
                     <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${!usePremiumTier
-                        ? 'bg-blue-50 border-blue-300'
-                        : 'bg-white border-gray-300 hover:bg-gray-50'
+                      ? 'bg-blue-50 border-blue-300'
+                      : 'bg-white border-gray-300 hover:bg-gray-50'
                       } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       <input
                         type="radio"
@@ -1192,8 +1196,8 @@ function TranslationInterface({ onBackToHome }) {
                       </div>
                     </label>
                     <label className={`flex items-center space-x-2 p-2 rounded-lg border cursor-pointer transition-colors ${usePremiumTier
-                        ? 'bg-blue-50 border-blue-300'
-                        : 'bg-white border-gray-300 hover:bg-gray-50'
+                      ? 'bg-blue-50 border-blue-300'
+                      : 'bg-white border-gray-300 hover:bg-gray-50'
                       } ${isListening ? 'opacity-50 cursor-not-allowed' : ''}`}>
                       <input
                         type="radio"
@@ -1237,10 +1241,10 @@ function TranslationInterface({ onBackToHome }) {
                 onClick={isListening ? handleStopListening : handleStartListening}
                 disabled={!isConnected}
                 className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full flex items-center justify-center transition-all transform hover:scale-105 ${isListening
-                    ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-                    : isConnected
-                      ? 'bg-blue-500 hover:bg-blue-600 text-white'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
+                  : isConnected
+                    ? 'bg-blue-500 hover:bg-blue-600 text-white'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   }`}
               >
                 {isListening ? (
