@@ -350,7 +350,7 @@ const TIER_CONFIG = {
     provider: 'google',
     tier: 'chirp3_hd',
     engine: TtsEngine.CHIRP3_HD,
-    model: 'chirp_3_hd',
+    model: 'chirp-3-hd',
     supportsAllLanguages: false, // Limited language support
     fallbackTier: 'neural2'
   },
@@ -811,30 +811,44 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
 
   // 2. Fallback to hardcoded mappings if discovery fails (Option 1)
   const fallbackVoicesForLang = FALLBACK_VOICES[normalizedCode];
+
+  // If user requested a specific voice, check if it's valid for this tier/language even if discovery is off
+  // If user requested a specific voice, check if it's valid for this tier/language even if discovery is off
+  if (requestedVoiceName) {
+    if (tier === 'gemini') {
+      // Gemini voices (studio personas) are generally English-only at the moment for direct match
+      // but we allow common names to pass through to the Gemini engine
+      const GEMINI_VOICES = [
+        'Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
+        'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam',
+        'Autonoe', 'Callirrhoe', 'Despina', 'Enceladus', 'Erinome',
+        'Gacrux', 'Iapetus', 'Laomedeia', 'Orus', 'Pulcherrima',
+        'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar', 'Sulafat',
+        'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
+      ];
+      if (GEMINI_VOICES.includes(requestedVoiceName)) return requestedVoiceName;
+    } else {
+      // For other tiers, check if it matches the expected pattern
+      const tierTag = tier === 'chirp3_hd' ? 'Chirp3' : (tier === 'neural2' ? 'Neural2' : 'Standard');
+      if (requestedVoiceName.includes(tierTag) && requestedVoiceName.includes(normalizedCode)) {
+        return requestedVoiceName;
+      }
+    }
+  }
+
   if (fallbackVoicesForLang && fallbackVoicesForLang[tier]) {
     return fallbackVoicesForLang[tier];
   }
 
   // 3. Special handling for Gemini if no specific mapping found in FALLBACK_VOICES
   if (tier === 'gemini') {
-    const GEMINI_VOICES = [
-      'Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
-      'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam',
-      'Autonoe', 'Callirrhoe', 'Despina', 'Erinome',
-      'Gacrux', 'Iapetus', 'Laomedeia', 'Orus', 'Pulcherrima',
-      'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar',
-      'Sulafat', 'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
-    ];
-
-    if (requestedVoiceName && GEMINI_VOICES.includes(requestedVoiceName)) {
-      return requestedVoiceName;
-    }
     return 'Kore';
   }
 
   // 4. Last resort: generic patterns based on tier
-  if (tier === 'neural2' || tier === 'chirp3_hd') {
-    // Note: Most Neural2 voices follow this pattern
+  if (tier === 'chirp3_hd') {
+    return `${normalizedCode}-Chirp3-HD-Kore`;
+  } else if (tier === 'neural2') {
     return `${normalizedCode}-Neural2-A`;
   } else if (tier === 'standard') {
     return `${normalizedCode}-Standard-A`;
@@ -893,6 +907,20 @@ export async function resolveTtsRoute({
     }
   }
 
+  // Determine engine and model
+  let engine = tierConfig.engine;
+  let model = tierConfig.model;
+
+  // Handle engine overrides for specific voice patterns (e.g. Studio voices in the Gemini tier)
+  if (resolvedVoiceName && (resolvedVoiceName.includes('Studio') || resolvedVoiceName.includes('Neural2') || resolvedVoiceName.includes('Standard'))) {
+    // Standard/Studio/Neural2 voices use the standard engine wrapper even if in Gemini tier
+    if (engine === TtsEngine.GEMINI_TTS) {
+      engine = TtsEngine.CHIRP3_HD;
+      model = 'chirp-3-hd';
+      reason = `${reason}; engine_override_for_standard_voice`;
+    }
+  }
+
   // Determine audio encoding
   const audioEncoding = mode === 'streaming' ? TtsEncoding.OGG_OPUS : TtsEncoding.MP3;
 
@@ -900,8 +928,8 @@ export async function resolveTtsRoute({
     // Provider and engine info
     provider: tierConfig.provider,
     tier: tierConfig.tier,
-    engine: tierConfig.engine,
-    model: tierConfig.model,
+    engine: engine,
+    model: model,
 
     // Voice and language info
     languageCode: normalizedLanguageCode,

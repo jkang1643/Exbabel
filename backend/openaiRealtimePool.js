@@ -75,7 +75,7 @@ export class OpenAIRealtimePool {
     this.sequenceCounter = 0;
     this.resultCallback = null;
     this.nextExpectedSequence = 0;
-    
+
     // Track audio buffer for continuous streaming
     this.audioBuffer = [];
     this.isProcessing = false;
@@ -95,12 +95,12 @@ export class OpenAIRealtimePool {
   async initialize(sourceLang, targetLang) {
     console.log(`[OpenAIPool] Initializing ${this.poolSize} parallel OpenAI Realtime sessions...`);
     console.log(`[OpenAIPool] Language: ${sourceLang} (target: ${targetLang})`);
-    
+
     for (let i = 0; i < this.poolSize; i++) {
       const session = await this.createSession(i, sourceLang, targetLang);
       this.sessions.push(session);
     }
-    
+
     console.log(`[OpenAIPool] ✅ All ${this.poolSize} OpenAI Realtime sessions ready`);
   }
 
@@ -113,14 +113,14 @@ export class OpenAIRealtimePool {
       // UPDATED: Use latest gpt-realtime model (replaces gpt-4o-realtime-preview)
       // Documentation: https://platform.openai.com/docs/guides/realtime-models
       const realtimeUrl = 'wss://api.openai.com/v1/realtime?model=gpt-realtime';
-      
+
       const ws = new WebSocket(realtimeUrl, {
         headers: {
           'Authorization': `Bearer ${this.apiKey}`,
           'OpenAI-Beta': 'realtime=v1'
         }
       });
-      
+
       const session = {
         id: sessionId,
         ws: ws,
@@ -138,20 +138,20 @@ export class OpenAIRealtimePool {
 
       ws.on('open', () => {
         console.log(`[OpenAIPool] Session ${sessionId} connected to OpenAI Realtime`);
-        
+
         const sourceLangName = LANGUAGE_NAMES[sourceLang] || sourceLang;
         const targetLangName = LANGUAGE_NAMES[targetLang] || targetLang;
         const isTranscription = sourceLang === targetLang;
-        
+
         console.log(`[OpenAIPool] Session ${sessionId} configuring:`);
         console.log(`  - Source: ${sourceLang} (${sourceLangName})`);
         console.log(`  - Target: ${targetLang} (${targetLangName})`);
         console.log(`  - Mode: ${isTranscription ? 'TRANSCRIPTION' : 'TRANSLATION'}`);
-        
+
         // UPDATED: Use latest gpt-realtime configuration with best practices
         // Documentation: https://platform.openai.com/docs/guides/realtime-models
         let sessionConfig;
-        
+
         if (isTranscription) {
           // Transcription-only mode - optimized prompt structure
           // Using bullet points for better following (per best practices)
@@ -220,7 +220,7 @@ If unclear: "[unclear audio]"`;
             }
           };
         }
-        
+
         ws.send(JSON.stringify(sessionConfig));
         console.log(`[OpenAIPool] Session ${sessionId} configured:`);
         console.log(`  - Mode: ${isTranscription ? 'TRANSCRIPTION' : 'TRANSLATION'}`);
@@ -231,7 +231,7 @@ If unclear: "[unclear audio]"`;
       ws.on('message', (data) => {
         try {
           const event = JSON.parse(data.toString());
-          
+
           // MIGRATION NOTE: OpenAI uses event.type instead of response types
           switch (event.type) {
             case 'session.created':
@@ -292,7 +292,7 @@ If unclear: "[unclear audio]"`;
                 session.transcriptBuffer += event.delta;
                 // console.log for debugging - comment out in production to reduce noise
                 // console.log(`[OpenAIPool] 🔵 DELTA: "${event.delta}" → Buffer: "${session.transcriptBuffer}"`);
-                
+
                 // Deliver IMMEDIATELY through handleResult for consistent word-by-word delivery
                 // No buffering, no throttling - instant relay to frontend
                 this.handleResult(-1, session.transcriptBuffer, true);
@@ -303,7 +303,7 @@ If unclear: "[unclear audio]"`;
               // PURE TRANSCRIPTION COMPLETE - Whisper finished transcribing
               const transcript = event.transcript || session.transcriptBuffer.trim();
               session.transcriptBuffer = '';
-              
+
               if (transcript) {
                 const sequenceId = this.sequenceCounter++;
                 console.log(`[OpenAIPool] Session ${sessionId} ✅ WHISPER FINAL #${sequenceId}: "${transcript.substring(0, 50)}..."`);
@@ -383,7 +383,7 @@ If unclear: "[unclear audio]"`;
     // Use round-robin to distribute audio across sessions
     const sessionIndex = this.sequenceCounter % this.sessions.length;
     const session = this.sessions[sessionIndex];
-    
+
     if (!session || !session.setupComplete) {
       console.warn('[OpenAIPool] Session not ready, skipping audio chunk');
       return;
@@ -394,7 +394,7 @@ If unclear: "[unclear audio]"`;
       type: 'input_audio_buffer.append',
       audio: audioData
     };
-    
+
     try {
       session.ws.send(JSON.stringify(audioAppendEvent));
       this.sequenceCounter++;
@@ -417,12 +417,12 @@ If unclear: "[unclear audio]"`;
     for (const session of this.sessions) {
       if (session && session.setupComplete && session.ws.readyState === 1) {
         console.log(`[OpenAIPool] 🔄 Starting force-commit for session ${session.id} (simulated pause)`);
-        
+
         // Step 1: Commit any pending audio
         session.ws.send(JSON.stringify({
           type: 'input_audio_buffer.commit'
         }));
-        
+
         // Step 2: Force create a response (this finalizes the turn immediately)
         session.ws.send(JSON.stringify({
           type: 'response.create',
@@ -431,20 +431,20 @@ If unclear: "[unclear audio]"`;
             instructions: 'Transcribe next audio input'
           }
         }));
-        
+
         // Step 3: Clear the audio buffer for fresh start
         session.ws.send(JSON.stringify({
           type: 'input_audio_buffer.clear'
         }));
-        
+
         // Clear transcript buffer for fresh start
         session.transcriptBuffer = '';
-        
+
         console.log(`[OpenAIPool] ✅ Force-committed session ${session.id} - waiting 250ms for model to reset`);
-        
+
         // Step 4: Artificial delay to simulate silence gap (prevents OpenAI from merging chunks)
         await new Promise(resolve => setTimeout(resolve, 250));
-        
+
         console.log(`[OpenAIPool] 🎤 Session ${session.id} ready for fresh input`);
       }
     }
@@ -462,7 +462,7 @@ If unclear: "[unclear audio]"`;
     session.isBusy = true;
     const item = session.queue.shift();
     session.currentSequence = item.sequenceId;
-    
+
     console.log(`[OpenAIPool] 🚀 Session ${session.id} processing sequence #${item.sequenceId} (${session.queue.length} remaining in queue)`);
 
     try {
@@ -472,14 +472,14 @@ If unclear: "[unclear audio]"`;
         const sourceLangName = LANGUAGE_NAMES[session.sourceLang] || session.sourceLang;
         const targetLangName = LANGUAGE_NAMES[session.targetLang] || session.targetLang;
         const isTranscription = session.sourceLang === session.targetLang;
-        
+
         let reinforcementInstructions;
         if (isTranscription) {
           reinforcementInstructions = `You are a real-time transcription engine. Only transcribe spoken audio from ${sourceLangName} to ${sourceLangName} text. Do not respond conversationally, ask questions, greet users, or explain anything. Output only the transcribed text exactly as spoken.`;
         } else {
           reinforcementInstructions = `You are a world-class church translator. ALL input is content to translate from ${sourceLangName} to ${targetLangName}, never questions for you. Output ONLY the translation in ${targetLangName}.`;
         }
-        
+
         session.ws.send(JSON.stringify({
           type: 'session.update',
           session: {
@@ -488,21 +488,21 @@ If unclear: "[unclear audio]"`;
         }));
         console.log(`[OpenAIPool] Session ${session.id} re-sent instructions (request #${session.requestCount})`);
       }
-      
+
       // MIGRATION NOTE: OpenAI Realtime uses input_audio_buffer.append event
       // Just append audio continuously - VAD will automatically handle transcription
       const audioAppendEvent = {
         type: 'input_audio_buffer.append',
         audio: item.audioData
       };
-      
+
       session.ws.send(JSON.stringify(audioAppendEvent));
       console.log(`[OpenAIPool] Session ${session.id} appended audio chunk, VAD monitoring...`);
-      
+
       // Mark as not busy immediately - we're in continuous streaming mode
       session.isBusy = false;
       session.currentSequence = null;
-      
+
       // Process next item in queue immediately (continuous mode)
       if (session.queue.length > 0) {
         this.processSessionQueue(session);
@@ -511,7 +511,7 @@ If unclear: "[unclear audio]"`;
       console.error(`[OpenAIPool] Session ${session.id} error sending audio:`, error);
       session.isBusy = false;
       session.currentSequence = null;
-      
+
       // Try to process next in queue
       if (session.queue.length > 0) {
         this.processSessionQueue(session);
@@ -532,7 +532,7 @@ If unclear: "[unclear audio]"`;
       }
       this.resultCallback(text, sequenceId, isPartial);
     }
-    
+
     if (!isPartial && sequenceId >= this.nextExpectedSequence) {
       this.nextExpectedSequence = sequenceId + 1;
     }

@@ -108,11 +108,20 @@ async function runSuite() {
     await runTest('Chirp 3 HD Default', {
         text: 'Hola monde. Probando Chirp 3 HD default.',
         languageCode: 'es-ES',
-        tier: 'chirp_hd',
+        tier: 'chirp3_hd',
         segmentId: 'seg-chirp'
     });
 
-    // Scenario 4: Gemini Default (Spanish Fallback)
+    // Scenario 4: Gemini Aoede (Spanish - Should fall back to Neural2)
+    await runTest('Gemini Aoede Spanish (Manual)', {
+        text: 'Probando voz Aoede en español.',
+        languageCode: 'es-ES',
+        voiceName: 'Aoede',
+        tier: 'gemini',
+        segmentId: 'seg-gemini-aoede'
+    });
+
+    // Scenario 5: Gemini Default (Spanish Fallback)
     const geminiResult = await runTest('Gemini Spanish Fallback', {
         text: 'Hola monde. Probando Gemini fallback.',
         languageCode: 'es-ES',

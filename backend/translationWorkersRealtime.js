@@ -131,10 +131,10 @@ export class RealtimePartialTranslationWorker {
     // SPEED: Try to find an idle connection (no active response)
     for (const [key, session] of this.connectionPool.entries()) {
       if (key.startsWith(connectionKey) &&
-          session.ws &&
-          session.ws.readyState === WebSocket.OPEN &&
-          session.setupComplete &&
-          !session.activeResponseId) { // IDLE - no active response
+        session.ws &&
+        session.ws.readyState === WebSocket.OPEN &&
+        session.setupComplete &&
+        !session.activeResponseId) { // IDLE - no active response
         console.log(`[RealtimePartialWorker] ♻️ Reusing idle connection: ${key}`);
         return session;
       }
@@ -180,17 +180,17 @@ export class RealtimePartialTranslationWorker {
     return new Promise((resolve, reject) => {
       const sourceLangName = getLanguageName(sourceLang);
       const targetLangName = getLanguageName(targetLang);
-      
+
       // Use gpt-realtime-mini (production model)
       const realtimeUrl = 'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini';
-      
+
       const ws = new WebSocket(realtimeUrl, {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'OpenAI-Beta': 'realtime=v1'
         }
       });
-      
+
       const session = {
         connectionKey,
         ws,
@@ -203,10 +203,10 @@ export class RealtimePartialTranslationWorker {
         pingInterval: null, // Keep-alive interval
         onResponseDone: null // Callback for when response.done is received (used for cancel waiting)
       };
-      
+
       ws.on('open', () => {
         console.log(`[RealtimePartialWorker] Connection opened for ${sourceLang} → ${targetLang}`);
-        
+
         // Configure session for text-to-text translation
         // Use SHORT instructions like Chat API - verbose instructions waste token budget
         const translationInstructions = `You are a world-class church translator. Translate from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Translate literally. Do not complete, rephrase, or extend. Output ONLY the translation.`;
@@ -221,14 +221,14 @@ export class RealtimePartialTranslationWorker {
             tools: [] // Explicitly disable tools to prevent function calling
           }
         };
-        
+
         ws.send(JSON.stringify(sessionConfig));
       });
-      
+
       ws.on('message', (data) => {
         try {
           const event = JSON.parse(data.toString());
-          
+
           switch (event.type) {
             case 'session.created':
             case 'session.updated':
@@ -240,7 +240,7 @@ export class RealtimePartialTranslationWorker {
                 resolve(session);
               }
               break;
-              
+
             case 'conversation.item.created':
               // Track conversation item and map to pending request
               if (event.item && event.item.id) {
@@ -319,7 +319,7 @@ export class RealtimePartialTranslationWorker {
                 session.ws.send(JSON.stringify(createResponseEvent));
               }
               break;
-              
+
             case 'response.created':
               const partialResponseId = event.response?.id;
               console.log(`[RealtimePartialWorker] ✅ Response created: ${partialResponseId || 'unknown'}`);
@@ -351,7 +351,7 @@ export class RealtimePartialTranslationWorker {
                 }
               }
               break;
-              
+
             case 'response.text.delta':
               // Streaming text delta - partial translation
               // NOTE: event.item_id refers to the OUTPUT item (response), not the input item
@@ -364,7 +364,7 @@ export class RealtimePartialTranslationWorker {
                     if (item) {
                       item.text += event.delta;
                       console.log(`[RealtimePartialWorker] 📥 Delta: "${event.delta}" (total: "${item.text}")`);
-                      
+
                       // Call partial callback if available
                       if (pending.onPartial) {
                         pending.onPartial(item.text, false);
@@ -399,7 +399,7 @@ export class RealtimePartialTranslationWorker {
                 }
               }
               break;
-              
+
             case 'response.text.done':
               // Text response complete
               // NOTE: event.item_id refers to the OUTPUT item (response), not the input item
@@ -547,7 +547,7 @@ export class RealtimePartialTranslationWorker {
                 console.warn(`[RealtimePartialWorker] ⚠️ Response done but no active request ID`);
               }
               break;
-              
+
             case 'response.done':
               console.log(`[RealtimePartialWorker] ✅ Response done: ${session.activeResponseId}`);
 
@@ -644,20 +644,20 @@ export class RealtimePartialTranslationWorker {
           console.error(`[RealtimePartialWorker] Message parsing error:`, error);
         }
       });
-      
+
       ws.on('error', (error) => {
         console.error(`[RealtimePartialWorker] WebSocket error for ${session.connectionKey}:`, error.message);
         if (!session.setupComplete) {
           reject(error);
         }
       });
-      
+
       ws.on('close', () => {
         console.log(`[RealtimePartialWorker] Connection closed for ${session.connectionKey}`);
         session.setupComplete = false;
         this.connectionPool.delete(session.connectionKey);
       });
-      
+
       // Timeout for connection setup
       setTimeout(() => {
         if (!session.setupComplete) {
@@ -891,7 +891,7 @@ export class RealtimePartialTranslationWorker {
             const item = pending.itemId ? session.pendingItems.get(pending.itemId) : null;
             const receivedSoFar = item ? item.text : '';
 
-            console.error(`[RealtimePartialWorker] ⏱️ Translation timeout after ${PARTIAL_TIMEOUT_MS/1000}s for request ${requestId}`);
+            console.error(`[RealtimePartialWorker] ⏱️ Translation timeout after ${PARTIAL_TIMEOUT_MS / 1000}s for request ${requestId}`);
             console.error(`[RealtimePartialWorker] ⚠️ Received so far: "${receivedSoFar.substring(0, 100)}..."`);
 
             // CRITICAL: Fallback - use what we've received so far if we have anything
@@ -909,7 +909,7 @@ export class RealtimePartialTranslationWorker {
               // No partial received - reject with timeout error
               this.pendingResponses.delete(requestId);
               if (pending.reject) {
-                pending.reject(new Error(`Translation timeout - realtime API did not respond after ${PARTIAL_TIMEOUT_MS/1000}s`));
+                pending.reject(new Error(`Translation timeout - realtime API did not respond after ${PARTIAL_TIMEOUT_MS / 1000}s`));
               }
             }
           }
@@ -984,7 +984,7 @@ export class RealtimePartialTranslationWorker {
     });
 
     const results = await Promise.all(translationPromises);
-    
+
     // Only include successful translations (not null)
     results.forEach(({ lang, text }) => {
       if (text !== null) {
@@ -1093,10 +1093,10 @@ export class RealtimeFinalTranslationWorker {
     // SPEED: Try to find an idle connection (no active response)
     for (const [key, session] of this.connectionPool.entries()) {
       if (key.startsWith(connectionKey) &&
-          session.ws &&
-          session.ws.readyState === WebSocket.OPEN &&
-          session.setupComplete &&
-          !session.activeResponseId) { // IDLE - no active response
+        session.ws &&
+        session.ws.readyState === WebSocket.OPEN &&
+        session.setupComplete &&
+        !session.activeResponseId) { // IDLE - no active response
         console.log(`[RealtimeFinalWorker] ♻️ Reusing idle connection: ${key}`);
         return session;
       }
@@ -1141,9 +1141,9 @@ export class RealtimeFinalTranslationWorker {
     return new Promise((resolve, reject) => {
       const sourceLangName = getLanguageName(sourceLang);
       const targetLangName = getLanguageName(targetLang);
-      
+
       const realtimeUrl = 'wss://api.openai.com/v1/realtime?model=gpt-realtime-mini';
-      
+
       const ws = new WebSocket(realtimeUrl, {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
@@ -1163,10 +1163,10 @@ export class RealtimeFinalTranslationWorker {
         pingInterval: null, // Keep-alive interval
         onResponseDone: null // Callback for when response.done is received (used for cancel waiting)
       };
-      
+
       ws.on('open', () => {
         console.log(`[RealtimeFinalWorker] Connection opened for ${sourceLang} → ${targetLang}`);
-        
+
         // Use SHORT instructions like Chat API - verbose instructions waste token budget
         const translationInstructions = `You are a world-class church translator. Translate from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Translate literally. Do not complete, rephrase, or extend. Output ONLY the translation.`;
 
@@ -1183,11 +1183,11 @@ export class RealtimeFinalTranslationWorker {
 
         ws.send(JSON.stringify(sessionConfig));
       });
-      
+
       ws.on('message', (data) => {
         try {
           const event = JSON.parse(data.toString());
-          
+
           switch (event.type) {
             case 'session.created':
             case 'session.updated':
@@ -1198,7 +1198,7 @@ export class RealtimeFinalTranslationWorker {
                 resolve(session);
               }
               break;
-              
+
             case 'conversation.item.created':
               // Track conversation item and map to pending request
               if (event.item && event.item.id) {
@@ -1236,11 +1236,11 @@ export class RealtimeFinalTranslationWorker {
                   // Don't create response if no match - item will be orphaned
                   return;
                 }
-                
+
                 // Get the original text from the pending request
                 const pendingRequest = this.pendingResponses.get(matchedRequestId);
                 const originalText = pendingRequest?.originalText || '';
-                
+
                 session.pendingItems.set(event.item.id, {
                   itemId: event.item.id,
                   requestId: matchedRequestId,
@@ -1276,7 +1276,7 @@ export class RealtimeFinalTranslationWorker {
                 session.ws.send(JSON.stringify(createResponseEvent));
               }
               break;
-              
+
             case 'response.text.delta':
               // Streaming text delta - partial translation
               // NOTE: event.item_id refers to the OUTPUT item (response), not the input item
@@ -1318,7 +1318,7 @@ export class RealtimeFinalTranslationWorker {
                 }
               }
               break;
-              
+
             case 'response.created':
               const finalResponseId = event.response?.id;
               console.log(`[RealtimeFinalWorker] ✅ Response created: ${finalResponseId || 'unknown'}`);
@@ -1351,7 +1351,7 @@ export class RealtimeFinalTranslationWorker {
                 }
               }
               break;
-              
+
             case 'response.done':
               console.log(`[RealtimeFinalWorker] ✅ Response done: ${session.activeResponseId}`);
 
@@ -1398,7 +1398,7 @@ export class RealtimeFinalTranslationWorker {
                 });
               }
               break;
-              
+
             case 'response.text.done':
               // Text response complete
               // NOTE: event.item_id refers to the OUTPUT item (response), not the input item
@@ -1491,7 +1491,7 @@ export class RealtimeFinalTranslationWorker {
                 console.warn(`[RealtimeFinalWorker] ⚠️ Response done but no active request ID`);
               }
               break;
-              
+
             case 'error':
               console.error(`[RealtimeFinalWorker] Error for ${session.connectionKey}:`, event.error);
               if (event.item_id) {
@@ -1521,20 +1521,20 @@ export class RealtimeFinalTranslationWorker {
           console.error(`[RealtimeFinalWorker] Message parsing error:`, error);
         }
       });
-      
+
       ws.on('error', (error) => {
         console.error(`[RealtimeFinalWorker] WebSocket error for ${session.connectionKey}:`, error.message);
         if (!session.setupComplete) {
           reject(error);
         }
       });
-      
+
       ws.on('close', () => {
         console.log(`[RealtimeFinalWorker] Connection closed for ${session.connectionKey}`);
         session.setupComplete = false;
         this.connectionPool.delete(session.connectionKey);
       });
-      
+
       setTimeout(() => {
         if (!session.setupComplete) {
           reject(new Error('Connection setup timeout'));
@@ -1729,7 +1729,7 @@ export class RealtimeFinalTranslationWorker {
     });
 
     const results = await Promise.all(translationPromises);
-    
+
     results.forEach(({ lang, text }) => {
       translations[lang] = text;
     });

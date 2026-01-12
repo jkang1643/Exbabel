@@ -31,6 +31,8 @@ export class TtsPlayerController {
         this.onStateChange = null;
         this.onError = null;
         this.onRouteResolved = null; // New callback for routing updates
+
+        this.lastRequestId = 0; // Track latest request ID to prevent out-of-order playback
     }
 
     /**
@@ -189,6 +191,20 @@ export class TtsPlayerController {
                 // Unary audio response
                 console.log('[TtsPlayerController] Received audio for segment:', msg.segmentId);
 
+                // Check for out-of-order responses (protected against overlap)
+                if (msg.segmentId && msg.segmentId.includes('_ts')) {
+                    const parts = msg.segmentId.split('_ts');
+                    const requestId = parseInt(parts[parts.length - 1], 10);
+                    if (requestId < this.lastRequestId) {
+                        console.warn('[TtsPlayerController] Ignoring out-of-order audio response', {
+                            receivedId: requestId,
+                            currentId: this.lastRequestId,
+                            segmentId: msg.segmentId
+                        });
+                        return;
+                    }
+                }
+
                 // Store resolved routing information
                 if (msg.resolvedRoute) {
                     this.lastResolvedRoute = msg.resolvedRoute;
@@ -281,13 +297,24 @@ export class TtsPlayerController {
         }
 
         const resolvedTier = options.tier || this.tier;
-        console.log(`[TtsPlayerController] Requesting synthesis for segment: ${segmentId} with tier: ${resolvedTier}`);
+        // Increment and track latest request
+        this.lastRequestId = Date.now();
+        const requestId = this.lastRequestId;
+        const trackedSegmentId = `${segmentId}_ts${requestId}`;
+
+        console.log('[TtsPlayerController] Requesting immediate synthesis:', {
+            text: text.substring(0, 50) + '...',
+            segmentId: trackedSegmentId,
+            voiceName: this.currentVoiceName,
+            languageCode: this.currentLanguageCode,
+            tier: resolvedTier
+        });
 
         // Send synthesis request
         if (this.sendMessage) {
             const message = {
                 type: 'tts/synthesize',
-                segmentId,
+                segmentId: trackedSegmentId,
                 text,
                 languageCode: this.currentLanguageCode,
                 voiceName: this.currentVoiceName,
@@ -326,25 +353,33 @@ export class TtsPlayerController {
      */
     _playAudio(audioBlob) {
         try {
-            // Stop current audio if playing
+            // Stop and clean up current audio if playing
             if (this.currentAudio) {
+                console.log('[TtsPlayerController] Stopping previous audio to prevent overlap');
                 this.currentAudio.pause();
+                this.currentAudio.src = ""; // Clear source to stop buffering
+                this.currentAudio.load();   // Force cleanup
                 this.currentAudio = null;
             }
 
             const audioUrl = URL.createObjectURL(audioBlob);
             const audio = new Audio(audioUrl);
+            this.currentAudio = audio;
 
             audio.onended = () => {
                 console.log('[TtsPlayerController] Audio playback ended');
+                if (this.currentAudio === audio) {
+                    this.currentAudio = null;
+                }
                 URL.revokeObjectURL(audioUrl);
-                this.currentAudio = null;
             };
 
             audio.onerror = (error) => {
                 console.error('[TtsPlayerController] Audio playback error:', error);
+                if (this.currentAudio === audio) {
+                    this.currentAudio = null;
+                }
                 URL.revokeObjectURL(audioUrl);
-                this.currentAudio = null;
 
                 if (this.onError) {
                     this.onError({
@@ -354,23 +389,27 @@ export class TtsPlayerController {
                 }
             };
 
-            audio.play().catch(error => {
-                console.error('[TtsPlayerController] Failed to start playback:', error);
-                URL.revokeObjectURL(audioUrl);
-
-                if (this.onError) {
-                    this.onError({
-                        code: 'PLAYBACK_ERROR',
-                        message: `Failed to start playback: ${error.message}`
-                    });
+            audio.play().then(() => {
+                console.log('[TtsPlayerController] Audio playback started');
+            }).catch(error => {
+                if (error.name === 'AbortError') {
+                    console.log('[TtsPlayerController] Playback aborted (likely stopped by user)');
+                } else {
+                    console.error('[TtsPlayerController] Failed to start playback:', error);
+                    if (this.currentAudio === audio) {
+                        this.currentAudio = null;
+                    }
+                    if (this.onError) {
+                        this.onError({
+                            code: 'PLAYBACK_ERROR',
+                            message: `Failed to start playback: ${error.message}`
+                        });
+                    }
                 }
+                URL.revokeObjectURL(audioUrl);
             });
-
-            this.currentAudio = audio;
-            console.log('[TtsPlayerController] Audio playback started');
         } catch (error) {
             console.error('[TtsPlayerController] Error in _playAudio:', error);
-
             if (this.onError) {
                 this.onError({
                     code: 'PLAYBACK_ERROR',

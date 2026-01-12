@@ -8,7 +8,7 @@
  * PR3: Full integration with audio playback
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Volume2, VolumeX, Play, Square } from 'lucide-react';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
@@ -25,6 +25,35 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
 
     // Get available voices for current language
     const availableVoices = getVoicesForLanguage(targetLang);
+
+    // Group voices by tier for organized display
+    const groupedVoices = useMemo(() => {
+        const groups = {
+            gemini: { label: 'Gemini & Studio (Ultra HD)', voices: [] },
+            chirp3_hd: { label: 'Chirp 3 HD (Premium)', voices: [] },
+            neural2: { label: 'Neural2 (High-Definition)', voices: [] },
+            standard: { label: 'Standard (Legacy)', voices: [] }
+        };
+
+        availableVoices.forEach(voice => {
+            const tier = voice.tier || 'standard';
+            const label = voice.label || '';
+            const value = voice.value || '';
+
+            // Grouping logic: Studio voices go to Gemini group for better UX visibility
+            if (tier === 'gemini' || label.includes('Studio') || value.includes('Studio')) {
+                groups.gemini.voices.push(voice);
+            } else if (tier === 'chirp3_hd') {
+                groups.chirp3_hd.voices.push(voice);
+            } else if (tier === 'neural2') {
+                groups.neural2.voices.push(voice);
+            } else {
+                groups.standard.voices.push(voice);
+            }
+        });
+
+        return groups;
+    }, [availableVoices]);
 
 
     // Subscribe to controller state changes
@@ -145,10 +174,16 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                         >
                             <option value="">Select voice...</option>
-                            {availableVoices.map((voice) => (
-                                <option key={voice.value} value={voice.value}>
-                                    {voice.label}
-                                </option>
+                            {Object.entries(groupedVoices).map(([tier, group]) => (
+                                group.voices.length > 0 && (
+                                    <optgroup key={tier} label={group.label}>
+                                        {group.voices.map((voice) => (
+                                            <option key={voice.value} value={voice.value}>
+                                                {voice.label}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                )
                             ))}
                         </select>
                     </div>

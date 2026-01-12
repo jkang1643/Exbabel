@@ -535,16 +535,10 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           const { recordUsage } = await import('./tts/ttsUsage.js');
 
           try {
-            // Determine appropriate engine
-            let engine = message.engine;
-            if (!engine) {
-              if (message.tier === 'chirp_hd') {
-                engine = 'chirp3_hd';
-              } else if (message.voiceName && (message.voiceName.includes('Neural2') || message.voiceName.includes('-Standard-') || message.voiceName.includes('-Wavenet-') || message.voiceName.includes('-Studio-'))) {
-                engine = 'chirp3_hd'; // Map native Google voices to the engine that supports full names
-              } else {
-                engine = 'gemini_tts';
-              }
+
+            // Fix for typo in tier name if it comes from frontend/config
+            if (message.tier === 'chirp_hd') {
+              message.tier = 'chirp3_hd';
             }
 
             // 1. Resolve TTS routing (single source of truth)
@@ -568,10 +562,10 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               profile: {
                 engine: route.engine,
                 requestedTier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
-                languageCode: message.languageCode,
-                voiceName: message.voiceName || (route.engine === 'gemini_tts' ? 'Kore' : undefined),
-                modelName: message.modelName || (route.engine === 'gemini_tts' ? 'gemini-2.5-flash-tts' : undefined),
-                encoding: message.encoding || process.env.TTS_AUDIO_FORMAT_UNARY || 'MP3',
+                languageCode: route.languageCode,
+                voiceName: route.voiceName,
+                modelName: route.model || message.modelName,
+                encoding: route.audioEncoding,
                 streaming: message.mode === 'streaming',
                 prompt: message.prompt
               }

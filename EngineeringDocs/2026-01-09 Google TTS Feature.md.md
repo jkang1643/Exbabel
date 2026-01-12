@@ -11,6 +11,24 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ---
 
+### BUG 8: FIXED — Gemini Persona Routing & Audio Collision Prevention
+**Status:** ✅ RESOLVED (2026-01-12)
+
+Resolved issues where Gemini persona voices (Kore, Aoede, etc.) would fail in non-English locales and prevented "simultaneous playback" where multiple audio streams would overlap.
+
+#### Root Cause:
+1. **Engine/Tier Mismatch:** Gemini personas were being incorrectly forced into the Chirp 3 HD engine wrapper or passed to the API with missing locale mappings, causing hangs or errors.
+2. **Delayed Audio Overlap:** Slow synthesis responses (especially from Gemini) would arrive after a newer request had already started, causing both audio clips to play at the same time.
+3. **Incomplete Voice List:** Users only had access to 6 Gemini personas, missing the full "Studio" range available in the API.
+
+#### Key Fixes:
+1.  **Request Sequence Tracking:** Implemented `lastRequestId` in `TtsPlayerController.js`. The frontend now ignores any audio response that doesn't match the most recent request ID, effectively killing out-of-order "ghost" audio.
+2.  **Intelligent Engine Switching:** Updated `ttsRouting.js` to automatically switch between `GEMINI_TTS` (for personas) and `CHIRP3_HD` (for Studio/Neural2 voices) regardless of the tier selected, ensuring the best engine is always used.
+3.  **Expanded Voice Personas:** Built out the full list of 30+ Gemini personas in `config/ttsVoices.js` and consolidated them with language-specific "Studio" voices in the UI.
+4.  **Backend Response Logging:** Added audio size logging to `GoogleTtsService` to verify successful data return during debugging.
+
+---
+
 ### BUG 7: FIXED — WebSocket Disconnects & Proxy Enforcement
 **Status:** ✅ RESOLVED
 

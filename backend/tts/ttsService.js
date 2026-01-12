@@ -316,8 +316,10 @@ export class GoogleTtsService extends TtsService {
             // Gemini-TTS requires model name
             googleRequest.voice.modelName = route.model;
         } else if (route.engine === TtsEngine.CHIRP3_HD) {
-            // For Chirp3 HD voices, don't set modelName (it's inferred from voice name)
-            // The voice name already contains the model info (e.g., 'en-US-Chirp3-HD-Kore')
+            // For Chirp3 HD voices, include model name if provided in route
+            if (route.model) {
+                googleRequest.voice.modelName = route.model;
+            }
         }
 
         return googleRequest;
@@ -518,6 +520,9 @@ export class GoogleTtsService extends TtsService {
                 const [response] = await this.client.synthesizeSpeech(googleRequest);
                 const audioContentBase64 = response.audioContent.toString('base64');
                 const mimeType = this._getMimeType(route.audioEncoding);
+                const audioSize = response.audioContent.length;
+
+                console.log(`[GoogleTtsService] Synthesis successful: ${audioSize} bytes of ${mimeType}`);
 
                 return {
                     audioContentBase64,
@@ -531,13 +536,18 @@ export class GoogleTtsService extends TtsService {
                 const errorMessage = error.message || '';
                 console.error(`[GoogleTtsService] Synthesis attempt ${attempt + 1} failed:`, errorMessage);
 
-                // Handle Vertex AI / Studio voice permission errors with immediate fallback
+                // Handle errors that should trigger immediate fallback to a safe tier (Neural2)
                 const isPermissionError = errorMessage.includes('PERMISSION_DENIED') || error.code === 7;
+                const isInvalidArgument = errorMessage.includes('INVALID_ARGUMENT') || error.code === 3;
                 const isVertexError = errorMessage.includes('Vertex AI') || errorMessage.includes('aiplatform.googleapis.com');
-                const isStudioError = errorMessage.includes('Studio voice');
+                const isStudioError = errorMessage.includes('Studio voice') || errorMessage.includes('Studio');
+                const isUnsupportedVoice = errorMessage.includes('not found') || errorMessage.includes('no voice');
 
-                if (isPermissionError && (isVertexError || isStudioError) && (route.tier === 'gemini' || route.tier === 'chirp3_hd')) {
-                    console.warn(`[GoogleTtsService] ${route.tier.toUpperCase()} voices disabled (Vertex AI API not enabled or permissions missing). Falling back to Neural2.`);
+                // Trigger fallback for permission issues or invalid voice/tier combinations
+                if ((isPermissionError || isInvalidArgument || isUnsupportedVoice) &&
+                    (route.tier === 'gemini' || route.tier === 'chirp3_hd')) {
+
+                    console.warn(`[GoogleTtsService] ${route.tier.toUpperCase()} voice error ("${route.voiceName}"). Falling back to Neural2. Error: ${errorMessage}`);
 
                     try {
                         // Re-resolve route with forced fallback to neural2

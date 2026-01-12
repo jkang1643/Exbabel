@@ -14,7 +14,31 @@ export const GEMINI_VOICE_OPTIONS = [
     { value: 'Leda', label: 'Leda (Gemini, Female)', tier: 'gemini' },
     { value: 'Puck', label: 'Puck (Gemini, Male)', tier: 'gemini' },
     { value: 'Aoede', label: 'Aoede (Gemini, Female)', tier: 'gemini' },
-    { value: 'Fenrir', label: 'Fenrir (Gemini, Male)', tier: 'gemini' }
+    { value: 'Fenrir', label: 'Fenrir (Gemini, Male)', tier: 'gemini' },
+    { value: 'Achernar', label: 'Achernar (Gemini, Female)', tier: 'gemini' },
+    { value: 'Achird', label: 'Achird (Gemini, Male)', tier: 'gemini' },
+    { value: 'Algenib', label: 'Algenib (Gemini, Male)', tier: 'gemini' },
+    { value: 'Algieba', label: 'Algieba (Gemini, Male)', tier: 'gemini' },
+    { value: 'Alnilam', label: 'Alnilam (Gemini, Male)', tier: 'gemini' },
+    { value: 'Autonoe', label: 'Autonoe (Gemini, Female)', tier: 'gemini' },
+    { value: 'Callirrhoe', label: 'Callirrhoe (Gemini, Female)', tier: 'gemini' },
+    { value: 'Despina', label: 'Despina (Gemini, Female)', tier: 'gemini' },
+    { value: 'Enceladus', label: 'Enceladus (Gemini, Male)', tier: 'gemini' },
+    { value: 'Erinome', label: 'Erinome (Gemini, Female)', tier: 'gemini' },
+    { value: 'Gacrux', label: 'Gacrux (Gemini, Female)', tier: 'gemini' },
+    { value: 'Iapetus', label: 'Iapetus (Gemini, Male)', tier: 'gemini' },
+    { value: 'Laomedeia', label: 'Laomedeia (Gemini, Female)', tier: 'gemini' },
+    { value: 'Orus', label: 'Orus (Gemini, Male)', tier: 'gemini' },
+    { value: 'Pulcherrima', label: 'Pulcherrima (Gemini, Female)', tier: 'gemini' },
+    { value: 'Rasalgethi', label: 'Rasalgethi (Gemini, Male)', tier: 'gemini' },
+    { value: 'Sadachbia', label: 'Sadachbia (Gemini, Male)', tier: 'gemini' },
+    { value: 'Sadaltager', label: 'Sadaltager (Gemini, Male)', tier: 'gemini' },
+    { value: 'Schedar', label: 'Schedar (Gemini, Male)', tier: 'gemini' },
+    { value: 'Sulafat', label: 'Sulafat (Gemini, Female)', tier: 'gemini' },
+    { value: 'Umbriel', label: 'Umbriel (Gemini, Male)', tier: 'gemini' },
+    { value: 'Vindemiatrix', label: 'Vindemiatrix (Gemini, Female)', tier: 'gemini' },
+    { value: 'Zephyr', label: 'Zephyr (Gemini, Female)', tier: 'gemini' },
+    { value: 'Zubenelgenubi', label: 'Zubenelgenubi (Gemini, Male)', tier: 'gemini' }
 ];
 
 /**
