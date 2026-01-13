@@ -104,7 +104,9 @@ export function resolvePrompt(options = {}) {
     if (promptPresetId) {
         const preset = getPresetById(promptPresetId);
         if (preset) {
-            resolvedPrompt = preset.prompt;
+            // HARDENING: functionality to prevent the reported "First Request Bug" where Gemini speaks the prompt
+            // We prepend a clear system instruction to differentiate prompt from text
+            resolvedPrompt = `(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.) ${preset.prompt}`;
             presetUsed = preset;
         }
     }
@@ -114,7 +116,8 @@ export function resolvePrompt(options = {}) {
         if (resolvedPrompt) {
             resolvedPrompt += "\n\nAdditional direction: " + customPrompt.trim();
         } else {
-            resolvedPrompt = customPrompt.trim();
+            // HARDENING: Safety instruction for custom-only prompts
+            resolvedPrompt = `(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.) ${customPrompt.trim()}`;
         }
     }
 
@@ -130,18 +133,33 @@ export function resolvePrompt(options = {}) {
         }
     }
 
-    // If no prompt at all, return early
+    // If no prompt at all, still need to check text limits
     if (!resolvedPrompt) {
+        let finalText = text;
+        let wasTextTruncated = false;
+        let truncationReason = null;
+
+        if (utf8ByteLength(text) > BYTE_LIMITS.TEXT_MAX) {
+            finalText = truncateToUtf8Bytes(text, BYTE_LIMITS.TEXT_MAX - 3);
+            finalText += '…';
+            wasTextTruncated = true;
+            truncationReason = 'text_exceeded_4000_bytes';
+        }
+
         return {
             prompt: null,
+            text: finalText,
             presetId: promptPresetId || null,
             presetUsed,
             promptBytes: 0,
-            textBytes: utf8ByteLength(text),
-            combinedBytes: utf8ByteLength(text),
+            textBytes: utf8ByteLength(finalText),
+            combinedBytes: utf8ByteLength(finalText),
             wasPromptTruncated: false,
-            wasTextTruncated: false,
-            truncationReason: null
+            wasTextTruncated,
+            truncationReason,
+            originalPromptBytes: 0,
+            originalTextBytes: utf8ByteLength(text),
+            originalCombinedBytes: utf8ByteLength(text)
         };
     }
 

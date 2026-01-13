@@ -139,7 +139,7 @@ export class GoogleTtsService extends TtsService {
         if (this.clientInitialized) return;
 
         try {
-            const { TextToSpeechClient } = await import('@google-cloud/text-to-speech');
+            const { v1beta1 } = await import('@google-cloud/text-to-speech');
 
             const clientOptions = {};
 
@@ -164,7 +164,7 @@ export class GoogleTtsService extends TtsService {
                 console.log(`[GoogleTtsService] Using explicit API Endpoint: ${process.env.GOOGLE_TTS_API_ENDPOINT}`);
             }
 
-            this.client = new TextToSpeechClient(clientOptions);
+            this.client = new v1beta1.TextToSpeechClient(clientOptions);
             this.clientInitialized = true;
             console.log('[GoogleTtsService] Google TTS client initialized');
         } catch (error) {
@@ -411,6 +411,7 @@ export class GoogleTtsService extends TtsService {
         // Handle engine-specific configuration
         if (isGeminiTts) {
             // Gemini-TTS: Use input.text + input.prompt
+            // Note: In v1beta1, input.prompt is correctly used for styling without being spoken.
             googleRequest.input = {
                 text: finalText
             };
@@ -423,10 +424,24 @@ export class GoogleTtsService extends TtsService {
             // Gemini-TTS requires model name
             googleRequest.voice.modelName = route.model;
 
-            console.log(`[GoogleTtsService] 🔷 Gemini-TTS Request Built:`);
+            console.log(`[GoogleTtsService] 🔷 Gemini-TTS Request Built (input.prompt + v1beta1):`);
             console.log(`  - Model: ${route.model}`);
             console.log(`  - Text length: ${finalText.length}`);
-            console.log(`  - Prompt: ${resolvedPromptResult?.prompt ? 'yes' : 'no'}`);
+            console.log(`  - Text start: "${finalText.substring(0, 50)}..."`); // Added logging
+            console.log(`  - Prompt: ${googleRequest.input.prompt ? 'yes' : 'no'}`);
+            if (googleRequest.input.prompt) {
+                console.log(`  - Prompt start: "${googleRequest.input.prompt.substring(0, 50)}..."`); // Added logging
+            }
+
+            // SAFETY CHECK: Ensure the text to be spoken is NOT the prompt itself
+            // This prevents a reported bug where the prompt leaks into the text field
+            if (googleRequest.input.prompt &&
+                typeof googleRequest.input.text === 'string' &&
+                googleRequest.input.text.includes(googleRequest.input.prompt.substring(0, 50))) {
+
+                console.error('[GoogleTtsService] 🚨 CRITICAL: Prompt leak detected! The text to be spoken contains the prompt. Overwriting with original text.');
+                googleRequest.input.text = request.text; // Revert to original text
+            }
 
         } else {
             // Chirp 3 HD / Neural2 / Standard: Use SSML or plain text

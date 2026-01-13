@@ -1039,6 +1039,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             }
             break;
 
+          // Session stats - silence to prevent undefined log noise
+          case 'session_stats':
+            // Harmless stats message, ignore
+            break;
+
           default:
             console.log('[LISTENER_UNKNOWN_TYPE]', {
               type: message.type,

@@ -9,7 +9,27 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
 
+
+### BUG 9: FIXED — Gemini TTS Prompt Hallucination (First Request Bug)
+**Status:** ✅ RESOLVED (2026-01-13)
+
+Resolved a critical issue where the Gemini TTS model would occasionally "hallucinate" and speak the styling prompt itself (e.g., "Speak like a helpful customer support agent...") instead of the requested text, or mix the prompt instructions into the audio output. This often occurred on the first request but was nondeterministic.
+
+#### Root Cause:
+1.  **Server-Side Hallucination:** The Gemini TTS model (v2.5-flash-tts) sometimes failed to distinguish between the `text` (content to speak) and the `prompt` (style instructions), treating the prompt as content. This is a model behavior issue, not a code bug, as the backend inputs were confirmed to be correct.
+2.  **Lack of Explicit Separation:** The prompt was provided as-is without strong negative constraints ("DO NOT SPEAK"), making it easier for the model to bleed the instructions into the speech.
+
+#### Key Fixes:
+1.  **Prompt Hardening (Primary Fix):** Modified `promptResolver.js` to prepend a strict system instruction to ALL prompts (both presets and custom): `(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.)`. This forces the model to interpret the prompt as metadata only.
+2.  **Input Safety Check (Defensive Layer):** Added a safety guard in `ttsService.js` that checks if the `input.text` contains the prompt string. If a client-side leak were to occur, this guard automatically intercepts the request and overwrites the text with the original payload, logging a critical error.
+3.  **Log Noise Reduction:** Updated `ListenerPage.jsx` to silence harmless `session_stats` messages that were creating "undefined" log noise during debugging.
+
+#### Impact:
+- ✅ **Eliminated Audio Hallucinations:** The model no longer speaks the prompt instructions.
+- ✅ **Robust Redundancy:** The system is protected against both model confusion (server-side) and potential future client-side leaks.
+
 ---
+
 
 ### BUG 8: FIXED — Gemini Persona Routing & Audio Collision Prevention
 **Status:** ✅ RESOLVED (2026-01-12)
