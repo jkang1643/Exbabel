@@ -58,6 +58,16 @@ export async function recordUsage(event) {
             reason: event.route.reason,
             fallbackFrom: event.route.fallbackFrom
         } : null,
+        // Prompt metadata (Gemini-TTS only)
+        promptMetadata: event.promptMetadata ? {
+            promptPresetId: event.promptMetadata.presetId || null,
+            promptBytes: event.promptMetadata.promptBytes || 0,
+            textBytes: event.promptMetadata.textBytes || 0,
+            combinedBytes: event.promptMetadata.combinedBytes || 0,
+            wasPromptTruncated: event.promptMetadata.wasPromptTruncated || false,
+            wasTextTruncated: event.promptMetadata.wasTextTruncated || false,
+            truncationReason: event.promptMetadata.truncationReason || null
+        } : null,
         // Legacy fields (for backwards compatibility)
         languageCode: event.languageCode || (event.route ? event.route.languageCode : null),
         engine: event.engine || (event.route ? event.route.engine : null),

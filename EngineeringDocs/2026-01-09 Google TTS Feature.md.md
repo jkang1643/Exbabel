@@ -155,8 +155,27 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 
 ## 1) What we did (feature updates / changes)
 
+### 2026-01-13 — PR 4: Gemini-TTS Prompted Voices
+**Status:** ✅ IMPLEMENTED - Integrated & Production Ready
+
+Implemented full support for Gemini-TTS "Prompted Delivery", enabling natural language style control and Pentecostal-specific presets.
+
+**Key Changes:**
+- **Prompt Resolver:** Created `promptResolver.js` for UTF-8 safe byte validation and truncation (4000 byte prompt, 4000 byte text, 8000 combined).
+- **Prompt Preset Library:** Implemented 16 high-quality presets including the "UPCI Fire Edition" (Apostolic Fire, Altar Call, Revival Meeting).
+- **Intensity Modifiers:** Added 1-5 intensity scale for urgent delivery peaks.
+- **SSML-to-Plain Text Extraction:** Automatic stripping of SSML tags for Gemini voices to extract clean text for `input.text`.
+- **Frontend UI Refactor:** Updated `TtsPanel.jsx` to dynamically switch between SSML (Chirp) and Prompt (Gemini) controls based on selected voice. Includes real-time byte counters and warning states.
+- **Usage Telemetry:** Extended `ttsUsage.js` to log prompt metadata, byte counts, and truncation events.
+
+**Where implemented:**
+- **Backend:** `backend/tts/promptResolver.js`, `backend/tts/promptPresets.js`, `backend/tts/ttsService.js`, `backend/websocketHandler.js`
+- **Frontend:** `frontend/src/config/promptConfig.js`, `frontend/src/components/TtsPanel.jsx`, `frontend/src/tts/TtsPlayerController.js`
+
+---
+
 ### 2026-01-13 — PR 3: Chirp 3 HD SSML Dynamic Prosody
-**Status:** 🚧 IN PROGRESS / INTEGRATED - Engine Active
+**Status:** ✅ INTEGRATED - Production Ready
 
 Implemented the "Dynamic Prosody Engine" for Chirp 3 HD voices, enabling sermon-style delivery with variable pacing and emphasis.
 
@@ -209,17 +228,20 @@ Implemented the complete scaffolding for Google TTS integration, supporting both
 ## 2) Where we are now (implementation status)
 
 ### ✅ Implemented
+- **Gemini Prompted Delivery:** Natural language style control with presets and intensity (PR 4).
+- **Chirp 3 Dynamic Prosody:** Phrase-level rate/pitch variation for preaching styles (PR 3).
 - **Scaffolding:** Feature flags, policy engine, and WebSocket command architecture.
 - **Unary synthesis:** Functional Google TTS integration for multiple tiers.
 - **Voice Routing:** Robust routing for Gemini, Chirp3 HD, Neural2, and Standard tiers.
-- **Best Defaults (Part 4):** Standardized best-in-class defaults for major languages (Kore, etc.) across all premium tiers.
-- **Language Support:** Comprehensive mapping for 80+ language locales.
+- **Voice Tiering:** 4-tier hierarchy (Ultra HD, Premium, HD, Standard).
+- **Smart Truncation:** Real-time UTF-8 byte validation for prompt/text payloads.
 - **Audio Playback:** Frontend queuing and playback for unary audio chunks.
 
 ### 🔍 Known / Remaining
-- **Database Persistence:** Usage tracking is currently in-memory (Map); database persistence is next.
-- **Streaming Mode:** Currently returns `NOT_IMPLEMENTED`.
+- **Comprehensive Testing:** Frontend/Backend unit tests for prompted synthesis.
 - **Auto-synthesis Integration:** Hooking synthesis into the main translation loop.
+- **Persistence:** Usage tracking currently in-memory.
+- **Streaming Mode:** Currently returns `NOT_IMPLEMENTED`.
 
 ---
 

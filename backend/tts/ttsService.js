@@ -299,8 +299,15 @@ export class GoogleTtsService extends TtsService {
      * Build Google TTS request from resolved route
      * @private
      */
-    _buildGoogleRequestFromRoute(request, route) {
-        const { text, ssmlOptions } = request;
+    async _buildGoogleRequestFromRoute(request, route) {
+        const { text, ssmlOptions, ttsPrompt, promptPresetId, intensity } = request;
+
+        // Import prompt resolver (dynamic to avoid circular deps)
+        const { resolvePrompt } = await import('./promptResolver.js');
+
+        // Determine if this is a Gemini-TTS request
+        const isGeminiTts = route.engine === TtsEngine.GEMINI_TTS ||
+            (route.model && route.model.startsWith('gemini-'));
 
         // Generate SSML input if applicable
         let inputContent = text;
@@ -342,9 +349,56 @@ export class GoogleTtsService extends TtsService {
             }
         }
 
+        // For Gemini-TTS: Extract plain text from SSML and resolve prompt
+        let resolvedPromptResult = null;
+        let finalText = text;
+
+        if (isGeminiTts) {
+            // Extract plain text from SSML if needed
+            if (inputType === 'ssml') {
+                // Best-effort SSML tag stripping
+                finalText = inputContent
+                    .replace(/<speak>/gi, '')
+                    .replace(/<\/speak>/gi, '')
+                    .replace(/<[^>]+>/g, '') // Remove all tags
+                    .replace(/\s+/g, ' ') // Normalize whitespace
+                    .trim();
+
+                console.log(`[GoogleTtsService] Extracted plain text from SSML: ${finalText.length} chars`);
+            }
+
+            // Resolve Gemini-TTS prompt if preset or custom prompt provided
+            if (promptPresetId || ttsPrompt) {
+                resolvedPromptResult = resolvePrompt({
+                    promptPresetId,
+                    customPrompt: ttsPrompt,
+                    intensity,
+                    text: finalText
+                });
+
+                // Use truncated text if needed
+                if (resolvedPromptResult.text !== finalText) {
+                    finalText = resolvedPromptResult.text;
+                }
+
+                console.log(`[GoogleTtsService] 🎯 Gemini-TTS Prompt Resolved:`);
+                console.log(`  - Preset: ${promptPresetId || 'none'}`);
+                console.log(`  - Custom: ${ttsPrompt ? 'yes' : 'no'}`);
+                console.log(`  - Intensity: ${intensity || 'none'}`);
+                console.log(`  - Prompt bytes: ${resolvedPromptResult.promptBytes}`);
+                console.log(`  - Text bytes: ${resolvedPromptResult.textBytes}`);
+                console.log(`  - Combined bytes: ${resolvedPromptResult.combinedBytes}`);
+                console.log(`  - Prompt truncated: ${resolvedPromptResult.wasPromptTruncated}`);
+                console.log(`  - Text truncated: ${resolvedPromptResult.wasTextTruncated}`);
+
+                if (resolvedPromptResult.truncationReason) {
+                    console.warn(`[GoogleTtsService] ⚠️ Truncation occurred: ${resolvedPromptResult.truncationReason}`);
+                }
+            }
+        }
+
         // Build base Google TTS request
         const googleRequest = {
-            input: inputType === 'ssml' ? { ssml: inputContent } : { text: inputContent },
             voice: {
                 languageCode: route.languageCode,
                 name: route.voiceName
@@ -354,46 +408,64 @@ export class GoogleTtsService extends TtsService {
             }
         };
 
-        // Apply prosody options to audioConfig (widest support across models)
-        if (ssmlOptions) {
-            // Apply speaking rate (Supported by Chirp 3 HD)
-            if (ssmlOptions.rate) {
-                googleRequest.audioConfig.speaking_rate = ssmlOptions.rate;
-                console.log(`[GoogleTtsService] Applied speaking_rate: ${ssmlOptions.rate}`);
-            }
-
-            // Apply pitch adjustment (NOT supported by Chirp 3 HD in audioConfig)
-            // We use ssmlOptions.pitch in the SSML generation solely for logging/consistency
-            if (ssmlOptions.pitch && route.tier !== 'chirp3_hd') {
-                // Parse semitone string (e.g., '+1st', '-2st', '0st')
-                let pitchValue = 0;
-                const match = ssmlOptions.pitch.match(/^([+-]?\d+)(?:st)?$/);
-                if (match) {
-                    pitchValue = parseFloat(match[1]);
-                    googleRequest.audioConfig.pitch = pitchValue;
-                    console.log(`[GoogleTtsService] Applied pitch: ${pitchValue} (from ${ssmlOptions.pitch})`);
-                }
-            }
-        }
-
         // Handle engine-specific configuration
-        if (route.engine === TtsEngine.GEMINI_TTS) {
+        if (isGeminiTts) {
+            // Gemini-TTS: Use input.text + input.prompt
+            googleRequest.input = {
+                text: finalText
+            };
+
+            // Add prompt if resolved
+            if (resolvedPromptResult && resolvedPromptResult.prompt) {
+                googleRequest.input.prompt = resolvedPromptResult.prompt;
+            }
+
             // Gemini-TTS requires model name
             googleRequest.voice.modelName = route.model;
 
-            // Add style prompt if generated from SSML
-            if (stylePrompt) {
-                googleRequest.prompt = stylePrompt;
+            console.log(`[GoogleTtsService] 🔷 Gemini-TTS Request Built:`);
+            console.log(`  - Model: ${route.model}`);
+            console.log(`  - Text length: ${finalText.length}`);
+            console.log(`  - Prompt: ${resolvedPromptResult?.prompt ? 'yes' : 'no'}`);
+
+        } else {
+            // Chirp 3 HD / Neural2 / Standard: Use SSML or plain text
+            googleRequest.input = inputType === 'ssml' ? { ssml: inputContent } : { text: inputContent };
+
+            // Apply prosody options to audioConfig (widest support across models)
+            if (ssmlOptions) {
+                // Apply speaking rate (Supported by Chirp 3 HD)
+                if (ssmlOptions.rate) {
+                    googleRequest.audioConfig.speaking_rate = ssmlOptions.rate;
+                    console.log(`[GoogleTtsService] Applied speaking_rate: ${ssmlOptions.rate}`);
+                }
+
+                // Apply pitch adjustment (NOT supported by Chirp 3 HD in audioConfig)
+                // We use ssmlOptions.pitch in the SSML generation solely for logging/consistency
+                if (ssmlOptions.pitch && route.tier !== 'chirp3_hd') {
+                    // Parse semitone string (e.g., '+1st', '-2st', '0st')
+                    let pitchValue = 0;
+                    const match = ssmlOptions.pitch.match(/^([+-]?\d+)(?:st)?$/);
+                    if (match) {
+                        pitchValue = parseFloat(match[1]);
+                        googleRequest.audioConfig.pitch = pitchValue;
+                        console.log(`[GoogleTtsService] Applied pitch: ${pitchValue} (from ${ssmlOptions.pitch})`);
+                    }
+                }
             }
-        } else if (route.engine === TtsEngine.CHIRP3_HD) {
+
             // For Chirp3 HD voices, include model name if provided in route
-            if (route.model) {
+            if (route.engine === TtsEngine.CHIRP3_HD && route.model) {
                 googleRequest.voice.modelName = route.model;
             }
 
-            // Note: Chirp 3 HD does not support the 'prompt' field like Gemini does.
-            // We rely on SSML tags (rate, breaks) for style.
+            // Note: Chirp 3 HD does NOT support the 'input.prompt' field.
+            // SSML prompts from DeliveryStyles are NOT sent to the API.
+            console.log(`[GoogleTtsService] 🔶 Chirp 3 HD Request Built (no prompt field)`);
         }
+
+        // Store prompt metadata for logging (will be used in synthesizeUnary)
+        googleRequest._promptMetadata = resolvedPromptResult;
 
         return googleRequest;
     }
@@ -585,7 +657,7 @@ export class GoogleTtsService extends TtsService {
             reason: route.reason
         }, null, 2));
 
-        const googleRequest = this._buildGoogleRequestFromRoute(request, route);
+        const googleRequest = await this._buildGoogleRequestFromRoute(request, route);
 
         console.log(`[GoogleTtsService] FINAL PAYLOAD for synthesizeSpeech:`, JSON.stringify({
             input: googleRequest.input,
@@ -609,7 +681,8 @@ export class GoogleTtsService extends TtsService {
                     mimeType,
                     sampleRateHz: response.sampleRateHz || undefined,
                     durationMs: undefined,
-                    route // Include resolved routing in response
+                    route, // Include resolved routing in response
+                    promptMetadata: googleRequest._promptMetadata || null // Include prompt metadata for logging
                 };
             } catch (error) {
                 lastError = error;
@@ -642,7 +715,7 @@ export class GoogleTtsService extends TtsService {
                         const originalRoute = { ...route };
 
                         // Update request for the next attempt
-                        const newGoogleRequest = this._buildGoogleRequestFromRoute(request, fallbackRoute);
+                        const newGoogleRequest = await this._buildGoogleRequestFromRoute(request, fallbackRoute);
 
                         // Update tracking variables to use the fallback for next attempts and response
                         Object.assign(googleRequest, newGoogleRequest);

@@ -20,6 +20,9 @@ export class TtsPlayerController {
         this.tier = TtsTier.GEMINI;
         this.mode = TtsMode.UNARY;
         this.ssmlOptions = null; // SSML configuration (Chirp 3 HD only)
+        this.promptPresetId = null; // Gemini-TTS prompt preset ID
+        this.ttsPrompt = null; // Gemini-TTS custom prompt
+        this.intensity = null; // Gemini-TTS intensity level (1-5)
 
         // Resolved routing info (from last synthesis)
         this.lastResolvedRoute = null;
@@ -45,8 +48,11 @@ export class TtsPlayerController {
      * @param {string} [config.tier='gemini'] - TTS tier
      * @param {string} [config.mode='unary'] - Synthesis mode
      * @param {Object} [config.ssmlOptions] - SSML configuration (Chirp 3 HD only)
+     * @param {string} [config.promptPresetId] - Prompt preset ID (Gemini-TTS only)
+     * @param {string} [config.ttsPrompt] - Custom prompt (Gemini-TTS only)
+     * @param {number} [config.intensity] - Intensity level 1-5 (Gemini-TTS only)
      */
-    start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null }) {
+    start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null, promptPresetId = null, ttsPrompt = null, intensity = null }) {
         console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode, ssmlOptions });
 
         this.currentLanguageCode = languageCode;
@@ -54,6 +60,9 @@ export class TtsPlayerController {
         this.tier = tier;
         this.mode = mode;
         this.ssmlOptions = ssmlOptions;
+        this.promptPresetId = promptPresetId;
+        this.ttsPrompt = ttsPrompt;
+        this.intensity = intensity;
         this.state = TtsPlayerState.PLAYING;
 
         // Send WebSocket message to backend
@@ -64,7 +73,10 @@ export class TtsPlayerController {
                 voiceName,
                 tier,
                 mode,
-                ssmlOptions
+                ssmlOptions,
+                promptPresetId,
+                ttsPrompt,
+                intensity
             });
         }
 
@@ -286,6 +298,9 @@ export class TtsPlayerController {
      * @param {Object} [options] - Optional overrides
      * @param {string} [options.tier] - Optional tier override
      * @param {Object} [options.ssmlOptions] - Optional SSML configuration override
+     * @param {string} [options.promptPresetId] - Optional prompt preset ID (Gemini-TTS)
+     * @param {string} [options.ttsPrompt] - Optional custom prompt (Gemini-TTS)
+     * @param {number} [options.intensity] - Optional intensity level 1-5 (Gemini-TTS)
      */
     speakTextNow(text, segmentId, options = {}) {
         console.log('[TtsPlayerController] speakTextNow called', { text, segmentId, currentLanguageCode: this.currentLanguageCode });
@@ -303,6 +318,9 @@ export class TtsPlayerController {
 
         const resolvedTier = options.tier || this.tier;
         const resolvedSsmlOptions = options.ssmlOptions || this.ssmlOptions;
+        const resolvedPromptPresetId = options.promptPresetId || this.promptPresetId;
+        const resolvedTtsPrompt = options.ttsPrompt || this.ttsPrompt;
+        const resolvedIntensity = options.intensity || this.intensity;
 
         // Increment and track latest request
         this.lastRequestId = Date.now();
@@ -328,7 +346,10 @@ export class TtsPlayerController {
                 voiceName: this.currentVoiceName,
                 tier: resolvedTier,
                 mode: this.mode,
-                ssmlOptions: resolvedSsmlOptions
+                ssmlOptions: resolvedSsmlOptions,
+                promptPresetId: resolvedPromptPresetId,
+                ttsPrompt: resolvedTtsPrompt,
+                intensity: resolvedIntensity
             };
             console.log('[TtsPlayerController] Sending synthesis request:', message);
             this.sendMessage(message);

@@ -502,7 +502,10 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             voiceName: message.voiceName,
             tier: message.tier,
             mode: message.mode,
-            ssmlOptions: message.ssmlOptions
+            ssmlOptions: message.ssmlOptions,
+            promptPresetId: message.promptPresetId,
+            ttsPrompt: message.ttsPrompt ? 'yes' : 'no',
+            intensity: message.intensity
           });
 
           // Validate payload
@@ -580,7 +583,11 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 streaming: message.mode === 'streaming',
                 prompt: message.prompt
               },
-              ssmlOptions: message.ssmlOptions || null // CRITICAL: Pass SSML options from frontend
+              ssmlOptions: message.ssmlOptions || null, // CRITICAL: Pass SSML options from frontend
+              // Gemini-TTS prompt fields
+              promptPresetId: message.promptPresetId || null,
+              ttsPrompt: message.ttsPrompt || null,
+              intensity: message.intensity || null
             };
 
             console.log(`[Listener] TTS Request built:`, {
@@ -588,7 +595,10 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               text: ttsRequest.text.substring(0, 50),
               voiceName: ttsRequest.profile.voiceName,
               tier: ttsRequest.profile.requestedTier,
-              ssmlOptions: ttsRequest.ssmlOptions
+              ssmlOptions: ttsRequest.ssmlOptions,
+              promptPresetId: ttsRequest.promptPresetId,
+              ttsPrompt: ttsRequest.ttsPrompt ? 'yes' : 'no',
+              intensity: ttsRequest.intensity
             });
 
             // 3. Check quota
@@ -697,6 +707,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 languageCode: message.languageCode
               },
               route: response.route,
+              promptMetadata: response.promptMetadata || null, // Include prompt metadata from synthesis
               characters: ttsRequest.text.length,
               audioSeconds: response.durationMs ? response.durationMs / 1000 : null,
               status: 'success'

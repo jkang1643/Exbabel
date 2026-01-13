@@ -15,6 +15,7 @@ import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
 
 import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
+import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js';
 
 export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerReady, translations }) {
     const [controller] = useState(() => new TtsPlayerController(sendMessage));
@@ -24,7 +25,7 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
     const [selectedMode, setSelectedMode] = useState(TtsMode.UNARY);
     const [resolvedRoute, setResolvedRoute] = useState(null);
 
-    // SSML state
+    // SSML state (Chirp 3 HD)
     const [deliveryStyle, setDeliveryStyle] = useState('standard_preaching');
     const [speakingRate, setSpeakingRate] = useState(0.92);
     const [pitchAdjust, setPitchAdjust] = useState('+1st');
@@ -32,8 +33,27 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [ssmlEnabled, setSsmlEnabled] = useState(true);
 
+    // Gemini-TTS prompt state
+    const [promptPresetId, setPromptPresetId] = useState('preacher_warm_build');
+    const [customPrompt, setCustomPrompt] = useState('');
+    const [intensity, setIntensity] = useState(3); // 1-5 scale
+    const [promptBytes, setPromptBytes] = useState(0);
+    const [textBytes, setTextBytes] = useState(0);
+
     // Get available voices for current language
     const availableVoices = getVoicesForLanguage(targetLang);
+
+    // Helper: Check if current voice is Gemini
+    const isGeminiVoice = useMemo(() => {
+        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+        const tier = voiceOption?.tier || 'neural2';
+        if (tier === 'gemini') return true;
+
+        // Check if it's a Gemini studio voice name
+        const geminiVoices = ['Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
+            'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam'];
+        return geminiVoices.includes(selectedVoice);
+    }, [selectedVoice, availableVoices]);
 
     // Group voices by tier for organized display
     const groupedVoices = useMemo(() => {
@@ -148,6 +168,16 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
         }
     }, [controller, currentSsmlOptions]);
 
+    // Update prompt bytes when custom prompt changes
+    useEffect(() => {
+        if (customPrompt) {
+            const bytes = utf8ByteLength(customPrompt);
+            setPromptBytes(bytes);
+        } else {
+            setPromptBytes(0);
+        }
+    }, [customPrompt]);
+
     const handleToggleEnabled = () => {
         setEnabled(!enabled);
         if (enabled && playerState === TtsPlayerState.PLAYING) {
@@ -165,13 +195,28 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
         const voiceOption = availableVoices.find(v => v.value === selectedVoice);
         const tier = voiceOption?.tier || 'neural2';
 
-        controller.start({
+        // Build request with prompt data for Gemini voices
+        const requestData = {
             languageCode: targetLang,
             voiceName: selectedVoice,
             tier: tier,
             mode: selectedMode,
             ssmlOptions: currentSsmlOptions
-        });
+        };
+
+        // Add Gemini-TTS prompt fields if using Gemini voice
+        if (isGeminiVoice) {
+            requestData.promptPresetId = promptPresetId;
+            requestData.ttsPrompt = customPrompt || undefined;
+            requestData.intensity = intensity;
+            console.log('[TtsPanel] Starting with Gemini prompts:', {
+                preset: promptPresetId,
+                customPrompt: customPrompt ? 'yes' : 'no',
+                intensity
+            });
+        }
+
+        controller.start(requestData);
     };
 
     const handleStop = () => {
@@ -251,13 +296,15 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                         })()}
                     </div>
 
-                    {/* SSML Delivery Style (Chirp 3 HD only) */}
+                    {/* Delivery Style / Prompt Controls (Chirp 3 HD SSML or Gemini Prompts) */}
                     {(() => {
                         const voiceOption = availableVoices.find(v => v.value === selectedVoice);
                         const tier = voiceOption?.tier || 'neural2';
                         const supportsSSML = voiceSupportsSSML(selectedVoice, tier);
+                        const supportsPrompts = isGeminiVoice;
 
-                        if (!supportsSSML) return null;
+                        // Show controls if voice supports SSML (Chirp 3) OR prompts (Gemini)
+                        if (!supportsSSML && !supportsPrompts) return null;
 
                         const deliveryStyles = getAllDeliveryStyles();
 
@@ -265,7 +312,7 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                             <div className="space-y-3 pt-3 border-t border-blue-100">
                                 <div className="flex items-center justify-between">
                                     <label className="block text-sm font-medium text-blue-700">
-                                        🎤 Preaching Delivery Style
+                                        {supportsPrompts ? '🎯 Prompted Delivery (Gemini)' : '🎤 Preaching Delivery Style'}
                                     </label>
                                     <label className="flex items-center gap-1 text-xs">
                                         <input
@@ -280,47 +327,132 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
 
                                 {ssmlEnabled && (
                                     <>
-                                        <select
-                                            value={deliveryStyle}
-                                            onChange={(e) => {
-                                                const newStyle = e.target.value;
-                                                setDeliveryStyle(newStyle);
-                                                const style = getDeliveryStyle(newStyle);
-                                                setSpeakingRate(style.defaultRate);
-                                                setPitchAdjust(style.defaultPitch);
-                                            }}
-                                            disabled={!isConnected}
-                                            className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-blue-50"
-                                        >
-                                            {deliveryStyles.map((style) => (
-                                                <option key={style.value} value={style.value}>
-                                                    {style.icon} {style.label} - {style.description}
-                                                </option>
-                                            ))}
-                                        </select>
+                                        {/* Gemini Prompt Preset Selection */}
+                                        {supportsPrompts ? (
+                                            <>
+                                                <select
+                                                    value={promptPresetId}
+                                                    onChange={(e) => setPromptPresetId(e.target.value)}
+                                                    disabled={!isConnected}
+                                                    className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-blue-50"
+                                                >
+                                                    {PROMPT_CATEGORIES.map((category) => (
+                                                        <optgroup key={category.id} label={category.label}>
+                                                            {PROMPT_PRESETS.filter(p => p.category === category.id).map((preset) => (
+                                                                <option key={preset.id} value={preset.id}>
+                                                                    {preset.label} - {preset.description}
+                                                                </option>
+                                                            ))}
+                                                        </optgroup>
+                                                    ))}
+                                                </select>
 
-                                        {/* Power Words Toggle */}
-                                        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked={powerWordsEnabled}
-                                                onChange={(e) => setPowerWordsEnabled(e.target.checked)}
-                                                className="w-4 h-4"
-                                            />
-                                            <span>✨ Emphasize spiritual keywords (Jesus, faith, grace, etc.)</span>
-                                        </label>
+                                                {/* Custom Prompt Input */}
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                                                        Custom Prompt (Optional)
+                                                    </label>
+                                                    <textarea
+                                                        value={customPrompt}
+                                                        onChange={(e) => setCustomPrompt(e.target.value)}
+                                                        placeholder="Add custom delivery instructions..."
+                                                        disabled={!isConnected}
+                                                        rows={3}
+                                                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed text-sm"
+                                                    />
+                                                    <div className="flex justify-between items-center mt-1 text-xs">
+                                                        <span className={`${getByteStatus(promptBytes, BYTE_LIMITS.PROMPT_MAX) === 'error' ? 'text-red-600 font-bold' :
+                                                            getByteStatus(promptBytes, BYTE_LIMITS.PROMPT_MAX) === 'warning' ? 'text-orange-600 font-medium' :
+                                                                'text-gray-500'
+                                                            }`}>
+                                                            Prompt: {promptBytes} / {BYTE_LIMITS.PROMPT_MAX} bytes
+                                                        </span>
+                                                        {getByteStatus(promptBytes, BYTE_LIMITS.PROMPT_MAX) === 'error' && (
+                                                            <span className="text-red-600">⚠️ Exceeds limit</span>
+                                                        )}
+                                                        {getByteStatus(promptBytes, BYTE_LIMITS.PROMPT_MAX) === 'warning' && (
+                                                            <span className="text-orange-600">⚠️ Near limit</span>
+                                                        )}
+                                                    </div>
+                                                </div>
 
-                                        {/* Advanced Settings Toggle */}
-                                        <button
-                                            onClick={() => setShowAdvanced(!showAdvanced)}
-                                            className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 transition-colors"
-                                        >
-                                            {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                                            Advanced Prosody Controls
-                                        </button>
+                                                {/* Intensity Slider */}
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                                                        Intensity Level: {intensity}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="1"
+                                                        max="5"
+                                                        step="1"
+                                                        value={intensity}
+                                                        onChange={(e) => setIntensity(parseInt(e.target.value))}
+                                                        disabled={!isConnected}
+                                                        className="w-full"
+                                                    />
+                                                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                                        <span>1 - Low</span>
+                                                        <span>3 - Moderate</span>
+                                                        <span>5 - Maximum</span>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 italic mt-1">
+                                                        Controls the intensity of delivery (1=measured, 5=fiery urgency)
+                                                    </p>
+                                                </div>
 
-                                        {/* Advanced Prosody Controls */}
-                                        {showAdvanced && (
+                                                <p className="text-xs text-blue-600 italic">
+                                                    💡 Gemini-TTS uses natural language prompts to control speaking style
+                                                </p>
+                                            </>
+                                        ) : (
+                                            /* Chirp 3 HD SSML Delivery Styles */
+                                            <select
+                                                value={deliveryStyle}
+                                                onChange={(e) => {
+                                                    const newStyle = e.target.value;
+                                                    setDeliveryStyle(newStyle);
+                                                    const style = getDeliveryStyle(newStyle);
+                                                    setSpeakingRate(style.defaultRate);
+                                                    setPitchAdjust(style.defaultPitch);
+                                                }}
+                                                disabled={!isConnected}
+                                                className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-blue-50"
+                                            >
+                                                {deliveryStyles.map((style) => (
+                                                    <option key={style.value} value={style.value}>
+                                                        {style.icon} {style.label} - {style.description}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        )}
+
+                                        {/* Power Words Toggle (Chirp 3 only) */}
+                                        {!supportsPrompts && (
+                                            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={powerWordsEnabled}
+                                                    onChange={(e) => setPowerWordsEnabled(e.target.checked)}
+                                                    className="w-4 h-4"
+                                                />
+                                                <span>✨ Emphasize spiritual keywords (Jesus, faith, grace, etc.)</span>
+                                            </label>
+                                        )}
+
+                                        {/* Advanced Settings Toggle (Chirp 3 only) */}
+                                        {!supportsPrompts && (
+                                            <button
+                                                onClick={() => setShowAdvanced(!showAdvanced)}
+                                                className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 transition-colors"
+                                            >
+                                                {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                                Advanced Prosody Controls
+                                            </button>
+                                        )}
+
+                                        {/* Advanced Prosody Controls (Chirp 3 only) */}
+                                        {!supportsPrompts && showAdvanced && (
                                             <div className="space-y-3 p-3 bg-gray-50 rounded-md border border-gray-200">
                                                 {/* Speaking Rate */}
                                                 <div>

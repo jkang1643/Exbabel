@@ -47,6 +47,7 @@ export const TtsErrorCode = {
     TTS_TIER_NOT_IMPLEMENTED: 'TTS_TIER_NOT_IMPLEMENTED',
     TTS_QUOTA_EXCEEDED: 'TTS_QUOTA_EXCEEDED',
     TTS_STREAMING_NOT_IMPLEMENTED: 'TTS_STREAMING_NOT_IMPLEMENTED',
+    TTS_PERMISSION_DENIED_GEMINI: 'TTS_PERMISSION_DENIED_GEMINI',
     NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
     INVALID_REQUEST: 'INVALID_REQUEST',
     SYNTHESIS_FAILED: 'SYNTHESIS_FAILED'
@@ -110,6 +111,9 @@ export const EmphasisLevel = {
  * @property {TtsProfile} profile - Unified TTS configuration profile
  * @property {string} [segmentId] - Optional segment identifier for tracking
  * @property {SsmlOptions} [ssmlOptions] - Optional SSML configuration (Chirp 3 HD only)
+ * @property {string} [ttsPrompt] - Optional custom prompt for Gemini-TTS
+ * @property {string} [promptPresetId] - Optional prompt preset ID for Gemini-TTS
+ * @property {number} [intensity] - Optional intensity level 1-5 for Gemini-TTS prompts
  */
 
 /**
