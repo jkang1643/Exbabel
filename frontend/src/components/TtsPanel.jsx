@@ -9,11 +9,12 @@
  */
 
 import { useState, useEffect, useMemo } from 'react';
-import { Volume2, VolumeX, Play, Square } from 'lucide-react';
+import { Volume2, VolumeX, Play, Square, ChevronDown, ChevronUp } from 'lucide-react';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
 
 import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
+import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
 
 export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerReady, translations }) {
     const [controller] = useState(() => new TtsPlayerController(sendMessage));
@@ -22,6 +23,14 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
     const [selectedVoice, setSelectedVoice] = useState('Kore');
     const [selectedMode, setSelectedMode] = useState(TtsMode.UNARY);
     const [resolvedRoute, setResolvedRoute] = useState(null);
+
+    // SSML state
+    const [deliveryStyle, setDeliveryStyle] = useState('standard_preaching');
+    const [speakingRate, setSpeakingRate] = useState(0.92);
+    const [pitchAdjust, setPitchAdjust] = useState('+1st');
+    const [powerWordsEnabled, setPowerWordsEnabled] = useState(true);
+    const [showAdvanced, setShowAdvanced] = useState(false);
+    const [ssmlEnabled, setSsmlEnabled] = useState(true);
 
     // Get available voices for current language
     const availableVoices = getVoicesForLanguage(targetLang);
@@ -111,6 +120,34 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
         }
     }, [controller, selectedVoice]);
 
+    // Build SSML options object
+    const currentSsmlOptions = useMemo(() => {
+        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+        const tier = voiceOption?.tier || 'neural2';
+
+        if (!ssmlEnabled || !voiceSupportsSSML(selectedVoice, tier)) {
+            return null;
+        }
+
+        return {
+            enabled: true,
+            deliveryStyle: deliveryStyle,
+            rate: speakingRate,
+            pitch: pitchAdjust,
+            pauseIntensity: getDeliveryStyle(deliveryStyle).pauseIntensity,
+            emphasizePowerWords: powerWordsEnabled,
+            emphasisLevel: 'moderate'
+        };
+    }, [ssmlEnabled, selectedVoice, availableVoices, deliveryStyle, speakingRate, pitchAdjust, powerWordsEnabled]);
+
+    // Sync SSML options to controller when they change
+    useEffect(() => {
+        if (controller) {
+            console.log('[TtsPanel] Syncing SSML options to controller:', currentSsmlOptions);
+            controller.ssmlOptions = currentSsmlOptions;
+        }
+    }, [controller, currentSsmlOptions]);
+
     const handleToggleEnabled = () => {
         setEnabled(!enabled);
         if (enabled && playerState === TtsPlayerState.PLAYING) {
@@ -132,7 +169,8 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
             languageCode: targetLang,
             voiceName: selectedVoice,
             tier: tier,
-            mode: selectedMode
+            mode: selectedMode,
+            ssmlOptions: currentSsmlOptions
         });
     };
 
@@ -186,7 +224,153 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                                 )
                             ))}
                         </select>
+
+                        {/* SSML Availability Hint */}
+                        {(() => {
+                            const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+                            const tier = voiceOption?.tier || 'neural2';
+                            const supportsSSML = voiceSupportsSSML(selectedVoice, tier);
+
+                            if (!supportsSSML && availableVoices.some(v => voiceSupportsSSML(v.value, v.tier))) {
+                                return (
+                                    <p className="text-xs text-blue-600 mt-1 italic">
+                                        💡 Select a Chirp 3 HD voice to enable preaching delivery styles
+                                    </p>
+                                );
+                            }
+
+                            if (supportsSSML) {
+                                return (
+                                    <p className="text-xs text-green-600 mt-1 font-medium">
+                                        ✅ SSML preaching delivery enabled for this voice
+                                    </p>
+                                );
+                            }
+
+                            return null;
+                        })()}
                     </div>
+
+                    {/* SSML Delivery Style (Chirp 3 HD only) */}
+                    {(() => {
+                        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+                        const tier = voiceOption?.tier || 'neural2';
+                        const supportsSSML = voiceSupportsSSML(selectedVoice, tier);
+
+                        if (!supportsSSML) return null;
+
+                        const deliveryStyles = getAllDeliveryStyles();
+
+                        return (
+                            <div className="space-y-3 pt-3 border-t border-blue-100">
+                                <div className="flex items-center justify-between">
+                                    <label className="block text-sm font-medium text-blue-700">
+                                        🎤 Preaching Delivery Style
+                                    </label>
+                                    <label className="flex items-center gap-1 text-xs">
+                                        <input
+                                            type="checkbox"
+                                            checked={ssmlEnabled}
+                                            onChange={(e) => setSsmlEnabled(e.target.checked)}
+                                            className="w-3 h-3"
+                                        />
+                                        <span className="text-gray-600">Enable SSML</span>
+                                    </label>
+                                </div>
+
+                                {ssmlEnabled && (
+                                    <>
+                                        <select
+                                            value={deliveryStyle}
+                                            onChange={(e) => {
+                                                const newStyle = e.target.value;
+                                                setDeliveryStyle(newStyle);
+                                                const style = getDeliveryStyle(newStyle);
+                                                setSpeakingRate(style.defaultRate);
+                                                setPitchAdjust(style.defaultPitch);
+                                            }}
+                                            disabled={!isConnected}
+                                            className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-blue-50"
+                                        >
+                                            {deliveryStyles.map((style) => (
+                                                <option key={style.value} value={style.value}>
+                                                    {style.icon} {style.label} - {style.description}
+                                                </option>
+                                            ))}
+                                        </select>
+
+                                        {/* Power Words Toggle */}
+                                        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={powerWordsEnabled}
+                                                onChange={(e) => setPowerWordsEnabled(e.target.checked)}
+                                                className="w-4 h-4"
+                                            />
+                                            <span>✨ Emphasize spiritual keywords (Jesus, faith, grace, etc.)</span>
+                                        </label>
+
+                                        {/* Advanced Settings Toggle */}
+                                        <button
+                                            onClick={() => setShowAdvanced(!showAdvanced)}
+                                            className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 transition-colors"
+                                        >
+                                            {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                            Advanced Prosody Controls
+                                        </button>
+
+                                        {/* Advanced Prosody Controls */}
+                                        {showAdvanced && (
+                                            <div className="space-y-3 p-3 bg-gray-50 rounded-md border border-gray-200">
+                                                {/* Speaking Rate */}
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                                                        Speaking Rate: {speakingRate.toFixed(2)}x
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="0.5"
+                                                        max="1.5"
+                                                        step="0.05"
+                                                        value={speakingRate}
+                                                        onChange={(e) => setSpeakingRate(parseFloat(e.target.value))}
+                                                        className="w-full"
+                                                    />
+                                                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                                                        <span>Slower (0.5x)</span>
+                                                        <span>Sermon (0.92x)</span>
+                                                        <span>Faster (1.5x)</span>
+                                                    </div>
+                                                </div>
+
+                                                {/* Pitch Adjustment */}
+                                                <div>
+                                                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                                                        Pitch Adjustment
+                                                    </label>
+                                                    <select
+                                                        value={pitchAdjust}
+                                                        onChange={(e) => setPitchAdjust(e.target.value)}
+                                                        className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    >
+                                                        <option value="-2st">-2 semitones (Lower)</option>
+                                                        <option value="-1st">-1 semitone</option>
+                                                        <option value="0st">Normal (0)</option>
+                                                        <option value="+1st">+1 semitone (Warm)</option>
+                                                        <option value="+2st">+2 semitones (Higher)</option>
+                                                    </select>
+                                                </div>
+
+                                                <p className="text-xs text-gray-500 italic">
+                                                    💡 Tip: Sermon cadence typically uses 88-94% rate with +1 to +2 semitone pitch
+                                                </p>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        );
+                    })()}
 
                     {/* Mode Selection */}
                     <div>

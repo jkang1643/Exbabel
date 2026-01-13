@@ -6,10 +6,12 @@
  * 
  * PR1: Stub implementation with correct signatures
  * PR2: Google TTS API integration
+ * PR4: SSML support for Chirp 3 HD voices
  */
 
 import { TtsErrorCode, TtsMode, TtsEngine, TtsEncoding, validateTtsProfile } from './tts.types.js';
 import { resolveTtsRoute, validateResolvedRoute } from './ttsRouting.js';
+import { generateTtsInput, supportsSSML } from './ssmlBuilder.js';
 
 /**
  * TTS Service Class
@@ -298,10 +300,51 @@ export class GoogleTtsService extends TtsService {
      * @private
      */
     _buildGoogleRequestFromRoute(request, route) {
-        const { text } = request;
+        const { text, ssmlOptions } = request;
 
+        // Generate SSML input if applicable
+        let inputContent = text;
+        let inputType = 'text';
+        let stylePrompt = null;
+
+        if (ssmlOptions && ssmlOptions.enabled && supportsSSML(route.voiceName, route.tier)) {
+            console.log('[GoogleTtsService] Generating SSML for Chirp 3 HD voice');
+
+            // DEBUG: Check tier and pitch logic
+            const targetPitch = (route.tier === 'chirp3_hd') ? null : ssmlOptions.pitch;
+            console.log(`[GoogleTtsService] DEBUG: tier='${route.tier}', originalPitch='${ssmlOptions.pitch}', targetPitch=${targetPitch}`);
+
+            const ssmlResult = generateTtsInput(text, {
+                voiceName: route.voiceName,
+                tier: route.tier,
+                languageCode: route.languageCode,
+                deliveryStyle: ssmlOptions.deliveryStyle || 'standard_preaching',
+                ssmlOptions: {
+                    rate: ssmlOptions.rate ? `${ssmlOptions.rate * 100}%` : undefined,
+                    pitch: ssmlOptions.pitch,
+                    pauseIntensity: ssmlOptions.pauseIntensity,
+                    emphasizePowerWords: ssmlOptions.emphasizePowerWords,
+                    customEmphasisWords: ssmlOptions.customEmphasisWords,
+                    emphasisLevel: ssmlOptions.emphasisLevel
+                }
+            });
+
+            inputContent = ssmlResult.content;
+            inputType = ssmlResult.inputType;
+            stylePrompt = ssmlResult.prompt;
+
+            console.log(`[GoogleTtsService] ✅ SSML Generated:\n${inputContent}`);
+            console.log(`[GoogleTtsService] type=${inputType}, length=${inputContent.length}`);
+            if (stylePrompt) {
+                console.log(`[GoogleTtsService] 📜 Style Prompt Generated: "${stylePrompt.substring(0, 50)}..."`);
+            } else {
+                console.log(`[GoogleTtsService] ⚠️ No Style Prompt Generated`);
+            }
+        }
+
+        // Build base Google TTS request
         const googleRequest = {
-            input: { text },
+            input: inputType === 'ssml' ? { ssml: inputContent } : { text: inputContent },
             voice: {
                 languageCode: route.languageCode,
                 name: route.voiceName
@@ -311,15 +354,45 @@ export class GoogleTtsService extends TtsService {
             }
         };
 
+        // Apply prosody options to audioConfig (widest support across models)
+        if (ssmlOptions) {
+            // Apply speaking rate (Supported by Chirp 3 HD)
+            if (ssmlOptions.rate) {
+                googleRequest.audioConfig.speaking_rate = ssmlOptions.rate;
+                console.log(`[GoogleTtsService] Applied speaking_rate: ${ssmlOptions.rate}`);
+            }
+
+            // Apply pitch adjustment (NOT supported by Chirp 3 HD in audioConfig)
+            // We use ssmlOptions.pitch in the SSML generation solely for logging/consistency
+            if (ssmlOptions.pitch && route.tier !== 'chirp3_hd') {
+                // Parse semitone string (e.g., '+1st', '-2st', '0st')
+                let pitchValue = 0;
+                const match = ssmlOptions.pitch.match(/^([+-]?\d+)(?:st)?$/);
+                if (match) {
+                    pitchValue = parseFloat(match[1]);
+                    googleRequest.audioConfig.pitch = pitchValue;
+                    console.log(`[GoogleTtsService] Applied pitch: ${pitchValue} (from ${ssmlOptions.pitch})`);
+                }
+            }
+        }
+
         // Handle engine-specific configuration
         if (route.engine === TtsEngine.GEMINI_TTS) {
             // Gemini-TTS requires model name
             googleRequest.voice.modelName = route.model;
+
+            // Add style prompt if generated from SSML
+            if (stylePrompt) {
+                googleRequest.prompt = stylePrompt;
+            }
         } else if (route.engine === TtsEngine.CHIRP3_HD) {
             // For Chirp3 HD voices, include model name if provided in route
             if (route.model) {
                 googleRequest.voice.modelName = route.model;
             }
+
+            // Note: Chirp 3 HD does not support the 'prompt' field like Gemini does.
+            // We rely on SSML tags (rate, breaks) for style.
         }
 
         return googleRequest;
@@ -514,6 +587,13 @@ export class GoogleTtsService extends TtsService {
 
         const googleRequest = this._buildGoogleRequestFromRoute(request, route);
 
+        console.log(`[GoogleTtsService] FINAL PAYLOAD for synthesizeSpeech:`, JSON.stringify({
+            input: googleRequest.input,
+            voice: googleRequest.voice,
+            audioConfig: googleRequest.audioConfig,
+            prompt: googleRequest.prompt
+        }, null, 2));
+
         let lastError = null;
         for (let attempt = 0; attempt < 2; attempt++) {
             try {
@@ -569,12 +649,22 @@ export class GoogleTtsService extends TtsService {
                         Object.assign(route, fallbackRoute);
 
                         // Set the reason to explicitly mention why we fell back
-                        route.reason = `vertex_ai_not_enabled_fallback_from_${originalRoute.tier}_to_${route.tier}`;
-                        route.fallbackFrom = {
-                            tier: originalRoute.tier,
-                            voiceName: originalRoute.voiceName,
-                            reason: 'vertex_ai_permission_denied'
-                        };
+                        // Set the reason to explicitly mention why we fell back
+                        if (isPermissionError || isVertexError) {
+                            route.reason = `vertex_ai_not_enabled_fallback_from_${originalRoute.tier}_to_${route.tier}`;
+                            route.fallbackFrom = {
+                                tier: originalRoute.tier,
+                                voiceName: originalRoute.voiceName,
+                                reason: 'vertex_ai_permission_denied'
+                            };
+                        } else if (isInvalidArgument || isUnsupportedVoice) {
+                            route.reason = `unsupported_voice_config_fallback_from_${originalRoute.tier}_to_${route.tier}`;
+                            route.fallbackFrom = {
+                                tier: originalRoute.tier,
+                                voiceName: originalRoute.voiceName,
+                                reason: errorMessage.includes('pitch') ? 'pitch_not_supported' : 'invalid_argument'
+                            };
+                        }
 
                         // Reset attempt counter or just continue - if attempt was 0, it will try again with fallback
                         continue;

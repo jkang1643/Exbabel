@@ -19,6 +19,7 @@ export class TtsPlayerController {
         this.currentVoiceName = null;
         this.tier = TtsTier.GEMINI;
         this.mode = TtsMode.UNARY;
+        this.ssmlOptions = null; // SSML configuration (Chirp 3 HD only)
 
         // Resolved routing info (from last synthesis)
         this.lastResolvedRoute = null;
@@ -43,14 +44,16 @@ export class TtsPlayerController {
      * @param {string} config.voiceName - Voice name
      * @param {string} [config.tier='gemini'] - TTS tier
      * @param {string} [config.mode='unary'] - Synthesis mode
+     * @param {Object} [config.ssmlOptions] - SSML configuration (Chirp 3 HD only)
      */
-    start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY }) {
-        console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode });
+    start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null }) {
+        console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode, ssmlOptions });
 
         this.currentLanguageCode = languageCode;
         this.currentVoiceName = voiceName;
         this.tier = tier;
         this.mode = mode;
+        this.ssmlOptions = ssmlOptions;
         this.state = TtsPlayerState.PLAYING;
 
         // Send WebSocket message to backend
@@ -60,7 +63,8 @@ export class TtsPlayerController {
                 languageCode,
                 voiceName,
                 tier,
-                mode
+                mode,
+                ssmlOptions
             });
         }
 
@@ -281,6 +285,7 @@ export class TtsPlayerController {
      * @param {string} segmentId - Segment identifier
      * @param {Object} [options] - Optional overrides
      * @param {string} [options.tier] - Optional tier override
+     * @param {Object} [options.ssmlOptions] - Optional SSML configuration override
      */
     speakTextNow(text, segmentId, options = {}) {
         console.log('[TtsPlayerController] speakTextNow called', { text, segmentId, currentLanguageCode: this.currentLanguageCode });
@@ -297,6 +302,8 @@ export class TtsPlayerController {
         }
 
         const resolvedTier = options.tier || this.tier;
+        const resolvedSsmlOptions = options.ssmlOptions || this.ssmlOptions;
+
         // Increment and track latest request
         this.lastRequestId = Date.now();
         const requestId = this.lastRequestId;
@@ -307,7 +314,8 @@ export class TtsPlayerController {
             segmentId: trackedSegmentId,
             voiceName: this.currentVoiceName,
             languageCode: this.currentLanguageCode,
-            tier: resolvedTier
+            tier: resolvedTier,
+            ssmlOptions: resolvedSsmlOptions
         });
 
         // Send synthesis request
@@ -319,7 +327,8 @@ export class TtsPlayerController {
                 languageCode: this.currentLanguageCode,
                 voiceName: this.currentVoiceName,
                 tier: resolvedTier,
-                mode: this.mode
+                mode: this.mode,
+                ssmlOptions: resolvedSsmlOptions
             };
             console.log('[TtsPlayerController] Sending synthesis request:', message);
             this.sendMessage(message);

@@ -45,6 +45,7 @@ const TRACE = import.meta.env.VITE_TRACE_REALTIME === '1';
 
 // TTS UI feature flag
 const TTS_UI_ENABLED = import.meta.env.VITE_TTS_UI_ENABLED === 'true';
+console.log('[ListenerPage] TTS_UI_ENABLED:', TTS_UI_ENABLED, 'raw env:', import.meta.env.VITE_TTS_UI_ENABLED);
 
 // Fingerprint helper for debugging ghost sentences
 const fp = (s) => {
@@ -1315,22 +1316,25 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         </div>
 
         {/* TTS Panel - Only shown when feature flag enabled */}
-        {TTS_UI_ENABLED && (
-          <TtsPanel
-            sendMessage={(msg) => {
-              if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify(msg));
-              }
-            }}
-            targetLang={targetLang}
-            isConnected={connectionState === 'open'}
-            translations={translations}
-            onControllerReady={(controller) => {
-              ttsControllerRef.current = controller;
-              console.log('[ListenerPage] TTS controller ready');
-            }}
-          />
-        )}
+        {TTS_UI_ENABLED && (() => {
+          console.log('[ListenerPage] Rendering TTS Panel - TTS_UI_ENABLED is true');
+          return (
+            <TtsPanel
+              sendMessage={(msg) => {
+                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(JSON.stringify(msg));
+                }
+              }}
+              targetLang={targetLang}
+              isConnected={connectionState === 'open'}
+              translations={translations}
+              onControllerReady={(controller) => {
+                ttsControllerRef.current = controller;
+                console.log('[ListenerPage] TTS controller ready');
+              }}
+            />
+          );
+        })()}
 
         {/* Translation History */}
         <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-2 sm:mx-0">

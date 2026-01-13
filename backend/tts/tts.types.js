@@ -68,6 +68,39 @@ export const TtsErrorCode = {
  */
 
 /**
+ * Delivery Style (for SSML preaching delivery)
+ */
+export const DeliveryStyle = {
+    STANDARD_PREACHING: 'standard_preaching',
+    PENTECOSTAL: 'pentecostal',
+    TEACHING: 'teaching',
+    ALTAR_CALL: 'altar_call'
+};
+
+/**
+ * Emphasis Level (for SSML emphasis tags)
+ */
+export const EmphasisLevel = {
+    NONE: 'none',
+    MODERATE: 'moderate',
+    STRONG: 'strong'
+};
+
+/**
+ * SSML Options
+ * Configuration for SSML generation (Chirp 3 HD only)
+ * @typedef {Object} SsmlOptions
+ * @property {boolean} enabled - Whether to use SSML
+ * @property {string} [deliveryStyle] - Delivery style preset (standard_preaching | pentecostal | teaching | altar_call)
+ * @property {number} [rate] - Speaking rate (0.25 - 2.0, default: 0.92)
+ * @property {string} [pitch] - Pitch adjustment (e.g., '+1st', '-2st', default: '+1st')
+ * @property {string} [pauseIntensity] - Pause intensity (light | medium | heavy)
+ * @property {boolean} [emphasizePowerWords] - Auto-emphasize spiritual keywords (default: true)
+ * @property {string[]} [customEmphasisWords] - Additional words to emphasize
+ * @property {string} [emphasisLevel] - Emphasis level (moderate | strong)
+ */
+
+/**
  * TTS Request
  * @typedef {Object} TtsRequest
  * @property {string} sessionId - Session identifier
@@ -76,6 +109,7 @@ export const TtsErrorCode = {
  * @property {string} text - Text to synthesize
  * @property {TtsProfile} profile - Unified TTS configuration profile
  * @property {string} [segmentId] - Optional segment identifier for tracking
+ * @property {SsmlOptions} [ssmlOptions] - Optional SSML configuration (Chirp 3 HD only)
  */
 
 /**

@@ -155,6 +155,23 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 
 ## 1) What we did (feature updates / changes)
 
+### 2026-01-13 — PR 3: Chirp 3 HD SSML Dynamic Prosody
+**Status:** 🚧 IN PROGRESS / INTEGRATED - Engine Active
+
+Implemented the "Dynamic Prosody Engine" for Chirp 3 HD voices, enabling sermon-style delivery with variable pacing and emphasis.
+
+**Key Changes:**
+- **Dynanmic Prosody Engine:** Created `ssmlBuilder.js` with phrase-level tokenization and semantic analysis.
+- **Hybrid Prosody:** Implemented strategy using `audioConfig.speaking_rate` for speed control + SSML tags for phrase dynamics (working around Chirp 3 API limitations).
+- **XML Entity Handling:** Fixed critical bug where tokenizer split escaped characters (like `&apos;`), ensuring robust multi-language support.
+- **Delivery Presets:** Added "Standard Preaching", "Pentecostal", "Teaching" styles.
+
+**Where implemented:**
+- **Backend:** `backend/tts/ssmlBuilder.js`, `backend/tts/ttsService.js`
+- **Frontend:** `frontend/src/config/ssmlConfig.js`
+
+---
+
 ### 2026-01-08 — PR 2: Google TTS Unary Synthesis
 **Status:** ✅ IMPLEMENTED - Backend can synthesize audio blobs
 

@@ -495,6 +495,15 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
         }
         else if (message.type === 'tts/synthesize') {
           console.log(`[Listener] ${userName} requesting TTS synthesis`);
+          console.log(`[Listener] Incoming message:`, {
+            segmentId: message.segmentId,
+            text: message.text?.substring(0, 50),
+            languageCode: message.languageCode,
+            voiceName: message.voiceName,
+            tier: message.tier,
+            mode: message.mode,
+            ssmlOptions: message.ssmlOptions
+          });
 
           // Validate payload
           if (!message.segmentId || !message.text || !message.languageCode) {
@@ -553,6 +562,8 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             });
 
             // 2. Build TTS request
+            console.log(`[Listener] Building TTS request with ssmlOptions:`, message.ssmlOptions);
+
             const ttsRequest = {
               sessionId: sessionId,
               userId: userName || 'anonymous',
@@ -568,8 +579,17 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 encoding: route.audioEncoding,
                 streaming: message.mode === 'streaming',
                 prompt: message.prompt
-              }
+              },
+              ssmlOptions: message.ssmlOptions || null // CRITICAL: Pass SSML options from frontend
             };
+
+            console.log(`[Listener] TTS Request built:`, {
+              segmentId: ttsRequest.segmentId,
+              text: ttsRequest.text.substring(0, 50),
+              voiceName: ttsRequest.profile.voiceName,
+              tier: ttsRequest.profile.requestedTier,
+              ssmlOptions: ttsRequest.ssmlOptions
+            });
 
             // 3. Check quota
             const quotaCheck = canSynthesize({
