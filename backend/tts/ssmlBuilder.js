@@ -18,7 +18,7 @@ export const DeliveryStyles = {
         description: 'Warm, confident, steady sermon cadence with intentional pauses',
         prompt: 'Deliver this as a seasoned preacher speaking from the pulpit. Warm, confident, and spiritually uplifting. Use a steady sermon cadence with intentional pauses. Gradually build intensity through the message. Emphasize key spiritual words with conviction, not shouting. End phrases with assurance and authority, not abrupt stops.',
         prosody: {
-            baseRate: 0.92,
+            baseRate: 1.1,
             basePitch: 1, // +1st
             dynamic: true
         },
@@ -158,9 +158,9 @@ export function emphasizePowerWords(text, customWords = [], level = 'moderate') 
  * Preserves the delimiter to determine pause type
  */
 function tokenizePhrases(text) {
-    // Split by punctuation, keeping the delimiter
-    // Matches: . ? ! ; : — , and newlines
-    const regex = /([.?!;:—,]|\n+)/;
+    // Split by sentence-level punctuation only, keeping the delimiter
+    // Matches: . ? ! ; : — and newlines (COMMAS REMOVED to keep natural flow)
+    const regex = /([.?!;:—]|\n+)/;
     const parts = text.split(regex);
 
     const phrases = [];
@@ -199,15 +199,14 @@ function analyzePhrase(content, delimiter, baseSettings) {
     let rate = baseSettings.baseRate;
     let pitch = baseSettings.basePitch;
 
-    // Heuristic Rules for "Dynamic Prosody"
-
+    // Heuristic Rules for "Dynamic Prosody" (Additive for predictable results)
     if (isShort) {
         // Short phrases often need more punch/emphasis (slower, slightly higher pitch)
-        rate = Math.max(0.75, rate - 0.04);
+        rate = rate - 0.05;
         pitch += 1; // +1st for emphasis
     } else if (isLong) {
         // Long flowing phrases should move slightly faster
-        rate = Math.min(1.2, rate + 0.02);
+        rate = rate + 0.03;
     }
 
     if (isExclamation) {
@@ -217,9 +216,12 @@ function analyzePhrase(content, delimiter, baseSettings) {
     }
 
     if (isQuestion) {
-        // Question intonation (mostly handled by model, but we can nudge pitch)
+        // Question intonation
         pitch += 1;
     }
+
+    // Ensure we don't exceed API limits (0.25 to 2.0)
+    rate = Math.min(2.0, Math.max(0.25, rate));
 
     return {
         rate: `${Math.round(rate * 100)}%`, // Format as % string
@@ -255,7 +257,7 @@ export function buildSSML(text, options = {}) {
     if (!text) return '';
 
     const {
-        rate = '92%', // Global base rate (ignored if dynamic)
+        rate = '110%', // Global base rate (ignored if dynamic)
         pitch = '+1st', // Global base pitch (ignored if dynamic)
         pauseIntensity = 'medium',
         emphasizePowerWords: shouldEmphasize = true,
@@ -263,7 +265,7 @@ export function buildSSML(text, options = {}) {
         emphasisLevel = 'moderate',
         // New options for dynamic engine
         useDynamicProsody = true,
-        baseRateValue = 0.92, // Numeric base (0.92 = 92%)
+        baseRateValue = 1.1, // Numeric base (1.1 = 110%)
         basePitchValue = 1    // Numeric base (+1)
     } = options;
 
@@ -294,7 +296,7 @@ export function buildSSML(text, options = {}) {
 
     if (typeof rate === 'string' && rate.includes('%')) {
         currentBaseRate = parseFloat(rate) / 100;
-        if (isNaN(currentBaseRate)) currentBaseRate = 0.92;
+        if (isNaN(currentBaseRate)) currentBaseRate = 1.1;
     }
 
     // 4. Build Phrase Blocks
@@ -353,8 +355,23 @@ export function applyDeliveryStyle(text, styleName = 'standard_preaching', overr
 
         // New Dynamic Engine options
         useDynamicProsody: useDynamic,
-        baseRateValue: (overrides.rate && overrides.rate.includes('%')) ? parseFloat(overrides.rate) / 100 : style.prosody.baseRate,
-        basePitchValue: style.prosody.basePitch, // Complex to parse override pitch string back to int, taking simple path for now
+        baseRateValue: (() => {
+            if (!overrides.rate) return style.prosody.baseRate;
+            if (typeof overrides.rate === 'number') return overrides.rate;
+            if (typeof overrides.rate === 'string' && overrides.rate.includes('%')) {
+                return parseFloat(overrides.rate) / 100;
+            }
+            return parseFloat(overrides.rate) || style.prosody.baseRate;
+        })(),
+        basePitchValue: (() => {
+            if (!overrides.pitch) return style.prosody.basePitch;
+            if (typeof overrides.pitch === 'number') return overrides.pitch;
+            if (typeof overrides.pitch === 'string') {
+                const match = overrides.pitch.match(/([+-]?\d+)/);
+                return match ? parseInt(match[1]) : style.prosody.basePitch;
+            }
+            return style.prosody.basePitch;
+        })(),
 
         pauseIntensity: overrides.pauseIntensity !== undefined ? overrides.pauseIntensity : style.pauseIntensity,
         emphasizePowerWords: overrides.emphasizePowerWords !== undefined ? overrides.emphasizePowerWords : true,
@@ -377,7 +394,11 @@ export function applyDeliveryStyle(text, styleName = 'standard_preaching', overr
 export function buildMarkup(text, options) { return text; } // Simplified placeholder if needed or keep original
 export function supportsSSML(voiceName, tier) {
     if (!voiceName && !tier) return false;
+
+    // ONLY Chirp 3 HD uses the complex dynamic prosody engine.
+    // Neural2 and Standard respond better to flat audioConfig.speaking_rate.
     if (tier === 'chirp3_hd') return true;
+
     if (voiceName) {
         return voiceName.includes('Chirp3') || voiceName.includes('Chirp_3') || voiceName.includes('Chirp-3');
     }

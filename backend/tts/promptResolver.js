@@ -93,44 +93,59 @@ export function resolvePrompt(options = {}) {
         promptPresetId,
         customPrompt,
         intensity,
-        text = ''
+        text = '',
+        rate = 1.0 // Default to 1.0
     } = options;
 
     // Start with empty prompt
     let resolvedPrompt = '';
     let presetUsed = null;
 
-    // 1. Get preset prompt if provided
-    if (promptPresetId) {
-        const preset = getPresetById(promptPresetId);
-        if (preset) {
-            // HARDENING: functionality to prevent the reported "First Request Bug" where Gemini speaks the prompt
-            // We prepend a clear system instruction to differentiate prompt from text
-            resolvedPrompt = `(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.) ${preset.prompt}`;
-            presetUsed = preset;
-        }
+    // 1. Get preset info
+    const preset = promptPresetId ? getPresetById(promptPresetId) : null;
+    if (preset) {
+        presetUsed = preset;
     }
 
-    // 2. Append custom prompt if provided
+    // 2. Resolve the core prompt content
+    // CRITICAL: If customPrompt is provided, it REPLACES the preset's prompt content
+    // to avoid messy concatenation and prompt leakage.
+    let corePrompt = '';
     if (customPrompt && customPrompt.trim()) {
-        if (resolvedPrompt) {
-            resolvedPrompt += "\n\nAdditional direction: " + customPrompt.trim();
-        } else {
-            // HARDENING: Safety instruction for custom-only prompts
-            resolvedPrompt = `(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.) ${customPrompt.trim()}`;
-        }
+        corePrompt = customPrompt.trim();
+    } else if (preset) {
+        corePrompt = preset.prompt;
     }
 
     // 3. Apply intensity modifier if provided
     if (intensity && intensity >= 1 && intensity <= 5) {
         const modifier = INTENSITY_MODIFIERS[intensity];
         if (modifier) {
-            if (resolvedPrompt) {
-                resolvedPrompt += " " + modifier;
-            } else {
-                resolvedPrompt = modifier;
-            }
+            corePrompt = corePrompt ? corePrompt + " " + modifier : modifier;
         }
+    }
+
+    // 4. Build final system-reinforced prompt
+    if (corePrompt) {
+        // Build instruction tags
+        let instructions = 'DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.';
+
+        // Add speed reinforcement if not normal
+        if (rate && rate !== 1.0) {
+            const speedDir = rate > 1.0 ? 'FASTER' : 'SLOWER';
+            instructions += ` SPEAK AT ${rate}X SPEED (${speedDir}).`;
+        }
+
+        resolvedPrompt = `(SYSTEM: ${instructions}) ${corePrompt}`;
+
+        // Reinforce at the end for Gemini-TTS attention
+        if (rate && rate !== 1.0) {
+            resolvedPrompt += ` [SPEED: ${rate}X]`;
+        }
+    } else if (rate && rate !== 1.0) {
+        // Rate only prompt
+        const speedDir = rate > 1.0 ? 'FASTER' : 'SLOWER';
+        resolvedPrompt = `(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. SPEAK AT ${rate}X SPEED (${speedDir}).) `;
     }
 
     // If no prompt at all, still need to check text limits

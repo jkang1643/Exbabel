@@ -14,7 +14,7 @@ export const DELIVERY_STYLES = {
         label: 'Standard Preaching',
         description: 'Warm, confident sermon cadence with intentional pauses',
         icon: '🎤',
-        defaultRate: 0.92,
+        defaultRate: 1.1,
         defaultPitch: '+1st',
         pauseIntensity: 'medium'
     },
@@ -101,7 +101,7 @@ export const PITCH_OPTIONS = [
 export function voiceSupportsSSML(voiceName, tier) {
     if (!voiceName && !tier) return false;
 
-    // Check tier first
+    // ONLY Chirp 3 HD uses the complex dynamic prosody engine.
     if (tier === 'chirp3_hd') return true;
 
     // Check voice name patterns

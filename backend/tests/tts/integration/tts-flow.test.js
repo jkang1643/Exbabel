@@ -128,6 +128,17 @@ async function runSuite() {
         segmentId: 'seg-gemini'
     });
 
+    // Scenario 6: Gemini-TTS with Prompt and Intensity
+    await runTest('Gemini-TTS with Prompt & Intensity', {
+        text: 'The power of God is here tonight!',
+        languageCode: 'en-US',
+        voiceName: 'Kore',
+        tier: 'gemini',
+        promptPresetId: 'upci_apostolic_fire',
+        intensity: 5,
+        segmentId: 'seg-gemini-prompt'
+    });
+
     if (geminiResult.error && geminiResult.error.includes('Vertex AI API')) {
         console.log('ℹ️ Note: Gemini tests correctly failed due to disabled Vertex AI API (expected unless enabled).');
     }

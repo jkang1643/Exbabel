@@ -27,7 +27,7 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
 
     // SSML state (Chirp 3 HD)
     const [deliveryStyle, setDeliveryStyle] = useState('standard_preaching');
-    const [speakingRate, setSpeakingRate] = useState(0.92);
+    const [speakingRate, setSpeakingRate] = useState(1.1);
     const [pitchAdjust, setPitchAdjust] = useState('+1st');
     const [powerWordsEnabled, setPowerWordsEnabled] = useState(true);
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -145,18 +145,17 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
         const voiceOption = availableVoices.find(v => v.value === selectedVoice);
         const tier = voiceOption?.tier || 'neural2';
 
-        if (!ssmlEnabled || !voiceSupportsSSML(selectedVoice, tier)) {
-            return null;
-        }
-
+        // We now always send at least the rate if SSML is enabled or if using standard voices
+        // Note: voiceSupportsSSML specifically refers to phrase-level prosody (Chirp 3 HD)
         return {
-            enabled: true,
+            enabled: ssmlEnabled,
             deliveryStyle: deliveryStyle,
             rate: speakingRate,
             pitch: pitchAdjust,
             pauseIntensity: getDeliveryStyle(deliveryStyle).pauseIntensity,
             emphasizePowerWords: powerWordsEnabled,
-            emphasisLevel: 'moderate'
+            emphasisLevel: 'moderate',
+            supportsPhraseProsody: voiceSupportsSSML(selectedVoice, tier)
         };
     }, [ssmlEnabled, selectedVoice, availableVoices, deliveryStyle, speakingRate, pitchAdjust, powerWordsEnabled]);
 
@@ -167,6 +166,20 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
             controller.ssmlOptions = currentSsmlOptions;
         }
     }, [controller, currentSsmlOptions]);
+
+    // Sync Gemini prompt settings to controller when they change
+    useEffect(() => {
+        if (controller) {
+            console.log('[TtsPanel] Syncing Gemini prompt settings to controller:', {
+                promptPresetId,
+                customPrompt: customPrompt ? 'yes' : 'no',
+                intensity
+            });
+            controller.promptPresetId = promptPresetId;
+            controller.ttsPrompt = customPrompt;
+            controller.intensity = intensity;
+        }
+    }, [controller, promptPresetId, customPrompt, intensity]);
 
     // Update prompt bytes when custom prompt changes
     useEffect(() => {
@@ -327,6 +340,35 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
 
                                 {ssmlEnabled && (
                                     <>
+                                        {/* Global Speaking Rate (Visible for all engines) */}
+                                        <div className="space-y-1 p-3 bg-blue-50/50 rounded-md border border-blue-100">
+                                            <div className="flex justify-between items-center">
+                                                <label className="block text-xs font-semibold text-blue-800">
+                                                    Speaking Speed: {speakingRate.toFixed(2)}x
+                                                </label>
+                                                <button
+                                                    onClick={() => setSpeakingRate(1.0)}
+                                                    className="text-[10px] text-blue-600 hover:underline"
+                                                >
+                                                    Reset to 1.0x
+                                                </button>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="0.25"
+                                                max="2.0"
+                                                step="0.05"
+                                                value={speakingRate}
+                                                onChange={(e) => setSpeakingRate(parseFloat(e.target.value))}
+                                                className="w-full h-1.5 bg-blue-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                            />
+                                            <div className="flex justify-between text-[10px] text-blue-500 px-1">
+                                                <span>0.25x</span>
+                                                <span>1.0x (Normal)</span>
+                                                <span>2.0x</span>
+                                            </div>
+                                        </div>
+
                                         {/* Gemini Prompt Preset Selection */}
                                         {supportsPrompts ? (
                                             <>
@@ -334,7 +376,7 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                                                     value={promptPresetId}
                                                     onChange={(e) => setPromptPresetId(e.target.value)}
                                                     disabled={!isConnected}
-                                                    className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-blue-50"
+                                                    className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-white"
                                                 >
                                                     {PROMPT_CATEGORIES.map((category) => (
                                                         <optgroup key={category.id} label={category.label}>
@@ -350,14 +392,14 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                                                 {/* Custom Prompt Input */}
                                                 <div>
                                                     <label className="block text-xs font-medium text-gray-700 mb-1">
-                                                        Custom Prompt (Optional)
+                                                        Custom Style Instructions (Optional)
                                                     </label>
                                                     <textarea
                                                         value={customPrompt}
                                                         onChange={(e) => setCustomPrompt(e.target.value)}
-                                                        placeholder="Add custom delivery instructions..."
+                                                        placeholder="e.g., Speak like a wise elder, whispering intermittently..."
                                                         disabled={!isConnected}
-                                                        rows={3}
+                                                        rows={2}
                                                         className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed text-sm"
                                                     />
                                                     <div className="flex justify-between items-center mt-1 text-xs">
@@ -367,20 +409,16 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                                                             }`}>
                                                             Prompt: {promptBytes} / {BYTE_LIMITS.PROMPT_MAX} bytes
                                                         </span>
-                                                        {getByteStatus(promptBytes, BYTE_LIMITS.PROMPT_MAX) === 'error' && (
-                                                            <span className="text-red-600">⚠️ Exceeds limit</span>
-                                                        )}
-                                                        {getByteStatus(promptBytes, BYTE_LIMITS.PROMPT_MAX) === 'warning' && (
-                                                            <span className="text-orange-600">⚠️ Near limit</span>
-                                                        )}
                                                     </div>
                                                 </div>
 
                                                 {/* Intensity Slider */}
                                                 <div>
-                                                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                                                        Intensity Level: {intensity}
-                                                    </label>
+                                                    <div className="flex justify-between items-center mb-1">
+                                                        <label className="block text-xs font-medium text-gray-700">
+                                                            Style Intensity: {intensity}
+                                                        </label>
+                                                    </div>
                                                     <input
                                                         type="range"
                                                         min="1"
@@ -389,113 +427,85 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                                                         value={intensity}
                                                         onChange={(e) => setIntensity(parseInt(e.target.value))}
                                                         disabled={!isConnected}
-                                                        className="w-full"
+                                                        className="w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-500"
                                                     />
-                                                    <div className="flex justify-between text-xs text-gray-500 mt-1">
-                                                        <span>1 - Low</span>
-                                                        <span>3 - Moderate</span>
-                                                        <span>5 - Maximum</span>
+                                                    <div className="flex justify-between text-[10px] text-gray-400">
+                                                        <span>Subtle</span>
+                                                        <span>Moderate</span>
+                                                        <span>Maximum</span>
                                                     </div>
-                                                    <p className="text-xs text-gray-500 italic mt-1">
-                                                        Controls the intensity of delivery (1=measured, 5=fiery urgency)
-                                                    </p>
                                                 </div>
-
-                                                <p className="text-xs text-blue-600 italic">
-                                                    💡 Gemini-TTS uses natural language prompts to control speaking style
-                                                </p>
                                             </>
                                         ) : (
                                             /* Chirp 3 HD SSML Delivery Styles */
-                                            <select
-                                                value={deliveryStyle}
-                                                onChange={(e) => {
-                                                    const newStyle = e.target.value;
-                                                    setDeliveryStyle(newStyle);
-                                                    const style = getDeliveryStyle(newStyle);
-                                                    setSpeakingRate(style.defaultRate);
-                                                    setPitchAdjust(style.defaultPitch);
-                                                }}
-                                                disabled={!isConnected}
-                                                className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-blue-50"
-                                            >
-                                                {deliveryStyles.map((style) => (
-                                                    <option key={style.value} value={style.value}>
-                                                        {style.icon} {style.label} - {style.description}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        )}
+                                            <div className="space-y-2">
+                                                <select
+                                                    value={deliveryStyle}
+                                                    onChange={(e) => {
+                                                        const newStyle = e.target.value;
+                                                        setDeliveryStyle(newStyle);
+                                                        const style = getDeliveryStyle(newStyle);
+                                                        setSpeakingRate(style.defaultRate);
+                                                        setPitchAdjust(style.defaultPitch);
+                                                    }}
+                                                    disabled={!isConnected}
+                                                    className="w-full px-3 py-2 border border-blue-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed bg-white"
+                                                >
+                                                    {deliveryStyles.map((style) => (
+                                                        <option key={style.value} value={style.value}>
+                                                            {style.icon} {style.label} - {style.description}
+                                                        </option>
+                                                    ))}
+                                                </select>
 
-                                        {/* Power Words Toggle (Chirp 3 only) */}
-                                        {!supportsPrompts && (
-                                            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={powerWordsEnabled}
-                                                    onChange={(e) => setPowerWordsEnabled(e.target.checked)}
-                                                    className="w-4 h-4"
-                                                />
-                                                <span>✨ Emphasize spiritual keywords (Jesus, faith, grace, etc.)</span>
-                                            </label>
-                                        )}
-
-                                        {/* Advanced Settings Toggle (Chirp 3 only) */}
-                                        {!supportsPrompts && (
-                                            <button
-                                                onClick={() => setShowAdvanced(!showAdvanced)}
-                                                className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 transition-colors"
-                                            >
-                                                {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                                                Advanced Prosody Controls
-                                            </button>
-                                        )}
-
-                                        {/* Advanced Prosody Controls (Chirp 3 only) */}
-                                        {!supportsPrompts && showAdvanced && (
-                                            <div className="space-y-3 p-3 bg-gray-50 rounded-md border border-gray-200">
-                                                {/* Speaking Rate */}
-                                                <div>
-                                                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                                                        Speaking Rate: {speakingRate.toFixed(2)}x
+                                                {/* Power Words Toggle (Chirp 3 only) */}
+                                                {supportsSSML && (
+                                                    <label className="flex items-center gap-2 text-[11px] text-gray-600 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={powerWordsEnabled}
+                                                            onChange={(e) => setPowerWordsEnabled(e.target.checked)}
+                                                            className="w-3.5 h-3.5"
+                                                        />
+                                                        <span>✨ Emphasize spiritual keywords (Jesus, faith, etc.)</span>
                                                     </label>
-                                                    <input
-                                                        type="range"
-                                                        min="0.5"
-                                                        max="1.5"
-                                                        step="0.05"
-                                                        value={speakingRate}
-                                                        onChange={(e) => setSpeakingRate(parseFloat(e.target.value))}
-                                                        className="w-full"
-                                                    />
-                                                    <div className="flex justify-between text-xs text-gray-500 mt-1">
-                                                        <span>Slower (0.5x)</span>
-                                                        <span>Sermon (0.92x)</span>
-                                                        <span>Faster (1.5x)</span>
+                                                )}
+
+                                                {/* Advanced Prosody Toggle (Chirp 3 / Neural2 only) */}
+                                                <button
+                                                    onClick={() => setShowAdvanced(!showAdvanced)}
+                                                    className="flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800 transition-colors"
+                                                >
+                                                    {showAdvanced ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                                    Advanced Prosody Controls
+                                                </button>
+
+                                                {/* Advanced Prosody Controls */}
+                                                {showAdvanced && (
+                                                    <div className="space-y-3 p-3 bg-gray-50 rounded-md border border-gray-200 mt-1">
+                                                        {/* Pitch Adjustment */}
+                                                        <div>
+                                                            <label className="block text-[10px] font-medium text-gray-700 mb-1 uppercase tracking-wider">
+                                                                Pitch Adjustment
+                                                            </label>
+                                                            <select
+                                                                value={pitchAdjust}
+                                                                onChange={(e) => setPitchAdjust(e.target.value)}
+                                                                className="w-full px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                            >
+                                                                <option value="-2st">-2 semitones (Lower)</option>
+                                                                <option value="-1st">-1 semitone</option>
+                                                                <option value="0st">Normal (0)</option>
+                                                                <option value="+1st">+1 semitone (Warm)</option>
+                                                                <option value="+2st">+2 semitones (Higher)</option>
+                                                            </select>
+                                                        </div>
+
+                                                        <p className="text-[10px] text-gray-400 italic">
+                                                            💡 Tip: Preaching cadence typically uses 0.90x-0.95x rate with +1 semitone
+                                                        </p>
                                                     </div>
-                                                </div>
-
-                                                {/* Pitch Adjustment */}
-                                                <div>
-                                                    <label className="block text-xs font-medium text-gray-700 mb-1">
-                                                        Pitch Adjustment
-                                                    </label>
-                                                    <select
-                                                        value={pitchAdjust}
-                                                        onChange={(e) => setPitchAdjust(e.target.value)}
-                                                        className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                                    >
-                                                        <option value="-2st">-2 semitones (Lower)</option>
-                                                        <option value="-1st">-1 semitone</option>
-                                                        <option value="0st">Normal (0)</option>
-                                                        <option value="+1st">+1 semitone (Warm)</option>
-                                                        <option value="+2st">+2 semitones (Higher)</option>
-                                                    </select>
-                                                </div>
-
-                                                <p className="text-xs text-gray-500 italic">
-                                                    💡 Tip: Sermon cadence typically uses 88-94% rate with +1 to +2 semitone pitch
-                                                </p>
+                                                )}
                                             </div>
                                         )}
                                     </>
@@ -637,7 +647,7 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                                             if (controller && segmentText && segmentText.trim()) {
                                                 console.log('[TtsPanel] Calling controller.speakTextNow with:', segmentText, segmentId, tier);
                                                 controller.speakTextNow(segmentText, segmentId, { tier });
-                                                alert(`Speaking: "${segmentText.substring(0, 50)}..."`);
+                                                // Removed alert(...) to prevent breaking user gesture chain and timing issues
                                             } else {
                                                 console.error('[TtsPanel] Cannot speak - controller:', !!controller, 'text:', !!segmentText);
                                                 alert('Cannot speak - check console for details');

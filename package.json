@@ -11,7 +11,10 @@
     "build": "cd frontend && npm run build",
     "start": "cd backend && npm start",
     "lint": "eslint .",
-    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "tts:snapshot": "node scripts/fetchGoogleTtsVoicesSnapshot.js",
+    "tts:diff": "node scripts/diffTtsLanguages.js",
+    "tts:update": "npm run tts:snapshot && npm run tts:diff"
   },
   "devDependencies": {
     "@eslint/css": "^0.13.0",
@@ -34,6 +37,8 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
-    "@google-cloud/speech": "^7.2.1"
+    "@google-cloud/aiplatform": "^6.1.0",
+    "@google-cloud/speech": "^7.2.1",
+    "@google-cloud/text-to-speech": "^6.4.0"
   }
 }

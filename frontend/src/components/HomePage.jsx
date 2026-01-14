@@ -102,8 +102,8 @@ export function HomePage({ onSelectMode }) {
           <div className="mt-8 sm:mt-12 grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
             <div className="text-center bg-white/50 rounded-lg p-3 sm:p-0 sm:bg-transparent">
               <div className="text-3xl sm:text-4xl mb-1 sm:mb-2">🌍</div>
-              <h3 className="font-semibold text-sm sm:text-base text-gray-800 mb-1">50+ Languages</h3>
-              <p className="text-xs sm:text-sm text-gray-600">Support for major world languages</p>
+              <h3 className="font-semibold text-sm sm:text-base text-gray-800 mb-1">180+ Languages</h3>
+              <p className="text-xs sm:text-sm text-gray-600">Comprehensive global language coverage</p>
             </div>
             <div className="text-center bg-white/50 rounded-lg p-3 sm:p-0 sm:bg-transparent">
               <div className="text-3xl sm:text-4xl mb-1 sm:mb-2">⚡</div>

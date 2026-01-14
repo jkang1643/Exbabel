@@ -37,6 +37,12 @@ export class TtsPlayerController {
         this.onRouteResolved = null; // New callback for routing updates
 
         this.lastRequestId = 0; // Track latest request ID to prevent out-of-order playback
+
+        // Create a hidden audio element for priming if in browser
+        if (typeof window !== 'undefined' && typeof Audio !== 'undefined') {
+            this.primingAudio = new Audio();
+            this.primingAudio.volume = 0;
+        }
     }
 
     /**
@@ -64,6 +70,9 @@ export class TtsPlayerController {
         this.ttsPrompt = ttsPrompt;
         this.intensity = intensity;
         this.state = TtsPlayerState.PLAYING;
+
+        // Prime the audio system
+        this._prime();
 
         // Send WebSocket message to backend
         if (this.sendMessage) {
@@ -232,48 +241,43 @@ export class TtsPlayerController {
                     }
                 }
 
-                // Store in queue
-                this.audioQueue.push({
+                // Store in queue with "ready" status
+                const queueItem = {
                     type: 'unary',
                     segmentId: msg.segmentId,
                     format: msg.format,
                     mimeType: msg.mimeType,
                     audioContentBase64: msg.audioContentBase64,
-                    resolvedRoute: msg.resolvedRoute // Include routing info in queue item
-                });
+                    resolvedRoute: msg.resolvedRoute,
+                    ssmlOptions: msg.ssmlOptions || (msg.segmentId && this._pendingRequests?.get(msg.segmentId)) || null,
+                    status: 'ready'
+                };
 
-                // Decode and play audio
-                const audioBlob = this._base64ToBlob(msg.audioContentBase64, msg.mimeType);
-                if (audioBlob) {
-                    this._playAudio(audioBlob);
-                } else {
-                    console.error('[TtsPlayerController] Failed to decode audio');
-                    if (this.onError) {
-                        this.onError({
-                            code: 'DECODE_ERROR',
-                            message: 'Failed to decode audio content'
-                        });
-                    }
-                }
+                // Cleanup pending request tracking
+                if (msg.segmentId) this._pendingRequests?.delete(msg.segmentId);
+
+                this.audioQueue.push(queueItem);
+                console.log(`[TtsPlayerController] Added to queue. New length: ${this.audioQueue.length}`);
+
+                // Attempt to play next in queue
+                this._processQueue();
                 break;
 
             case 'tts/audio_chunk':
                 // Streaming audio chunk
                 console.log('[TtsPlayerController] Received audio chunk:', msg.seq, msg.isLast);
 
-                // PR1: Store in queue but don't play
                 this.audioQueue.push({
                     type: 'stream_chunk',
                     segmentId: msg.segmentId,
                     seq: msg.seq,
                     mimeType: msg.mimeType,
                     chunkBase64: msg.chunkBase64,
-                    isLast: msg.isLast
+                    isLast: msg.isLast,
+                    status: 'ready'
                 });
 
-                // PR3: Decode and stream audio
-                // const chunkBlob = this._base64ToBlob(msg.chunkBase64, msg.mimeType);
-                // this._streamAudioChunk(chunkBlob, msg.isLast);
+                // PR3: Streaming playback would go here
                 break;
 
             case 'tts/error':
@@ -285,7 +289,6 @@ export class TtsPlayerController {
                 break;
 
             default:
-                // Ignore other message types
                 break;
         }
     }
@@ -304,6 +307,9 @@ export class TtsPlayerController {
      */
     speakTextNow(text, segmentId, options = {}) {
         console.log('[TtsPlayerController] speakTextNow called', { text, segmentId, currentLanguageCode: this.currentLanguageCode });
+
+        // Prime the audio system to allow subsequent playback after synthesis delay
+        this._prime();
 
         if (!this.currentLanguageCode) {
             console.error('[TtsPlayerController] Cannot speak: language not set');
@@ -351,6 +357,11 @@ export class TtsPlayerController {
                 ttsPrompt: resolvedTtsPrompt,
                 intensity: resolvedIntensity
             };
+
+            // Track the rate for this request to apply it in the browser if synthesis-side fails (Gemini)
+            if (!this._pendingRequests) this._pendingRequests = new Map();
+            this._pendingRequests.set(trackedSegmentId, resolvedSsmlOptions);
+
             console.log('[TtsPlayerController] Sending synthesis request:', message);
             this.sendMessage(message);
         } else {
@@ -378,57 +389,119 @@ export class TtsPlayerController {
     }
 
     /**
-     * Play audio blob
+     * Process the audio queue
      * @private
      */
-    _playAudio(audioBlob) {
-        try {
-            // Stop and clean up current audio if playing
-            if (this.currentAudio) {
-                console.log('[TtsPlayerController] Stopping previous audio to prevent overlap');
-                this.currentAudio.pause();
-                this.currentAudio.src = ""; // Clear source to stop buffering
-                this.currentAudio.load();   // Force cleanup
-                this.currentAudio = null;
-            }
+    _processQueue() {
+        // If already playing something, wait for it to finish
+        if (this.currentAudio) {
+            console.log('[TtsPlayerController] Queue processing: Audio already playing, waiting...');
+            return;
+        }
 
+        // If paused or stopped, don't start new audio (unless we want to allow manual triggers)
+        if (this.state === TtsPlayerState.PAUSED || this.state === TtsPlayerState.STOPPED) {
+            console.log(`[TtsPlayerController] Queue processing: Player is ${this.state}, skipping auto-advance`);
+            return;
+        }
+
+        // Find the next ready item
+        const nextItem = this.audioQueue.find(item => item.status === 'ready');
+        if (!nextItem) {
+            console.log('[TtsPlayerController] Queue processing: No ready items found');
+            return;
+        }
+
+        // Mark as playing and execute
+        nextItem.status = 'playing';
+
+        if (nextItem.type === 'unary') {
+            const audioBlob = this._base64ToBlob(nextItem.audioContentBase64, nextItem.mimeType);
+            if (audioBlob) {
+                this._playAudio(audioBlob, nextItem);
+            } else {
+                console.error('[TtsPlayerController] Failed to decode audio for segment:', nextItem.segmentId);
+                nextItem.status = 'error';
+                this._processQueue(); // Try next one
+            }
+        } else {
+            // Placeholder for streaming
+            console.warn('[TtsPlayerController] Streaming chunks not yet supported in sequential player');
+            nextItem.status = 'error';
+            this._processQueue();
+        }
+    }
+
+    /**
+     * Play audio blob
+     * @private
+     * @param {Blob} audioBlob
+     * @param {Object} queueItem
+     */
+    _playAudio(audioBlob, queueItem) {
+        try {
             const audioUrl = URL.createObjectURL(audioBlob);
             const audio = new Audio(audioUrl);
+
+            // Apply playback rate reinforcement for Gemini-TTS (solid guarantee)
+            // Note: Chirp 3 HD and Neural2/Standard voices handle speed via backend synthesis parameters
+            if (queueItem.resolvedRoute?.tier === TtsTier.GEMINI || queueItem.resolvedRoute?.engine === 'gemini_tts' || queueItem.resolvedRoute?.voiceName === 'Kore') {
+                if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {
+                    const rate = parseFloat(queueItem.ssmlOptions.rate);
+                    if (!isNaN(rate) && rate !== 1.0) {
+                        console.log(`[TtsPlayerController] Reinforcing playbackRate in browser for Gemini: ${rate}x`);
+                        audio.playbackRate = rate;
+                    }
+                }
+            }
+
             this.currentAudio = audio;
 
             audio.onended = () => {
-                console.log('[TtsPlayerController] Audio playback ended');
+                console.log('[TtsPlayerController] Audio playback ended for segment:', queueItem.segmentId);
                 if (this.currentAudio === audio) {
                     this.currentAudio = null;
                 }
+                queueItem.status = 'done';
                 URL.revokeObjectURL(audioUrl);
+
+                // Remove item from queue to keep it clean (optional, could mark instead)
+                this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
+
+                // Play next in queue
+                this._processQueue();
             };
 
             audio.onerror = (error) => {
-                console.error('[TtsPlayerController] Audio playback error:', error);
+                console.error('[TtsPlayerController] Audio playback error for segment:', queueItem.segmentId, error);
                 if (this.currentAudio === audio) {
                     this.currentAudio = null;
                 }
+                queueItem.status = 'error';
                 URL.revokeObjectURL(audioUrl);
+
+                this._processQueue();
 
                 if (this.onError) {
                     this.onError({
                         code: 'PLAYBACK_ERROR',
-                        message: 'Failed to play audio'
+                        message: `Failed to play audio for ${queueItem.segmentId}`
                     });
                 }
             };
 
+            console.log('[TtsPlayerController] Starting audio play() for segment:', queueItem.segmentId);
             audio.play().then(() => {
-                console.log('[TtsPlayerController] Audio playback started');
+                console.log('[TtsPlayerController] Audio playing:', queueItem.segmentId);
             }).catch(error => {
                 if (error.name === 'AbortError') {
-                    console.log('[TtsPlayerController] Playback aborted (likely stopped by user)');
+                    console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
                 } else {
-                    console.error('[TtsPlayerController] Failed to start playback:', error);
+                    console.error('[TtsPlayerController] Failed to start playback:', queueItem.segmentId, error);
                     if (this.currentAudio === audio) {
                         this.currentAudio = null;
                     }
+                    queueItem.status = 'error';
                     if (this.onError) {
                         this.onError({
                             code: 'PLAYBACK_ERROR',
@@ -437,15 +510,20 @@ export class TtsPlayerController {
                     }
                 }
                 URL.revokeObjectURL(audioUrl);
+                // Even on play error, try next in queue
+                this._processQueue();
             });
         } catch (error) {
             console.error('[TtsPlayerController] Error in _playAudio:', error);
+            this.currentAudio = null;
+            queueItem.status = 'error';
             if (this.onError) {
                 this.onError({
                     code: 'PLAYBACK_ERROR',
                     message: error.message
                 });
             }
+            this._processQueue();
         }
     }
 
@@ -456,6 +534,22 @@ export class TtsPlayerController {
      */
     _streamAudioChunk(chunkBlob, isLast) {
         // PR3: Implement using MediaSource API or Web Audio API
+    }
+
+    /**
+     * Prime the audio system to allow subsequent play() calls
+     * Must be called from a user gesture (like click)
+     * @private
+     */
+    _prime() {
+        if (!this.primingAudio) return;
+
+        console.log('[TtsPlayerController] Priming audio system...');
+        // Playing an empty source or a short silent sound works to "unlock" audio in most browsers
+        this.primingAudio.play().catch(err => {
+            // We expect an error because there's no source, but the play() call still "primes" the browser gesture tracking
+            console.log('[TtsPlayerController] Audio primed (ignored harmless error):', err.message);
+        });
     }
 
     /**

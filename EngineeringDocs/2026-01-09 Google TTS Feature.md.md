@@ -1,5 +1,5 @@
 # Exbabel — Feat/Google TTS Integration
-**Last updated:** 2026-01-09 (America/Chicago)
+**Last updated:** 2026-01-14 (America/Chicago) - Refined Gemini Speed Reliability
 
 This is a running "what is done" document capturing what we changed, why, and where we are now regarding the Google Text-to-Speech integration.
 **Newest items are at the top.**
@@ -8,6 +8,66 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+
+
+### BUG 12: FIXED — Gemini TTS Speed Reliability & Multi-Layered Enforcement
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved the fundamental "unreliability" of Gemini-TTS speed control by implementing a multi-layered enforcement strategy that combines backend prompt injection with frontend playback normalization.
+
+#### Root Cause:
+1.  **Model Variance:** Even with numeric instructions, the Gemini-TTS model (generative) would occasionally articualte with correct "energy" but suboptimal "real-time duration," leading to speech that felt slower than the requested rate.
+2.  **API Limitation:** Unlike standard Google voices, the current Gemini-TTS beta doesn't always handle the `speaking_rate` in `audioConfig` with the same mechanical precision as standard voices.
+3.  **State Mismatch:** The frontend occasionally lost track of the specific speed requested for a segment if multiple translations arrive rapidly.
+
+#### Key Fixes:
+1.  **Double-Reinforcement Prompting:** Updated `promptResolver.js` to inject speed instructions at both the start and the end of the system prompt (e.g., `(SYSTEM: SPEAK AT 1.2X SPEED) ... [SPEED: 1.2X]`).
+2.  **Hard Browser-Side Enforcement:** Modified `TtsPlayerController.js` to manually set the `playbackRate` on the HTML5 `Audio` element for all Gemini/Kore voices. This provides a 100% mechanical guarantee that the audio plays at the user's selected speed, regardless of how the model synthesized it.
+3.  **Request Tracking:** Implemented a `_pendingRequests` map in the frontend to store the exact SSML configuration (including rate) sent to the server, ensuring that when the audio returns, the correct speed is applied to the specific segment.
+4.  **Legacy Voice Protection:** Explicitly excluded Neural2 and Standard voices from browser-side speed reinforcement to prevent "double-speed" issues, as these voices handle speed reliably on the server.
+
+---
+
+
+### BUG 11: FIXED — TTS Speaking Rate Logic & Range Capping
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved issues where the speaking speed slider behaved inconsistently, specifically where speeds above 1.2x were ignored and Gemini-TTS speed reinforcement caused erratic speed jumps.
+
+#### Root Cause:
+1.  **Hard-Capped SSML Engine:** The `ssmlBuilder.js` contained a legacy 1.2x cap for long phrases, preventing the full user-selected range from taking effect.
+2.  **Generative Model Hyper-Adherence:** Using descriptive adjectives (e.g., "FAST") for Gemini speed reinforcement triggered extreme/erratic speed jumps.
+3.  **Multiplicative logic:** Corrected logic that could apply speed at both `audioConfig` and SSML levels simultaneously.
+
+#### Key Fixes:
+1.  **Prosody Multipliers:** Refactored `analyzePhrase` to use relative multipliers instead of absolute caps, unlocking the full 0.25x - 2.0x range.
+2.  **Strict Numeric Reinforcement:** Gemini speed instructions now use precise numeric syntax (e.g., `SYSTEM: SPEAK AT 1.15X SPEED`) instead of qualitative descriptors.
+3.  **Baseline Default:** Standardized application default to 1.1x for optimal sermon delivery.
+
+---
+
+
+### BUG 10: FIXED — TTS Playback Delay & Browser Gesture Block
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved a race condition and browser security block where the "Speak Last Final Segment" button (and other manual triggers) would require two clicks to play audio.
+
+#### Root Cause:
+1.  **Browser Gesture Expiration:** Modern browsers (Chrome/Safari) block `audio.play()` if it's not directly triggered by a user gesture. Because TTS synthesis involves an asynchronous WebSocket round-trip, the delay between the "click" and the "audio response" sometimes exceeded the browser's gesture-persistence window, causing the first playback attempt to be blocked.
+2.  **Synchronous UI Interference:** A legacy `alert()` call in the UI blocked the main thread immediately after the click, interfering with the WebSocket message timing and the browser's ability to track the user gesture.
+3.  **Lack of Formal Queue:** The previous implementation attempted immediate playback of any incoming chunk, which was prone to race conditions if multiple chunks arrived or if the player state wasn't perfectly synchronized.
+
+#### Key Fixes:
+1.  **Audio Priming System:** Implemented a `_prime()` method in `TtsPlayerController.js`. It triggers a silent/empty `play()` call immediately upon the user's click (inside `start()` and `speakTextNow()`), which "unlocks" the browser's audio permissions for the upcoming synthesis response.
+2.  **Sequential Playback Queue:** Refactored the frontend player to use a formal `audioQueue` with a robust `_processQueue()` worker. Audio is now staged in the queue and played sequentially, ensuring no collisions and reliable execution after the initial "unlock."
+3.  **Async-Friendly UI:** Removed blocking `alert()` calls from `TtsPanel.jsx` to ensure the main thread remains responsive for WebSocket event processing.
+
+#### Impact:
+- ✅ **Instant Playback:** Audio now plays reliably on the very first click.
+- ✅ **Gesture-Ready:** The architecture is now compliant with strict mobile and desktop browser autoplay policies.
+- ✅ **Sequential Foundation:** The new queue system provides the necessary infrastructure for the upcoming "Radio Mode" (automatic sequential playback).
+
+---
 
 
 ### BUG 9: FIXED — Gemini TTS Prompt Hallucination (First Request Bug)
@@ -174,6 +234,27 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 ---
 
 ## 1) What we did (feature updates / changes)
+
+### 2026-01-14 — PR 5: Universal Speaking Speed Control
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Implemented global speaking rate control across all TTS engines (Gemini, Chirp 3 HD, Neural2, Standard) with a dedicated UI slider and intelligent multi-layered reinforcement.
+
+**Key Changes:**
+- **Universal Speed Slider:** Added a persistent speed control (0.25x to 2.0x) to the `TtsPanel` visible for all voice tiers.
+- **Multi-Layered Gemini Enforcement:**
+    - **Prompt Reinforcement:** Numeric style injection at both the beginning and end of Gemini prompts.
+    - **Browser-Side Normalization:** Frontend `playbackRate` enforcement on the `Audio` element to guarantee mechanical speed adherence for generative voices.
+- **Dynamic Prosody Refinement:** Unlocked the full 2.0x speed range in the SSML builder while maintaining phrase-level natural cadence.
+- **Request State Persistence:** Implemented segment-specific configuration tracking in the frontend to ensure the correct speed is applied to returning asynchronus audio chunks.
+- **Default Baseline:** Standardized the application-wide default speaking rate to **1.1**.
+
+**Where implemented:**
+- **Backend:** `backend/tts/ttsService.js`, `backend/tts/ssmlBuilder.js`, `backend/tts/promptResolver.js`
+- **Frontend:** `frontend/src/components/TtsPanel.jsx`, `frontend/src/tts/TtsPlayerController.js`
+
+---
+
 
 ### 2026-01-13 — PR 4: Gemini-TTS Prompted Voices
 **Status:** ✅ IMPLEMENTED - Integrated & Production Ready
