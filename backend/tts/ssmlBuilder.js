@@ -266,7 +266,8 @@ export function buildSSML(text, options = {}) {
         // New options for dynamic engine
         useDynamicProsody = true,
         baseRateValue = 1.1, // Numeric base (1.1 = 110%)
-        basePitchValue = 1    // Numeric base (+1)
+        basePitchValue = 1,    // Numeric base (+1)
+        suppressProsodyTags = false // New: Skip <prosody> tags (use for Chirp 3 where audioConfig is preferred)
     } = options;
 
     // 1. Sanitize (MOVED: Now done per-phrase to avoid splitting entities like &apos; on semicolons)
@@ -283,6 +284,9 @@ export function buildSSML(text, options = {}) {
             processed = emphasizePowerWords(processed, customEmphasisWords, emphasisLevel);
         }
 
+        if (suppressProsodyTags) {
+            return `<speak>${processed}</speak>`;
+        }
         return `<speak><prosody rate="${rate}" pitch="${pitch}">${processed}</prosody></speak>`;
     }
 
@@ -315,12 +319,16 @@ export function buildSSML(text, options = {}) {
         // Calculate Dynamic Prosody
         // If content exists, wrap it. Use base settings + analysis.
         if (phrase.content) {
-            const modifiers = analyzePhrase(phrase.content, phrase.delimiter, {
-                baseRate: currentBaseRate,
-                basePitch: currentBasePitch
-            });
-
-            ssmlContent += `<prosody rate="${modifiers.rate}" pitch="${modifiers.pitch}">${contentWithEmphasis}</prosody>`;
+            if (suppressProsodyTags) {
+                // Just append content, no prosody wrapper
+                ssmlContent += contentWithEmphasis;
+            } else {
+                const modifiers = analyzePhrase(phrase.content, phrase.delimiter, {
+                    baseRate: currentBaseRate,
+                    basePitch: currentBasePitch
+                });
+                ssmlContent += `<prosody rate="${modifiers.rate}" pitch="${modifiers.pitch}">${contentWithEmphasis}</prosody>`;
+            }
         }
 
         // Append Pause based on delimiter
@@ -376,7 +384,8 @@ export function applyDeliveryStyle(text, styleName = 'standard_preaching', overr
         pauseIntensity: overrides.pauseIntensity !== undefined ? overrides.pauseIntensity : style.pauseIntensity,
         emphasizePowerWords: overrides.emphasizePowerWords !== undefined ? overrides.emphasizePowerWords : true,
         customEmphasisWords: overrides.customEmphasisWords || [],
-        emphasisLevel: overrides.emphasisLevel || 'moderate'
+        emphasisLevel: overrides.emphasisLevel || 'moderate',
+        suppressProsodyTags: overrides.suppressProsodyTags || false
     };
 
     // Build SSML

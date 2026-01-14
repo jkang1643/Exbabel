@@ -332,7 +332,8 @@ export class GoogleTtsService extends TtsService {
                     pauseIntensity: ssmlOptions.pauseIntensity,
                     emphasizePowerWords: ssmlOptions.emphasizePowerWords,
                     customEmphasisWords: ssmlOptions.customEmphasisWords,
-                    emphasisLevel: ssmlOptions.emphasisLevel
+                    emphasisLevel: ssmlOptions.emphasisLevel,
+                    suppressProsodyTags: route.tier === 'chirp3_hd' // Suppress prosody tags for Chirp 3 to avoid quality degradation
                 }
             });
 
