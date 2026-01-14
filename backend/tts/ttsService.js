@@ -691,15 +691,17 @@ export class GoogleTtsService extends TtsService {
                 const isUnsupportedVoice = errorMessage.includes('not found') || errorMessage.includes('no voice');
 
                 // Trigger fallback for permission issues or invalid voice/tier combinations
-                if ((isPermissionError || isInvalidArgument || isUnsupportedVoice) &&
-                    (route.tier === 'gemini' || route.tier === 'chirp3_hd')) {
+                if (isPermissionError || isInvalidArgument || isUnsupportedVoice) {
+                    // Force fallback to neural2 for high-end engines, or to the language's default fallback for the current tier
+                    const forceNeural2Fallback = (route.tier === 'gemini' || route.tier === 'chirp3_hd');
+                    const targetTier = forceNeural2Fallback ? 'neural2' : route.tier;
 
-                    console.warn(`[GoogleTtsService] ${route.tier.toUpperCase()} voice error ("${route.voiceName}"). Falling back to Neural2. Error: ${errorMessage}`);
+                    console.warn(`[GoogleTtsService] ${route.tier.toUpperCase()} voice error ("${route.voiceName}"). Falling back to ${targetTier}. Error: ${errorMessage}`);
 
                     try {
-                        // Re-resolve route with forced fallback to neural2
+                        // Re-resolve route with forced fallback (requestedVoice=null will trigger the default language mapping)
                         const fallbackRoute = await resolveTtsRoute({
-                            requestedTier: 'neural2',
+                            requestedTier: targetTier,
                             requestedVoice: null,
                             languageCode: route.languageCode,
                             mode: 'unary'

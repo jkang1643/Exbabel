@@ -828,9 +828,24 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
       ];
       if (GEMINI_VOICES.includes(requestedVoiceName)) return requestedVoiceName;
     } else {
-      // For other tiers, check if it matches the expected pattern
-      const tierTag = tier === 'chirp3_hd' ? 'Chirp3' : (tier === 'neural2' ? 'Neural2' : 'Standard');
-      if (requestedVoiceName.includes(tierTag) && requestedVoiceName.includes(normalizedCode)) {
+      // For other tiers, check if it matches any of the expected patterns for that tier
+      const TIER_NAME_TAGS = {
+        'chirp3_hd': ['Chirp3', 'Chirp_3', 'Chirp-3'],
+        'neural2': ['Neural2', 'Wavenet', 'Studio'],
+        'standard': ['Standard', 'Polyglot', 'Chirp-HD', 'Chirp']
+      };
+
+      const allowedTags = TIER_NAME_TAGS[tier] || [];
+      const hasTierMatch = allowedTags.some(tag => requestedVoiceName.includes(tag));
+
+      // Language match: check for full locale or just the language prefix
+      const langPrefix = normalizedCode.split('-')[0];
+      const hasLangMatch = requestedVoiceName.includes(normalizedCode) ||
+        (requestedVoiceName.startsWith(langPrefix + '-') && !requestedVoiceName.includes('Polyglot'));
+      // Polyglot voices are cross-language, so we allow them handled specifically if needed
+      // but usually they have the locale they were selected for in the name too.
+
+      if (hasTierMatch && hasLangMatch) {
         return requestedVoiceName;
       }
     }
