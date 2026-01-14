@@ -370,6 +370,10 @@ export async function handleHostConnection(clientWs, sessionId) {
   }
 }
 
+// TTS Radio Mode: Lease enforcement constants
+const TTS_PLAYING_LEASE_SECONDS = 300; // 5 minutes
+const TTS_PAUSED_LEASE_SECONDS = 60; // 1 minute
+
 /**
  * Handle listener connection
  */
@@ -449,7 +453,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       try {
         const message = JSON.parse(msg.toString());
 
-        // TTS command handlers (PR1: scaffold only)
+        // TTS command handlers
         if (message.type === 'tts/start') {
           console.log(`[Listener] ${userName} starting TTS playback`);
 
@@ -463,26 +467,76 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           clientWs.ttsState.voiceName = message.voiceName || null;
           clientWs.ttsState.tier = message.tier || 'gemini';
           clientWs.ttsState.mode = message.mode || 'unary';
-          clientWs.ttsState.playingLeaseTimestamp = Date.now();
+          clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PLAYING_LEASE_SECONDS * 1000);
 
-          // Send acknowledgment
+          // Store full config for lease validation
+          clientWs.ttsState.ttsConfig = {
+            languageCode: message.languageCode || targetLang,
+            voiceName: message.voiceName,
+            tier: message.tier || 'gemini',
+            mode: message.mode || 'unary',
+            ssmlOptions: message.ssmlOptions,
+            promptPresetId: message.promptPresetId,
+            ttsPrompt: message.ttsPrompt,
+            intensity: message.intensity
+          };
+
+          // Send acknowledgment with lease info
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({
               type: 'tts/ack',
               action: 'start',
-              state: clientWs.ttsState
+              state: clientWs.ttsState,
+              leaseExpiresAt: clientWs.ttsState.ttsLeaseExpiresAt
             }));
           }
 
           console.log(`[Listener] ${userName} TTS state:`, clientWs.ttsState);
         }
+        else if (message.type === 'tts/pause') {
+          console.log(`[Listener] ${userName} pausing TTS playback`);
+
+          // Update playback state and refresh lease with shorter duration
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'PAUSED';
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PAUSED_LEASE_SECONDS * 1000);
+          }
+
+          // Send acknowledgment
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'pause',
+              leaseExpiresAt: clientWs.ttsState?.ttsLeaseExpiresAt
+            }));
+          }
+        }
+        else if (message.type === 'tts/resume') {
+          console.log(`[Listener] ${userName} resuming TTS playback`);
+
+          // Update playback state and refresh full lease
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'PLAYING';
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PLAYING_LEASE_SECONDS * 1000);
+          }
+
+          // Send acknowledgment
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'resume',
+              leaseExpiresAt: clientWs.ttsState?.ttsLeaseExpiresAt
+            }));
+          }
+        }
         else if (message.type === 'tts/stop') {
           console.log(`[Listener] ${userName} stopping TTS playback`);
 
-          // Update playback state
+          // Update playback state and clear lease
           if (clientWs.ttsState) {
             clientWs.ttsState.playbackState = 'STOPPED';
-            clientWs.ttsState.playingLeaseTimestamp = null;
+            clientWs.ttsState.ttsLeaseExpiresAt = null;
+            clientWs.ttsState.ttsConfig = null;
           }
 
           // Send acknowledgment
@@ -519,6 +573,39 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                   segmentId: message.segmentId,
                   hasText: !!message.text,
                   hasLanguageCode: !!message.languageCode
+                }
+              }));
+            }
+            return;
+          }
+
+          // Radio Mode: Check if playing state is active (lease enforcement)
+          if (!clientWs.ttsState || clientWs.ttsState.playbackState !== 'PLAYING') {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_NOT_PLAYING',
+                message: 'TTS synthesis requires active playback state. Please start TTS playback first.',
+                details: {
+                  segmentId: message.segmentId,
+                  currentState: clientWs.ttsState?.playbackState || 'STOPPED'
+                }
+              }));
+            }
+            return;
+          }
+
+          // Radio Mode: Check if lease is still valid
+          if (clientWs.ttsState.ttsLeaseExpiresAt && Date.now() > clientWs.ttsState.ttsLeaseExpiresAt) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_LEASE_EXPIRED',
+                message: 'TTS playback lease expired. Please restart playback.',
+                details: {
+                  segmentId: message.segmentId,
+                  leaseExpiredAt: clientWs.ttsState.ttsLeaseExpiresAt,
+                  currentTime: Date.now()
                 }
               }));
             }
@@ -681,15 +768,18 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             const ttsService = new GoogleTtsService();
             const response = await ttsService.synthesizeUnary(ttsRequest, route);
 
-            // Send audio response with resolved routing info
+            // Send audio response with resolved routing info (streaming-compatible structure)
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'tts/audio',
-                segmentId: message.segmentId,
-                format: response.route.audioEncoding, // Use resolved encoding
-                mimeType: response.mimeType,
-                audioContentBase64: response.audioContentBase64,
-                sampleRateHz: response.sampleRateHz,
+                segmentId: response.segmentId,
+                audio: {
+                  bytesBase64: response.audio.bytesBase64,
+                  mimeType: response.audio.mimeType,
+                  durationMs: response.audio.durationMs,
+                  sampleRateHz: response.audio.sampleRateHz
+                },
+                mode: response.mode,
                 // Include resolved routing for frontend visibility
                 resolvedRoute: response.route
               }));

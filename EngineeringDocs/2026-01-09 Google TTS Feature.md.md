@@ -1,5 +1,5 @@
 # Exbabel — Feat/Google TTS Integration
-**Last updated:** 2026-01-14 (America/Chicago) - Refined Gemini Speed Reliability
+**Last updated:** 2026-01-14 (America/Chicago) - Radio Mode Streaming-Compatible Architecture
 
 This is a running "what is done" document capturing what we changed, why, and where we are now regarding the Google Text-to-Speech integration.
 **Newest items are at the top.**
@@ -10,6 +10,49 @@ This is a running "what is done" document capturing what we changed, why, and wh
 **Most recent at the top.**
 
 
+### BUG 15: FIXED — Chirp 3 HD Voice Quality Degradation
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved an issue where Chirp 3 HD voices sounded robotic or low-quality when dynamic prosody was applied.
+
+#### Root Cause:
+1. **Model Incompatibility:** Applying SSML `<prosody>` tags for rate and pitch control to Chirp 3 HD voices (which use a different generative architecture than Standard/Neural2) caused significant audio artifacts and loss of fidelity. The model struggled to reconcile the SSML instructions with its internal generative flow.
+
+#### Key Fixes:
+1. **SSML Bypass:** Modified `ssmlBuilder.js` to explicitly bypass generation of `<prosody>` tags for any voice identified as `CHIRP3_HD`.
+2. **Native Speed Control:** Reverted to using `audioConfig.speaking_rate` exclusively for Chirp 3 speed control, which (after recent fixes) now works reliably without degrading audio quality.
+3. **Preserved Pausing:** Retained `<break>` tags in SSML as they are still handled correctly by the engine.
+
+---
+
+
+### BUG 14: FIXED — Broadcast Sequence Adapter Error (Legacy Audio Structure)
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved a crash in the Host Mode adapter when broadcasting synthesized audio to clients.
+
+#### Root Cause:
+1. **Structure Mismatch:** The `broadcastWithSequence` function in `backend/host/adapter.js` was legacy code expecting the old flat audio response format (directly containing `bytesBase64`).
+2. **Breaking Change (PR 6):** The recent "Radio Mode" architecture update (PR 6) nested the audio data into an `audio` object (`msg.audio.bytesBase64`), causing the adapter to read `undefined` and throw errors.
+
+#### Key Fixes:
+1. **Structure Adaptation:** Updated `adapter.js` to robustly handle the new nested structure: `const audioData = msg.audio?.bytesBase64 || msg.audio;`. This ensures compatibility with both the new streaming-ready format and any potential legacy messages.
+
+---
+
+
+### BUG 13: FIXED — Radio Mode Queue Status Error
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved a frontend crash that occurred when switching to or monitoring "Radio Mode".
+
+#### Root Cause:
+1. **Missing Method:** The `TtsPanel.jsx` component was polling `controller.getQueueStatus()` to update the UI progress bars, but this method was not actually implemented in the `TtsPlayerController` class, leading to a `TypeError`.
+
+#### Key Fixes:
+1. **Implementation:** Added the `getQueueStatus()` method to `TtsPlayerController.js`. It now correctly returns the current queue length, active segment ID, and playback status, allowing the UI to reflect the true state of the radio queue.
+
+---
 ### BUG 12: FIXED — Gemini TTS Speed Reliability & Multi-Layered Enforcement
 **Status:** ✅ RESOLVED (2026-01-14)
 
@@ -235,6 +278,54 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 
 ## 1) What we did (feature updates / changes)
 
+### 2026-01-14 — PR 6: Radio Mode Streaming-Compatible Architecture
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Refactored TTS audio response structure to support future streaming mode without breaking existing unary mode. Wrapped audio data in structured metadata object with `segmentId` and `mode` fields.
+
+**Key Changes:**
+- **Structured Audio Response:** Backend now returns `{ segmentId, audio: { bytesBase64, mimeType, durationMs, sampleRateHz }, mode }` instead of flat structure
+- **Pluggable Audio Source Interface:** Frontend has clear abstraction point for future SourceBuffer integration
+- **Backward Compatible:** V1 still uses object URLs; no changes to playback logic
+- **Future-Ready:** When streaming is added, just check `mode` field and route to SourceBuffer
+
+**Response Structure:**
+```javascript
+// Unary Mode (Current)
+{
+  segmentId: 'seg-1',
+  audio: {
+    bytesBase64: '...',  // Complete audio blob
+    mimeType: 'audio/mpeg',
+    durationMs: 1500,
+    sampleRateHz: 24000
+  },
+  mode: 'unary',
+  resolvedRoute: {...}
+}
+
+// Streaming Mode (Future)
+{
+  segmentId: 'seg-1',
+  audio: {
+    chunks: [
+      { seq: 0, bytesBase64: '...', isLast: false },
+      { seq: 1, bytesBase64: '...', isLast: true }
+    ],
+    mimeType: 'audio/mpeg'
+  },
+  mode: 'streaming',
+  resolvedRoute: {...}
+}
+```
+
+**Where implemented:**
+- **Backend:** `backend/tts/ttsService.js`, `backend/websocketHandler.js`
+- **Frontend:** `frontend/src/tts/TtsPlayerController.js`
+- **Tests:** `backend/tests/tts/integration/tts-flow.test.js`
+
+---
+
 ### 2026-01-14 — PR 5: Universal Speaking Speed Control
 **Status:** ✅ IMPLEMENTED - Production Ready
 
@@ -289,6 +380,32 @@ Implemented the "Dynamic Prosody Engine" for Chirp 3 HD voices, enabling sermon-
 **Where implemented:**
 - **Backend:** `backend/tts/ssmlBuilder.js`, `backend/tts/ttsService.js`
 - **Frontend:** `frontend/src/config/ssmlConfig.js`
+
+---
+
+### 2026-01-14 — PR 7: Radio Mode & Queue Management
+**Status:** ✅ IMPLEMENTED - Auto-play and Queue Logic
+
+Implemented "Radio Mode" for automatic sequential playback of finalized translations.
+
+**Key Changes:**
+- **UI:** Added "Radio Mode" controls (Play/Pause/Resume) and live queue status to `TtsPanel.jsx`.
+- **Queue Logic:** Implemented `TtsPlayerController` queue system to handle auto-enqueuing of finalized segments.
+- **Lease Enforcement:** Backend now enforces 5-min playing leases to prevent runaway costs.
+- **Bug Fix:** Fixed critical `TypeError` where numeric `segmentId` caused frontend crash during out-of-order checks.
+- **Auto-start:** Radio mode starts playback from "now" (current timestamp), ignoring old segments.
+- **Prefetching:** Automatically fetches the next segment in the queue while the current segment is playing, eliminating inter-segment latency.
+
+#### Critical Bug Fix Details
+**Issue:** Frontend crash during TTS playback.
+**Cause:** The backend sends `segmentId` as a number (e.g., `128`), but frontend code attempted to call `.includes()` on it during out-of-order checks (expecting a string).
+**Error:** `TypeError: msg.segmentId.includes is not a function`
+**Fix:** Explicitly converted `segmentId` to string before string operations: `String(msg.segmentId).includes(...)`.
+**Impact:** Audio now plays correctly and segments are processed sequentially.
+
+**Where implemented:**
+- **Backend:** `backend/websocketHandler.js` (Lease logic)
+- **Frontend:** `frontend/src/tts/TtsPlayerController.js`, `frontend/src/components/TtsPanel.jsx`, `frontend/src/components/ListenerPage.jsx`
 
 ---
 

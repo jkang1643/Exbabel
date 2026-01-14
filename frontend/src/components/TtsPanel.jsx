@@ -40,6 +40,9 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
     const [promptBytes, setPromptBytes] = useState(0);
     const [textBytes, setTextBytes] = useState(0);
 
+    // Radio mode queue status
+    const [queueStatus, setQueueStatus] = useState(null);
+
     // Get available voices for current language
     const availableVoices = getVoicesForLanguage(targetLang);
 
@@ -191,6 +194,20 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
         }
     }, [customPrompt]);
 
+    // Poll queue status when playing (radio mode)
+    useEffect(() => {
+        if (playerState === TtsPlayerState.PLAYING && controller) {
+            const interval = setInterval(() => {
+                const status = controller.getQueueStatus();
+                setQueueStatus(status);
+            }, 500); // Update every 500ms
+
+            return () => clearInterval(interval);
+        } else {
+            setQueueStatus(null);
+        }
+    }, [playerState, controller]);
+
     const handleToggleEnabled = () => {
         setEnabled(!enabled);
         if (enabled && playerState === TtsPlayerState.PLAYING) {
@@ -214,7 +231,9 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
             voiceName: selectedVoice,
             tier: tier,
             mode: selectedMode,
-            ssmlOptions: currentSsmlOptions
+            ssmlOptions: currentSsmlOptions,
+            // Radio mode: Start from "now" - use current timestamp as marker
+            startFromSegmentId: Date.now()
         };
 
         // Add Gemini-TTS prompt fields if using Gemini voice
@@ -229,11 +248,20 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
             });
         }
 
+        console.log('[TtsPanel] Starting radio mode with startFromSegmentId:', requestData.startFromSegmentId);
         controller.start(requestData);
     };
 
     const handleStop = () => {
         controller.stop();
+    };
+
+    const handlePause = () => {
+        controller.pause();
+    };
+
+    const handleResume = () => {
+        controller.resume();
     };
 
     const isPlaying = playerState === TtsPlayerState.PLAYING;
@@ -541,6 +569,110 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                                 Streaming
                             </button>
                         </div>
+                    </div>
+
+                    {/* Radio Mode Section */}
+                    <div className="space-y-3 pt-3 border-t-2 border-green-200 bg-green-50/30 p-3 rounded-md">
+                        <div className="flex items-center justify-between">
+                            <h4 className="text-sm font-semibold text-green-800 flex items-center gap-2">
+                                📻 Radio Mode
+                                <span className="text-xs font-normal text-gray-600">(Auto-play new segments)</span>
+                            </h4>
+                        </div>
+
+                        {/* Radio Mode Controls */}
+                        <div className="flex gap-2">
+                            {playerState === TtsPlayerState.STOPPED && (
+                                <button
+                                    onClick={handlePlay}
+                                    disabled={!isConnected || !selectedVoice}
+                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                                >
+                                    <Play className="w-5 h-5" />
+                                    Start Radio Mode
+                                </button>
+                            )}
+                            {playerState === TtsPlayerState.PLAYING && (
+                                <>
+                                    <button
+                                        onClick={handlePause}
+                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 transition-colors font-medium"
+                                    >
+                                        <Square className="w-5 h-5" />
+                                        Pause
+                                    </button>
+                                    <button
+                                        onClick={handleStop}
+                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors font-medium"
+                                    >
+                                        <Square className="w-5 h-5" />
+                                        Stop
+                                    </button>
+                                </>
+                            )}
+                            {playerState === TtsPlayerState.PAUSED && (
+                                <>
+                                    <button
+                                        onClick={handleResume}
+                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors font-medium"
+                                    >
+                                        <Play className="w-5 h-5" />
+                                        Resume
+                                    </button>
+                                    <button
+                                        onClick={handleStop}
+                                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors font-medium"
+                                    >
+                                        <Square className="w-5 h-5" />
+                                        Stop
+                                    </button>
+                                </>
+                            )}
+                        </div>
+
+                        {/* Queue Status Display */}
+                        {queueStatus && playerState === TtsPlayerState.PLAYING && (
+                            <div className="space-y-2 p-3 bg-white/80 rounded border border-green-200">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-xs font-semibold text-gray-700">Queue Status</span>
+                                    <span className="text-xs text-gray-500">
+                                        {queueStatus.queueLength} total | {queueStatus.readyCount} ready | {queueStatus.pendingCount} pending
+                                    </span>
+                                </div>
+
+                                {queueStatus.currentSegmentId && (
+                                    <div className="p-2 bg-green-100 rounded border border-green-300">
+                                        <div className="text-xs font-medium text-green-800 mb-1">
+                                            🎵 Now Playing: {queueStatus.currentSegmentId}
+                                        </div>
+                                        <div className="text-xs text-gray-700 line-clamp-2">
+                                            {queueStatus.currentText || 'Loading...'}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {!queueStatus.currentSegmentId && queueStatus.queueLength > 0 && (
+                                    <div className="text-xs text-gray-600 italic p-2 bg-yellow-50 rounded border border-yellow-200">
+                                        ⏳ Waiting for next segment...
+                                    </div>
+                                )}
+
+                                {queueStatus.queueLength === 0 && (
+                                    <div className="text-xs text-gray-500 italic p-2">
+                                        📭 Queue empty - waiting for new finalized segments
+                                    </div>
+                                )}
+
+                                {/* Debug Info */}
+                                <div className="text-[10px] text-gray-400 font-mono pt-1 border-t border-gray-200">
+                                    Requesting: {queueStatus.inFlightCount} | Ready: {queueStatus.readyCount} | Pending: {queueStatus.pendingCount}
+                                </div>
+                            </div>
+                        )}
+
+                        <p className="text-xs text-gray-600 italic">
+                            💡 Radio mode automatically speaks new finalized segments as they arrive
+                        </p>
                     </div>
 
                     {/* Playback Controls */}

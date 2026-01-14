@@ -31,6 +31,15 @@ export class TtsPlayerController {
         this.audioQueue = [];
         this.currentAudio = null;
 
+        // Radio mode queue management (PR3)
+        this.queue = []; // Array<{ segmentId, text, status: 'pending'|'requesting'|'ready'|'playing'|'done'|'failed', audioBlob?, timestamp }>
+        this.lastSeenSegmentId = null; // Track "start from now" marker
+        this.inFlight = new Map(); // Map<segmentId, abortToken> for cancellation
+        this.dedupeSet = new Set(); // Set<segmentId> to prevent duplicate requests
+        this.queueLimit = 25; // Maximum queue size
+        this.maxConcurrentRequests = 3; // Limit concurrent TTS requests (increased for prefetching)
+        this.currentRequestCount = 0; // Track active requests
+
         // Callbacks
         this.onStateChange = null;
         this.onError = null;
@@ -57,9 +66,10 @@ export class TtsPlayerController {
      * @param {string} [config.promptPresetId] - Prompt preset ID (Gemini-TTS only)
      * @param {string} [config.ttsPrompt] - Custom prompt (Gemini-TTS only)
      * @param {number} [config.intensity] - Intensity level 1-5 (Gemini-TTS only)
+     * @param {number} [config.startFromSegmentId] - Start from this segment ID (radio mode)
      */
-    start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null, promptPresetId = null, ttsPrompt = null, intensity = null }) {
-        console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode, ssmlOptions });
+    start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null, promptPresetId = null, ttsPrompt = null, intensity = null, startFromSegmentId = null }) {
+        console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode, ssmlOptions, startFromSegmentId });
 
         this.currentLanguageCode = languageCode;
         this.currentVoiceName = voiceName;
@@ -70,6 +80,13 @@ export class TtsPlayerController {
         this.ttsPrompt = ttsPrompt;
         this.intensity = intensity;
         this.state = TtsPlayerState.PLAYING;
+
+        // Radio mode: Clear queue and set start marker
+        this.queue = [];
+        this.inFlight.clear();
+        this.dedupeSet.clear();
+        this.currentRequestCount = 0;
+        this.lastSeenSegmentId = startFromSegmentId;
 
         // Prime the audio system
         this._prime();
@@ -111,6 +128,13 @@ export class TtsPlayerController {
 
         this.audioQueue = [];
 
+        // Radio mode: Clear queue and inflight requests
+        this.queue = [];
+        this.inFlight.clear();
+        this.dedupeSet.clear();
+        this.currentRequestCount = 0;
+        this.lastSeenSegmentId = null;
+
         // Send WebSocket message to backend
         if (this.sendMessage) {
             this.sendMessage({
@@ -126,8 +150,6 @@ export class TtsPlayerController {
 
     /**
      * Pause TTS playback
-     * PR1: Local state change only
-     * PR3: Pause current audio
      */
     pause() {
         console.log('[TtsPlayerController] Pausing playback');
@@ -138,10 +160,17 @@ export class TtsPlayerController {
 
         this.state = TtsPlayerState.PAUSED;
 
-        // PR3: Pause current audio
-        // if (this.currentAudio) {
-        //   this.currentAudio.pause();
-        // }
+        // Pause current audio
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+        }
+
+        // Send pause message to backend
+        if (this.sendMessage) {
+            this.sendMessage({
+                type: 'tts/pause'
+            });
+        }
 
         // Notify state change
         if (this.onStateChange) {
@@ -151,8 +180,6 @@ export class TtsPlayerController {
 
     /**
      * Resume TTS playback
-     * PR1: Local state change only
-     * PR3: Resume current audio
      */
     resume() {
         console.log('[TtsPlayerController] Resuming playback');
@@ -163,10 +190,22 @@ export class TtsPlayerController {
 
         this.state = TtsPlayerState.PLAYING;
 
-        // PR3: Resume current audio
-        // if (this.currentAudio) {
-        //   this.currentAudio.play();
-        // }
+        // Resume current audio if paused
+        if (this.currentAudio) {
+            this.currentAudio.play().catch(error => {
+                console.error('[TtsPlayerController] Failed to resume audio:', error);
+            });
+        } else {
+            // No current audio, try to play next in queue
+            this._processQueue();
+        }
+
+        // Send resume message to backend
+        if (this.sendMessage) {
+            this.sendMessage({
+                type: 'tts/resume'
+            });
+        }
 
         // Notify state change
         if (this.onStateChange) {
@@ -175,30 +214,139 @@ export class TtsPlayerController {
     }
 
     /**
-     * Handle finalized segment (for auto-synthesis)
-     * PR1: Placeholder
-     * PR3: Request synthesis and queue audio
+     * Switch language mid-playback (radio mode)
+     * Stops current audio, clears queue, and restarts with new language
+     * 
+     * @param {string} newLanguageCode - New language code
+     * @param {string} newVoiceName - New voice name
+     */
+    switchLanguage(newLanguageCode, newVoiceName) {
+        console.log('[TtsPlayerController] Switching language', { newLanguageCode, newVoiceName });
+
+        // Stop current audio immediately
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio = null;
+        }
+
+        // Clear queue and inflight
+        this.queue = [];
+        this.audioQueue = [];
+        this.inFlight.clear();
+        this.dedupeSet.clear();
+        this.currentRequestCount = 0;
+
+        // Send stop to backend
+        if (this.sendMessage) {
+            this.sendMessage({ type: 'tts/stop' });
+        }
+
+        // Restart with new language
+        this.start({
+            languageCode: newLanguageCode,
+            voiceName: newVoiceName,
+            tier: this.tier,
+            mode: this.mode,
+            ssmlOptions: this.ssmlOptions,
+            promptPresetId: this.promptPresetId,
+            ttsPrompt: this.ttsPrompt,
+            intensity: this.intensity
+        });
+    }
+
+    /**
+     * Handle finalized segment (for auto-synthesis in radio mode)
      * 
      * @param {Object} segment - Finalized segment
      * @param {string} segment.id - Segment ID
      * @param {string} segment.text - Segment text
+     * @param {number} [segment.timestamp] - Segment timestamp
      */
     onFinalSegment(segment) {
-        // PR1: Placeholder - do nothing
-        console.log('[TtsPlayerController] Final segment received (not implemented)', segment.id);
+        // Only process if PLAYING
+        if (this.state !== TtsPlayerState.PLAYING) {
+            console.log('[TtsPlayerController] Ignoring segment (not PLAYING)', segment.id);
+            return;
+        }
 
-        // PR3: Request synthesis if playing
-        // if (this.state === TtsPlayerState.PLAYING) {
-        //   this.sendMessage({
-        //     type: 'tts/synthesize',
-        //     segmentId: segment.id,
-        //     text: segment.text,
-        //     languageCode: this.currentLanguageCode,
-        //     voiceName: this.currentVoiceName,
-        //     tier: this.tier,
-        //     mode: this.mode
-        //   });
-        // }
+        // Check if segment is after "start marker" (skip old history)
+        if (this.lastSeenSegmentId && segment.timestamp && segment.timestamp < this.lastSeenSegmentId) {
+            console.log('[TtsPlayerController] Skipping old segment', segment.id);
+            return;
+        }
+
+        // Dedupe check
+        if (this.dedupeSet.has(segment.id)) {
+            console.log('[TtsPlayerController] Skipping duplicate segment', segment.id);
+            return;
+        }
+
+        // Add to queue as pending
+        this.queue.push({
+            segmentId: segment.id,
+            text: segment.text,
+            status: 'pending',
+            timestamp: segment.timestamp || Date.now()
+        });
+
+        this.dedupeSet.add(segment.id);
+
+        // Enforce queue limit (drop oldest pending/done)
+        if (this.queue.length > this.queueLimit) {
+            const toRemove = this.queue.filter(item =>
+                item.status === 'pending' || item.status === 'done'
+            )[0];
+            if (toRemove) {
+                this.queue = this.queue.filter(item => item !== toRemove);
+                this.dedupeSet.delete(toRemove.segmentId);
+                console.log('[TtsPlayerController] Dropped oldest item from queue:', toRemove.segmentId);
+            }
+        }
+
+        console.log(`[TtsPlayerController] Enqueued segment ${segment.id}. Queue length: ${this.queue.length}`);
+
+        // Try to request synthesis for pending items
+        this._requestNextPending();
+    }
+
+    /**
+     * Request synthesis for next pending item (radio mode)
+     * @private
+     */
+    _requestNextPending() {
+        // Respect concurrency limit
+        if (this.currentRequestCount >= this.maxConcurrentRequests) {
+            return;
+        }
+
+        // Find earliest pending item
+        const nextPending = this.queue.find(item => item.status === 'pending');
+        if (!nextPending) {
+            return;
+        }
+
+        // Mark as requesting
+        nextPending.status = 'requesting';
+        this.currentRequestCount++;
+
+        console.log(`[TtsPlayerController] Requesting synthesis for ${nextPending.segmentId}`);
+
+        // Send synthesis request
+        if (this.sendMessage) {
+            this.sendMessage({
+                type: 'tts/synthesize',
+                segmentId: nextPending.segmentId,
+                text: nextPending.text,
+                languageCode: this.currentLanguageCode,
+                voiceName: this.currentVoiceName,
+                tier: this.tier,
+                mode: this.mode,
+                ssmlOptions: this.ssmlOptions,
+                promptPresetId: this.promptPresetId,
+                ttsPrompt: this.ttsPrompt,
+                intensity: this.intensity
+            });
+        }
     }
 
     /**
@@ -213,12 +361,13 @@ export class TtsPlayerController {
                 break;
 
             case 'tts/audio':
-                // Unary audio response
+                // Unary audio response (streaming-compatible structure)
                 console.log('[TtsPlayerController] Received audio for segment:', msg.segmentId);
 
                 // Check for out-of-order responses (protected against overlap)
-                if (msg.segmentId && msg.segmentId.includes('_ts')) {
-                    const parts = msg.segmentId.split('_ts');
+                // Check for out-of-order responses (protected against overlap)
+                if (msg.segmentId && String(msg.segmentId).includes('_ts')) {
+                    const parts = String(msg.segmentId).split('_ts');
                     const requestId = parseInt(parts[parts.length - 1], 10);
                     if (requestId < this.lastRequestId) {
                         console.warn('[TtsPlayerController] Ignoring out-of-order audio response', {
@@ -241,13 +390,17 @@ export class TtsPlayerController {
                     }
                 }
 
-                // Store in queue with "ready" status
+                // Store in queue with "ready" status (streaming-compatible structure)
                 const queueItem = {
                     type: 'unary',
                     segmentId: msg.segmentId,
-                    format: msg.format,
-                    mimeType: msg.mimeType,
-                    audioContentBase64: msg.audioContentBase64,
+                    mode: msg.mode || 'unary',
+                    audioData: {
+                        bytesBase64: msg.audio.bytesBase64,
+                        mimeType: msg.audio.mimeType,
+                        durationMs: msg.audio.durationMs,
+                        sampleRateHz: msg.audio.sampleRateHz
+                    },
                     resolvedRoute: msg.resolvedRoute,
                     ssmlOptions: msg.ssmlOptions || (msg.segmentId && this._pendingRequests?.get(msg.segmentId)) || null,
                     status: 'ready'
@@ -255,6 +408,20 @@ export class TtsPlayerController {
 
                 // Cleanup pending request tracking
                 if (msg.segmentId) this._pendingRequests?.delete(msg.segmentId);
+
+                // Radio mode: Update queue item status
+                const radioQueueItem = this.queue.find(item => item.segmentId === msg.segmentId);
+                if (radioQueueItem) {
+                    radioQueueItem.status = 'ready';
+                    radioQueueItem.audioData = queueItem.audioData;
+                    radioQueueItem.resolvedRoute = msg.resolvedRoute;
+                    radioQueueItem.ssmlOptions = queueItem.ssmlOptions;
+                    this.currentRequestCount--;
+                    console.log(`[TtsPlayerController] Marked segment ${msg.segmentId} as ready. Request count: ${this.currentRequestCount}`);
+
+                    // Request next pending item
+                    this._requestNextPending();
+                }
 
                 this.audioQueue.push(queueItem);
                 console.log(`[TtsPlayerController] Added to queue. New length: ${this.audioQueue.length}`);
@@ -282,6 +449,23 @@ export class TtsPlayerController {
 
             case 'tts/error':
                 console.error('[TtsPlayerController] TTS error:', msg.code, msg.message);
+
+                // Radio mode: Mark queue item as failed and continue
+                if (msg.segmentId) {
+                    const radioQueueItem = this.queue.find(item => item.segmentId === msg.segmentId);
+                    if (radioQueueItem && radioQueueItem.status === 'requesting') {
+                        radioQueueItem.status = 'failed';
+                        radioQueueItem.error = { code: msg.code, message: msg.message };
+                        this.currentRequestCount--;
+                        console.log(`[TtsPlayerController] Marked segment ${msg.segmentId} as failed. Request count: ${this.currentRequestCount}`);
+
+                        // Request next pending item
+                        this._requestNextPending();
+
+                        // Try to play next ready item
+                        this._processQueue();
+                    }
+                }
 
                 if (this.onError) {
                     this.onError(msg);
@@ -416,7 +600,10 @@ export class TtsPlayerController {
         nextItem.status = 'playing';
 
         if (nextItem.type === 'unary') {
-            const audioBlob = this._base64ToBlob(nextItem.audioContentBase64, nextItem.mimeType);
+            // Audio source interface: extract from structured audioData object
+            // V1: Create object URL from base64 blob
+            // Future: This is where we'll add SourceBuffer support for streaming
+            const audioBlob = this._base64ToBlob(nextItem.audioData.bytesBase64, nextItem.audioData.mimeType);
             if (audioBlob) {
                 this._playAudio(audioBlob, nextItem);
             } else {
@@ -550,6 +737,32 @@ export class TtsPlayerController {
             // We expect an error because there's no source, but the play() call still "primes" the browser gesture tracking
             console.log('[TtsPlayerController] Audio primed (ignored harmless error):', err.message);
         });
+    }
+
+    /**
+     * Get detailed queue status for UI
+     * @returns {Object} Queue status object
+     */
+    getQueueStatus() {
+        // Find currently playing item from audioQueue
+        const playingItem = this.audioQueue.find(item => item.status === 'playing');
+
+        // Find corresponding text from radio queue
+        const radioItem = playingItem ? this.queue.find(item => item.segmentId === playingItem.segmentId) : null;
+
+        // Count stats from radio queue
+        const readyCount = this.queue.filter(item => item.status === 'ready').length;
+        const pendingCount = this.queue.filter(item => item.status === 'pending').length;
+        const requestingCount = this.queue.filter(item => item.status === 'requesting').length;
+
+        return {
+            queueLength: this.queue.length,
+            readyCount,
+            pendingCount,
+            inFlightCount: requestingCount,
+            currentSegmentId: playingItem ? playingItem.segmentId : null,
+            currentText: radioItem ? radioItem.text : null
+        };
     }
 
     /**

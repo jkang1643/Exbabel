@@ -59,7 +59,16 @@ async function runTest(name, scenario) {
                     clearTimeout(timeout);
                     listenerWs.close();
                     hostWs.close();
-                    resolve({ success: true, size: msg.audioContentBase64?.length });
+                    // Verify new streaming-compatible structure
+                    const audioSize = msg.audio?.bytesBase64?.length || 0;
+                    const hasValidStructure = msg.audio && msg.audio.bytesBase64 && msg.audio.mimeType && msg.mode;
+                    resolve({
+                        success: true,
+                        size: audioSize,
+                        validStructure: hasValidStructure,
+                        mode: msg.mode,
+                        segmentId: msg.segmentId
+                    });
                 } else if (msg.type === 'tts/error') {
                     clearTimeout(timeout);
                     listenerWs.close();
@@ -72,7 +81,8 @@ async function runTest(name, scenario) {
         });
 
         if (result.success) {
-            console.log(`✅ Passed: Received ${result.size} bytes of audio`);
+            const structureCheck = result.validStructure ? '✓ valid structure' : '✗ invalid structure';
+            console.log(`✅ Passed: Received ${result.size} bytes of audio (${structureCheck}, mode: ${result.mode}, segmentId: ${result.segmentId})`);
         } else {
             console.warn(`⚠️ Finished with error (expected in some scenarios): ${result.error}`);
             return result;

@@ -706,6 +706,18 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 });
               }
 
+              // Radio Mode: Auto-enqueue finalized segment for TTS
+              if (ttsControllerRef.current &&
+                ttsControllerRef.current.getState().state === 'PLAYING' &&
+                isForMyLanguageFinal &&
+                finalText) {
+                ttsControllerRef.current.onFinalSegment({
+                  id: message.seqId || `seg_${Date.now()}`,
+                  text: finalText,
+                  timestamp: message.timestamp || Date.now()
+                });
+              }
+
               // CRITICAL: Reset throttling refs so new partials can immediately update after final
               // Without this, throttling might skip the first partials of the new segment
               lastRenderTimeRef.current = 0;
@@ -1001,6 +1013,23 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
                   return next;
                 });
+
+                // Radio Mode: Auto-enqueue finalized segment for TTS
+                try {
+                  if (ttsControllerRef.current &&
+                    ttsControllerRef.current.getState().state === 'PLAYING' &&
+                    (isForMyLanguage || isTranscriptionMode) &&
+                    textToDisplay) {
+                    ttsControllerRef.current.onFinalSegment({
+                      id: message.seqId || `seg_${Date.now()}`,
+                      text: textToDisplay,
+                      timestamp: message.timestamp || Date.now()
+                    });
+                  }
+                } catch (ttsErr) {
+                  console.error('[ListenerPage] Failed to enqueue TTS segment:', ttsErr);
+                  // Swallow error to protect history update flow
+                }
 
                 // Clear live displays immediately after adding to history
                 setCurrentTranslation('');

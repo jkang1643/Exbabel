@@ -671,12 +671,17 @@ export class GoogleTtsService extends TtsService {
 
                 console.log(`[GoogleTtsService] Synthesis successful: ${audioSize} bytes of ${mimeType}`);
 
+                // Streaming-compatible response structure
                 return {
-                    audioContentBase64,
-                    mimeType,
-                    sampleRateHz: response.sampleRateHz || undefined,
-                    durationMs: undefined,
-                    route, // Include resolved routing in response
+                    segmentId: request.segmentId || 'unknown',
+                    audio: {
+                        bytesBase64: audioContentBase64,
+                        mimeType: mimeType,
+                        durationMs: undefined,
+                        sampleRateHz: response.sampleRateHz || undefined
+                    },
+                    mode: 'unary',
+                    route: route, // Include resolved routing in response
                     promptMetadata: googleRequest._promptMetadata || null // Include prompt metadata for logging
                 };
             } catch (error) {
