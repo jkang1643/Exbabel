@@ -23,7 +23,7 @@ console.log('='.repeat(70));
 console.log('');
 
 // Simulate what GoogleSpeechStream does
-const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID;
+const projectId = process.env.GOOGLE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
 const phraseSetId = process.env.GOOGLE_PHRASE_SET_ID;
 
 console.log('[GoogleSpeech] Starting stream #0...');

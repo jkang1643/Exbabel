@@ -1,0 +1,138 @@
+# PR 1 — TTS Feature Flags + Scaffolding (Streaming-ready)
+
+You are working in the Exbabel repo. Implement scaffolding only (NO full TTS generation yet). 
+Goal: introduce feature flags, config, policy checks, and backend/frontend skeletons so later PRs can implement BOTH:
+- Unary synthesis (batch): returns one audio blob (mp3/ogg/pcm) for a segment
+- Streaming synthesis: returns audio chunks for low latency (PCM/OGG_OPUS/etc)
+Do NOT modify transcription/translation/partials/CoreEngine behavior.
+
+## Constraints / Guardrails
+- Do not change existing transcription, translation, partials/finals emission logic, or CoreEngine.
+- No caching (S3/Redis) in this PR.
+- No speed controls in this PR.
+- No new DB migrations required in PR1 (ok to add placeholders/interfaces; logging can be stubbed).
+- Ensure all new code is behind feature flags so it can be safely merged without impacting current behavior.
+
+---
+
+## A) Backend: Add Config + Feature Flags (scaffold)
+
+### 1) Environment Variables (with safe defaults)
+Add config parsing (backend/config or equivalent) for:
+- TTS_ENABLED_DEFAULT=false
+- TTS_PROVIDER="google"
+- TTS_MODE="unary" | "streaming"  (default "unary" for now)
+- TTS_MODEL_TIER="gemini" | "chirp_hd" | "custom_voice" (default "gemini")
+- TTS_AUDIO_FORMAT_UNARY="MP3" | "OGG_OPUS" | "LINEAR16" (default "MP3")
+- TTS_AUDIO_FORMAT_STREAMING="PCM" | "OGG_OPUS" | "ALAW" | "MULAW" (default "PCM")
+- TTS_PLAYING_LEASE_SECONDS=30  (prevents runaway billing later)
+
+Important: streaming MUST NOT default to MP3; keep separate format vars.
+
+### 2) Types / Interfaces
+Create new module: backend/tts/
+- tts.types.js (or .ts if repo uses TS):
+  - TtsTier = gemini | chirp_hd | custom_voice
+  - TtsMode = unary | streaming
+  - TtsFormatUnary = MP3 | OGG_OPUS | LINEAR16 | ALAW | MULAW | PCM
+  - TtsFormatStreaming = PCM | OGG_OPUS | ALAW | MULAW
+  - TtsRequest: { sessionId, userId, orgId, languageCode, voiceName, tier, mode, text, segmentId }
+  - TtsUnaryResponse: { audioContentBase64, mimeType, sampleRateHz?, durationMs? } (duration optional)
+  - TtsStreamChunk: { chunkBase64, mimeType, seq, isLast }
+  - TtsResponse = unary | stream
+
+### 3) Policy + Tier gating skeleton
+Create backend/tts/ttsPolicy.js:
+- resolveTierForUser({orgTierConfig, userSubscription}) -> allowed tiers
+- isVoiceAllowed({tier, languageCode, voiceName}) -> boolean
+- For PR1: implement basic checks + TODOs, but DO enforce:
+  - if tier not allowed -> return error "TTS_TIER_NOT_ALLOWED"
+  - if voice not allowed -> return error "TTS_VOICE_NOT_ALLOWED"
+  - if org flag disabled -> return error "TTS_DISABLED"
+
+### 4) Service abstraction
+Create backend/tts/ttsService.js:
+- class TtsService { 
+    async synthesizeUnary(req:TtsRequest): Promise<TtsUnaryResponse>
+    async synthesizeStream(req:TtsRequest, onChunk:(chunk:TtsStreamChunk)=>void): Promise<void>
+  }
+- For PR1: stub implementations that throw "NOT_IMPLEMENTED" but have correct method signatures.
+- Add a factory: backend/tts/index.js that exports getTtsService(config) returning GoogleTtsService (placeholder).
+
+### 5) WebSocket / HTTP API contract (scaffold only)
+Add minimal endpoint(s) without changing existing flows:
+Option A (preferred): WebSocket commands
+- Client sends: { type: "tts/start", languageCode, voiceName, tier, mode }
+- Client sends: { type: "tts/stop" }
+- Client sends: { type: "tts/synthesize", segmentId, text, languageCode, voiceName, tier, mode }  (later PR will call this automatically while playing)
+Server responds:
+- Unary: { type:"tts/audio", segmentId, format, mimeType, audioContentBase64 }
+- Streaming: { type:"tts/audio_chunk", segmentId, seq, mimeType, chunkBase64, isLast }
+
+In PR1, implement parsing/validation and reply with an informative stub error:
+- { type:"tts/error", code:"NOT_IMPLEMENTED", message:"TTS synthesis not implemented yet" }
+But DO return successful ack for start/stop:
+- { type:"tts/ack", action:"start" } etc
+
+Important: Store a per-connection "ttsPlaybackState" in memory (STOPPED/PLAYING/PAUSED) but do nothing else yet.
+Add playing lease timestamp bookkeeping (no enforcement beyond storing it).
+
+### 6) Logging / Usage (stub)
+Create backend/tts/ttsUsage.js with function recordUsage(event) stubbed.
+No DB writes in PR1; just console.debug with structured payload.
+
+---
+
+## B) Frontend: UI Flags + Controller Skeleton
+
+### 1) Feature gating
+Add a feature flag in frontend config:
+- VITE_TTS_UI_ENABLED=false by default
+When false, hide ALL new TTS UI.
+
+### 2) Player controller skeleton (no real audio yet)
+Create frontend/tts/TtsPlayerController.ts(x)/js:
+- state: STOPPED | PLAYING | PAUSED
+- currentLanguageCode
+- currentVoiceName
+- tier
+- mode (unary|streaming)
+- methods:
+  - start({languageCode, voiceName, tier, mode})
+  - stop()
+  - pause()
+  - resume()
+  - onFinalSegment(segment)  // for future PRs (do not integrate yet)
+  - onWsMessage(msg)         // handles tts/audio and tts/audio_chunk
+In PR1: implement start/stop that send WS messages "tts/start" and "tts/stop"
+For audio messages: just store them in memory queue (do not play).
+
+### 3) Minimal UI controls (hidden behind flag)
+Add a small TTS panel in Listener UI:
+- Toggle "Enable Speech" (only visible if VITE_TTS_UI_ENABLED=true)
+- Dropdown Language (bind existing target language selection)
+- Dropdown Voice (empty list for now; placeholder)
+- Toggle Mode: Unary vs Streaming (default Unary)
+- Buttons: Play / Stop (calls controller start/stop)
+No styling perfection required; keep consistent with existing UI framework.
+
+Do NOT change existing transcript display logic.
+
+---
+
+## C) Acceptance Criteria for PR1
+- App runs with no behavior changes when flags are off.
+- Backend accepts WS tts/start and tts/stop and responds with ack.
+- Backend validates tier/voice/org enabled flag (even if stubbed) and returns structured errors.
+- Frontend shows/hides TTS UI with a flag.
+- Start/Stop sends WS messages; no audio playback yet.
+- Code structure clearly supports both unary and streaming synthesis in later PRs.
+
+---
+
+## D) Deliverables
+- Commit changes with clear folder structure under backend/tts and frontend/tts.
+- Add small README comment in backend/tts/README.md explaining:
+  - Streaming formats exclude MP3; unary can use MP3.
+  - Why we keep separate config vars for unary vs streaming.
+- Add TODO markers for PR2 and PR3.

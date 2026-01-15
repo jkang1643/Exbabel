@@ -19,65 +19,57 @@ export function useWebSocket(url) {
     }
 
     console.log(`[WebSocket] Connecting to: ${url}`)
-    
+
     try {
       wsRef.current = new WebSocket(url)
-      
+
       wsRef.current.onopen = () => {
         setConnectionState('open')
-        console.log('[WebSocket] ✅ Connected successfully!')
-        
+        console.log(`[WebSocket] ✅ Connected successfully to: ${wsRef.current.url}`)
+
         // Start keep-alive ping interval (10s)
         pingIntervalRef.current = setInterval(() => {
           if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }))
-            console.log('[WebSocket] 📡 Keep-alive ping sent')
           }
         }, PING_INTERVAL)
       }
-      
+
       wsRef.current.onclose = (event) => {
         setConnectionState('closed')
-        console.log(`[WebSocket] ❌ Disconnected (code: ${event.code}, reason: ${event.reason})`)
-        
+        console.warn(`[WebSocket] ❌ Disconnected from: ${url}`)
+        console.warn(`[WebSocket] Close code: ${event.code}, reason: ${event.reason || 'No reason provided'}`)
+
         // Clear keep-alive ping interval
         if (pingIntervalRef.current) {
           clearInterval(pingIntervalRef.current)
           pingIntervalRef.current = null
         }
-        
+
         // Auto-reconnect after 2 seconds
+        console.log('[WebSocket] Will attempt to reconnect in 2 seconds...')
         setTimeout(() => {
           if (wsRef.current?.readyState !== WebSocket.OPEN) {
-            console.log('[WebSocket] Attempting to reconnect...')
+            console.log('[WebSocket] 🔄 Attempting to reconnect...')
             connect()
           }
         }, 2000)
       }
-      
+
       wsRef.current.onerror = (error) => {
         setConnectionState('error')
-        // Extract more details from the error event
-        const errorDetails = {
-          type: error.type,
-          target: error.target,
-          readyState: wsRef.current?.readyState,
-          url: wsRef.current?.url
-        }
-        console.error('[WebSocket] ⚠️ Error:', errorDetails)
-        console.error('[WebSocket] Error event:', error)
-        
+        console.error('[WebSocket] 🚨 ERROR event:', error)
+
         // Log WebSocket state for debugging
         if (wsRef.current) {
-          console.error('[WebSocket] WebSocket state:', {
+          console.error('[WebSocket] Current State:', {
             readyState: wsRef.current.readyState,
             url: wsRef.current.url,
-            protocol: wsRef.current.protocol,
-            extensions: wsRef.current.extensions
+            protocol: wsRef.current.protocol
           })
         }
       }
-      
+
       wsRef.current.onmessage = (event) => {
         // Check if data is a string (JSON) or Blob
         if (typeof event.data === 'string') {
@@ -118,7 +110,7 @@ export function useWebSocket(url) {
       clearInterval(pingIntervalRef.current)
       pingIntervalRef.current = null
     }
-    
+
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null

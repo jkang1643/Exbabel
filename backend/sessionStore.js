@@ -90,18 +90,67 @@ class SessionStore {
     };
 
     session.listeners.set(socketId, listenerData);
-    
+
     // Add to language group
     if (!session.languageGroups.has(targetLang)) {
       session.languageGroups.set(targetLang, new Set());
     }
     session.languageGroups.get(targetLang).add(socketId);
-    
+
     session.lastActivity = Date.now();
-    
+
     console.log(`[SessionStore] Listener ${userName} joined session ${session.sessionCode} (${targetLang}) - Total: ${session.listeners.size}`);
-    
+
     return listenerData;
+  }
+
+  /**
+   * Update a listener's target language (removes from old language group, adds to new one)
+   */
+  updateListenerLanguage(sessionId, socketId, newTargetLang) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    const listener = session.listeners.get(socketId);
+    if (!listener) {
+      throw new Error('Listener not found');
+    }
+
+    const oldTargetLang = listener.targetLang;
+
+    // If language hasn't changed, do nothing
+    if (oldTargetLang === newTargetLang) {
+      return listener;
+    }
+
+    console.log(`[SessionStore] Updating listener ${listener.userName} language: ${oldTargetLang} → ${newTargetLang}`);
+
+    // Remove from old language group
+    const oldLangGroup = session.languageGroups.get(oldTargetLang);
+    if (oldLangGroup) {
+      oldLangGroup.delete(socketId);
+      // Clean up empty language groups
+      if (oldLangGroup.size === 0) {
+        session.languageGroups.delete(oldTargetLang);
+      }
+    }
+
+    // Update listener data
+    listener.targetLang = newTargetLang;
+
+    // Add to new language group
+    if (!session.languageGroups.has(newTargetLang)) {
+      session.languageGroups.set(newTargetLang, new Set());
+    }
+    session.languageGroups.get(newTargetLang).add(socketId);
+
+    session.lastActivity = Date.now();
+
+    console.log(`[SessionStore] Listener ${listener.userName} moved to language group ${newTargetLang}`);
+
+    return listener;
   }
 
   /**
@@ -176,6 +225,11 @@ class SessionStore {
         try {
           listener.socket.send(messageStr);
           sentCount++;
+
+          // TEMP DEBUG: Log exact payload sent to ES listeners for "Y grito"
+          if (targetLang === 'es' && message?.hasTranslation && (message?.translatedText || '').includes('Y grito')) {
+            console.log('[ES_PAYLOAD_TO_LISTENER]', JSON.stringify(message));
+          }
         } catch (error) {
           console.error(`[SessionStore] Error sending to listener:`, error.message);
         }

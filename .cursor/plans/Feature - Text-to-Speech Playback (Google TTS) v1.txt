@@ -1,0 +1,307 @@
+
+# Feature: Google TTS Playback (Opt-in Radio Mode) v1
+
+## Problem
+
+Exbabel uses browser TTS as a placeholder, which is inconsistent across devices, limited in voice quality/language coverage, and can’t be tiered or reliably controlled for seamless segment-to-segment playback. Users need to listen to translations in their native language during live sessions with minimal lag.
+
+## Goals
+
+1. Integrate **Google TTS** to support spoken playback for **all Google-supported languages** (within Exbabel’s translated languages).
+2. Introduce **tiered voice quality**:
+
+   * Tier A: Gemini TTS
+   * Tier B: Chirp 3 HD (available via subscription)
+   * (Future) Chirp 3 Instant Custom Voice
+3. **Opt-in playback**: no API calls until user presses Play (admin enables feature; user opts in).
+4. **Radio-like continuous mode**: while playing, new finalized translated segments auto-generate audio and auto-play.
+5. Playback begins **from current transcript position** (most recent or “now”) and continues as segments finalize.
+6. Support immediate **language switching** mid-playback (restart/flush queue).
+
+## Non-Goals
+
+* No changes to partials, transcription/translation logic, CoreEngine, or liveness semantics.
+* No caching to S3 in v1.
+* No playback speed controls in v1.
+* No transcript-audio highlighting alignment in v1 (future).
+* No persistence across restarts (best-effort v1).
+
+## User/System Impact
+
+### Users
+
+* When enabled, can **Play/Pause** translated audio during live sermons.
+* Playback continues automatically as new finalized segments arrive.
+* Can switch language mid-playback (audio restarts immediately in selected language).
+
+### Admins
+
+* Enable/disable TTS for the org/church.
+* Set default voice per language.
+* Control tier availability per subscription.
+
+### System
+
+* Adds a TTS generation pipeline triggered by finalized segment emissions, but **only while a listener is in “playing” state**.
+* Adds usage/audit tracking for billing and compliance.
+
+---
+
+## High-Level Design
+
+### Core v1 flow (opt-in radio mode)
+
+1. Listener clicks **Play** (TTS enabled + authorized by subscription).
+2. Client sets `ttsPlaybackState = PLAYING` and selects:
+
+   * language
+   * voice (resolved from admin defaults + user override if allowed)
+   * tier (allowed by subscription)
+3. For each **finalized translated segment** received while playing:
+
+   * Backend generates **one MP3 per segment** (v1 rule).
+   * Client queues returned audio and plays sequentially.
+4. If user switches language:
+
+   * Client clears queue + stops current audio
+   * Immediately restarts using new language voice
+
+### Tier gating
+
+* If user requests a voice/tier not allowed:
+
+  * Hide those voices in UI (per your choice)
+  * Server validates anyway and falls back to allowed tier or errors (recommended: fallback to allowed tier for stability)
+
+---
+
+## System Boundaries
+
+### In scope
+
+* Segment-to-audio generation (per finalized segment)
+* Play/Pause state machine
+* Queueing + sequential playback
+* Tier enforcement + voice selection
+* Usage/audit logging
+
+### Out of scope (explicit)
+
+* Multi-segment “perfect chunking” / sentence merging
+* Streaming audio synthesis end-to-end (true sub-second pipeline)
+* S3 caching
+* Speed control
+* Offline
+
+---
+
+## Data Model Changes (minimal v1)
+
+*(You can implement now in Supabase later; for v1 you can store in-memory + log usage to DB if available.)*
+
+### `tts_voice_defaults`
+
+* `org_id`
+* `language_code`
+* `voice_name`
+* `model_tier` (gemini | chirp_hd | custom_future)
+* `updated_at`
+
+### `tts_usage_events` (billing/compliance)
+
+* `org_id`, `user_id`, `session_id`
+* `language_code`
+* `model_tier`
+* `voice_name`
+* `characters` (billable)
+* `audio_seconds` (tracked)
+* `status` (success|failed|fallback)
+* `created_at`
+
+*(Audio caching table intentionally omitted in v1.)*
+
+---
+
+## Integration Points
+
+### Existing systems
+
+* Finalized transcript emission (is_final segments)
+* Translation output per target language
+* Listener WebSocket delivery (real-time feed)
+
+### New components (v1)
+
+* `TtsService` backend module
+* `TtsPolicy` (tier + voice eligibility)
+* `TtsUsageMeter` (characters + audio seconds)
+* Frontend `TtsPlayerController` (queue, play, pause, language switch)
+
+---
+
+## Risks
+
+1. **Latency gaps** between segments (TTS call duration).
+
+   * Mitigation v1: Keep segments small (current is_final chunks), fast retry once, fallback to Gemini tier if higher tier fails.
+2. **Cost spikes** if playback state leaks as “playing”.
+
+   * Mitigation: server-side “playing lease” (expires after inactivity) + explicit stop on disconnect.
+3. **Language/voice mismatch**
+
+   * Mitigation: strict voice filtering by language code; server validation.
+4. **Mid-play language switching complexity**
+
+   * Mitigation: flush queue + restart cleanly (v1).
+
+---
+
+## Rollout & Rollback
+
+### Rollout
+
+* Feature flag: `tts_enabled_org`
+* Runtime flag: `tts_player_enabled_user` (opt-in)
+* Start with one tier (Gemini), then enable Chirp HD behind subscription.
+
+### Rollback
+
+* Disable org flag → UI hides + server rejects generation
+* Fallback stays: browser TTS (optional) or silent disable
+
+---
+
+## Testing Plan
+
+### Unit
+
+* Tier/voice eligibility
+* “playing lease” expiry behavior
+* language switch resets queue
+
+### Integration
+
+* End-to-end: finalized segment → TTS MP3 → queue → playback
+* Retry + fallback path
+
+### Manual QA
+
+* Live session with multiple languages
+* Rapid language switching
+* Disconnect/reconnect while playing
+* Downgrade plan applies to **future sessions**
+
+---
+
+## Future Work (explicit next steps)
+
+1. **Prefetch** next N segments once playing (reduce gaps)
+2. **S3 caching** keyed by (segment_id, language, voice)
+3. **Merged chunking layer** (sentence smoothing) with API size guards
+4. **StreamingSynthesize** (gRPC) for true sub-second “speak as it arrives”
+5. Playback speed + transcript highlighting
+
+---
+
+## User Story
+
+As a user, I want to playback spoken audio during sermons, so that I can listen in my native language.
+
+### Acceptance Criteria (v1)
+
+* Given TTS is enabled for my org and my plan allows it
+* When I press Play while viewing a live translated feed
+* Then I hear audio for finalized translated segments starting from “now”
+* And it continues automatically as new segments arrive
+* And I can pause/resume
+* And if I switch language mid-playback, audio restarts immediately in the new language
+* And usage is logged for billing/compliance
+
+---
+
+# System Mapping (15–30 minutes)
+
+## Current (as-is)
+
+* **STT** produces partials + `is_final` finalized chunks
+* **Translation** generates target-language text from finalized segments
+* **WebSocket broadcast** delivers translated segments to listeners in real time
+* **Frontend** displays segment list + has placeholder browser TTS per segment
+
+## New (to-be) — v1
+
+### Backend
+
+* `TtsService.generateMp3(text, language_code, voice, tier)`
+* `TtsPolicy.resolveVoice(org_defaults, user_pref, language_code, tier_allowed)`
+* `TtsUsageMeter.record(...)`
+* Endpoint or WS command: `tts/generateForSegment`
+
+### Frontend
+
+* `TtsPlayerController`
+
+  * state: STOPPED | PLAYING | PAUSED
+  * queue: ordered finalized segments (from “current” onward)
+  * onSegmentFinal(text): request backend MP3 → enqueue → play if idle
+  * onLanguageSwitch(): stop audio, clear queue, restart
+
+---
+
+# Artifact: Implementation Steps (PR-sized)
+
+## PR 1 — Contracts + Feature Flags
+
+* Add `tts_enabled_org` + `tts_allowed_tier` config (stub ok)
+* Add frontend toggle UI (hidden unless enabled)
+* Add backend skeleton modules: `TtsService`, `TtsPolicy`, `TtsUsageMeter`
+
+## PR 2 — Backend TTS (Gemini tier first)
+
+* Implement `generateMp3()` for Gemini TTS → return MP3 bytes/base64
+* Add retry-once logic
+* Add fallback-to-Gemini when higher tier fails (scaffold)
+
+## PR 3 — Frontend Player Controller (radio mode)
+
+* Add `TtsPlayerController` queueing + sequential playback
+* Start from “current transcript position”
+* Auto-play as new finalized segments arrive while PLAYING
+
+## PR 4 — Voice Defaults + Tier Enforcement
+
+* Admin defaults per language (static config for v1)
+* Hide unavailable voices in UI
+* Server-side validation to prevent bypass
+
+## PR 5 — Usage/Audit Logging
+
+* Log per segment: characters + audio_seconds + tier + voice
+* Hard stop when quota exceeded (server authoritative)
+
+## PR 6 — Language Switch + Disconnect Safety
+
+* Language switch: flush queue and restart immediately
+* “Playing lease” expires on inactivity/disconnect to prevent runaway billing
+
+---
+
+## One thing I need to “engineer” based on your segment concern (without refactoring v1)
+
+**Decision locked for v1:** *1 finalized transcript segment = 1 MP3 file*
+**But we lay the hook for future merging:**
+
+* Add an internal interface now: `getTtsTextForPlayback(segment)`
+
+  * v1 returns `segment.text`
+  * v2 can return “merged chunk” without rewriting player logic
+
+---
+
+If you want, next message I can generate **Cursor prompts** as:
+
+1. “PR 1 prompt” (flags + scaffolding)
+2. “PR 2 prompt” (Gemini MP3 generation)
+3. “PR 3 prompt” (player queue + radio behavior)
+
+…and each prompt will include “don’t touch” guardrails so Cursor doesn’t break CoreEngine.

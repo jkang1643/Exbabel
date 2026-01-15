@@ -48,6 +48,9 @@ export class GoogleSpeechStream {
     this.streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     console.log(`[GoogleSpeech] Created new stream instance: ${this.streamId}`);
 
+    // Pipeline marker: "normal" for regular streaming, "recovery" for recovery streams
+    this.pipeline = 'normal';
+
     // AUDIO BUFFER MANAGER: Captures EVERY audio chunk for recovery operations
     // This rolling buffer maintains the last 2500ms of audio for text extension window
     this.audioBufferManager = new AudioBufferManager({
@@ -70,18 +73,18 @@ export class GoogleSpeechStream {
     // Google Speech has a 305 second (5 min) streaming limit
     // We'll restart the stream every 4 minutes to be safe
     this.STREAMING_LIMIT = 240000; // 4 minutes in milliseconds
-    
+
     // CRITICAL: Auto-restart at 25 seconds to prevent VAD cutoff
     // Google's VAD becomes aggressive after ~30 seconds, causing premature finalization
     this.VAD_CUTOFF_LIMIT = 25000; // 25 seconds - restart before VAD cutoff
     this.cumulativeAudioTime = 0; // Track total audio sent in current session
     this.lastAudioChunkTime = Date.now();
-    
+
     this.startTime = Date.now();
-    
+
     // Speech context: Track last transcript for context carry-forward between sessions
     this.lastTranscriptContext = ''; // Last 50 chars of transcript for context
-    
+
     // Audio batching: Batch chunks into 100-150ms groups for optimal flow
     // Balance between smooth flow (prevent VAD gaps) and responsiveness
     this.jitterBuffer = [];
@@ -90,12 +93,12 @@ export class GoogleSpeechStream {
     this.jitterBufferMax = 150; // Maximum 150ms
     this.jitterBufferTimer = null;
     this.lastJitterRelease = Date.now();
-    
+
     // Chunk retry tracking: Track failed chunks and retry up to 3 times
     this.chunkRetryMap = new Map(); // chunkId -> { attempts: number, chunkData, metadata, lastAttempt }
     this.MAX_CHUNK_RETRIES = 3;
     this.RETRY_BACKOFF_MS = [100, 200, 400]; // Exponential backoff delays
-    
+
     // Per-chunk timeout tracking: Detect stuck chunks
     // Timeout accounts for audio batching (100ms) + processing time
     this.chunkTimeouts = new Map(); // chunkId -> { timeout handle, sendTimestamp }
@@ -104,7 +107,7 @@ export class GoogleSpeechStream {
     this.chunkTimeoutTimestamps = [];
     this.CHUNK_TIMEOUT_RESET_THRESHOLD = 6; // If 6+ timeouts happen within a short window, treat stream as stuck
     this.CHUNK_TIMEOUT_WINDOW_MS = 2500; // 2.5s window for timeout burst detection
-    
+
     // Track pending chunks in send order for better timeout clearing
     this.pendingChunks = []; // Array of { chunkId, sendTimestamp }
 
@@ -147,21 +150,21 @@ export class GoogleSpeechStream {
 
     // Get language code for Google Speech (only supports transcription languages)
     // If language is not supported for transcription, fall back to English
-    const newLanguageCode = isTranscriptionSupported(sourceLang) 
+    const newLanguageCode = isTranscriptionSupported(sourceLang)
       ? getTranscriptionLanguageCode(sourceLang)
       : 'en-US';
-    
+
     if (!isTranscriptionSupported(sourceLang)) {
       console.warn(`[GoogleSpeech] Language ${sourceLang} not supported for transcription, falling back to English`);
     }
-    
+
     // Reset enhanced model flags if language changed
     if (this.languageCode !== newLanguageCode) {
       console.log(`[GoogleSpeech] Language changed from ${this.languageCode} to ${newLanguageCode}, resetting enhanced model flags`);
       this.hasTriedEnhancedModel = false;
       this.useEnhancedModel = true;
     }
-    
+
     this.languageCode = newLanguageCode;
     console.log(`[GoogleSpeech] Using language code: ${this.languageCode}`);
 
@@ -190,7 +193,7 @@ export class GoogleSpeechStream {
     this.startTime = Date.now();
     this.isActive = true;
     this.isRestarting = false;
-    
+
     // Reset cumulative audio time for new session
     this.cumulativeAudioTime = 0;
     console.log(`[GoogleSpeech] Reset cumulative audio time. Context: "${this.lastTranscriptContext || 'none'}"`);
@@ -210,12 +213,13 @@ export class GoogleSpeechStream {
     }
 
     // Check if PhraseSet is configured
-    const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && process.env.GOOGLE_CLOUD_PROJECT_ID);
-    
+    const currentProjectId = process.env.GOOGLE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
+    const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && currentProjectId);
+
     // Use enhanced model with PhraseSets for best accuracy
     // Check for forceEnhanced option (used by recovery streams for maximum accuracy)
     const forceEnhanced = this.initOptions?.forceEnhanced === true;
-    
+
     if (forceEnhanced || (this.useEnhancedModel && !this.hasTriedEnhancedModel)) {
       requestConfig.useEnhanced = true;
       requestConfig.model = 'latest_long'; // Enhanced model for long-form audio
@@ -240,7 +244,7 @@ export class GoogleSpeechStream {
     // Add PhraseSet reference if configured (for improved recognition of glossary terms)
     // CRITICAL: v1p1beta1 API uses adaptation.phraseSets format
     if (hasPhraseSet) {
-      const phraseSetRef = `projects/${process.env.GOOGLE_CLOUD_PROJECT_ID}/locations/global/phraseSets/${process.env.GOOGLE_PHRASE_SET_ID}`;
+      const phraseSetRef = `projects/${currentProjectId}/locations/global/phraseSets/${process.env.GOOGLE_PHRASE_SET_ID}`;
       // v1p1beta1 API uses adaptation.phraseSets format
       requestConfig.adaptation = {
         phraseSets: [
@@ -254,14 +258,14 @@ export class GoogleSpeechStream {
       console.log(`[GoogleSpeech]    Glossary terms will be recognized with improved accuracy`);
       console.log(`[GoogleSpeech]    Request config includes adaptation: ${JSON.stringify(requestConfig.adaptation)}`);
     } else {
-      console.log(`[GoogleSpeech] ⚠️  PhraseSet NOT configured - set GOOGLE_PHRASE_SET_ID and GOOGLE_CLOUD_PROJECT_ID to enable`);
+      console.log(`[GoogleSpeech] ⚠️  PhraseSet NOT configured - set GOOGLE_PHRASE_SET_ID and GOOGLE_PROJECT_ID to enable`);
     }
 
     const request = {
       config: requestConfig,
       interimResults: true, // CRITICAL: Enable partial results
     };
-    
+
     // Always log PhraseSet status for verification
     if (requestConfig.adaptation && requestConfig.adaptation.phraseSets && requestConfig.adaptation.phraseSets.length > 0) {
       console.log(`[GoogleSpeech] 🔍 VERIFICATION: PhraseSet will be sent in API request (v1p1beta1 API)`);
@@ -270,7 +274,7 @@ export class GoogleSpeechStream {
     } else {
       console.log(`[GoogleSpeech] ⚠️  WARNING: No adaptation.phraseSets in request config!`);
     }
-    
+
     // Log the full request config for debugging (without sensitive data)
     if (process.env.DEBUG_PHRASESET === 'true') {
       console.log(`[GoogleSpeech] DEBUG - Full request config:`, JSON.stringify({
@@ -293,7 +297,7 @@ export class GoogleSpeechStream {
         useEnhanced: requestConfig.useEnhanced || false
       })}`);
     }
-    
+
     // Create streaming recognition stream
     this.recognizeStream = this.client
       .streamingRecognize(request)
@@ -302,10 +306,10 @@ export class GoogleSpeechStream {
         try {
           console.error('[GoogleSpeech] Stream error:', error);
           console.error('[GoogleSpeech] Error code:', error.code, 'Details:', error.details);
-          
+
           // Check specifically for PhraseSet errors
           if (error.message && (
-            error.message.includes('phraseSet') || 
+            error.message.includes('phraseSet') ||
             error.message.includes('phrase_set') ||
             error.message.includes('adaptation') ||
             error.message.includes('PhraseSet')
@@ -313,7 +317,7 @@ export class GoogleSpeechStream {
             console.error(`[GoogleSpeech] ❌ PHRASESET ERROR: ${error.message}`);
             console.error(`[GoogleSpeech]    This means Google rejected the PhraseSet reference`);
           }
-          
+
           // Mark as inactive immediately
           this.isActive = false;
 
@@ -322,6 +326,32 @@ export class GoogleSpeechStream {
             console.log('[GoogleSpeech] Audio timeout (code 11) - restarting stream...');
             if (!this.isRestarting) {
               this.restartStream();
+            }
+          } else if (error.code === 14 || (error.details && error.details.includes('ECONNRESET'))) {
+            // Handle UNAVAILABLE (code 14) and connection reset errors
+            console.log('[GoogleSpeech] Connection reset/unavailable (code 14) - cleaning up and restarting stream...');
+            console.log('[GoogleSpeech] Error details:', error.details || error.message);
+
+            // Clean up the stream immediately
+            this.isActive = false;
+            if (this.recognizeStream) {
+              try {
+                this.recognizeStream.removeAllListeners();
+                this.recognizeStream.destroy();
+              } catch (cleanupError) {
+                console.warn('[GoogleSpeech] Error during stream cleanup:', cleanupError);
+              }
+              this.recognizeStream = null;
+            }
+
+            // Restart after a brief delay to allow cleanup
+            if (!this.isRestarting && this.shouldAutoRestart) {
+              setTimeout(() => {
+                if (!this.isRestarting) {
+                  console.log('[GoogleSpeech] Restarting stream after connection reset...');
+                  this.restartStream();
+                }
+              }, 1000);
             }
           } else if (error.code === 2 || (error.details && (error.details.includes('408') || error.details.includes('Request Timeout')))) {
             // Handle 408 Request Timeout (code 2 UNKNOWN with 408 details)
@@ -336,84 +366,84 @@ export class GoogleSpeechStream {
               }, 500);
             }
           } else if (error.code === 3) {
-          console.error('[GoogleSpeech] Invalid argument error - check audio format');
-          console.error('[GoogleSpeech] Full error message:', error.message);
-          
-          // Check if error is about model not being supported for this language
-          if (error.message && error.message.includes('model is currently not supported for language')) {
-            console.log(`[GoogleSpeech] ⚠️ Enhanced model not supported for ${this.languageCode}, falling back to default model...`);
-            
-            // Mark that we've tried enhanced model and it failed
-            this.hasTriedEnhancedModel = true;
-            this.useEnhancedModel = false;
-            
-            // Retry with default model (no model parameter)
-            if (!this.isRestarting) {
-              setTimeout(() => {
-                if (!this.isRestarting) {
-                  console.log(`[GoogleSpeech] Retrying with default model for ${this.languageCode}...`);
-                  this.restartStream();
-                }
-              }, 500);
-            }
-            return; // Don't notify error callback yet - we're retrying
-          }
-          
-          // Check if error is about PhraseSet not being supported with enhanced model
-          const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && process.env.GOOGLE_CLOUD_PROJECT_ID);
-          if (hasPhraseSet && this.useEnhancedModel && error.message && (
-            error.message.includes('phraseSet') || 
-            error.message.includes('phrase_set') || 
-            error.message.includes('adaptation') ||
-            error.message.toLowerCase().includes('phrase')
-          )) {
-            console.error(`[GoogleSpeech] ❌ CONFIRMED: Enhanced model does NOT support PhraseSets!`);
-            console.error(`[GoogleSpeech]    Error: ${error.message}`);
-            console.error(`[GoogleSpeech]    Falling back to default model with PhraseSet...`);
-            
-            // Disable enhanced model and retry
-            this.hasTriedEnhancedModel = true;
-            this.useEnhancedModel = false;
-            
-            if (!this.isRestarting) {
-              setTimeout(() => {
-                if (!this.isRestarting) {
-                  console.log(`[GoogleSpeech] Retrying with default model (PhraseSet compatible)...`);
-                  this.restartStream();
-                }
-              }, 500);
-            }
-            return; // Don't notify error callback yet - we're retrying
-          }
-          
-          // Check if error is about PhraseSet configuration
-          if (error.message && (error.message.includes('phraseSet') || error.message.includes('phrase_set') || error.message.includes('adaptation'))) {
-            console.error(`[GoogleSpeech] ❌ PhraseSet error detected: ${error.message}`);
-            console.error(`[GoogleSpeech]    Check PhraseSet configuration and permissions`);
-          }
-          
-          // Don't restart on other invalid argument errors
-        } else {
-          console.error('[GoogleSpeech] Unhandled error:', error.message, 'Code:', error.code);
-          // For other errors, attempt restart if auto-restart is enabled
-          if (this.shouldAutoRestart && !this.isRestarting) {
-            console.log('[GoogleSpeech] Attempting restart for unhandled error...');
-            setTimeout(() => {
-              if (!this.isRestarting) {
-                this.restartStream();
-              }
-            }, 1000);
-          }
-        }
+            console.error('[GoogleSpeech] Invalid argument error - check audio format');
+            console.error('[GoogleSpeech] Full error message:', error.message);
 
-        // Notify caller of error if callback exists
-        if (this.errorCallback) {
-          try {
-            this.errorCallback(error);
-          } catch (callbackError) {
-            console.error('[GoogleSpeech] Error in error callback:', callbackError);
+            // Check if error is about model not being supported for this language
+            if (error.message && error.message.includes('model is currently not supported for language')) {
+              console.log(`[GoogleSpeech] ⚠️ Enhanced model not supported for ${this.languageCode}, falling back to default model...`);
+
+              // Mark that we've tried enhanced model and it failed
+              this.hasTriedEnhancedModel = true;
+              this.useEnhancedModel = false;
+
+              // Retry with default model (no model parameter)
+              if (!this.isRestarting) {
+                setTimeout(() => {
+                  if (!this.isRestarting) {
+                    console.log(`[GoogleSpeech] Retrying with default model for ${this.languageCode}...`);
+                    this.restartStream();
+                  }
+                }, 500);
+              }
+              return; // Don't notify error callback yet - we're retrying
+            }
+
+            // Check if error is about PhraseSet not being supported with enhanced model
+            const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && process.env.GOOGLE_CLOUD_PROJECT_ID);
+            if (hasPhraseSet && this.useEnhancedModel && error.message && (
+              error.message.includes('phraseSet') ||
+              error.message.includes('phrase_set') ||
+              error.message.includes('adaptation') ||
+              error.message.toLowerCase().includes('phrase')
+            )) {
+              console.error(`[GoogleSpeech] ❌ CONFIRMED: Enhanced model does NOT support PhraseSets!`);
+              console.error(`[GoogleSpeech]    Error: ${error.message}`);
+              console.error(`[GoogleSpeech]    Falling back to default model with PhraseSet...`);
+
+              // Disable enhanced model and retry
+              this.hasTriedEnhancedModel = true;
+              this.useEnhancedModel = false;
+
+              if (!this.isRestarting) {
+                setTimeout(() => {
+                  if (!this.isRestarting) {
+                    console.log(`[GoogleSpeech] Retrying with default model (PhraseSet compatible)...`);
+                    this.restartStream();
+                  }
+                }, 500);
+              }
+              return; // Don't notify error callback yet - we're retrying
+            }
+
+            // Check if error is about PhraseSet configuration
+            if (error.message && (error.message.includes('phraseSet') || error.message.includes('phrase_set') || error.message.includes('adaptation'))) {
+              console.error(`[GoogleSpeech] ❌ PhraseSet error detected: ${error.message}`);
+              console.error(`[GoogleSpeech]    Check PhraseSet configuration and permissions`);
+            }
+
+            // Don't restart on other invalid argument errors
+          } else {
+            console.error('[GoogleSpeech] Unhandled error:', error.message, 'Code:', error.code);
+            // For other errors, attempt restart if auto-restart is enabled
+            if (this.shouldAutoRestart && !this.isRestarting) {
+              console.log('[GoogleSpeech] Attempting restart for unhandled error...');
+              setTimeout(() => {
+                if (!this.isRestarting) {
+                  this.restartStream();
+                }
+              }, 1000);
+            }
           }
-        }
+
+          // Notify caller of error if callback exists
+          if (this.errorCallback) {
+            try {
+              this.errorCallback(error);
+            } catch (callbackError) {
+              console.error('[GoogleSpeech] Error in error callback:', callbackError);
+            }
+          }
         } catch (handlerError) {
           // Catch any errors in the error handler itself to prevent crashes
           console.error('[GoogleSpeech] ❌ Error in error handler:', handlerError);
@@ -497,7 +527,7 @@ export class GoogleSpeechStream {
         this.recognizeStream.removeAllListeners('error');
         this.recognizeStream.removeAllListeners('data');
         this.recognizeStream.removeAllListeners('end');
-        
+
         // Try to destroy the stream gracefully
         if (typeof this.recognizeStream.destroy === 'function') {
           this.recognizeStream.destroy();
@@ -512,7 +542,7 @@ export class GoogleSpeechStream {
 
     // Clear jitter buffer and retry tracking on restart
     this.clearJitterBuffer();
-    
+
     // Clear all retry timers
     for (const [chunkId, retryInfo] of this.chunkRetryMap.entries()) {
       if (retryInfo.retryTimer) {
@@ -520,7 +550,7 @@ export class GoogleSpeechStream {
       }
     }
     this.chunkRetryMap.clear();
-    
+
     // Clear all chunk timeouts
     for (const [chunkId, timeoutInfo] of this.chunkTimeouts.entries()) {
       clearTimeout(timeoutInfo.timeout);
@@ -572,12 +602,12 @@ export class GoogleSpeechStream {
     // For long phrases, we need to accumulate ALL results, not just the first one
     let allTranscripts = [];
     let hasFinal = false;
-    
+
     for (const result of data.results) {
       if (!result.alternatives || result.alternatives.length === 0) {
         continue;
       }
-      
+
       const transcript = result.alternatives[0].transcript;
       if (transcript && transcript.trim()) {
         allTranscripts.push(transcript.trim());
@@ -586,16 +616,16 @@ export class GoogleSpeechStream {
         }
       }
     }
-    
+
     if (allTranscripts.length === 0) {
       return;
     }
-    
+
     // Combine all transcripts (Google may split long phrases across multiple results)
     const combinedTranscript = allTranscripts.join(' ');
     const isFinal = hasFinal;
     const stability = data.results[0].stability || 0;
-    
+
     // Check if recognized text matches PhraseSet entries (for verification)
     // Log when PhraseSet terms are recognized to confirm it's working
     if (combinedTranscript && process.env.GOOGLE_PHRASE_SET_ID) {
@@ -606,26 +636,27 @@ export class GoogleSpeechStream {
           if (glossary.phrases && Array.isArray(glossary.phrases)) {
             // Strip punctuation and normalize transcript for matching
             const transcriptClean = combinedTranscript.toLowerCase().replace(/[.,!?;:]/g, '').trim();
-            
+
             // Check if transcript contains any PhraseSet term
             const matched = glossary.phrases.find(phrase => {
               const phraseValue = phrase.value.toLowerCase();
-              
+
               // Handle entries with "/" separator (e.g., "Ephesia/Ephesus")
-              const phraseVariants = phraseValue.includes('/') 
+              const phraseVariants = phraseValue.includes('/')
                 ? phraseValue.split('/').map(v => v.trim())
                 : [phraseValue];
-              
+
               // Check each variant
               return phraseVariants.some(variant => {
                 const variantClean = variant.replace(/[.,!?;:]/g, '').trim();
                 // Check for exact match or phrase contained in transcript
-                return transcriptClean === variantClean || 
-                       transcriptClean.includes(variantClean) ||
-                       variantClean.includes(transcriptClean);
+                // CRITICAL: Only check if transcript contains phrase (not vice versa)
+                // Checking if phrase contains transcript causes false positives (e.g., "stand your ground" contains "you")
+                return transcriptClean === variantClean ||
+                  transcriptClean.includes(variantClean);
               });
             });
-            
+
             if (matched) {
               console.log(`[GoogleSpeech] 🎯✅ PHRASESET TERM RECOGNIZED: "${matched.value}" in transcript "${combinedTranscript}"`);
             }
@@ -639,7 +670,7 @@ export class GoogleSpeechStream {
         }
       }
     }
-    
+
     // Update speech context when we get a final result
     if (isFinal && combinedTranscript.length > 20) {
       // Store last 50 characters for context carry-forward
@@ -680,7 +711,7 @@ export class GoogleSpeechStream {
         if (this.initOptions?.disablePunctuation) {
           console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with FINAL: "${combinedTranscript}"`);
         }
-        this.resultCallback(combinedTranscript, false); // isPartial = false
+        this.resultCallback(combinedTranscript, false, { pipeline: this.pipeline }); // isPartial = false, pass pipeline in meta
       }
 
       // Clear cached partial since we emitted a real final
@@ -693,7 +724,7 @@ export class GoogleSpeechStream {
         if (this.initOptions?.disablePunctuation) {
           console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with PARTIAL: "${combinedTranscript}"`);
         }
-        this.resultCallback(combinedTranscript, true); // isPartial = true
+        this.resultCallback(combinedTranscript, true, { pipeline: this.pipeline }); // isPartial = true, pass pipeline in meta
       }
 
       // Cache the latest partial so we can force-commit if the stream restarts
@@ -706,11 +737,11 @@ export class GoogleSpeechStream {
    */
   isStreamReady() {
     const ready = this.recognizeStream &&
-           this.recognizeStream.writable &&
-           !this.recognizeStream.destroyed &&
-           !this.recognizeStream.writableEnded &&
-           this.isActive &&
-           !this.isRestarting;
+      this.recognizeStream.writable &&
+      !this.recognizeStream.destroyed &&
+      !this.recognizeStream.writableEnded &&
+      this.isActive &&
+      !this.isRestarting;
 
     // Debug logging for recovery streams
     if (this.initOptions?.disablePunctuation && !ready) {
@@ -736,13 +767,13 @@ export class GoogleSpeechStream {
     try {
       // Track chunk send time for timeout detection
       const sendTimestamp = Date.now();
-      
+
       // Check if stream is ready
       if (!this.isStreamReady()) {
         // If stream not ready, check if we should retry or give up
         const existingRetry = this.chunkRetryMap.get(chunkId);
         const attempts = existingRetry ? existingRetry.attempts : 0;
-        
+
         // Only retry if we haven't exceeded max attempts and stream is just restarting (not inactive)
         if (attempts < this.MAX_CHUNK_RETRIES && !this.isRestarting && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
           this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
@@ -758,7 +789,7 @@ export class GoogleSpeechStream {
       // Track cumulative audio time (assume ~20ms per chunk based on 24kHz sampling)
       const chunkDurationMs = 20; // Approximate duration of each audio chunk
       this.cumulativeAudioTime += chunkDurationMs;
-      
+
       // CRITICAL: Check for VAD cutoff limit (25 seconds)
       // Restart proactively BEFORE Google's VAD becomes aggressive
       // DISABLED FOR NOW - causing timeout issues
@@ -768,7 +799,7 @@ export class GoogleSpeechStream {
       //   await this.restartStream();
       //   return;
       // }
-      
+
       // Check if we need to restart due to time limit
       const elapsedTime = Date.now() - this.startTime;
       if (elapsedTime >= this.STREAMING_LIMIT) {
@@ -801,14 +832,14 @@ export class GoogleSpeechStream {
 
         // Set per-chunk timeout (5s)
         this.setChunkTimeout(chunkId, sendTimestamp, audioData, metadata);
-        
+
         // Track last audio time
         this.lastAudioTime = Date.now();
       } else {
         console.warn('[GoogleSpeech] Stream became unavailable, checking if retry is needed...');
         const existingRetry = this.chunkRetryMap.get(chunkId);
         const attempts = existingRetry ? existingRetry.attempts : 0;
-        
+
         // Only retry if conditions are met
         if (attempts < this.MAX_CHUNK_RETRIES && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
           this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
@@ -818,7 +849,7 @@ export class GoogleSpeechStream {
           this.chunkRetryMap.delete(chunkId);
           this.clearChunkTimeout(chunkId);
         }
-        
+
         if (!this.isRestarting) {
           await this.restartStream();
         }
@@ -827,7 +858,7 @@ export class GoogleSpeechStream {
       console.error('[GoogleSpeech] Error releasing chunk:', error.message);
       const existingRetry = this.chunkRetryMap.get(chunkId);
       const attempts = existingRetry ? existingRetry.attempts : 0;
-      
+
       // Only retry on error if conditions are met
       if (attempts < this.MAX_CHUNK_RETRIES && this.lastAudioTime && (Date.now() - this.lastAudioTime < 3000)) {
         this.queueChunkForRetry(chunkId, audioData, metadata, attempts);
@@ -846,28 +877,28 @@ export class GoogleSpeechStream {
     if (this.chunkTimeouts.has(chunkId)) {
       clearTimeout(this.chunkTimeouts.get(chunkId).timeout);
     }
-    
+
     // Remove from pending chunks if already there (avoid duplicates)
     this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
-    
+
     // Add to pending chunks queue (FIFO)
     this.pendingChunks.push({ chunkId, sendTimestamp });
-    
+
     const timeoutHandle = setTimeout(() => {
       const elapsed = Date.now() - sendTimestamp;
       console.warn(`[GoogleSpeech] ⚠️ Chunk ${chunkId} timeout after ${elapsed}ms (${this.CHUNK_TIMEOUT_MS}ms limit)`);
-      
+
       // Remove from timeout tracking and pending chunks
       this.chunkTimeouts.delete(chunkId);
       this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
       this.chunkRetryMap.delete(chunkId);
-      
+
       this.recordChunkTimeout();
       if (this.shouldForceRestartAfterTimeoutBurst()) {
         this.handleChunkTimeoutBurst();
       }
     }, this.CHUNK_TIMEOUT_MS);
-    
+
     this.chunkTimeouts.set(chunkId, { timeout: timeoutHandle, sendTimestamp });
   }
 
@@ -880,7 +911,7 @@ export class GoogleSpeechStream {
       clearTimeout(timeoutInfo.timeout);
       this.chunkTimeouts.delete(chunkId);
     }
-    
+
     // Also remove from pending chunks
     this.pendingChunks = this.pendingChunks.filter(c => c.chunkId !== chunkId);
   }
@@ -950,13 +981,13 @@ export class GoogleSpeechStream {
       console.log(`[GoogleSpeech] ⚠️ Chunk ${chunkId} already has retry scheduled, skipping duplicate`);
       return;
     }
-    
+
     if (currentAttempts >= this.MAX_CHUNK_RETRIES) {
       console.error(`[GoogleSpeech] ❌ Chunk ${chunkId} failed after ${this.MAX_CHUNK_RETRIES} retries, giving up`);
       this.chunkRetryMap.delete(chunkId);
       return;
     }
-    
+
     // Don't retry if stream is restarting or if audio has been stopped for a while
     // Check if audio stopped more than 2 seconds ago (likely user paused)
     const audioStopped = this.lastAudioTime && (Date.now() - this.lastAudioTime > 2000);
@@ -965,10 +996,10 @@ export class GoogleSpeechStream {
       this.chunkRetryMap.delete(chunkId);
       return;
     }
-    
+
     const nextAttempt = currentAttempts + 1;
     const backoffDelay = this.RETRY_BACKOFF_MS[Math.min(currentAttempts, this.RETRY_BACKOFF_MS.length - 1)];
-    
+
     const retryInfo = {
       attempts: nextAttempt,
       chunkData: audioData,
@@ -976,18 +1007,18 @@ export class GoogleSpeechStream {
       lastAttempt: Date.now(),
       retryTimer: null // Will be set below
     };
-    
+
     this.chunkRetryMap.set(chunkId, retryInfo);
-    
+
     console.log(`[GoogleSpeech] 🔄 Scheduling retry ${nextAttempt}/${this.MAX_CHUNK_RETRIES} for chunk ${chunkId} in ${backoffDelay}ms`);
-    
+
     const retryTimer = setTimeout(async () => {
       // Remove timer reference
       const currentRetry = this.chunkRetryMap.get(chunkId);
       if (currentRetry) {
         currentRetry.retryTimer = null;
       }
-      
+
       // Check if chunk still needs retry and stream is ready
       const stillPending = this.chunkRetryMap.get(chunkId);
       if (stillPending && stillPending.attempts === nextAttempt) {
@@ -1001,7 +1032,7 @@ export class GoogleSpeechStream {
         }
       }
     }, backoffDelay);
-    
+
     // Store timer reference so we can cancel it if needed
     retryInfo.retryTimer = retryTimer;
   }
@@ -1014,7 +1045,7 @@ export class GoogleSpeechStream {
   async processAudio(audioData, metadata = {}) {
     // Generate unique chunk ID
     const chunkId = `chunk_${this.chunkIdCounter++}_${Date.now()}`;
-    
+
     // Add to jitter buffer with timestamp
     const now = Date.now();
     this.jitterBuffer.push({
@@ -1024,10 +1055,10 @@ export class GoogleSpeechStream {
       receivedAt: now,
       shouldReleaseAt: now + this.jitterBufferDelay
     });
-    
+
     // Sort buffer by receive time to handle out-of-order chunks
     this.jitterBuffer.sort((a, b) => a.receivedAt - b.receivedAt);
-    
+
     // Process jitter buffer - release chunks that are ready
     this.processJitterBuffer();
   }
@@ -1037,17 +1068,17 @@ export class GoogleSpeechStream {
    */
   processJitterBuffer() {
     const now = Date.now();
-    
+
     // Clear any existing timer
     if (this.jitterBufferTimer) {
       clearTimeout(this.jitterBufferTimer);
     }
-    
+
     // Release all chunks that are ready (past their release time)
     while (this.jitterBuffer.length > 0) {
       const chunk = this.jitterBuffer[0];
       const delay = now - chunk.receivedAt;
-      
+
       // Release if delay is at least jitterBufferMin (80ms) and past release time
       if (delay >= this.jitterBufferMin && now >= chunk.shouldReleaseAt) {
         const released = this.jitterBuffer.shift();
@@ -1064,7 +1095,7 @@ export class GoogleSpeechStream {
         break;
       }
     }
-    
+
     // If buffer still has items but no timer set, set one
     if (this.jitterBuffer.length > 0 && !this.jitterBufferTimer) {
       const nextChunk = this.jitterBuffer[0];
@@ -1076,7 +1107,7 @@ export class GoogleSpeechStream {
       }
     }
   }
-  
+
   /**
    * Clear chunk retry (cancel retry timer and remove from map)
    */
@@ -1090,7 +1121,7 @@ export class GoogleSpeechStream {
       this.chunkRetryMap.delete(chunkId);
     }
   }
-  
+
   clearJitterBuffer() {
     // Release all pending chunks immediately before clearing
     while (this.jitterBuffer.length > 0) {
@@ -1099,12 +1130,12 @@ export class GoogleSpeechStream {
       this.clearChunkRetry(chunk.chunkId);
       this.clearChunkTimeout(chunk.chunkId);
     }
-    
+
     if (this.jitterBufferTimer) {
       clearTimeout(this.jitterBufferTimer);
       this.jitterBufferTimer = null;
     }
-    
+
     // Also clear any pending chunks that were sent but not yet timed out
     for (const pending of this.pendingChunks) {
       this.clearChunkTimeout(pending.chunkId);

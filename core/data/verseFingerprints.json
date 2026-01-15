@@ -1,0 +1,106 @@
+{
+  "Acts 2:38": {
+    "ref": "Acts 2:38",
+    "keywords": [
+      "repent",
+      "baptize",
+      "holy spirit",
+      "forgiveness",
+      "sin",
+      "peter",
+      "pentecost"
+    ],
+    "weights": {
+      "repent": 0.9,
+      "baptize": 0.8,
+      "holy spirit": 1.0,
+      "forgiveness": 0.85,
+      "sin": 0.7,
+      "peter": 0.6,
+      "pentecost": 0.75
+    }
+  },
+  "John 3:16": {
+    "ref": "John 3:16",
+    "keywords": [
+      "god",
+      "love",
+      "world",
+      "son",
+      "believe",
+      "eternal life",
+      "perish"
+    ],
+    "weights": {
+      "god": 0.7,
+      "love": 0.9,
+      "world": 0.8,
+      "son": 0.85,
+      "believe": 0.9,
+      "eternal life": 1.0,
+      "perish": 0.8
+    }
+  },
+  "Romans 6:23": {
+    "ref": "Romans 6:23",
+    "keywords": [
+      "wages",
+      "sin",
+      "death",
+      "gift",
+      "god",
+      "eternal life",
+      "christ jesus"
+    ],
+    "weights": {
+      "wages": 0.95,
+      "sin": 0.8,
+      "death": 0.85,
+      "gift": 0.9,
+      "god": 0.7,
+      "eternal life": 1.0,
+      "christ jesus": 0.85
+    }
+  },
+  "Matthew 28:19": {
+    "ref": "Matthew 28:19",
+    "keywords": [
+      "go",
+      "make disciples",
+      "baptize",
+      "name",
+      "father",
+      "son",
+      "holy spirit"
+    ],
+    "weights": {
+      "go": 0.6,
+      "make disciples": 1.0,
+      "baptize": 0.9,
+      "name": 0.8,
+      "father": 0.85,
+      "son": 0.85,
+      "holy spirit": 0.9
+    }
+  },
+  "Philippians 4:13": {
+    "ref": "Philippians 4:13",
+    "keywords": [
+      "can",
+      "do",
+      "all things",
+      "christ",
+      "strengthens",
+      "strength"
+    ],
+    "weights": {
+      "can": 0.7,
+      "do": 0.7,
+      "all things": 1.0,
+      "christ": 0.9,
+      "strengthens": 0.95,
+      "strength": 0.8
+    }
+  }
+}
+

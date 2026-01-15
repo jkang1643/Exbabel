@@ -17,7 +17,7 @@ if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
 }
 
-const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID || '222662040787';
+const projectId = process.env.GOOGLE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID || 'exbabel-tts-prod';
 const phraseSetId = process.env.GOOGLE_PHRASE_SET_ID || 'church-glossary-10k';
 
 async function checkEphesia() {

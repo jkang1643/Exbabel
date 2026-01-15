@@ -4,11 +4,11 @@
  * Prerequisites:
  *   1. PhraseSet must already exist in Google Cloud Console
  *   2. Set GOOGLE_APPLICATION_CREDENTIALS to Service Account JSON path
- *   3. Set GOOGLE_CLOUD_PROJECT_ID=222662040787 (or set in .env)
+ *   3. Set GOOGLE_CLOUD_PROJECT_ID=exbabel-tts-prod (or set in .env)
  * 
  * Usage:
  *   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
- *   export GOOGLE_CLOUD_PROJECT_ID=222662040787
+ *   export GOOGLE_CLOUD_PROJECT_ID=exbabel-tts-prod
  *   node backend/scripts/populatePhraseSet.js
  * 
  * This script uses Service Account JSON to update the PhraseSet via REST API.
@@ -31,7 +31,7 @@ if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
 }
 
-const projectId = process.env.GOOGLE_CLOUD_PROJECT_ID || '222662040787';
+const projectId = process.env.GOOGLE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID || 'exbabel-tts-prod';
 const phraseSetId = process.env.GOOGLE_PHRASE_SET_ID || 'church-glossary-10k';
 // Boost value: 0-20, higher = more likely to recognize these phrases
 // Using 20 (maximum) for maximum recognition probability

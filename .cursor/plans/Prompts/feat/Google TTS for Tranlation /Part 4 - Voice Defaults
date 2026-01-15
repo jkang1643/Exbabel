@@ -1,0 +1,155 @@
+# PR 4 — Voice Defaults + Voice List (Admin defaults per language, user sees only allowed voices)
+
+Goal: implement the “source of truth” for voice selection so users don’t see random voices and admins can set defaults per language.
+This PR should add:
+1) A backend-controlled voice catalog (Gemini + Chirp3-HD)
+2) Tier gating + language gating (hide disallowed voices entirely)
+3) Admin-set default voice per language
+4) Frontend wiring to show the correct voice dropdown and use defaults automatically
+
+Keep streaming-ready design:
+- Unary can use MP3; streaming cannot. Streaming formats are PCM/OGG_OPUS/ALAW/MULAW. :contentReference[oaicite:0]{index=0}
+No streaming implementation required in PR4, just keep the separation in config and future compatibility.
+
+---
+
+## Guardrails
+- Do not change transcription/translation/partials/CoreEngine.
+- No caching in S3/Redis.
+- No payment integration changes; tier gating uses existing subscription/org tier info already available (or stub config).
+- Must be safe behind flags.
+
+---
+
+## A) Backend — Voice Catalog + Defaults
+
+### 1) Add `VoiceCatalog` module
+Create: backend/tts/voiceCatalog.js
+
+It should expose:
+- `getAllVoices(): Voice[]`
+- `getVoicesFor({ languageCode, allowedTiers }): Voice[]`
+- `isVoiceValid({ voiceName, languageCode, tier }): boolean`
+- `getDefaultVoice({ languageCode, allowedTiers }): Voice | null`
+
+Voice type:
+- `Voice = { provider:"google", tier:"gemini"|"chirp_hd", languageCode, name, gender?, description? }`
+
+Populate catalog using static lists for now:
+- Gemini-TTS voices: include the “prebuilt voice” names listed (e.g., Kore, Charon, Leda, etc.) and map them to languages you support. :contentReference[oaicite:1]{index=1}
+- Chirp3-HD voices: include the listed names and the known locale format guidance for Chirp3-HD. :contentReference[oaicite:2]{index=2}
+Notes:
+- The docs show voice names follow a locale-model-voice pattern for Chirp3-HD (example: en-US-Chirp3-HD-Kore). :contentReference[oaicite:3]{index=3}
+- For Gemini TTS, treat the voice “name” as the prebuilt voice id (e.g., Kore) combined with languageCode in requests.
+
+If you’re unsure about exact naming used by the Node client, keep internal representation normalized and implement a helper:
+- `toGoogleVoiceSelection({tier, languageCode, voiceName}) -> { name, languageCode, model_name? }`
+and document assumptions in README.
+
+### 2) Admin defaults storage (v1 minimal)
+Implement a minimal persistence strategy:
+Option A (preferred if Supabase already present): add a table `tts_voice_defaults`
+- org_id
+- language_code
+- tier
+- voice_name
+- updated_at
+
+Option B (if DB not ready for PR4): store in a JSON config file under backend/config/ttsDefaults.json keyed by orgId + language.
+Pick the least invasive option that fits repo today.
+
+Expose backend functions:
+- `getOrgVoiceDefaults(orgId): Record<languageCode, {tier, voiceName}>`
+- `setOrgVoiceDefault(orgId, languageCode, tier, voiceName)` (admin-only)
+- `resolveVoice({orgId, userPref?, languageCode, allowedTiers}) -> {tier, voiceName}`:
+  1) If userPref exists and allowed -> use it
+  2) Else org default if valid and allowed
+  3) Else catalog default for that language/tier
+  4) Else fallback to gemini + first voice available for that language
+
+### 3) Add API/WS commands
+Add WS messages (or HTTP endpoints, but WS preferred since you already use WS):
+
+- `tts/list_voices` request:
+  `{ type:"tts/list_voices", languageCode }`
+  Response:
+  `{ type:"tts/voices", languageCode, voices:[{tier, voiceName, displayName}] }`
+  IMPORTANT: filter voices by what the caller is allowed to use:
+  - disallowed tiers/voices are NOT returned at all (hidden entirely).
+
+- `tts/get_defaults` request:
+  `{ type:"tts/get_defaults" }`
+  Response:
+  `{ type:"tts/defaults", defaultsByLanguage:{ [languageCode]: {tier, voiceName} } }`
+
+- `tts/set_default` (admin-only):
+  `{ type:"tts/set_default", languageCode, tier, voiceName }`
+  Response:
+  `{ type:"tts/ack", action:"set_default" }` or error `NOT_AUTHORIZED`.
+
+Ensure policy enforcement:
+- Only admin can set defaults.
+- Defaults must be validated via VoiceCatalog + allowedTiers.
+
+### 4) Update TTS synth path to use resolved voice automatically
+In the existing `tts/synthesize` handler:
+- If client omits voiceName or tier, resolve them server-side using:
+  `resolveVoice({orgId, userPref, languageCode, allowedTiers})`
+- Even if client provides them, validate and override/fallback if invalid to prevent bypass.
+
+---
+
+## B) Frontend — Voice Dropdown + Defaults
+
+### 1) Fetch voices + defaults on entry
+When Listener opens (and feature flag enabled):
+- send `tts/get_defaults`
+- for current language selection, send `tts/list_voices`
+
+Store:
+- `defaultsByLanguage`
+- `voicesByLanguage`
+
+### 2) Voice dropdown behavior
+- Only show voices returned by server (already filtered).
+- On language change:
+  - request `tts/list_voices` for new language
+  - preselect voice using `defaultsByLanguage[lang]` if present, else first voice returned
+- When user presses Play:
+  - controller uses selected voice + tier
+  - OR can omit voice/tier and let server resolve (recommended for robustness)
+
+### 3) Admin UI (minimal)
+If you already have an admin settings page:
+- Add “Default Voice Per Language”
+  - language selector
+  - voice dropdown (populated using `tts/list_voices` but for admin include all voices allowed by org tier)
+  - Save button -> `tts/set_default`
+
+If you don’t have an admin page yet:
+- Add a temporary hidden admin panel behind an `isAdmin` check.
+Keep it basic.
+
+---
+
+## C) Acceptance Criteria
+- User voice dropdown shows only allowed voices (disallowed hidden).
+- For each language:
+  - default voice is selected automatically
+  - user can override (if you allow per-user preference; if not, keep override ephemeral in session)
+- Admin can set default voice per language; users see the change in new sessions.
+- `tts/synthesize` never fails due to missing voiceName/tier because server resolves defaults.
+- No behavior change when feature flags are off.
+
+---
+
+## D) Deliverables
+- backend/tts/voiceCatalog.js + helpers
+- backend endpoints/WS handlers for list/get/set defaults
+- frontend voice dropdown wired to server responses
+- short README updates:
+  - voice naming rules (Gemini vs Chirp3-HD)
+  - reminder: unary supports MP3, streaming does not :contentReference[oaicite:4]{index=4}
+
+Commit message:
+"feat(tts): add voice catalog + org defaults per language"

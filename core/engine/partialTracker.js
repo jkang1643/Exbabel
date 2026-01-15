@@ -205,6 +205,18 @@ export class PartialTracker {
   }
 
   /**
+   * Atomically snapshot and reset partial tracking
+   * This prevents race conditions where new partials arrive between snapshot and reset
+   * 
+   * @returns {Object} Snapshot of partial state before reset
+   */
+  snapshotAndReset() {
+    const snapshot = this.getSnapshot();
+    this.reset();
+    return snapshot;
+  }
+
+  /**
    * Helper function to tokenize text for overlap matching
    * 
    * @param {string} text - Text to tokenize

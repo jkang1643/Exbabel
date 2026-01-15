@@ -4,20 +4,22 @@
 
 import { useState } from 'react';
 import { Header } from './Header';
+import { JoinSessionModal } from './JoinSessionModal';
 
 export function HomePage({ onSelectMode }) {
-  const [joinCode, setJoinCode] = useState('');
+  const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
 
-  const handleJoinWithCode = () => {
-    if (joinCode.trim()) {
-      onSelectMode('listener', joinCode.toUpperCase());
+  const handleJoin = (code) => {
+    if (code && code.trim()) {
+      onSelectMode('listener', code.toUpperCase());
+      setIsJoinModalOpen(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100">
       <Header />
-      
+
       <div className="container mx-auto px-3 sm:px-4 py-6 sm:py-12">
         <div className="max-w-4xl mx-auto">
           {/* Welcome Section */}
@@ -76,25 +78,14 @@ export function HomePage({ onSelectMode }) {
             <p className="text-sm sm:text-base text-gray-600 mb-4 sm:mb-6 text-center">
               Enter a session code to receive live translations
             </p>
-            
+
             <div className="max-w-md mx-auto">
-              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
-                <input
-                  type="text"
-                  value={joinCode}
-                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                  placeholder="Enter session code"
-                  maxLength={6}
-                  className="flex-1 px-3 sm:px-4 py-2 sm:py-3 text-lg sm:text-xl font-bold text-center tracking-wider border-2 border-gray-300 rounded-lg focus:border-emerald-500 focus:outline-none uppercase"
-                />
-                <button
-                  onClick={handleJoinWithCode}
-                  disabled={!joinCode.trim()}
-                  className="px-6 sm:px-8 py-2 sm:py-3 bg-emerald-500 hover:bg-emerald-600 disabled:bg-gray-300 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg transition-all transform hover:scale-105 disabled:scale-100"
-                >
-                  Join
-                </button>
-              </div>
+              <button
+                onClick={() => setIsJoinModalOpen(true)}
+                className="w-full px-6 sm:px-8 py-3 sm:py-4 bg-emerald-500 hover:bg-emerald-600 text-white text-lg sm:text-xl font-bold rounded-lg shadow-lg transition-all transform hover:scale-105 flex items-center justify-center gap-3"
+              >
+                <span>Tap to Join Session</span>
+              </button>
             </div>
           </div>
 
@@ -102,8 +93,8 @@ export function HomePage({ onSelectMode }) {
           <div className="mt-8 sm:mt-12 grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
             <div className="text-center bg-white/50 rounded-lg p-3 sm:p-0 sm:bg-transparent">
               <div className="text-3xl sm:text-4xl mb-1 sm:mb-2">🌍</div>
-              <h3 className="font-semibold text-sm sm:text-base text-gray-800 mb-1">50+ Languages</h3>
-              <p className="text-xs sm:text-sm text-gray-600">Support for major world languages</p>
+              <h3 className="font-semibold text-sm sm:text-base text-gray-800 mb-1">180+ Languages</h3>
+              <p className="text-xs sm:text-sm text-gray-600">Comprehensive global language coverage</p>
             </div>
             <div className="text-center bg-white/50 rounded-lg p-3 sm:p-0 sm:bg-transparent">
               <div className="text-3xl sm:text-4xl mb-1 sm:mb-2">⚡</div>
@@ -118,7 +109,12 @@ export function HomePage({ onSelectMode }) {
           </div>
         </div>
       </div>
+
+      <JoinSessionModal
+        isOpen={isJoinModalOpen}
+        onClose={() => setIsJoinModalOpen(false)}
+        onJoin={handleJoin}
+      />
     </div>
   );
 }
-

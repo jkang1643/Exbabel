@@ -1,15 +1,44 @@
 /**
  * Host Mode Adapter - Uses CoreEngine for translation pipeline
- * 
+ *
  * PHASE 8: Migrate host mode to use CoreEngine
- * 
+ *
  * This adapter wraps CoreEngine and adds host-specific functionality:
  * - SessionStore integration for broadcasting
  * - Multi-language translation broadcasting
  * - Listener management
- * 
+ *
  * CRITICAL: Must maintain exact same behavior as current hostModeHandler
  */
+
+// --- TEMP DEBUG LEDGER (remove later) ---
+const corrLedger = new Map(); // sourceSeqId -> { en: [...], es: [...] }
+function ledgerAdd(sourceSeqId, kind, payload, route) {
+  if (sourceSeqId == null || sourceSeqId === 0) return;
+  const entry = corrLedger.get(sourceSeqId) || { en: [], es: [], other: [] };
+  const rec = {
+    t: Date.now(),
+    route, // 'host' | 'listeners'
+    kind,  // 'EN_ANCHOR' | 'ES_TRANSLATION' | etc
+    isPartial: payload?.isPartial,
+    hasTranslation: payload?.hasTranslation,
+    hasCorrection: payload?.hasCorrection,
+    targetLang: payload?.targetLang,
+    previewO: String(payload?.originalText ?? '').slice(0, 60),
+    previewT: String(payload?.translatedText ?? '').slice(0, 60),
+    updateType: payload?.updateType,
+  };
+  if (payload?.targetLang === 'en') entry.en.push(rec);
+  else if (payload?.targetLang === 'es') entry.es.push(rec);
+  else entry.other.push(rec);
+
+  // Keep small
+  entry.en = entry.en.slice(-5);
+  entry.es = entry.es.slice(-5);
+  entry.other = entry.other.slice(-5);
+
+  corrLedger.set(sourceSeqId, entry);
+}
 
 import { GoogleSpeechStream } from '../googleSpeechStream.js';
 import WebSocket from 'ws';
@@ -19,7 +48,45 @@ import { partialTranslationWorker, finalTranslationWorker } from '../translation
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from '../translationWorkersRealtime.js';
 import { grammarWorker } from '../grammarWorker.js';
 import { CoreEngine } from '../../core/engine/coreEngine.js';
-import { mergeRecoveryText } from '../utils/recoveryMerge.js';
+import { mergeRecoveryText, wordsAreRelated } from '../utils/recoveryMerge.js';
+import { deduplicatePartialText } from '../../core/utils/partialDeduplicator.js';
+import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmittedText, hasAlphaNumeric } from '../../core/utils/emitGuards.js';
+
+/**
+ * Normalize text for comparison
+ * @param {string} s - Text to normalize
+ * @returns {string} Normalized text
+ */
+function normalizeForCompare(s = '') {
+  return s.trim().toLowerCase().replace(/[^\w\s']/g, '').replace(/\s+/g, ' ');
+}
+
+/**
+ * Check if a partial is a recovery stub that should be suppressed
+ * @param {Object} params - Parameters
+ * @param {string} params.partialText - Partial text to check
+ * @param {string} params.forcedBufferText - Forced buffer text to compare against
+ * @returns {boolean} True if partial is a stub that should be suppressed
+ */
+function isRecoveryStubPartial({ partialText, forcedBufferText }) {
+  const p = normalizeForCompare(partialText);
+  const f = normalizeForCompare(forcedBufferText);
+
+  if (!p) return true;
+
+  // If it's very short, it's almost always a stub in recovery
+  if (p.length < 18) return true; // tune 15–25
+
+  // If partial is entirely contained in forced buffer text (or likely a prefix)
+  if (f && (f.includes(p) || p.startsWith(f) || f.startsWith(p))) return true;
+
+  // Word-based containment (handles small ASR rewrite like "ours"/"our")
+  const pWords = p.split(' ').filter(w => w.length > 2);
+  const fWords = f.split(' ').filter(w => w.length > 2);
+  if (pWords.length <= 4 && pWords.every(w => fWords.includes(w))) return true;
+
+  return false;
+}
 
 /**
  * Handle host connection using CoreEngine
@@ -119,6 +186,22 @@ export async function handleHostConnection(clientWs, sessionId) {
 
   // Helper: Broadcast message to all listeners
   const broadcastToListeners = (messageData, isPartial = true) => {
+    // Spanish emission tracer for bypass path
+    const tl = messageData?.targetLang;
+    const sl = messageData?.sourceLang;
+    const hasT = !!messageData?.hasTranslation;
+    if (tl === 'es') {
+      console.warn('[TRACE_ES_BYPASS] Spanish emission via broadcastToListeners (bypasses broadcastWithSequence)', {
+        type: messageData?.type,
+        hasTranslation: hasT,
+        sourceLang: sl,
+        targetLang: tl,
+        originalPreview: String(messageData?.originalText ?? '').slice(0, 80),
+        translatedPreview: String(messageData?.translatedText ?? '').slice(0, 80),
+      });
+      console.warn(new Error('[TRACE_ES_BYPASS] stack').stack);
+    }
+    
     const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
     sessionStore.broadcastToListeners(currentSessionId, message);
     return seqId;
@@ -187,6 +270,10 @@ export async function handleHostConnection(clientWs, sessionId) {
               let currentPartialText = ''; // Track current partial text for delayed translations
               let latestPartialTextForCorrection = ''; // Track the absolute latest partial to avoid race conditions
               
+              // Segment epoch tracking - prevents out-of-order delayed partial emissions
+              let segmentEpoch = 0;           // increments every time we move to a new segment or emit a FINAL
+              let delayedPartialTimer = null; // timer for delayed partial processing
+              
               // PHASE 8: Partial tracking now uses CoreEngine Partial Tracker
               // Compatibility layer - variables that reference tracker (for closures/timeouts)
               let latestPartialText = '';
@@ -232,31 +319,259 @@ export async function handleHostConnection(clientWs, sessionId) {
                 return finalizationEngine.endsWithCompleteSentence(text);
               };
               
+              // Helper function to check for partials that extend a just-sent FINAL
+              // This should ALWAYS be called after a FINAL is sent to catch any partials that arrived
+              // during async processing (grammar correction, translation, etc.)
+              const checkForExtendingPartialsAfterFinal = (sentFinalText) => {
+                if (!sentFinalText) return;
+                
+                // Sync partial variables to get the latest state
+                syncPartialVariables();
+                
+                const sentFinalTrimmed = sentFinalText.trim();
+                const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
+                const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
+                
+                // Check if any partials extend the just-sent FINAL
+                let foundExtension = false;
+                
+                if (longestPartialText && longestPartialText.length > sentFinalTrimmed.length && timeSinceLongest < 5000) {
+                  const longestTrimmed = longestPartialText.trim();
+                  const sentNormalized = sentFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const longestNormalized = longestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const extendsFinal = longestNormalized.startsWith(sentNormalized) || 
+                      (sentFinalTrimmed.length > 5 && longestNormalized.substring(0, sentNormalized.length) === sentNormalized) ||
+                      longestTrimmed.startsWith(sentFinalTrimmed) ||
+                      (sentFinalTrimmed.length > 5 && longestTrimmed.substring(0, sentFinalTrimmed.length) === sentFinalTrimmed);
+                  
+                  if (extendsFinal) {
+                    const missingWords = longestPartialText.substring(sentFinalTrimmed.length).trim();
+                    console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                    console.log(`[HostMode] 📊 This indicates words were spoken during final processing - they should be captured in next segment`);
+                    foundExtension = true;
+                  } else {
+                    // Check for overlap using partialTracker
+                    const merged = partialTracker.mergeWithOverlap(sentFinalTrimmed, longestTrimmed);
+                    if (merged && merged.length > sentFinalTrimmed.length + 3) {
+                      const missingWords = merged.substring(sentFinalTrimmed.length).trim();
+                      console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL via overlap - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                      console.log(`[HostMode] 📊 This indicates words were spoken during final processing - they should be captured in next segment`);
+                      foundExtension = true;
+                    }
+                  }
+                } else if (latestPartialText && latestPartialText.length > sentFinalTrimmed.length && timeSinceLatest < 5000) {
+                  const latestTrimmed = latestPartialText.trim();
+                  const sentNormalized = sentFinalTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const latestNormalized = latestTrimmed.replace(/\s+/g, ' ').toLowerCase();
+                  const extendsFinal = latestNormalized.startsWith(sentNormalized) || 
+                      (sentFinalTrimmed.length > 5 && latestNormalized.substring(0, sentNormalized.length) === sentNormalized) ||
+                      latestTrimmed.startsWith(sentFinalTrimmed) ||
+                      (sentFinalTrimmed.length > 5 && latestTrimmed.substring(0, sentFinalTrimmed.length) === sentFinalTrimmed);
+                  
+                  if (extendsFinal) {
+                    const missingWords = latestPartialText.substring(sentFinalTrimmed.length).trim();
+                    console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                    console.log(`[HostMode] 📊 This indicates words were spoken during final processing - they should be captured in next segment`);
+                    foundExtension = true;
+                  } else {
+                    // Check for overlap using partialTracker
+                    const merged = partialTracker.mergeWithOverlap(sentFinalTrimmed, latestTrimmed);
+                    if (merged && merged.length > sentFinalTrimmed.length + 3) {
+                      const missingWords = merged.substring(sentFinalTrimmed.length).trim();
+                      console.log(`[HostMode] ⚠️ Partial extends just-sent FINAL via overlap - likely continuation (FINAL: "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}", partial extends by: "${missingWords.substring(0, 50)}...")`);
+                      console.log(`[HostMode] 📊 This indicates words were spoken during final processing - they should be captured in next segment`);
+                      foundExtension = true;
+                    }
+                  }
+                }
+                
+                if (!foundExtension) {
+                  // Still log that we checked (for debugging)
+                  const finalEndsWithCompleteSentence = endsWithCompleteSentence(sentFinalTrimmed);
+                  if (!finalEndsWithCompleteSentence) {
+                    console.log(`[HostMode] ✓ Checked for extending partials after FINAL (none found): "${sentFinalTrimmed.substring(Math.max(0, sentFinalTrimmed.length - 50))}"`);
+                  }
+                }
+              };
+              
               // Helper function to broadcast message to host and listeners (uses CoreEngine for sequencing)
               const broadcastWithSequence = (messageData, isPartial = true, targetLang = null) => {
                 if (!currentSessionId) {
                   console.error(`[HostMode] ❌ ERROR: currentSessionId is not defined! Cannot broadcast message.`);
                   return -1;
                 }
+
+                // TRACE_ALL: Universal broadcast logging (compact for all, detailed for filtered)
+                const TRACE_ALL = process.env.TRACE_ALL_EMIT === '1';
+                const TRACE_STACK = process.env.TRACE_ALL_STACK === '1';
+                const TRACE_FILTER = process.env.TRACE_FILTER || '';
+
+                function shouldTracePayload(p) {
+                  if (!TRACE_ALL) return false;
+                  if (!TRACE_FILTER) return true;
+                  const blob = `${p?.originalText || ''} ${p?.correctedText || ''} ${p?.translatedText || ''}`;
+                  return blob.includes(TRACE_FILTER);
+                }
+
+                // ✅ CENTRAL INVARIANT: Remove sourceSeqId from same-language payloads (EN payloads)
+                const payloadToSend = { ...messageData };
+                if (payloadToSend.targetLang === payloadToSend.sourceLang) {
+                  delete payloadToSend.sourceSeqId;
+                }
                 
+                // Spanish emission stack tracer - catches every path that emits Spanish
+                const tl = payloadToSend?.targetLang || targetLang;
+                const sl = payloadToSend?.sourceLang;
+                const hasT = !!payloadToSend?.hasTranslation;
+                const upd = payloadToSend?.updateType;
+                const corr = payloadToSend?.hasCorrection;
+                const hasOriginal = !!(payloadToSend?.originalText && payloadToSend.originalText.trim());
+                const hasTranslated = !!(payloadToSend?.translatedText && payloadToSend.translatedText.trim());
+                
+                // Catch ALL Spanish emissions to trace the source - log everything as warning for visibility
+                if (tl === 'es') {
+                  const isProblematic = !hasT || sl !== 'en' || !hasOriginal;
+
+                  console.warn(`[TRACE_ES] Spanish emission ${isProblematic ? 'PROBLEMATIC' : 'VALID'}`, {
+                    type: payloadToSend?.type,
+                    updateType: upd,
+                    hasCorrection: corr,
+                    hasTranslation: payloadToSend?.hasTranslation,
+                    sourceLang: sl,
+                    targetLang: tl,
+                    targetLangParam: targetLang,
+                    payloadTargetLang: payloadToSend?.targetLang,
+                    hasOriginalText: hasOriginal,
+                    hasTranslatedText: hasTranslated,
+                    sourceSeqId: payloadToSend?.sourceSeqId,
+                    originalPreview: String(payloadToSend?.originalText ?? '').slice(0, 80),
+                    correctedPreview: String(payloadToSend?.correctedText ?? '').slice(0, 80),
+                    translatedPreview: String(payloadToSend?.translatedText ?? '').slice(0, 80),
+                    isPartial: isPartial,
+                    isProblematic: isProblematic,
+                  });
+
+                  // TEMP DEBUG LEDGER: Dump ledger for "Y grito" detection
+                  if (payloadToSend?.translatedText?.includes('Y grito')) {
+                    console.log('[LEDGER_DUMP]', payloadToSend.sourceSeqId, corrLedger.get(payloadToSend.sourceSeqId));
+                  }
+
+                  console.warn(new Error(`[TRACE_ES] ${isProblematic ? 'PROBLEMATIC' : 'VALID'} stack`).stack);
+                }
+                
+                // ✅ INVARIANT: Never allow non-source language emissions unless it actually has translation text
+                if ((payloadToSend?.targetLang !== payloadToSend?.sourceLang) && !payloadToSend?.hasTranslation) {
+                  console.warn('[HostMode] 🚫 [Invariant] Dropping non-source emission without translation', {
+                    sourceLang: payloadToSend?.sourceLang,
+                    targetLang: payloadToSend?.targetLang,
+                    updateType: payloadToSend?.updateType,
+                    hasCorrection: payloadToSend?.hasCorrection,
+                    seqId: payloadToSend?.seqId
+                  });
+                  return -1; // Return error code to indicate rejection
+                }
+
+                // ✅ NEW: Emergency guard - never allow translation broadcasts missing sourceSeqId
+                const missingSourceSeqId =
+                  payloadToSend?.sourceSeqId === undefined ||
+                  payloadToSend?.sourceSeqId === null ||
+                  payloadToSend?.sourceSeqId === 0;
+
+                if (payloadToSend?.hasTranslation && payloadToSend?.targetLang !== payloadToSend?.sourceLang && missingSourceSeqId) {
+                  console.warn('[Invariant] Dropping translation missing sourceSeqId', {
+                    sourceLang: payloadToSend?.sourceLang,
+                    targetLang: payloadToSend?.targetLang,
+                    hasCorrection: payloadToSend?.hasCorrection,
+                    isPartial: payloadToSend?.isPartial,
+                    originalPreview: String(payloadToSend?.originalText ?? '').slice(0, 80),
+                    translatedPreview: String(payloadToSend?.translatedText ?? '').slice(0, 80),
+                  });
+                  return null;
+                }
+
+                // TRACE_ALL: Log all broadcasts before sequencing
+                if (TRACE_ALL) {
+                  const preview = (s) => (s ? String(s).slice(0, 90).replace(/\n/g, '\\n') : '');
+                  const isPartialFinal = !!payloadToSend?.isPartial; // from payload
+                  const forceFinal = !!payloadToSend?.forceFinal;
+
+                  console.log(`[TRACE_ALL_EMIT]`, {
+                    type: payloadToSend?.type,
+                    updateType: payloadToSend?.updateType,
+                    sourceLang: payloadToSend?.sourceLang,
+                    targetLang: payloadToSend?.targetLang,
+                    targetLangParam: targetLang,
+                    seqId_before: 'pending', // seqId not assigned yet
+                    sourceSeqId: payloadToSend?.sourceSeqId,
+                    isPartial: isPartialFinal,
+                    forceFinal,
+                    hasOriginal: !!payloadToSend?.originalText,
+                    hasCorrected: !!payloadToSend?.correctedText,
+                    hasTranslated: !!payloadToSend?.translatedText,
+                    o: preview(payloadToSend?.originalText),
+                    c: preview(payloadToSend?.correctedText),
+                    t: preview(payloadToSend?.translatedText),
+                  });
+
+                  if (shouldTracePayload(payloadToSend) && TRACE_STACK) {
+                    console.log(new Error('[TRACE_ALL_EMIT] stack').stack);
+                  }
+                }
+
                 // PHASE 8: Use CoreEngine timeline tracker for sequence IDs
-                const { message, seqId } = timelineTracker.createSequencedMessage(messageData, isPartial);
-                
+                const { message, seqId } = timelineTracker.createSequencedMessage(payloadToSend, isPartial);
+
+                // TEMP DEBUG LEDGER: Add to correlation ledger
+                const sid = payloadToSend?.sourceSeqId ?? (payloadToSend?.targetLang === payloadToSend?.sourceLang ? seqId : null);
+                ledgerAdd(sid, payloadToSend?.targetLang === 'es' ? 'ES_EMIT' : 'EN_EMIT', payloadToSend, targetLang ? 'listeners' : 'host');
+
                 // Send to host
                 if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify(message));
-                  console.log(`[HostMode] 📤 Sent to host (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${messageData.targetLang || 'N/A'})`);
+                  console.log(`[HostMode] 📤 SENT_TO_HOST (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId}, targetLang: ${payloadToSend.targetLang || 'N/A'})`);
+
+                  if (TRACE_ALL) {
+                    console.log(`[TRACE_ALL_EMIT] SENT_TO_HOST: seqId=${seqId}, listeners=0`);
+                  }
+
+                  // Optional correlation logging
+                  if (payloadToSend?.sourceSeqId !== undefined) {
+                    console.log(`[HostMode] 🔗 Correlate: seqId=${seqId} sourceSeqId=${payloadToSend.sourceSeqId} target=${payloadToSend.targetLang || 'N/A'}`);
+                  }
                 }
                 
                 // Broadcast to listeners
                 if (targetLang) {
+                  // Spanish routing tracer - check if routing parameter routes to Spanish
+                  if (targetLang === 'es' && (!payloadToSend?.hasTranslation || payloadToSend?.sourceLang !== 'en')) {
+                    console.warn('[TRACE_ES_ROUTING] Spanish routing via targetLang parameter', {
+                      targetLangParam: targetLang,
+                      payloadTargetLang: payloadToSend?.targetLang,
+                      hasTranslation: payloadToSend?.hasTranslation,
+                      sourceLang: payloadToSend?.sourceLang,
+                      type: payloadToSend?.type,
+                      updateType: payloadToSend?.updateType,
+                      originalPreview: String(payloadToSend?.originalText ?? '').slice(0, 80),
+                      translatedPreview: String(payloadToSend?.translatedText ?? '').slice(0, 80),
+                    });
+                    console.warn(new Error('[TRACE_ES_ROUTING] stack').stack);
+                  }
+
                   // Broadcast to specific language group
-                  console.log(`[HostMode] 📡 Broadcasting to ${targetLang} listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
-                  sessionStore.broadcastToListeners(currentSessionId, message, targetLang);
+                  console.log(`[HostMode] 📡 SENT_TO_GROUP ${targetLang} (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
+                  const listenerCount = sessionStore.broadcastToListeners(currentSessionId, message, targetLang);
+
+                  if (TRACE_ALL) {
+                    console.log(`[TRACE_ALL_EMIT] SENT_TO_GROUP: targetLang=${targetLang}, seqId=${seqId}, listeners=${listenerCount || 'unknown'}`);
+                  }
                 } else {
                   // Broadcast to all listeners
-                  console.log(`[HostMode] 📡 Broadcasting to ALL listeners (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
-                  sessionStore.broadcastToListeners(currentSessionId, message);
+                  console.log(`[HostMode] 📡 SENT_TO_ALL_LISTENERS (${isPartial ? 'PARTIAL' : 'FINAL'}, seqId: ${seqId})`);
+                  const listenerCount = sessionStore.broadcastToListeners(currentSessionId, message);
+
+                  if (TRACE_ALL) {
+                    console.log(`[TRACE_ALL_EMIT] SENT_TO_ALL_LISTENERS: seqId=${seqId}, listeners=${listenerCount || 'unknown'}`);
+                  }
                 }
                 
                 return seqId;
@@ -311,6 +626,7 @@ export async function handleHostConnection(clientWs, sessionId) {
               
               // Track last sent FINAL (from solo mode)
               let lastSentFinalText = '';
+              let segmentStartTime = null; // Track segment start time for grace window
               let lastSentFinalTime = 0;
               let lastSentOriginalText = ''; // Track original text to prevent grammar correction duplicates
               const FINAL_CONTINUATION_WINDOW_MS = 3000;
@@ -320,10 +636,66 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Queue for finals that arrive while another is being processed
               const finalProcessingQueue = [];
               
+              // Queue for deferred finals from recovery/dedupe pipeline
+              const deferredFinalQueue = [];
+              
+              // Function to drain deferred final queue (called from recovery completion callbacks)
+              async function drainDeferredFinals({ processFinalText }) {
+                const queueLength = deferredFinalQueue.length;
+                console.log(`[HostMode] 🔄 drainDeferredFinals called - queue length: ${queueLength}`);
+                
+                if (queueLength === 0) {
+                  console.log('[HostMode] ✅ Deferred final queue is empty - nothing to drain');
+                  return;
+                }
+                
+                if (!processFinalText) {
+                  console.error('[HostMode] ❌ drainDeferredFinals: processFinalText is not provided!');
+                  return;
+                }
+                
+                let processedCount = 0;
+                while (deferredFinalQueue.length > 0) {
+                  const item = deferredFinalQueue.shift();
+                  try {
+                    // item should include { text, options } or similar
+                    if (item && item.text) {
+                      console.log(`[HostMode] 📝 Processing deferred final ${processedCount + 1}/${queueLength}: "${item.text.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   Options: ${JSON.stringify(item.options || {})}`);
+                      processFinalText(item.text, item.options || {});
+                      processedCount++;
+                    } else {
+                      console.warn(`[HostMode] ⚠️ Skipping invalid deferred final item: ${JSON.stringify(item)}`);
+                    }
+                  } catch (err) {
+                    console.error('[HostMode] ❌ Error processing deferred final:', err);
+                    console.error('[HostMode]   Item that failed:', JSON.stringify(item));
+                    console.error('[HostMode]   Error stack:', err.stack);
+                  }
+                }
+                
+                console.log(`[HostMode] ✅ drainDeferredFinals completed - processed ${processedCount}/${queueLength} items`);
+              }
+              
               // Extract final processing into separate async function (using solo mode logic, adapted for broadcasting)
               const processFinalText = (textToProcess, options = {}) => {
                 // If already processing, queue this final instead of skipping
                 if (isProcessingFinal) {
+                  // CRITICAL: Before queuing, check if this is an older version of text already committed
+                  // This prevents queuing incomplete versions after recovery has committed complete versions
+                  if (lastSentFinalText) {
+                    const queuedNormalized = textToProcess.trim().replace(/\s+/g, ' ').toLowerCase();
+                    const lastSentNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                    
+                    // If this text is a prefix of what we already sent, skip queuing (older version)
+                    if (lastSentNormalized.startsWith(queuedNormalized) && lastSentNormalized.length > queuedNormalized.length) {
+                      console.log(`[HostMode] ⏭️ Skipping queued final - older version already committed (queued: ${queuedNormalized.length} chars, sent: ${lastSentNormalized.length} chars)`);
+                      console.log(`[HostMode]   Would queue: "${textToProcess.substring(0, 80)}..."`);
+                      console.log(`[HostMode]   Already sent: "${lastSentFinalText.substring(0, 80)}..."`);
+                      return; // Don't queue older version
+                    }
+                  }
+                  
                   console.log(`[HostMode] ⏳ Final already being processed, queuing: "${textToProcess.substring(0, 60)}..."`);
                   finalProcessingQueue.push({ textToProcess, options });
                   return; // Queue instead of skip
@@ -339,6 +711,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // This prevents sending grammar-corrected version of same original text twice
                     const trimmedText = textToProcess.trim();
                     const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+                    const isForcedFinal = !!options.forceFinal;
                     
                     // Always check for duplicates if we have tracking data (not just within time window)
                     // This catches duplicates even if they arrive outside the continuation window
@@ -346,6 +719,75 @@ export async function handleHostConnection(clientWs, sessionId) {
                       const lastSentOriginalNormalized = lastSentOriginalText.replace(/\s+/g, ' ').toLowerCase();
                       const lastSentFinalNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
                       const timeSinceLastFinal = Date.now() - lastSentFinalTime;
+                      
+                      // CRITICAL: For forced finals, use MORE aggressive deduplication
+                      // Forced finals can be committed multiple times (recovery + timeout) with slight variations
+                      // Check if one is a prefix/extension of another, or if they're very similar
+                      if (isForcedFinal) {
+                        // For forced finals, check within a longer window (10 seconds) since recovery can take time
+                        const FORCED_FINAL_DEDUP_WINDOW_MS = 10000;
+                        
+                        if (timeSinceLastFinal < FORCED_FINAL_DEDUP_WINDOW_MS) {
+                          // Check if texts are identical (normalized)
+                          if (textNormalized === lastSentFinalNormalized || textNormalized === lastSentOriginalNormalized) {
+                            console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (identical text, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
+                            isProcessingFinal = false;
+                            return;
+                          }
+                          
+                          // CRITICAL: Check if one forced final is a prefix/extension of another
+                          // This catches cases where recovery adds words to the same base text
+                          if (textNormalized.length > 20 && lastSentFinalNormalized.length > 20) {
+                            // Check if new text starts with last sent (new is extension)
+                            if (lastSentFinalNormalized.startsWith(textNormalized.substring(0, Math.min(textNormalized.length, lastSentFinalNormalized.length - 5)))) {
+                              const prefixLen = Math.min(textNormalized.length, lastSentFinalNormalized.length - 5);
+                              if (prefixLen > 30) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (new is prefix of last sent, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
+                                console.log(`[HostMode]   New: "${trimmedText.substring(0, 80)}..."`);
+                                console.log(`[HostMode]   Last sent: "${lastSentFinalText.substring(0, 80)}..."`);
+                                isProcessingFinal = false;
+                                return;
+                              }
+                            }
+                            
+                            // Check if last sent starts with new text (last sent is extension - prefer longer one)
+                            if (textNormalized.startsWith(lastSentFinalNormalized.substring(0, Math.min(lastSentFinalNormalized.length, textNormalized.length - 5)))) {
+                              const prefixLen = Math.min(lastSentFinalNormalized.length, textNormalized.length - 5);
+                              if (prefixLen > 30 && textNormalized.length > lastSentFinalNormalized.length) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (last sent is prefix of new, ${timeSinceLastFinal}ms ago), but new is longer - will replace`);
+                                // Allow this to proceed - it's an extension, but we'll update tracking
+                              } else if (prefixLen > 30) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (last sent is prefix of new but new is not longer, ${timeSinceLastFinal}ms ago), skipping`);
+                                isProcessingFinal = false;
+                                return;
+                              }
+                            }
+                          }
+                          
+                          // Check for high word overlap (catches punctuation/capitalization/grammar differences)
+                          const textWords = textNormalized.split(/\s+/).filter(w => w.length > 2);
+                          const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
+                          
+                          if (textWords.length > 5 && lastSentWords.length > 5) {
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
+                            const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
+                            const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
+                            
+                            // For forced finals, if 75%+ words match and length difference is small, it's a duplicate
+                            // Use lower threshold (75% vs 80%) because forced finals may have recovery words added
+                            if (wordOverlapRatio >= 0.75 && lengthDiff < 30) {
+                              // But allow if new text is significantly longer (recovery found more words)
+                              if (textNormalized.length <= lastSentFinalNormalized.length + 10) {
+                                console.log(`[HostMode] ⚠️ Duplicate FORCED final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
+                                isProcessingFinal = false;
+                                return;
+                              }
+                            }
+                          }
+                        }
+                      }
                       
                       // Check if this is the same original text (even if grammar correction would change it)
                       // Use stricter matching for very recent commits (within 5 seconds)
@@ -379,13 +821,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                           }
                           
                           // CRITICAL: Also check for high word overlap (catches cases with punctuation/capitalization differences)
-                          // Split into words and compare word-by-word similarity
+                          // Split into words and compare word-by-word similarity using wordsAreRelated for stem matching
                           const textWords = textNormalized.split(/\s+/).filter(w => w.length > 2); // Words longer than 2 chars
                           const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
                           
                           if (textWords.length > 3 && lastSentWords.length > 3) {
-                            // Count matching words
-                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            // Count matching words using wordsAreRelated (handles punctuation and stem variations like gather/gathered)
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             
                             // If 80%+ words match and texts are similar length, it's likely a duplicate
@@ -413,7 +857,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                           const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
                           
                           if (textWords.length > 3 && lastSentWords.length > 3) {
-                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            // Use wordsAreRelated for stem matching (handles gather/gathered, punctuation, etc.)
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
                             
@@ -433,7 +880,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                           const lastSentWords = lastSentFinalNormalized.split(/\s+/).filter(w => w.length > 2);
                           
                           if (textWords.length > 5 && lastSentWords.length > 5) {
-                            const matchingWords = textWords.filter(w => lastSentWords.includes(w));
+                            // Use wordsAreRelated for stem matching (handles gather/gathered, punctuation, etc.)
+                            const matchingWords = textWords.filter(w => 
+                              lastSentWords.some(lw => wordsAreRelated(w, lw))
+                            );
                             const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
                             const lengthDiff = Math.abs(textNormalized.length - lastSentFinalNormalized.length);
                             
@@ -453,9 +903,22 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Different language - KEEP COUPLED FOR FINALS (history needs complete data)
                     let correctedText = textToProcess; // Declare outside try for catch block access
                     try {
+                      // CRITICAL FIX: Apply cached grammar corrections FIRST before running new grammar correction
+                      // This ensures that if a final extends a partial that had grammar corrections, we use those cached corrections
+                      // This prevents cases where a partial was sent with uncorrected grammar, then a final extends it
+                      // and we send the final with uncorrected grammar for the partial portion
+                      let textWithCachedCorrections = textToProcess;
+                      if (currentSourceLang === 'en' && grammarCorrectionCache.size > 0) {
+                        textWithCachedCorrections = applyCachedCorrections(textToProcess);
+                        if (textWithCachedCorrections !== textToProcess) {
+                          console.log(`[HostMode] ✅ Applied cached grammar corrections to final: "${textToProcess.substring(0, 50)}..." → "${textWithCachedCorrections.substring(0, 50)}..."`);
+                        }
+                      }
+                      
                       // CRITICAL FIX: Get grammar correction FIRST (English only), then translate the CORRECTED text
                       // This ensures the translation matches the corrected English text
                       // Use Promise.race to prevent grammar correction from blocking too long
+                      // Use textWithCachedCorrections as input (not original textToProcess) to avoid re-correcting already-corrected portions
                       if (currentSourceLang === 'en') {
                         try {
                           // Set a timeout for grammar correction (max 2 seconds) to prevent blocking
@@ -463,23 +926,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                             setTimeout(() => reject(new Error('Grammar correction timeout')), 2000)
                           );
                           
+                          // Run grammar correction on text that already has cached corrections applied
+                          // This ensures we don't lose corrections that were already made to partial portions
                           correctedText = await Promise.race([
-                            grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY),
+                            grammarWorker.correctFinal(textWithCachedCorrections, process.env.OPENAI_API_KEY),
                             grammarTimeout
                           ]);
                           
+                          // Remember the correction mapping from original text to final corrected text
                           rememberGrammarCorrection(textToProcess, correctedText);
                         } catch (grammarError) {
                           if (grammarError.message === 'Grammar correction timeout') {
-                            console.warn(`[HostMode] Grammar correction timed out after 2s, using original text`);
+                            console.warn(`[HostMode] Grammar correction timed out after 2s, using text with cached corrections`);
+                            // Use text with cached corrections as fallback (better than original)
+                            correctedText = textWithCachedCorrections;
                           } else {
-                            console.warn(`[HostMode] Grammar correction failed, using original text:`, grammarError.message);
+                            console.warn(`[HostMode] Grammar correction failed, using text with cached corrections:`, grammarError.message);
+                            // Use text with cached corrections as fallback (better than original)
+                            correctedText = textWithCachedCorrections;
                           }
-                          correctedText = textToProcess; // Fallback to original on error/timeout
                         }
                       } else {
-                        // Non-English source - skip grammar correction
-                        correctedText = textToProcess;
+                        // Non-English source - skip grammar correction, but still apply cached corrections if any
+                        correctedText = textWithCachedCorrections;
                       }
 
                       // Get all target languages needed for listeners
@@ -492,7 +961,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (clientWs && clientWs.readyState === WebSocket.OPEN) {
                           broadcastWithSequence({
                             type: 'translation',
-                            originalText: textToProcess,
+                            originalText: correctedText,
                             correctedText: correctedText,
                             translatedText: correctedText,
                             sourceLang: currentSourceLang,
@@ -562,11 +1031,40 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log(`[HostMode]   translations: ${Object.keys(translations).length} language(s)`);
                       console.log(`[HostMode]   hasCorrection: ${hasCorrection}`);
 
+                      // ✅ NEW: Create a guaranteed source-language FINAL anchor seqId for correlation.
+                      // This does NOT change UI behavior (still same content), it only provides a stable join key.
+                      let finalSourceSeqId = null;
+                      try {
+                        const anchorPayload = {
+                          type: 'translation',
+                          originalText: correctedText,
+                          correctedText: correctedText,
+                          sourceLang: currentSourceLang,
+                          targetLang: currentSourceLang,
+                          timestamp: Date.now(),
+                          hasTranslation: false,
+                          hasCorrection: hasCorrection,
+                          forceFinal: !!options.forceFinal,
+                          // Same-language: show corrected text as translatedText (existing behavior)
+                          translatedText: correctedText
+                        };
+
+                        const anchorSeqId = broadcastWithSequence(anchorPayload, false, currentSourceLang);
+                        // Treat 0/undefined/null as invalid
+                        if (anchorSeqId !== undefined && anchorSeqId !== null && anchorSeqId !== 0) {
+                          finalSourceSeqId = anchorSeqId;
+                        } else {
+                          console.warn(`[HostMode] ⚠️ FINAL anchor broadcast returned invalid seqId`, { anchorSeqId });
+                        }
+                      } catch (e) {
+                        console.warn(`[HostMode] ⚠️ FINAL anchor broadcast failed`, e?.message || e);
+                      }
+
                       // Broadcast to each language group
                       for (const targetLang of targetLanguages) {
                         // CRITICAL: Only use translation if it exists and is valid - never fallback to English transcriptText
                         const translatedText = translations[targetLang];
-                        
+
                         // Check if translation is valid:
                         // 1. Must exist and not be empty
                         // 2. Must not be the same as original or corrected text (no translation happened)
@@ -576,23 +1074,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                           translatedText.startsWith('[Translation error') ||
                           translatedText.includes('Translation error')
                         );
-                        
-                        const hasTranslationForLang = translatedText && 
-                                                      translatedText.trim() &&
-                                                      !isErrorMessage &&
-                                                      translatedText !== textToProcess &&
-                                                      translatedText !== correctedText;
-                        
+
+                        const hasTranslationForLang = translatedText &&
+                          translatedText.trim() &&
+                          !isErrorMessage &&
+                          translatedText !== textToProcess &&
+                          translatedText !== correctedText;
+
                         console.log(`[HostMode] 📤 Broadcasting FINAL to ${targetLang}:`);
                         console.log(`[HostMode]   translatedText: "${translatedText || 'undefined'}"`);
                         console.log(`[HostMode]   isErrorMessage: ${isErrorMessage}`);
                         console.log(`[HostMode]   hasTranslationForLang: ${hasTranslationForLang}`);
-                        
+
                         // CRITICAL: If translation is valid, send it. Otherwise, don't send translatedText at all
                         // The frontend will handle the absence of translatedText appropriately
                         const messageToSend = {
                           type: 'translation',
-                          originalText: textToProcess,
+                          originalText: correctedText,
                           correctedText: correctedText,
                           sourceLang: currentSourceLang,
                           targetLang: targetLang,
@@ -601,12 +1099,29 @@ export async function handleHostConnection(clientWs, sessionId) {
                           hasCorrection: hasCorrection,
                           forceFinal: !!options.forceFinal
                         };
-                        
+
+                        // ✅ NEW: attach correlation key to *non-source language* FINAL translations only
+                        if (targetLang !== currentSourceLang && hasTranslationForLang) {
+                          messageToSend.sourceSeqId = finalSourceSeqId;
+
+                          // ✅ NEW: hard invariant — never broadcast a translated FINAL without a valid sourceSeqId
+                          if (messageToSend.sourceSeqId === undefined || messageToSend.sourceSeqId === null || messageToSend.sourceSeqId === 0) {
+                            console.warn(`[HostMode] 🚫 Dropping FINAL translation missing sourceSeqId`, {
+                              targetLang,
+                              finalSourceSeqId,
+                              originalPreview: (textToProcess || '').slice(0, 80),
+                              translatedPreview: (translatedText || '').slice(0, 80)
+                            });
+                            continue;
+                          }
+                        }
+
                         // CRITICAL: For same-language listeners, use correctedText as translatedText (like solo mode)
                         // This ensures grammar corrections appear in history
                         if (targetLang === currentSourceLang) {
                           messageToSend.translatedText = correctedText; // Same language = show corrected text
                           messageToSend.hasTranslation = false; // No translation needed
+                          // (No sourceSeqId needed for same-language)
                         }
                         // Only include translatedText if we have a valid translation
                         else if (hasTranslationForLang) {
@@ -617,8 +1132,16 @@ export async function handleHostConnection(clientWs, sessionId) {
                           messageToSend.translatedText = undefined;
                           messageToSend.translationError = true;
                         }
-                        
+
                         broadcastWithSequence(messageToSend, false, targetLang);
+                      }
+                      
+                      // Increment epoch and cancel any pending delayed partial timers when FINAL is emitted
+                      segmentEpoch++;
+                      if (delayedPartialTimer) {
+                        clearTimeout(delayedPartialTimer);
+                        delayedPartialTimer = null;
+                        console.log(`[HostMode] 🔄 FINAL emitted - cancelled pending delayed partial timer (epoch: ${segmentEpoch})`);
                       }
                       
                       // CRITICAL: Update last sent FINAL tracking after sending
@@ -626,6 +1149,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                       lastSentOriginalText = textToProcess; // Always track the original
                       lastSentFinalText = correctedText !== textToProcess ? correctedText : textToProcess;
                       lastSentFinalTime = Date.now();
+                      
+                      // CRITICAL: Check for partials that arrived during async processing (grammar correction, translation)
+                      // This catches words that were spoken while the final was being processed
+                      checkForExtendingPartialsAfterFinal(lastSentFinalText);
                     } catch (error) {
                       console.error(`[HostMode] Final processing error:`, error);
                       // If it's a skip request error, use corrected text (or original if not set)
@@ -648,17 +1175,45 @@ export async function handleHostConnection(clientWs, sessionId) {
                         lastSentOriginalText = textToProcess; // Track original
                         lastSentFinalText = textToProcess;
                         lastSentFinalTime = Date.now();
+                        
+                        // CRITICAL: Check for partials that arrived during async processing
+                        checkForExtendingPartialsAfterFinal(lastSentFinalText);
                       }
                     } finally {
                       // CRITICAL: Always clear the processing flag when done
                       isProcessingFinal = false;
                       
                       // Process next queued final if any
-                      if (finalProcessingQueue.length > 0) {
+                      // CRITICAL: Filter out queued finals that are older versions of text already committed
+                      while (finalProcessingQueue.length > 0) {
                         const next = finalProcessingQueue.shift();
+                        
+                        // Check if this queued final is an older version of text we already sent
+                        // This prevents processing incomplete versions after recovery has committed a complete version
+                        if (lastSentFinalText && lastSentOriginalText) {
+                          const queuedNormalized = next.textToProcess.trim().replace(/\s+/g, ' ').toLowerCase();
+                          const lastSentNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                          const lastSentOriginalNormalized = lastSentOriginalText.replace(/\s+/g, ' ').toLowerCase();
+                          
+                          // If queued text is a prefix of what we already sent, skip it (older version)
+                          if (lastSentNormalized.startsWith(queuedNormalized) && lastSentNormalized.length > queuedNormalized.length) {
+                            console.log(`[HostMode] ⏭️ Skipping queued final - older version already committed (queued: ${queuedNormalized.length} chars, sent: ${lastSentNormalized.length} chars)`);
+                            console.log(`[HostMode]   Queued: "${next.textToProcess.substring(0, 80)}..."`);
+                            console.log(`[HostMode]   Already sent: "${lastSentFinalText.substring(0, 80)}..."`);
+                            continue; // Skip this queued final, check next one
+                          }
+                          
+                          // Also check if queued text matches original but we already sent a corrected version
+                          if (queuedNormalized === lastSentOriginalNormalized && lastSentNormalized !== lastSentOriginalNormalized) {
+                            console.log(`[HostMode] ⏭️ Skipping queued final - original version already committed as corrected version`);
+                            continue; // Skip this queued final, check next one
+                          }
+                        }
+                        
                         console.log(`[HostMode] 🔄 Processing queued final: "${next.textToProcess.substring(0, 60)}..."`);
                         // Recursively process the next queued final
                         processFinalText(next.textToProcess, next.options);
+                        break; // Only process one at a time
                       }
                     }
                   } catch (error) {
@@ -667,10 +1222,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                     isProcessingFinal = false;
                     
                     // Process next queued final even on error
-                    if (finalProcessingQueue.length > 0) {
+                    // CRITICAL: Filter out queued finals that are older versions of text already committed
+                    while (finalProcessingQueue.length > 0) {
                       const next = finalProcessingQueue.shift();
+                      
+                      // Check if this queued final is an older version of text we already sent
+                      if (lastSentFinalText && lastSentOriginalText) {
+                        const queuedNormalized = next.textToProcess.trim().replace(/\s+/g, ' ').toLowerCase();
+                        const lastSentNormalized = lastSentFinalText.replace(/\s+/g, ' ').toLowerCase();
+                        const lastSentOriginalNormalized = lastSentOriginalText.replace(/\s+/g, ' ').toLowerCase();
+                        
+                        // If queued text is a prefix of what we already sent, skip it (older version)
+                        if (lastSentNormalized.startsWith(queuedNormalized) && lastSentNormalized.length > queuedNormalized.length) {
+                          console.log(`[HostMode] ⏭️ Skipping queued final after error - older version already committed`);
+                          continue; // Skip this queued final, check next one
+                        }
+                        
+                        // Also check if queued text matches original but we already sent a corrected version
+                        if (queuedNormalized === lastSentOriginalNormalized && lastSentNormalized !== lastSentOriginalNormalized) {
+                          console.log(`[HostMode] ⏭️ Skipping queued final after error - original version already committed as corrected version`);
+                          continue; // Skip this queued final, check next one
+                        }
+                      }
+                      
                       console.log(`[HostMode] 🔄 Processing queued final after error: "${next.textToProcess.substring(0, 60)}..."`);
                       processFinalText(next.textToProcess, next.options);
+                      break; // Only process one at a time
                     }
                   }
                 })();
@@ -688,6 +1265,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                   console.log(`[HostMode] ⚠️ Received empty/null transcriptText from stream, ignoring`);
                   return;
                 }
+                
+                // Extract pipeline from meta (default to 'normal')
+                const pipeline = meta.pipeline || 'normal';
+                console.log(`[HostMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (pipeline: ${pipeline})`);
 
                 // 🧪 AUDIO BUFFER TEST: Log buffer status on every result (same as solo mode)
                 const audioBufferStatus = speechStream.getAudioBufferStatus();
@@ -743,7 +1324,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (recoveredMerged) {
                               console.log('[HostMode] 🔁 Merging recovered text with extending partial and committing');
                               forcedCommitEngine.clearForcedFinalBufferTimeout();
-                              processFinalText(recoveredMerged, { forceFinal: true });
+                              try {
+                                processFinalText(recoveredMerged, { forceFinal: true });
+                              } catch (e) {
+                                console.error('[HostMode] ❌ Forced-final commit failed (recovered merged):', e);
+                              }
                               forcedCommitEngine.clearForcedFinalBuffer();
                               syncForcedFinalBuffer();
                               // Continue processing the extended partial normally
@@ -759,11 +1344,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                       console.log('[HostMode] 🔁 New partial extends forced final - merging and committing');
                       forcedCommitEngine.clearForcedFinalBufferTimeout();
                       const mergedFinal = partialTracker.mergeWithOverlap(forcedCommitEngine.getForcedFinalBuffer().text, transcriptText);
-                      if (mergedFinal) {
-                        processFinalText(mergedFinal, { forceFinal: true });
-                      } else {
-                        // Merge failed - use extended text
-                        processFinalText(extension.extendedText, { forceFinal: true });
+                      try {
+                        if (mergedFinal) {
+                          processFinalText(mergedFinal, { forceFinal: true });
+                        } else {
+                          // Merge failed - use extended text
+                          processFinalText(extension.extendedText, { forceFinal: true });
+                        }
+                      } catch (e) {
+                        console.error('[HostMode] ❌ Forced-final commit failed (extending partial):', e);
                       }
                       forcedCommitEngine.clearForcedFinalBuffer();
                       syncForcedFinalBuffer();
@@ -771,19 +1360,106 @@ export async function handleHostConnection(clientWs, sessionId) {
                     } else {
                       // New segment detected - but DON'T cancel timeout yet!
                       // Let the POST-final audio recovery complete in the timeout
-                      console.log('[HostMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                      // CRITICAL: Check if recovery is in progress - if so, don't reset partial tracker yet
+                      // This prevents race conditions where new partials mix with recovery data
+                      syncForcedFinalBuffer();
+                      const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
+                      if (recoveryInProgress) {
+                        console.log('[HostMode] 🔀 New segment detected but recovery in progress - deferring partial tracker reset');
+                        console.log('[HostMode] ⏳ Will reset partial tracker after recovery completes');
+                      } else {
+                        console.log('[HostMode] 🔀 New segment detected - will let POST-final recovery complete first');
+                      }
                       // DON'T clear timeout or set to null - let it run!
                       // The timeout will commit the final after POST-final audio recovery
                       // Continue processing the new partial as a new segment
+                      // NOTE: Partial tracker reset will happen in the timeout callback after recovery
                     }
                   }
                   
-                  // Track latest partial for correction race condition prevention
-                  latestPartialTextForCorrection = transcriptText;
-                  const translationSeedText = applyCachedCorrections(transcriptText);
+                  // CRITICAL: Check if this partial duplicates words from the previous FINAL FIRST
+                  // This prevents cases like "desires" in FINAL followed by "Desires" in PARTIAL
+                  // Do this BEFORE updating partial tracker so we track the deduplicated text
+                  // CRITICAL: If there's a forced final buffer, also check against it (it hasn't been committed yet)
+                  // This prevents partials like "I've been..." from being treated as new when they're actually
+                  // continuations of the forced final "Bend. Oh boy, I've been to grocery store..."
+                  syncForcedFinalBuffer();
+                  let textToCheckAgainst = lastSentFinalText;
+                  let timeToCheckAgainst = lastSentFinalTime;
+                  
+                  // If there's a forced final buffer, check against it instead (it's more recent and hasn't been committed yet)
+                  if (forcedFinalBuffer && forcedFinalBuffer.text) {
+                    // Use the forced final text - it represents the most recent final, even though it hasn't been sent yet
+                    textToCheckAgainst = forcedFinalBuffer.text;
+                    // Use the timestamp from when the forced final was received (stored in buffer)
+                    timeToCheckAgainst = forcedFinalBuffer.timestamp || Date.now();
+                    console.log(`[HostMode] 🔍 Checking partial against forced final buffer (timestamp: ${timeToCheckAgainst}): "${textToCheckAgainst.substring(0, 60)}..."`);
+                  }
+                  
+                  // ✅ Recovery-pipeline stub suppression:
+                  // If recovery is active and forced buffer exists, do NOT emit short "stub" partials that will be extended.
+                  const recoveryActive = pipeline === 'recovery' && forcedFinalBuffer && forcedFinalBuffer.text;
+                  const forcedRecoveryInProgress = !!forcedFinalBuffer?.recoveryInProgress;
+
+                  if (recoveryActive && forcedRecoveryInProgress) {
+                    if (isRecoveryStubPartial({ partialText: transcriptText, forcedBufferText: forcedFinalBuffer.text })) {
+                      console.log('[HostMode] ⏭️ Skipping recovery stub partial (prevents early emission flicker)');
+                      console.log(`[HostMode]   Stub: "${transcriptText.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   Forced buffer: "${forcedFinalBuffer.text.substring(0, 60)}..."`);
+                      return;
+                    }
+                  }
+                  
+                  // CRITICAL: Dedupe ONLY runs in recovery pipeline
+                  // Normal pipeline must NOT run dedupe to prevent dropping early partials
+                  let partialTextToSend = transcriptText;
+                  
+                  // Determine if dedupe should run: only in recovery pipeline with proper conditions
+                  const shouldDedupe =
+                    pipeline === 'recovery' &&
+                    (meta?.forceFinal === true || meta?.ranAudioRecovery === true);
+                  
+                  console.log(`[HostMode] 🔍 Dedupe check: pipeline="${pipeline}", forceFinal=${meta?.forceFinal}, ranAudioRecovery=${meta?.ranAudioRecovery}, shouldDedupe=${shouldDedupe}`);
+                  
+                  if (shouldDedupe) {
+                    // Recovery pipeline: run dedupe to stitch recovered transcript cleanly
+                    console.log(`[HostMode] 🔄 DEDUP RUNNING (recovery pipeline only)`);
+                    console.log(`[HostMode]   Partial text: "${transcriptText.substring(0, 60)}..."`);
+                    console.log(`[HostMode]   Checking against: "${textToCheckAgainst?.substring(0, 60) || 'none'}..."`);
+                    
+                    const dedupResult = deduplicatePartialText({
+                      partialText: transcriptText,
+                      lastFinalText: textToCheckAgainst,
+                      lastFinalTime: timeToCheckAgainst,
+                      mode: 'HostMode',
+                      timeWindowMs: 5000,
+                      maxWordsToCheck: 3
+                    });
+                    
+                    console.log(`[HostMode]   Dedupe result: wasDeduplicated=${dedupResult.wasDeduplicated}, wordsSkipped=${dedupResult.wordsSkipped}`);
+                    console.log(`[HostMode]   Original: "${transcriptText.substring(0, 60)}..."`);
+                    console.log(`[HostMode]   Deduplicated: "${dedupResult.deduplicatedText?.substring(0, 60) || 'empty'}..."`);
+                    
+                    partialTextToSend = dedupResult.deduplicatedText;
+                    
+                    // If all words were duplicates, skip sending this partial entirely
+                    if (dedupResult.wasDeduplicated && (!partialTextToSend || partialTextToSend.length < 3)) {
+                      console.log(`[HostMode] ⏭️ Skipping partial - all words are duplicates of previous FINAL (recovery pipeline)`);
+                      return; // Skip this partial entirely
+                    }
+                  } else {
+                    // Normal pipeline: skip dedupe
+                    console.log(`[HostMode] ⏭️ skip: dedupe disabled (normal pipeline)`);
+                    console.log(`[HostMode]   Reason: pipeline="${pipeline}" (needs "recovery") OR missing forceFinal/ranAudioRecovery flags`);
+                  }
+                  
+                  // Track latest partial for correction race condition prevention (use deduplicated text)
+                  latestPartialTextForCorrection = partialTextToSend;
+                  const translationSeedText = applyCachedCorrections(partialTextToSend);
                   
                   // PHASE 8: Update partial tracking using CoreEngine Partial Tracker
-                  partialTracker.updatePartial(transcriptText);
+                  // Use deduplicated text for tracking to ensure consistency
+                  partialTracker.updatePartial(partialTextToSend);
                   syncPartialVariables(); // Sync variables for compatibility
                   
                   const snapshot = partialTracker.getSnapshot();
@@ -791,29 +1467,138 @@ export async function handleHostConnection(clientWs, sessionId) {
                     console.log(`[HostMode] 📏 New longest partial: ${snapshot.longest.length} chars`);
                   }
                   
-                  // Live partial transcript - send original immediately with sequence ID (solo mode style)
-                  // Note: This is the initial send before grammar/translation, so use raw text
-                  const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
-                  const seqId = broadcastWithSequence({
-                    type: 'translation',
-                    originalText: transcriptText, // Raw STT text (shown immediately)
-                    translatedText: undefined, // Will be updated when translation arrives
-                    sourceLang: currentSourceLang,
-                    targetLang: currentSourceLang,
-                    timestamp: Date.now(),
-                    isTranscriptionOnly: false,
-                    hasTranslation: false, // Flag that translation is pending
-                    hasCorrection: false // Flag that correction is pending
-                  }, true);
+                  // Segment start grace window: Allow early short partials with alphanumeric content
+                  // This prevents dropping early partials like "you" at the start of a segment
+                  const isVeryShortPartial = partialTextToSend.trim().length < 5;
+                  syncPendingFinalization();
+                  const hasPendingFinal = finalizationEngine.hasPendingFinalization();
+                  syncForcedFinalBuffer();
+                  const timeSinceLastFinal = lastSentFinalTime ? (Date.now() - lastSentFinalTime) : Infinity;
+                  // New segment start if: no pending final AND (no forced final buffer OR forced final recovery not in progress) AND recent final (< 2 seconds)
+                  const isNewSegmentStart = !hasPendingFinal && 
+                                            (!forcedFinalBuffer || !forcedFinalBuffer.recoveryInProgress) &&
+                                            timeSinceLastFinal < 2000;
+                  
+                  // Track segment start time for grace window
+                  if (isNewSegmentStart && !segmentStartTime) {
+                    segmentStartTime = Date.now();
+                    console.log(`[HostMode] 🎯 Grace window active - new segment start detected`);
+                    
+                    // Increment epoch and cancel any pending delayed partial timers
+                    segmentEpoch++;
+                    if (delayedPartialTimer) {
+                      clearTimeout(delayedPartialTimer);
+                      delayedPartialTimer = null;
+                      console.log(`[HostMode] 🔄 New segment detected - cancelled pending delayed partial timer (epoch: ${segmentEpoch})`);
+                    }
+                  }
+                  
+                  const timeSinceSegmentStart = segmentStartTime ? (Date.now() - segmentStartTime) : Infinity;
+                  const isInGraceWindow = isNewSegmentStart && timeSinceSegmentStart < 900; // 600-900ms grace window
+                  
+                  // In grace window: be conservative - only suppress if pure punctuation/noise
+                  // Outside grace window: apply normal rules
+                  const hasAlpha = hasAlphaNumeric(partialTextToSend);
+                  
+                  if (isVeryShortPartial && isNewSegmentStart) {
+                    if (isInGraceWindow) {
+                      // Grace window: allow if has alphanumeric content
+                      if (hasAlpha) {
+                        console.log(`[HostMode] ✅ Grace window active (${timeSinceSegmentStart.toFixed(0)}ms) - allowing short partial with alphanumeric: "${partialTextToSend.substring(0, 30)}..."`);
+                        // Allow it through - emit guards will handle duplicates
+                      } else {
+                        // Pure punctuation/noise - suppress even in grace window
+                        console.log(`[HostMode] ⏳ Grace window active (${timeSinceSegmentStart.toFixed(0)}ms) - suppressing punctuation-only partial: "${partialTextToSend.substring(0, 30)}..."`);
+                        return; // Skip sending this partial
+                      }
+                    } else {
+                      // Outside grace window: apply normal suppression (only if very recent)
+                      if (timeSinceLastFinal < 500) {
+                        console.log(`[HostMode] ⏳ Delaying very short partial at segment start (${partialTextToSend.trim().length} chars, ${timeSinceLastFinal}ms since last final): "${partialTextToSend.substring(0, 30)}..." - waiting for transcription to stabilize`);
+                        return; // Skip sending this partial
+                      }
+                    }
+                  }
+                  
+                  // Clear segment start time when we're clearly past the grace window
+                  if (timeSinceSegmentStart >= 900) {
+                    segmentStartTime = null;
+                  }
+                  
+                  // CRITICAL: Check if this partial extends a pending final BEFORE sending it
+                  // If it does, we should NOT send it as a new partial to avoid duplication
+                  // PHASE 8: Sync pendingFinalization before accessing
+                  syncPendingFinalization();
+                  let shouldSkipSendingPartial = false;
+                  if (finalizationEngine.hasPendingFinalization()) {
+                    const pending = finalizationEngine.getPendingFinalization();
+                    const timeSinceFinal = Date.now() - pending.timestamp;
+                    const finalText = pending.text.trim();
+                    // CRITICAL: Use deduplicated text for all checks to ensure consistency
+                    // The deduplicated text is what we'll actually send, so use it for extension checks
+                    const partialText = partialTextToSend.trim(); // Use deduplicated text, not original
+                    
+                    // Check if the deduplicated partial extends the final
+                    // For short finals, require exact start match. For longer finals, allow some flexibility
+                    const extendsFinal = partialText.length > finalText.length && 
+                                         (partialText.startsWith(finalText) || 
+                                          (finalText.length > 10 && partialText.substring(0, finalText.length) === finalText));
+                    
+                    // If partial extends the final and it's recent, we should still send it to frontend
+                    // so users can see the live updates, but we'll update the pending finalization
+                    // The frontend will handle deduplication when the final arrives
+                    if (extendsFinal && timeSinceFinal < 2000) {
+                      console.log(`[HostMode] 🔁 Partial extends pending final - will send to frontend for live display`);
+                      console.log(`[HostMode] 📝 Final: "${finalText.substring(0, 50)}..." → Raw Partial: "${rawPartialText.substring(0, 50)}..." → Deduplicated: "${deduplicatedPartialText.substring(0, 50)}..."`);
+                      // Don't skip sending - let frontend see the live update
+                      // shouldSkipSendingPartial = true; // REMOVED: Send partials even if they extend finals
+                    }
+                  }
+                  
+                  // Only send partial if it doesn't extend a pending final
+                  if (!shouldSkipSendingPartial) {
+                    // Live partial transcript - send original immediately with sequence ID (solo mode style)
+                    // Apply emit guards to prevent duplicate flashes and fragment spam
+                    const partialSegmentId = `partial_${Date.now()}`; // Temporary, will use seqId after send
+                    const emitCheck = shouldEmitPartial(partialSegmentId, partialTextToSend, {
+                      allowCorrection: false,
+                      mode: 'HostMode'
+                    });
+                    
+                    if (!emitCheck.shouldEmit) {
+                      console.log(`[HostMode] ⏭️ ${emitCheck.reason}: "${partialTextToSend.substring(0, 50)}..."`);
+                      return; // Skip emitting this partial
+                    }
+                    
+                    // Note: This is the initial send before grammar/translation, so use raw text
+                    // CRITICAL: Explicitly set isPartial: true to prevent frontend from committing as FINAL
+                    const isTranscriptionOnly = false; // Host mode always translates (no transcription-only mode)
+                    const seqId = broadcastWithSequence({
+                      type: 'translation',
+                      originalText: partialTextToSend, // Use deduplicated text
+                      translatedText: undefined, // Will be updated when translation arrives
+                      sourceLang: currentSourceLang,
+                      targetLang: currentSourceLang,
+                      timestamp: Date.now(),
+                      isTranscriptionOnly: false,
+                      hasTranslation: false, // Flag that translation is pending
+                      hasCorrection: false, // Flag that correction is pending
+                      isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
+                    }, true);
+                    
+                    // Track last emitted text for this seqId to prevent duplicates
+                    setLastEmittedText(seqId, partialTextToSend);
+                  }
                   
                   // CRITICAL: If we have pending finalization, check if this partial extends it or is a new segment
                   // PHASE 8: Sync pendingFinalization before accessing
+                  // Use deduplicated text for all checks to ensure consistency
                   syncPendingFinalization();
                   if (finalizationEngine.hasPendingFinalization()) {
                     const pending = finalizationEngine.getPendingFinalization();
                     const timeSinceFinal = Date.now() - pending.timestamp;
                     const finalText = pending.text.trim();
-                    const partialText = transcriptText.trim();
+                    const partialText = partialTextToSend.trim(); // Use deduplicated text, not original
                     
                     // Check if this partial actually extends the final (starts with it or has significant overlap)
                     // For short finals, require exact start match. For longer finals, allow some flexibility
@@ -826,14 +1611,71 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const finalEndsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(finalText);
                     const finalEndsWithPunctuationOrSpace = /[.!?…\s]$/.test(finalText);
                     const isVeryShortPartial = partialText.length < 20; // Very short partials (< 20 chars) are likely continuations
-                    // If final doesn't end with complete sentence, wait longer for continuation (up to 5 seconds)
-                    const mightBeContinuation = !finalEndsWithCompleteSentence && isVeryShortPartial && timeSinceFinal < 5000;
                     
-                    // If partial might be a continuation, wait longer and don't treat as new segment yet
+                    // CRITICAL FIX: Check if partial actually shares words with final before treating as continuation
+                    // If partial is completely unrelated (no shared words, doesn't start with final), it's a new segment
+                    const finalWords = finalText.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                    const partialWords = partialText.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+                    const sharedWords = finalWords.filter(w => partialWords.includes(w));
+                    const hasWordOverlap = sharedWords.length > 0;
+                    
+                    // Also check if partial starts with any of the last few words of final (catches cases like "haven't" -> "haven't been")
+                    const lastWordsOfFinal = finalWords.slice(-3);
+                    const startsWithFinalWord = partialWords.length > 0 && lastWordsOfFinal.some(w => 
+                      partialWords[0].startsWith(w) || w.startsWith(partialWords[0]) || wordsAreRelated(partialWords[0], w)
+                    );
+                    
+                    // Partial is only a potential continuation if:
+                    // 1. Final doesn't end with complete sentence AND
+                    // 2. Partial is very short AND
+                    // 3. Partial actually has some relationship to final (word overlap OR starts with final word OR extends final)
+                    const mightBeContinuation = !finalEndsWithCompleteSentence && 
+                                                isVeryShortPartial && 
+                                                timeSinceFinal < 5000 &&
+                                                (hasWordOverlap || startsWithFinalWord || extendsFinal);
+                    
+                    // CRITICAL: Even if FINAL ends with period, Google Speech may have incorrectly finalized mid-sentence
+                    // If a very short partial arrives very soon after (< 1.5 seconds), wait briefly to see if it's a continuation
+                    // This catches cases like "You just can't." followed by "People...." which should be "You just can't beat people..."
+                    const mightBeFalseFinal = finalEndsWithCompleteSentence && 
+                                             isVeryShortPartial && 
+                                             timeSinceFinal < 1500 && 
+                                             !hasWordOverlap && 
+                                             !startsWithFinalWord && 
+                                             !extendsFinal;
+                    
+                    // If partial is clearly a new segment (no relationship to final), commit the pending final immediately
+                    // BUT: If it might be a false final (period added incorrectly), wait a bit longer
+                    if (!extendsFinal && !hasWordOverlap && !startsWithFinalWord && timeSinceFinal > 500 && !mightBeFalseFinal) {
+                      console.log(`[HostMode] 🔀 New segment detected - partial "${partialText}" has no relationship to pending FINAL "${finalText.substring(0, 50)}..."`);
+                      console.log(`[HostMode] ✅ Committing pending FINAL before processing new segment`);
+                      // PHASE 8: Clear timeout using engine
+                      finalizationEngine.clearPendingFinalizationTimeout();
+                      const textToCommit = pendingFinalization.text;
+                      // PHASE 8: Clear using engine
+                      finalizationEngine.clearPendingFinalization();
+                      syncPendingFinalization();
+                      // PHASE 8: Reset partial tracking using tracker
+                      partialTracker.reset();
+                      syncPartialVariables();
+                      processFinalText(textToCommit);
+                      // Continue processing the new partial as a new segment (don't return - let it be processed below)
+                    }
+                    
+                    // If partial might be a continuation OR might be a false final (period added incorrectly), wait longer
                     // Continue tracking the partial so it can grow into the complete word
                     // CRITICAL: Check max wait time - don't extend wait if we've already waited too long
+                    // CRITICAL: Check if pending still exists (it may have been cleared above)
+                    if (!pending) {
+                      // pendingFinalization was cleared (final was committed) - skip continuation logic
+                      return; // Continue processing the new partial as a new segment
+                    }
                     const timeSinceMaxWait = Date.now() - pending.maxWaitTimestamp;
-                    if (mightBeContinuation && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
+                    if ((mightBeContinuation || mightBeFalseFinal) && !extendsFinal && timeSinceMaxWait < MAX_FINALIZATION_WAIT_MS - 1000) {
+                      if (mightBeFalseFinal) {
+                        console.log(`[HostMode] ⚠️ Possible false final - FINAL ends with period but very short partial arrived soon after (${timeSinceFinal}ms)`);
+                        console.log(`[HostMode] ⏳ Waiting to see if partial grows into continuation: FINAL="${finalText}", partial="${partialText}"`);
+                      }
                       console.log(`[HostMode] ⚠️ Short partial after incomplete FINAL - likely continuation (FINAL: "${finalText}", partial: "${partialText}")`);
                       console.log(`[HostMode] ⏳ Extending wait to see if partial grows into complete word/phrase`);
                       // Extend timeout significantly to wait for complete word/phrase
@@ -880,7 +1722,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         console.log(`[HostMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
                         processFinalText(textToProcess);
                       }, remainingWait);
-                      // Continue tracking this partial (don't return - let it be tracked normally below)
+                      // CRITICAL: Return early to prevent the code below from committing the final
+                      // We're waiting for the partial to grow into a continuation, so don't treat it as a new segment yet
+                      return; // Continue tracking this partial, but don't commit final or process as new segment
                     }
                     
                       // If partials are still arriving and extending the final, update the pending text and extend the timeout
@@ -957,6 +1801,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Process final (reuse the async function logic from the main timeout)
                         processFinalText(textToProcess);
                       }, remainingWait);
+                      
+                      // CRITICAL: We now send all partials to frontend (even if they extend finals) for live display
+                      // The frontend will handle deduplication when the final arrives
+                      // No need to skip translation processing - process all partials
                     } else if (!extendsFinal && timeSinceFinal > 600) {
                       // New segment detected - but check if final ends with complete sentence first
                       // If final doesn't end with complete sentence, wait longer before committing
@@ -985,18 +1833,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                         let textToProcess = pendingFinalization.text;
                         const finalTrimmed = pendingFinalization.text.trim();
                         
+                        // CRITICAL: Track if we're using partial text (to check if it's mid-sentence)
+                        let usingPartialText = false;
+                        
                         // Check saved partials first - ONLY if they start with the final
                         if (savedLongestPartial && savedLongestPartial.length > pendingFinalization.text.length) {
                           const savedLongestTrimmed = savedLongestPartial.trim();
                           if (savedLongestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using SAVED LONGEST partial (${pendingFinalization.text.length} → ${savedLongestPartial.length} chars)`);
                             textToProcess = savedLongestPartial;
+                            usingPartialText = true;
                           }
                         } else if (savedLatestPartial && savedLatestPartial.length > pendingFinalization.text.length) {
                           const savedLatestTrimmed = savedLatestPartial.trim();
                           if (savedLatestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using SAVED LATEST partial (${pendingFinalization.text.length} → ${savedLatestPartial.length} chars)`);
                             textToProcess = savedLatestPartial;
+                            usingPartialText = true;
                           }
                         }
                         
@@ -1009,6 +1862,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                           if (longestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using CURRENT LONGEST partial (${textToProcess.length} → ${longestPartialText.length} chars)`);
                             textToProcess = longestPartialText;
+                            usingPartialText = true;
                           } else {
                             console.log(`[HostMode] ⚠️ Ignoring CURRENT LONGEST partial - doesn't start with final (new segment detected)`);
                           }
@@ -1018,14 +1872,38 @@ export async function handleHostConnection(clientWs, sessionId) {
                           if (latestTrimmed.startsWith(finalTrimmed)) {
                             console.log(`[HostMode] ⚠️ Using CURRENT LATEST partial (${textToProcess.length} → ${latestPartialText.length} chars)`);
                             textToProcess = latestPartialText;
+                            usingPartialText = true;
                           } else {
                             console.log(`[HostMode] ⚠️ Ignoring CURRENT LATEST partial - doesn't start with final (new segment detected)`);
                           }
                         }
                         
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables();
+                        // CRITICAL: If we're using partial text, verify it ends with a complete sentence
+                        // This prevents committing mid-sentence partials when a new segment is detected
+                        if (usingPartialText) {
+                          const textToProcessTrimmed = textToProcess.trim();
+                          const endsWithCompleteSentence = finalizationEngine.endsWithCompleteSentence(textToProcessTrimmed);
+                          if (!endsWithCompleteSentence && timeSinceFinal < 2000) {
+                            // Partial text is mid-sentence and not enough time has passed - wait longer
+                            console.log(`[HostMode] ⏳ Partial text is mid-sentence and new segment detected - waiting longer before committing (${timeSinceFinal}ms < 2000ms)`);
+                            console.log(`[HostMode] 📊 Text: "${textToProcessTrimmed.substring(0, 100)}..."`);
+                            // Don't commit yet - continue tracking
+                            return; // Exit early, let the partial continue to be tracked
+                          }
+                        }
+                        
+                        // CRITICAL: Check if forced final recovery is in progress before resetting
+                        // If recovery is in progress, defer reset until recovery completes
+                        syncForcedFinalBuffer();
+                        const recoveryInProgress = forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress;
+                        if (recoveryInProgress) {
+                          console.log('[HostMode] ⏳ Recovery in progress - deferring partial tracker reset until recovery completes');
+                          // Reset will happen in recovery completion callback
+                        } else {
+                          // PHASE 8: Reset partial tracking using tracker
+                          partialTracker.reset();
+                          syncPartialVariables();
+                        }
                         // PHASE 8: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
@@ -1046,8 +1924,38 @@ export async function handleHostConnection(clientWs, sessionId) {
                   // OPTIMIZED: Throttle updates to prevent overwhelming the API (solo mode style)
                   // Updates every 2 characters for word-by-word feel with stable translations
                   if (transcriptText.length >= 1) {
-                    // Update current partial text (used for delayed translations)
-                    currentPartialText = transcriptText;
+                    // ✅ In recovery pipeline, avoid setting currentPartialText to short "stub" partials that flicker
+                    // (e.g., "Ours cordoned off from others.") before the continuation arrives.
+                    if (pipeline === 'recovery') {
+                      syncForcedFinalBuffer();
+                      const forcedRecoveryActive =
+                        forcedFinalBuffer?.recoveryInProgress === true &&
+                        typeof forcedFinalBuffer?.text === 'string' &&
+                        forcedFinalBuffer.text.trim().length > 0;
+
+                      if (forcedRecoveryActive) {
+                        // Use the same stub detector used elsewhere
+                        const shouldSuppress = isRecoveryStubPartial({
+                          partialText: transcriptText,
+                          forcedBufferText: forcedFinalBuffer.text
+                        });
+
+                        if (shouldSuppress) {
+                          console.log('[HostMode] ⏭️ Suppressing recovery stub partial from delayed pipeline (not updating currentPartialText)');
+                          console.log(`[HostMode]   Stub: "${transcriptText.substring(0, 60)}..."`);
+                          console.log(`[HostMode]   Forced buffer: "${forcedFinalBuffer.text.substring(0, 60)}..."`);
+                          // Do NOT update currentPartialText; keep the previous value
+                        } else {
+                          currentPartialText = transcriptText;
+                        }
+                      } else {
+                        // Recovery pipeline but no active forced recovery buffer
+                        currentPartialText = transcriptText;
+                      }
+                    } else {
+                      // Normal pipeline: always update
+                      currentPartialText = transcriptText;
+                    }
 
                     const now = Date.now();
                     const timeSinceLastTranslation = now - lastPartialTranslationTime;
@@ -1098,7 +2006,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                             targetLang: currentSourceLang,
                             timestamp: Date.now(),
                             hasTranslation: false,
-                            hasCorrection: false
+                            hasCorrection: false,
+                            isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                           }, true);
                           
                           // CRITICAL: Still run grammar correction even with no listeners
@@ -1129,7 +2038,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   isTranscriptionOnly: true,
                                   hasTranslation: false,
                                   hasCorrection: true,
-                                  updateType: 'grammar'
+                                  updateType: 'grammar',
+                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                 }, true, currentSourceLang);
                               })
                               .catch(error => {
@@ -1145,6 +2055,27 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // Separate same-language targets from translation targets
                         const sameLanguageTargets = targetLanguages.filter(lang => lang === currentSourceLang);
                         const translationTargets = targetLanguages.filter(lang => lang !== currentSourceLang);
+                        
+                        // ✅ Declare correlation variables before both blocks so they're accessible to translation handler
+                        let sourceSeqId = null;
+                        let sourceOriginalText = rawCapturedText; // Freeze the exact English you emitted
+                        
+                        // ✅ ALWAYS create an EN anchor seqId for correlation (even if sameLanguageTargets is empty)
+                        const anchorSeqId = broadcastWithSequence({
+                          type: 'translation',
+                          originalText: rawCapturedText,
+                          translatedText: capturedText,
+                          sourceLang: currentSourceLang,
+                          targetLang: currentSourceLang,
+                          timestamp: Date.now(),
+                          isTranscriptionOnly: true,
+                          hasTranslation: false,
+                          hasCorrection: false,
+                          isPartial: true
+                        }, true, currentSourceLang);
+                        if (anchorSeqId > 0) {
+                          sourceSeqId = anchorSeqId; // Only set if broadcast succeeded
+                        }
                         
                         // TRANSLATION MODE: Decouple grammar and translation for lowest latency
                         // Fire both in parallel, but send results independently (grammar only for English)
@@ -1162,7 +2093,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         if (sameLanguageTargets.length > 0) {
                           // Send raw text immediately to same-language listeners
                           for (const targetLang of sameLanguageTargets) {
-                            broadcastWithSequence({
+                            const seqId = broadcastWithSequence({
                               type: 'translation',
                               originalText: rawCapturedText,
                               translatedText: capturedText,
@@ -1171,9 +2102,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                               timestamp: Date.now(),
                               isTranscriptionOnly: true,
                               hasTranslation: false,
-                              hasCorrection: false
+                              hasCorrection: false,
+                              isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                             }, true, targetLang);
+                            sourceSeqId = seqId; // Capture the last seqId from same-language broadcast
                           }
+                          
+                          // ✅ sourceOriginalText already set above - freeze the exact English you emitted
                           
                           // Start grammar correction asynchronously (English only, don't wait for it)
                           if (currentSourceLang === 'en') {
@@ -1203,7 +2138,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                   isTranscriptionOnly: true,
                                   hasTranslation: false,
                                   hasCorrection: true,
-                                  updateType: 'grammar'
+                                  updateType: 'grammar',
+                                  isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                 }, true, currentSourceLang);
                                 
                                 // Send grammar update separately to same-language listeners
@@ -1219,7 +2155,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isTranscriptionOnly: true,
                                     hasTranslation: false,
                                     hasCorrection: true,
-                                    updateType: 'grammar'
+                                    updateType: 'grammar',
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, targetLang);
                                 }
                               })
@@ -1237,8 +2174,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                             console.log(`[HostMode] ⏸️ Skipping REALTIME translation - restart cooldown active (${realtimeTranslationCooldownUntil - Date.now()}ms remaining)`);
                           } else {
                             console.log(`[HostMode] 🔀 Using ${workerType} API for partial translation to ${translationTargets.length} language(s) (${capturedText.length} chars)`);
+
+                            // ✅ Freeze correlation + text for THIS translation request
+                            const frozenSourceSeqId = sourceSeqId;     // freeze current anchor
+                            const frozenTranslationReadyText = translationReadyText;       // freeze exact text being translated
+
                             const translationPromise = partialWorker.translateToMultipleLanguages(
-                              translationReadyText,
+                              frozenTranslationReadyText,
                               currentSourceLang,
                               translationTargets,
                               process.env.OPENAI_API_KEY,
@@ -1249,12 +2191,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                             translationPromise.then(translations => {
                               // Validate translation results
                               if (!translations || Object.keys(translations).length === 0) {
-                                console.warn(`[HostMode] ⚠️ Translation returned empty for ${capturedText.length} char text`);
+                                console.warn(`[HostMode] ⚠️ Translation returned empty for ${frozenTranslationReadyText.length} char text`);
                                 return;
                               }
 
                               // CRITICAL: Only update lastPartialTranslation AFTER successful translation
-                              lastPartialTranslation = capturedText;
+                              lastPartialTranslation = frozenTranslationReadyText;
                               
                               console.log(`[HostMode] ✅ TRANSLATION (IMMEDIATE): Translated to ${Object.keys(translations).length} language(s)`);
                               
@@ -1262,25 +2204,55 @@ export async function handleHostConnection(clientWs, sessionId) {
                               for (const targetLang of translationTargets) {
                                 const translatedText = translations[targetLang];
                                 // Validate that translation is different from original (prevent English leak)
-                                const isSameAsOriginal = translatedText === translationReadyText || 
-                                                         translatedText.trim() === translationReadyText.trim() ||
-                                                         translatedText.toLowerCase() === translationReadyText.toLowerCase();
-                                
+                                const isSameAsOriginal = translatedText === frozenTranslationReadyText ||
+                                                         translatedText.trim() === frozenTranslationReadyText.trim() ||
+                                                         translatedText.toLowerCase() === frozenTranslationReadyText.toLowerCase();
+
                                 if (isSameAsOriginal) {
                                   console.warn(`[HostMode] ⚠️ Translation matches original (English leak detected) for ${targetLang}: "${translatedText.substring(0, 60)}..."`);
                                   continue; // Don't send English as translation
                                 }
+
+                                // ✅ HARD INVARIANT: never send translation with blank original
+                                const safeOriginal =
+                                  (frozenTranslationReadyText && frozenTranslationReadyText.trim()) ||
+                                  (sourceOriginalText && sourceOriginalText.trim()) ||
+                                  (rawCapturedText && rawCapturedText.trim()) ||
+                                  '';
                                 
+                                if (!safeOriginal) {
+                                  console.warn(`[HostMode] 🚫 Dropping translation partial (blank originalText)`, {
+                                    frozenSourceSeqId,
+                                    targetLang,
+                                    translatedPreview: (translatedText || '').slice(0, 80),
+                                  });
+                                  continue;
+                                }
+
+                                // ✅ HARD INVARIANT: never send translation with null sourceSeqId
+                                if (frozenSourceSeqId == null || frozenSourceSeqId === 0) {
+                                  console.warn(`[HostMode] 🚫 Dropping translation: missing frozenSourceSeqId`, {
+                                    targetLang,
+                                    originalPreview: safeOriginal.slice(0, 80),
+                                    translatedPreview: (translatedText || '').slice(0, 80),
+                                  });
+                                  continue;
+                                }
+
+                                console.log('[DBG_TRANSLATE_EMIT]', { frozenSourceSeqId, targetLang, o: safeOriginal.slice(0,30), t: (translatedText||'').slice(0,30) });
+
                                 broadcastWithSequence({
                                   type: 'translation',
-                                  originalText: rawCapturedText,
+                                  sourceSeqId: frozenSourceSeqId,     // ✅ frozen correlation key
+                                  originalText: safeOriginal,
                                   translatedText: translatedText,
                                   sourceLang: currentSourceLang,
                                   targetLang: targetLang,
                                   timestamp: Date.now(),
                                   isTranscriptionOnly: false,
                                   hasTranslation: true,
-                                  hasCorrection: false // Grammar not ready yet
+                                  hasCorrection: false, // Grammar not ready yet
+                                  isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                                 }, true, targetLang);
                               }
                             }).catch(error => {
@@ -1324,23 +2296,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 isTranscriptionOnly: true,
                                 hasTranslation: false,
                                 hasCorrection: true,
-                                updateType: 'grammar' // Flag for grammar-only update
+                                updateType: 'grammar', // Flag for grammar-only update
+                                isPartial: true // CRITICAL: Grammar updates for partials are still partials
                               }, true, currentSourceLang);
                               
-                              // Broadcast grammar correction to all listener language groups
-                              for (const targetLang of targetLanguages) {
-                                broadcastWithSequence({
-                                  type: 'translation',
-                                  originalText: rawCapturedText,
-                                  correctedText: correctedText,
-                                  sourceLang: currentSourceLang,
-                                  targetLang: targetLang,
-                                  timestamp: Date.now(),
-                                  isTranscriptionOnly: false,
-                                  hasCorrection: true,
-                                  updateType: 'grammar' // Flag for grammar-only update
-                                }, true, targetLang);
-                              }
+                              // Broadcast grammar correction to same-language listeners only
+                              broadcastWithSequence({
+                                type: 'translation',
+                                originalText: rawCapturedText,
+                                correctedText: correctedText,
+                                sourceLang: currentSourceLang,
+                                targetLang: currentSourceLang,  // ✅ Force source language only
+                                timestamp: Date.now(),
+                                isTranscriptionOnly: false,
+                                hasCorrection: true,
+                                updateType: 'grammar', // Flag for grammar-only update
+                                isPartial: true // CRITICAL: Grammar updates for partials are still partials
+                              }, true, currentSourceLang);
                             }).catch(error => {
                               if (error.name !== 'AbortError') {
                                 console.error(`[HostMode] ❌ Grammar error (${rawCapturedText.length} chars):`, error.message);
@@ -1361,16 +2333,44 @@ export async function handleHostConnection(clientWs, sessionId) {
                         clearTimeout(pendingPartialTranslation);
                         pendingPartialTranslation = null;
                       }
+                      if (delayedPartialTimer) {
+                        clearTimeout(delayedPartialTimer);
+                        delayedPartialTimer = null;
+                      }
                       
                       // Immediate execution (no delay) for real-time feel
                       const delayMs = 0;
                       
-                      pendingPartialTranslation = setTimeout(async () => {
+                      // Capture current epoch before scheduling delayed partial
+                      const myEpoch = segmentEpoch;
+                      delayedPartialTimer = setTimeout(async () => {
+                        // CRITICAL: Check epoch - if we advanced segments since scheduling, drop this delayed partial
+                        // This prevents out-of-order emissions when delayed partial fires after a new segment/FINAL
+                        if (myEpoch !== segmentEpoch) {
+                          console.log(`[HostMode] ⏭️ Dropping delayed partial - epoch mismatch (scheduled: ${myEpoch}, current: ${segmentEpoch})`);
+                          delayedPartialTimer = null;
+                          return;
+                        }
+                        
                         // CRITICAL: Always capture LATEST text at timeout execution
                         const latestText = currentPartialText;
                         if (!latestText || latestText.length < 1) {
-                          pendingPartialTranslation = null;
+                          delayedPartialTimer = null;
                           return;
+                        }
+                        
+                        // ✅ Prevent delayed partial broadcast of recovery stubs.
+                        // These create the "Ours cordoned off..." flicker in the recovery pipeline.
+                        syncForcedFinalBuffer();
+                        const recoveryActive = forcedFinalBuffer?.recoveryInProgress && forcedFinalBuffer?.text;
+
+                        if (recoveryActive) {
+                          if (isRecoveryStubPartial({ partialText: latestText, forcedBufferText: forcedFinalBuffer.text })) {
+                            console.log('[HostMode] ⏭️ Dropping delayed recovery stub partial (prevents flicker)');
+                            console.log(`[HostMode]   Stub: "${latestText.substring(0, 60)}..."`);
+                            delayedPartialTimer = null;
+                            return;
+                          }
                         }
                         
                         // Skip only if exact match (no need to retranslate identical text)
@@ -1378,7 +2378,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         if (isExactMatch) {
                           console.log(`[HostMode] ⏭️ Skipping exact match translation`);
-                          pendingPartialTranslation = null;
+                          delayedPartialTimer = null;
                           return;
                         }
                         
@@ -1400,15 +2400,37 @@ export async function handleHostConnection(clientWs, sessionId) {
                               targetLang: currentSourceLang,
                               timestamp: Date.now(),
                               hasTranslation: false,
-                              hasCorrection: false
+                              hasCorrection: false,
+                              isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                             }, true);
-                            pendingPartialTranslation = null;
+                            delayedPartialTimer = null;
                             return;
                           }
                           
                           // Separate same-language targets from translation targets
                           const sameLanguageTargets = targetLanguages.filter(lang => lang === currentSourceLang);
                           const translationTargets = targetLanguages.filter(lang => lang !== currentSourceLang);
+                          
+                          // ✅ Declare correlation variables before both blocks so they're accessible to translation handler
+                          let sourceSeqId = null;
+                          let sourceOriginalText = latestText; // Freeze the exact English you emitted
+                          
+                          // ✅ ALWAYS create an EN anchor seqId for correlation (even if sameLanguageTargets is empty)
+                          const anchorSeqId = broadcastWithSequence({
+                            type: 'translation',
+                            originalText: latestText,
+                            translatedText: latestText,
+                            sourceLang: currentSourceLang,
+                            targetLang: currentSourceLang,
+                            timestamp: Date.now(),
+                            isTranscriptionOnly: true,
+                            hasTranslation: false,
+                            hasCorrection: false,
+                            isPartial: true
+                          }, true, currentSourceLang);
+                          if (anchorSeqId > 0) {
+                            sourceSeqId = anchorSeqId; // Only set if broadcast succeeded
+                          }
                           
                           // Handle same-language targets
                           if (sameLanguageTargets.length > 0) {
@@ -1419,7 +2441,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                             
                             // Send transcription immediately
                             for (const targetLang of sameLanguageTargets) {
-                              broadcastWithSequence({
+                              const seqId = broadcastWithSequence({
                                 type: 'translation',
                                 originalText: latestText,
                                 translatedText: latestText,
@@ -1428,8 +2450,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 timestamp: Date.now(),
                                 isTranscriptionOnly: true,
                                 hasTranslation: false,
-                                hasCorrection: false
+                                hasCorrection: false,
+                                isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                               }, true, targetLang);
+                              sourceSeqId = seqId; // Capture the last seqId from same-language broadcast
                             }
                             
                             // Start grammar correction asynchronously (English only)
@@ -1450,7 +2474,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isTranscriptionOnly: true,
                                     hasTranslation: false,
                                     hasCorrection: true,
-                                    updateType: 'grammar'
+                                    updateType: 'grammar',
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, currentSourceLang);
                                   
                                   // Send grammar update to same-language listeners
@@ -1466,7 +2491,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                                       isTranscriptionOnly: true,
                                       hasTranslation: false,
                                       hasCorrection: true,
-                                      updateType: 'grammar'
+                                      updateType: 'grammar',
+                                      isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                     }, true, targetLang);
                                   }
                                 })
@@ -1497,8 +2523,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                             if (underRestartCooldown) {
                               console.log(`[HostMode] ⏸️ Skipping REALTIME translation (delayed) - restart cooldown active (${realtimeTranslationCooldownUntil - Date.now()}ms remaining)`);
                             } else {
+                              // ✅ Freeze correlation + text for THIS translation request
+                              const frozenSourceSeqId = sourceSeqId;     // freeze current anchor
+                              const frozenLatestText = latestText;       // freeze exact text being translated
+
                               const translationPromise = partialWorker.translateToMultipleLanguages(
-                                latestText,
+                                frozenLatestText,
                                 currentSourceLang,
                                 translationTargets,
                                 process.env.OPENAI_API_KEY,
@@ -1509,12 +2539,12 @@ export async function handleHostConnection(clientWs, sessionId) {
                               translationPromise.then(translations => {
                                 // Validate translation results
                                 if (!translations || Object.keys(translations).length === 0) {
-                                  console.warn(`[HostMode] ⚠️ Delayed translation returned empty for ${latestText.length} char text`);
+                                  console.warn(`[HostMode] ⚠️ Delayed translation returned empty for ${frozenLatestText.length} char text`);
                                   return;
                                 }
 
                                 // CRITICAL: Update tracking and send translation
-                                lastPartialTranslation = latestText;
+                                lastPartialTranslation = frozenLatestText;
                                 lastPartialTranslationTime = Date.now();
                                 
                                 console.log(`[HostMode] ✅ TRANSLATION (DELAYED): Translated to ${Object.keys(translations).length} language(s)`);
@@ -1523,25 +2553,54 @@ export async function handleHostConnection(clientWs, sessionId) {
                                 for (const targetLang of translationTargets) {
                                   const translatedText = translations[targetLang];
                                   // Validate that translation is different from original
-                                  const isSameAsOriginal = translatedText === latestText || 
-                                                           translatedText.trim() === latestText.trim() ||
-                                                           translatedText.toLowerCase() === latestText.toLowerCase();
-                                  
+                                  const isSameAsOriginal = translatedText === frozenLatestText ||
+                                                           translatedText.trim() === frozenLatestText.trim() ||
+                                                           translatedText.toLowerCase() === frozenLatestText.toLowerCase();
+
                                   if (isSameAsOriginal) {
                                     console.warn(`[HostMode] ⚠️ Translation matches original (English leak detected) for ${targetLang}`);
                                     continue; // Don't send English as translation
                                   }
+
+                                  // ✅ HARD INVARIANT: never send translation with blank original
+                                  const safeOriginal =
+                                    (frozenLatestText && frozenLatestText.trim()) ||
+                                    (sourceOriginalText && sourceOriginalText.trim()) ||
+                                    '';
                                   
+                                  if (!safeOriginal) {
+                                    console.warn(`[HostMode] 🚫 Dropping delayed translation partial (blank originalText)`, {
+                                      frozenSourceSeqId,
+                                      targetLang,
+                                      translatedPreview: (translatedText || '').slice(0, 80),
+                                    });
+                                    continue;
+                                  }
+
+                                  // ✅ HARD INVARIANT: never send translation with missing sourceSeqId (covers stale/overwritten cases)
+                                  if (frozenSourceSeqId == null || frozenSourceSeqId === 0) {
+                                    console.warn(`[HostMode] 🚫 Dropping delayed translation: missing frozenSourceSeqId`, {
+                                      targetLang,
+                                      originalPreview: safeOriginal.slice(0, 80),
+                                      translatedPreview: (translatedText || '').slice(0, 80),
+                                    });
+                                    continue;
+                                  }
+
+                                  console.log('[DBG_TRANSLATE_EMIT]', { frozenSourceSeqId, targetLang, o: safeOriginal.slice(0,30), t: (translatedText||'').slice(0,30) });
+
                                   broadcastWithSequence({
                                     type: 'translation',
-                                    originalText: latestText,
+                                    sourceSeqId: frozenSourceSeqId,     // ✅ frozen correlation key
+                                    originalText: safeOriginal,
                                     translatedText: translatedText,
                                     sourceLang: currentSourceLang,
                                     targetLang: targetLang,
                                     timestamp: Date.now(),
                                     isTranscriptionOnly: false,
                                     hasTranslation: true,
-                                    hasCorrection: false // Grammar not ready yet
+                                    hasCorrection: false, // Grammar not ready yet
+                                    isPartial: true // CRITICAL: Explicitly mark as partial to prevent frontend from committing
                                   }, true, targetLang);
                                 }
                               }).catch(error => {
@@ -1578,23 +2637,23 @@ export async function handleHostConnection(clientWs, sessionId) {
                                     isTranscriptionOnly: true,
                                     hasTranslation: false,
                                     hasCorrection: true,
-                                    updateType: 'grammar'
+                                    updateType: 'grammar',
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
                                   }, true, currentSourceLang);
                                   
-                                  // Broadcast grammar update to listener language groups - sequence IDs handle ordering
-                                  for (const targetLang of targetLanguages) {
-                                    broadcastWithSequence({
-                                      type: 'translation',
-                                      originalText: latestText,
-                                      correctedText: correctedText,
-                                      sourceLang: currentSourceLang,
-                                      targetLang: targetLang,
-                                      timestamp: Date.now(),
-                                      isTranscriptionOnly: false,
-                                      hasCorrection: true,
-                                      updateType: 'grammar'
-                                    }, true, targetLang);
-                                  }
+                                  // Broadcast grammar update to same-language listeners only
+                                  broadcastWithSequence({
+                                    type: 'translation',
+                                    originalText: latestText,
+                                    correctedText: correctedText,
+                                    sourceLang: currentSourceLang,
+                                    targetLang: currentSourceLang,  // ✅ Force source language only
+                                    timestamp: Date.now(),
+                                    isTranscriptionOnly: false,
+                                    hasCorrection: true,
+                                    updateType: 'grammar',
+                                    isPartial: true // CRITICAL: Grammar updates for partials are still partials
+                                  }, true, currentSourceLang);
                                 }
                               }).catch(error => {
                                 if (error.name !== 'AbortError') {
@@ -1604,12 +2663,14 @@ export async function handleHostConnection(clientWs, sessionId) {
                             }
                           }
 
-                          pendingPartialTranslation = null;
+                          delayedPartialTimer = null;
                         } catch (error) {
                           console.error(`[HostMode] ❌ Delayed partial processing error (${latestText.length} chars):`, error.message);
-                          pendingPartialTranslation = null;
+                          delayedPartialTimer = null;
                         }
                       }, delayMs);
+                      // Also update pendingPartialTranslation for backward compatibility
+                      pendingPartialTranslation = delayedPartialTimer;
                     }
                   }
                   return;
@@ -1644,15 +2705,52 @@ export async function handleHostConnection(clientWs, sessionId) {
                   if (longestPartialSnapshot && longestPartialSnapshot.length > transcriptText.length && timeSinceLongestForced < 5000) {
                     const forcedTrimmed = transcriptText.trim();
                     const longestTrimmed = longestPartialSnapshot.trim();
+                    
+                    // Helper function to normalize text for comparison (remove punctuation, lowercase, collapse whitespace)
+                    const normalizeForComparison = (text) => {
+                      return text.toLowerCase()
+                        .replace(/[.,!?;:'"\-()]/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    };
+                    
                     // Verify it actually extends the forced final (not from a previous segment)
-                    if (longestTrimmed.startsWith(forcedTrimmed) ||
-                        (forcedTrimmed.length > 10 && longestTrimmed.substring(0, forcedTrimmed.length) === forcedTrimmed)) {
+                    // Use lenient comparison that ignores punctuation differences
+                    const forcedNormalized = normalizeForComparison(forcedTrimmed);
+                    const longestNormalized = normalizeForComparison(longestTrimmed);
+                    
+                    // Check if longest normalized starts with forced normalized (ignoring punctuation)
+                    // This handles cases where punctuation differs but the words are the same
+                    const extendsForced = longestNormalized.startsWith(forcedNormalized);
+                    
+                    // Also check word-by-word comparison (more robust for punctuation differences)
+                    const forcedWords = forcedNormalized.split(/\s+/).filter(w => w.length > 0);
+                    const longestWords = longestNormalized.split(/\s+/).filter(w => w.length > 0);
+                    const minWords = Math.min(forcedWords.length, longestWords.length);
+                    let matchingWords = 0;
+                    for (let i = 0; i < minWords; i++) {
+                      if (forcedWords[i] === longestWords[i]) {
+                        matchingWords++;
+                      } else {
+                        break;
+                      }
+                    }
+                    // If > 80% of words match and longest is longer, consider it an extension
+                    const hasWordOverlap = forcedWords.length > 0 && 
+                                          matchingWords >= forcedWords.length * 0.8 &&
+                                          longestNormalized.length > forcedNormalized.length;
+                    
+                    const extendsForcedFinal = extendsForced || hasWordOverlap;
+                    
+                    if (extendsForcedFinal) {
                       const missingWords = longestPartialSnapshot.substring(transcriptText.length).trim();
                       console.log(`[HostMode] ⚠️ Forced FINAL using LONGEST partial SNAPSHOT (${transcriptText.length} → ${longestPartialSnapshot.length} chars)`);
                       console.log(`[HostMode] 📊 Recovered (forced): "${missingWords}"`);
                       transcriptText = longestPartialSnapshot;
                     } else {
-                      console.log(`[HostMode] ⚠️ Ignoring LONGEST partial snapshot - doesn't extend forced final`);
+                      console.log(`[HostMode] ⚠️ Ignoring LONGEST partial snapshot - doesn't extend forced final (normalized comparison failed)`);
+                      console.log(`[HostMode]   Forced normalized: "${forcedNormalized.substring(0, 60)}..."`);
+                      console.log(`[HostMode]   Longest normalized: "${longestNormalized.substring(0, 60)}..."`);
                     }
                   }
                   
@@ -1679,6 +2777,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                     // Note: We've already committed the forced final above, so this buffer is just for recovery
                     forcedCommitEngine.createForcedFinalBuffer(transcriptText, forcedFinalTimestamp);
                     syncForcedFinalBuffer();
+                    // ✅ Store segmentId in buffer for proper identity tracking
+                    if (forcedFinalBuffer) {
+                      forcedFinalBuffer.segmentId = `forced_final_${forcedFinalTimestamp}`;
+                    }
                     console.log(`[HostMode] ✅ Forced final buffer created for recovery - audio recovery will trigger in ${FORCED_FINAL_MAX_WAIT_MS}ms`);
                     console.log(`[HostMode] 🎯 DUAL BUFFER: Setting up Phase 1 timeout (delay: 0ms) - recovery system initializing`);
                     
@@ -1709,8 +2811,24 @@ export async function handleHostConnection(clientWs, sessionId) {
                         
                         // CRITICAL: Check if buffer still exists (might have been committed by new segment)
                         if (!forcedCommitEngine.hasForcedFinalBuffer()) {
-                          console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new segment) - skipping recovery commit');
+                          console.log('[HostMode] ⚠️ Forced final buffer already cleared (likely committed by new segment or recovery) - skipping recovery commit');
                           return;
+                        }
+                        
+                        // CRITICAL: If recovery is in progress, wait for it to complete before proceeding
+                        // This prevents race conditions where timeout fires while recovery is still processing
+                        syncForcedFinalBuffer();
+                        const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                        if (buffer?.recoveryInProgress && buffer?.recoveryPromise) {
+                          console.log('[HostMode] ⏳ Recovery still in progress - waiting for completion before timeout commit...');
+                          try {
+                            await buffer.recoveryPromise;
+                            console.log('[HostMode] ✅ Recovery completed - will check if it already committed before timeout commit');
+                          } catch (error) {
+                            console.error('[HostMode] ❌ Error waiting for recovery:', error.message);
+                          }
+                          // Re-sync buffer after recovery completes (it may have been cleared)
+                          syncForcedFinalBuffer();
                         }
 
                         // Snapshot any late partials that arrived during the 1200ms wait
@@ -1742,11 +2860,31 @@ export async function handleHostConnection(clientWs, sessionId) {
                           }
                         }
 
-                        // NOW reset partial tracking for next segment (clean slate for recovery)
-                        console.log(`[HostMode] 🧹 Resetting partial tracking for next segment`);
-                        // PHASE 8: Reset partial tracking using tracker
-                        partialTracker.reset();
-                        syncPartialVariables(); // Sync variables after reset
+                        // CRITICAL: Before resetting, check if a new segment has started during recovery
+                        // If new segment partials arrived (like "Together...."), we should NOT reset yet
+                        // because those partials are part of the new segment and need to continue being tracked
+                        // This prevents dropping segments when finalization is slow
+                        syncPartialVariables(); // Sync to get latest state
+                        const hasNewSegmentPartials = longestPartialText && 
+                                                      longestPartialText.length > 0 &&
+                                                      !longestPartialText.trim().toLowerCase().startsWith(bufferedText.trim().toLowerCase()) &&
+                                                      longestPartialTime && 
+                                                      (Date.now() - longestPartialTime) < 3000; // Recent partials (< 3 seconds)
+                        
+                        if (hasNewSegmentPartials) {
+                          console.log(`[HostMode] ⚠️ New segment partials detected during recovery - NOT resetting partial tracker yet`);
+                          console.log(`[HostMode]   New segment partial: "${longestPartialText.substring(0, 50)}..."`);
+                          console.log(`[HostMode]   Forced final: "${bufferedText.substring(0, 50)}..."`);
+                          console.log(`[HostMode]   Partial tracker will be reset after forced final is committed`);
+                          // Don't reset - let the new segment partials continue to be tracked
+                          // The reset will happen when the forced final is committed
+                        } else {
+                          // No new segment detected - safe to reset for next segment
+                          console.log(`[HostMode] 🧹 Resetting partial tracking for next segment`);
+                          // PHASE 8: Reset partial tracking using tracker (snapshot already taken above)
+                          partialTracker.reset();
+                          syncPartialVariables(); // Sync variables after reset
+                        }
 
                         // Calculate how much time has passed since forced final
                         const timeSinceForcedFinal = Date.now() - forcedFinalTimestamp;
@@ -1778,7 +2916,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                             }
                             
                             // Commit the forced final immediately
-                            processFinalText(forcedFinalText, { forceFinal: true });
+                            try {
+                              processFinalText(forcedFinalText, { forceFinal: true });
+                            } catch (e) {
+                              console.error('[HostMode] ❌ Forced-final commit failed (empty audio buffer):', e);
+                            }
                             
                             // Clear the buffer
                             forcedCommitEngine.clearForcedFinalBuffer();
@@ -1825,237 +2967,31 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // This audio includes the decoder gap at T-200ms where "spent" exists!
                         
                         if (recoveryAudio.length > 0) {
-                          console.log(`[HostMode] 🎵 Starting decoder gap recovery with PRE+POST-final audio: ${recoveryAudio.length} bytes`);
-
-                          try {
-                            console.log(`[HostMode] 🔄 ENTERED recovery try block - about to import GoogleSpeechStream...`);
-                            console.log(`[HostMode] 🔄 Importing GoogleSpeechStream...`);
-                            const { GoogleSpeechStream } = await import('../googleSpeechStream.js');
-
-                            const tempStream = new GoogleSpeechStream();
-                            await tempStream.initialize(currentSourceLang, { 
-                              disablePunctuation: true,
-                              forceEnhanced: true  // Always use enhanced model for recovery streams
-                            });
-
-                            // CRITICAL: Disable auto-restart for recovery stream
-                            // We want it to end naturally after processing our audio
-                            tempStream.shouldAutoRestart = false;
-
-                            console.log(`[HostMode] ✅ Temporary recovery stream initialized (auto-restart disabled)`);
-
-                            // Wait for stream to be FULLY ready (not just exist)
-                            console.log(`[HostMode] ⏳ Waiting for recovery stream to be ready...`);
-                            let streamReadyTimeout = 0;
-                            while (!tempStream.isStreamReady() && streamReadyTimeout < 2000) {
-                              await new Promise(resolve => setTimeout(resolve, 50));
-                              streamReadyTimeout += 50;
-                            }
-
-                            if (!tempStream.isStreamReady()) {
-                              console.log(`[HostMode] ❌ Recovery stream not ready after 2000ms!`);
-                              console.log(`[HostMode] Stream state:`, {
-                                exists: !!tempStream.recognizeStream,
-                                writable: tempStream.recognizeStream?.writable,
-                                destroyed: tempStream.recognizeStream?.destroyed,
-                                isActive: tempStream.isActive,
-                                isRestarting: tempStream.isRestarting
-                              });
-                              throw new Error('Recognition stream not ready');
-                            }
-
-                            console.log(`[HostMode] ✅ Recovery stream ready after ${streamReadyTimeout}ms`);
-                            await new Promise(resolve => setTimeout(resolve, 100));
-                            console.log(`[HostMode] ✅ Additional 100ms wait complete`);
-
-                            // CRITICAL: Create recovery promise NOW (after stream is ready) so new segments can wait for it
-                            // recoveryResolve is already declared at the start of setTimeout callback
-                            const recoveryPromise = new Promise((resolve) => {
-                              recoveryResolve = resolve;
-                            });
-                            
-                            // Store recovery promise in buffer
-                            syncForcedFinalBuffer();
-                            if (forcedFinalBuffer) {
-                              forcedCommitEngine.setRecoveryInProgress(true, recoveryPromise);
-                              syncForcedFinalBuffer();
-                              console.log('[HostMode] 🔄 Recovery promise created and stored in buffer');
-                            }
-
-                            // Set up result handler and create promise to wait for stream completion
-                            let recoveredText = '';
-                            let lastPartialText = '';
-                            let allPartials = [];
-
-                            // CRITICAL: Create promise that waits for Google's 'end' event
-                            const streamCompletionPromise = new Promise((resolve) => {
-                              tempStream.onResult((text, isPartial) => {
-                                console.log(`[HostMode] 📥 Recovery stream ${isPartial ? 'PARTIAL' : 'FINAL'}: "${text}"`);
-                                if (!isPartial) {
-                                  recoveredText = text;
-                                } else {
-                                  allPartials.push(text);
-                                  lastPartialText = text;
-                                }
-                              });
-
-                              // Wait for Google to finish processing (stream 'end' event)
-                              tempStream.recognizeStream.on('end', () => {
-                                console.log(`[HostMode] 🏁 Recovery stream 'end' event received from Google`);
-                                resolve();
-                              });
-
-                              // Also handle errors
-                              tempStream.recognizeStream.on('error', (err) => {
-                                console.error(`[HostMode] ❌ Recovery stream error:`, err);
-                                resolve(); // Resolve anyway to prevent hanging
-                              });
-                            });
-
-                            // Send the PRE+POST-final audio DIRECTLY to recognition stream
-                            // BYPASS jitter buffer - send entire audio as one write for recovery
-                            console.log(`[HostMode] 📤 Sending ${recoveryAudio.length} bytes directly to recovery stream (bypassing jitter buffer)...`);
-
-                            // Write directly to the recognition stream
-                            if (tempStream.recognizeStream && tempStream.isStreamReady()) {
-                              tempStream.recognizeStream.write(recoveryAudio);
-                              console.log(`[HostMode] ✅ Audio written directly to recognition stream`);
-
-                              // CRITICAL: End write side IMMEDIATELY after writing
-                              // This tells Google "no more audio coming, finalize what you have"
-                              tempStream.recognizeStream.end();
-                              console.log(`[HostMode] ✅ Write side closed - waiting for Google to process and send results...`);
-                            } else {
-                              console.error(`[HostMode] ❌ Recovery stream not ready for direct write!`);
-                              throw new Error('Recovery stream not ready');
-                            }
-
-                            // Wait for Google to process and send back results
-                            // This waits for the actual 'end' event, not a timer
-                            console.log(`[HostMode] ⏳ Waiting for Google to decode and send results (stream 'end' event)...`);
-
-                            // Add timeout to prevent infinite hang
-                            const timeoutPromise = new Promise((resolve) => {
-                              setTimeout(() => {
-                                console.warn(`[HostMode] ⚠️ Recovery stream timeout after 5000ms`);
-                                resolve();
-                              }, 5000);
-                            });
-
-                            await Promise.race([streamCompletionPromise, timeoutPromise]);
-                            console.log(`[HostMode] ✅ Google decode wait complete`);
-
-                            // Use last partial if no final
-                            if (!recoveredText && lastPartialText) {
-                              recoveredText = lastPartialText;
-                            }
-
-                            console.log(`[HostMode] 📊 === DECODER GAP RECOVERY RESULTS ===`);
-                            console.log(`[HostMode]   Total partials: ${allPartials.length}`);
-                            console.log(`[HostMode]   All partials: ${JSON.stringify(allPartials)}`);
-                            console.log(`[HostMode]   Final text: "${recoveredText}"`);
-                            console.log(`[HostMode]   Audio sent: ${recoveryAudio.length} bytes`);
-
-                            // Clean up
-                            tempStream.destroy();
-
-                            // Find the missing words by comparing recovered vs buffered
-                            // Update finalTextToCommit (declared at line 1642) with recovered text
-                            let finalRecoveredText = '';
-                            if (recoveredText && recoveredText.length > 0) {
-                              console.log(`[HostMode] ✅ Recovery stream transcribed: "${recoveredText}"`);
-
-                              // Use shared merge utility for improved merge logic
-                              syncPartialVariables();
-                              const mergeResult = mergeRecoveryText(
-                                finalWithPartials,
-                                recoveredText,
-                                {
-                                  nextPartialText: latestPartialText,
-                                  nextFinalText: nextFinalAfterRecovery?.text,
-                                  mode: 'HostMode'
-                                }
-                              );
-
-                              // Use merge result
-                              if (mergeResult.merged) {
-                                finalTextToCommit = mergeResult.mergedText;
-                                finalRecoveredText = mergeResult.mergedText; // Store for promise resolution
-                              } else {
-                                // Fallback to buffered text if merge failed
-                                finalTextToCommit = finalWithPartials;
-                                console.log(`[HostMode] ⚠️ Merge failed: ${mergeResult.reason}`);
-                              }
-                            } else {
-                              console.log(`[HostMode] ⚠️ Recovery stream returned no text`);
-                            }
-
-                            // CRITICAL: If recovery found additional words, commit them as an update
-                            // The forced final was already committed immediately when detected
-                            // Recovery just adds the missing words we found
-                            const originalBufferedText = finalWithPartials;
-                            if (finalTextToCommit !== originalBufferedText && finalTextToCommit.length > originalBufferedText.length) {
-                              // Check if buffer still exists before committing recovery update
-                              syncForcedFinalBuffer();
-                              if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                                const additionalWords = finalTextToCommit.substring(originalBufferedText.length).trim();
-                                console.log(`[HostMode] ✅ Recovery found additional words: "${additionalWords}"`);
-                                console.log(`[HostMode] 📊 Committing recovery update: "${finalTextToCommit.substring(0, 80)}..."`);
-                                
-                                // Mark as committed by recovery BEFORE clearing buffer
-                                syncForcedFinalBuffer();
-                                if (forcedFinalBuffer) {
-                                  forcedFinalBuffer.committedByRecovery = true;
-                                }
-                                
-                                // Commit the full recovered text (forced final + recovery words)
-                                processFinalText(finalTextToCommit, { forceFinal: true });
-                                forcedCommitEngine.clearForcedFinalBuffer();
-                                syncForcedFinalBuffer();
-                                
-                                // Reset recovery tracking after commit
-                                recoveryStartTime = 0;
-                                nextFinalAfterRecovery = null;
-                                
-                                // Mark that we've already committed, so timeout callback can skip
-                                console.log(`[HostMode] ✅ Recovery commit completed - timeout callback will skip`);
-                              } else {
-                                console.log(`[HostMode] ⚠️ Buffer already cleared - recovery found words but cannot commit update`);
-                              }
-                            } else {
-                              console.log(`[HostMode] ⚠️ No new text recovered - will commit forced final with grammar correction via timeout`);
-                              // Don't clear buffer - let timeout callback commit the forced final (with grammar correction)
-                              // The timeout will handle committing the original forced final text
-                            }
-
-                            // CRITICAL: Resolve recovery promise with recovered text (or empty if nothing found)
-                            // This allows other code (like new FINALs) to wait for recovery to complete
-                            if (recoveryResolve) {
-                              console.log(`[HostMode] ✅ Resolving recovery promise with recovered text: "${finalRecoveredText || ''}"`);
-                              recoveryResolve(finalRecoveredText || '');
-                            }
-
-                          } catch (error) {
-                            console.error(`[HostMode] ❌ Decoder gap recovery failed:`, error.message);
-                            console.error(`[HostMode] ❌ Error stack:`, error.stack);
-                            console.error(`[HostMode] ❌ Full error object:`, error);
-                            
-                            // CRITICAL: Resolve recovery promise even on error (with empty string)
-                            // This prevents other code from hanging while waiting for recovery
-                            if (recoveryResolve) {
-                              console.log(`[HostMode] ⚠️ Resolving recovery promise with empty text due to error`);
-                              recoveryResolve('');
-                            } else {
-                              console.warn('[HostMode] ⚠️ recoveryResolve not available in catch block - this should not happen');
-                            }
-                          } finally {
-                            // Mark recovery as complete
-                            syncForcedFinalBuffer();
-                            if (forcedCommitEngine.hasForcedFinalBuffer()) {
-                              forcedCommitEngine.setRecoveryInProgress(false, null);
-                              syncForcedFinalBuffer();
-                            }
-                          }
+                          // Use RecoveryStreamEngine to handle recovery stream operations
+                          // Wrap recoveryStartTime and nextFinalAfterRecovery in objects so they can be modified
+                          const recoveryStartTimeRef = { value: recoveryStartTime };
+                          const nextFinalAfterRecoveryRef = { value: nextFinalAfterRecovery };
+                          
+                          await coreEngine.recoveryStreamEngine.performRecoveryStream({
+                            speechStream,
+                            sourceLang: currentSourceLang,
+                            forcedCommitEngine,
+                            finalWithPartials,
+                            latestPartialText,
+                            nextFinalAfterRecovery,
+                            bufferedText,
+                            processFinalText,
+                            syncForcedFinalBuffer,
+                            syncPartialVariables,
+                            mode: 'HostMode',
+                            recoveryStartTime: recoveryStartTimeRef,
+                            nextFinalAfterRecovery: nextFinalAfterRecoveryRef,
+                            recoveryAudio
+                          });
+                          
+                          // Update the original variables from the refs
+                          recoveryStartTime = recoveryStartTimeRef.value;
+                          nextFinalAfterRecovery = nextFinalAfterRecoveryRef.value;
                         } else {
                           // No recovery audio available
                           console.log(`[HostMode] ⚠️ No recovery audio available (${recoveryAudio.length} bytes) - committing without recovery`);
@@ -2064,7 +3000,33 @@ export async function handleHostConnection(clientWs, sessionId) {
                         // CRITICAL: Check if recovery already committed before committing from timeout
                         syncForcedFinalBuffer();
                         const bufferStillExists = forcedCommitEngine.hasForcedFinalBuffer();
-                        const wasCommittedByRecovery = forcedFinalBuffer?.committedByRecovery === true;
+                        
+                        // Check if recovery already committed by checking the buffer's committedByRecovery flag
+                        // OR if buffer was cleared but recovery was in progress (recovery clears buffer after committing)
+                        let wasCommittedByRecovery = false;
+                        if (bufferStillExists) {
+                          // Buffer still exists - check its flag
+                          const buffer = forcedCommitEngine.getForcedFinalBuffer();
+                          wasCommittedByRecovery = buffer?.committedByRecovery === true;
+                        } else {
+                          // Buffer doesn't exist - check if recovery was in progress
+                          // If recovery was in progress and buffer is now cleared, recovery must have committed it
+                          // We can't directly check if recovery completed, but we can infer:
+                          // - If buffer was cleared AND we're in the timeout callback, recovery likely committed it
+                          // - However, buffer could also be cleared by new FINAL or extending partial
+                          // So we need a more reliable check: look for recovery promise completion
+                          // For now, if buffer doesn't exist, we'll check if there's any indication recovery ran
+                          // The safest approach: if buffer doesn't exist, don't commit (recovery or new FINAL already handled it)
+                          console.log('[HostMode] ⚠️ Forced final buffer already cleared - checking if recovery already committed...');
+                          
+                          // If we reach here and buffer is cleared, it means either:
+                          // 1. Recovery committed it (and cleared buffer) - DON'T commit again
+                          // 2. New FINAL arrived and merged with it - DON'T commit again  
+                          // 3. Extending partial cleared it - DON'T commit again
+                          // In all cases, we should NOT commit from timeout if buffer is cleared
+                          console.log('[HostMode] ⏭️ Skipping timeout commit - buffer already cleared (likely committed by recovery, new FINAL, or extending partial)');
+                          return; // Skip commit - something else already handled it
+                        }
                         
                         if (wasCommittedByRecovery) {
                           console.log('[HostMode] ⏭️ Skipping timeout commit - recovery already committed this forced final');
@@ -2090,21 +3052,41 @@ export async function handleHostConnection(clientWs, sessionId) {
                           return;
                         }
                         
-                        if (!bufferStillExists) {
-                          console.log('[HostMode] ⚠️ Forced final buffer already cleared - but committing forced final to ensure it is not lost');
-                          // Buffer was cleared (likely by extending partial or new FINAL), but we should still commit
-                          // the forced final text to ensure it's not lost (recovery didn't commit it, so timeout must)
-                        }
-                        
                         // Commit the forced final (with grammar correction via processFinalText)
                         console.log(`[HostMode] 📝 Committing forced final from timeout: "${textToCommit.substring(0, 80)}..." (${textToCommit.length} chars)`);
                         console.log(`[HostMode] 📊 Final text to commit: "${textToCommit}"`);
-                        processFinalText(textToCommit, { forceFinal: true });
+                        
+                        // ✅ Extract segmentId from buffer if available
+                        let segmentIdForCommit = null;
+                        try {
+                          const buf = forcedCommitEngine.getForcedFinalBuffer?.();
+                          segmentIdForCommit = buf?.segmentId || null;
+                        } catch (_) {}
+                        
+                        try {
+                          processFinalText(textToCommit, { forceFinal: true, segmentId: segmentIdForCommit, pipeline: 'recovery' });
+                        } catch (e) {
+                          console.error('[HostMode] ❌ Forced-final commit failed (timeout):', e);
+                        }
                         
                         // Clear buffer if it still exists
                         if (bufferStillExists) {
                           forcedCommitEngine.clearForcedFinalBuffer();
                           syncForcedFinalBuffer();
+                        }
+                        
+                        // CRITICAL: If we didn't reset the partial tracker earlier (because new segment partials were detected),
+                        // reset it now after committing the forced final
+                        syncPartialVariables();
+                        if (longestPartialText && longestPartialText.length > 0) {
+                          // Check if these are new segment partials (don't start with the forced final)
+                          const longestTrimmed = longestPartialText.trim().toLowerCase();
+                          const forcedFinalTrimmed = textToCommit.trim().toLowerCase();
+                          if (!longestTrimmed.startsWith(forcedFinalTrimmed)) {
+                            console.log(`[HostMode] 🧹 Resetting partial tracker after forced final commit (new segment partials detected)`);
+                            partialTracker.reset();
+                            syncPartialVariables();
+                          }
                         }
                         
                         // Reset recovery tracking after commit
@@ -2133,83 +3115,91 @@ export async function handleHostConnection(clientWs, sessionId) {
                 if (forcedCommitEngine.hasForcedFinalBuffer()) {
                   const buffer = forcedCommitEngine.getForcedFinalBuffer();
                   
-                  // CRITICAL: If recovery is in progress, wait for it to complete first
-                  // This ensures forced finals are committed in chronological order
+                  // CRITICAL: If recovery is in progress, check if this FINAL is related to the forced final
+                  // Only block if it might be a continuation/extension of the forced final
+                  // New segments (unrelated FINALs) should be processed immediately
                   if (buffer.recoveryInProgress && buffer.recoveryPromise) {
-                    console.log('[HostMode] ⏳ Forced final recovery in progress - waiting for completion before processing new FINAL (maintaining order)...');
-                    try {
-                      const recoveredText = await buffer.recoveryPromise;
-                      if (recoveredText && recoveredText.length > 0) {
-                        console.log(`[HostMode] ✅ Forced final recovery completed with text: "${recoveredText.substring(0, 60)}..."`);
-                        // Recovery found words - commit the forced final first
-                        console.log('[HostMode] 📝 Committing forced final first (maintaining chronological order)');
-                        
-                        // Mark as committed by recovery BEFORE clearing buffer
+                    const forcedFinalText = (buffer.text || '').trim().toLowerCase();
+                    const newFinalText = (transcriptText || '').trim().toLowerCase();
+
+                    // Heuristics: is the new FINAL a continuation/overlap of the forced-final segment?
+                    const isExtension =
+                      newFinalText.length > forcedFinalText.length &&
+                      forcedFinalText.length > 0 &&
+                      newFinalText.startsWith(forcedFinalText);
+
+                    const isPrefix =
+                      forcedFinalText.length > newFinalText.length &&
+                      newFinalText.length > 0 &&
+                      forcedFinalText.startsWith(newFinalText);
+
+                    const forcedWords = forcedFinalText.split(/\s+/).filter(w => w.length > 2);
+                    const newWords = newFinalText.split(/\s+/).filter(w => w.length > 2);
+                    const sharedWords = forcedWords.filter(w => newWords.includes(w));
+                    const hasWordOverlap =
+                      sharedWords.length >= Math.min(2, Math.floor(Math.min(forcedWords.length, newWords.length) * 0.3));
+
+                    const mightBeRelated = isExtension || isPrefix || hasWordOverlap;
+
+                    if (!mightBeRelated) {
+                      console.log('[HostMode] ✅ Forced final recovery in progress, but new FINAL is unrelated segment - processing immediately');
+                      console.log(`[HostMode]   Forced final: "${buffer.text?.substring(0, 50)}..."`);
+                      console.log(`[HostMode]   New FINAL (unrelated): "${transcriptText?.substring(0, 50)}..."`);
+                      console.log(`[HostMode]   Heuristics: isExtension=${isExtension}, isPrefix=${isPrefix}, hasWordOverlap=${hasWordOverlap}, mightBeRelated=${mightBeRelated}`);
+                      console.log(`[HostMode]   ⚡ FALLING THROUGH - will process transcriptText immediately without waiting for recovery`);
+
+                      // ✅ CRITICAL: Do NOT wait. Do NOT merge with forced-final. Just fall through and
+                      // let the normal FINAL handling commit transcriptText as its own segment.
+                      // (No return, no await, no touching forced buffer.)
+                      // The forced final will be handled by its own recovery promise and timeout independently.
+                    } else {
+                      console.log('[HostMode] ⏳ Forced final recovery in progress - new FINAL appears related, waiting for completion (maintaining order)...');
+                      console.log(`[HostMode]   Forced final: "${buffer.text?.substring(0, 50)}..."`);
+                      console.log(`[HostMode]   New FINAL: "${transcriptText?.substring(0, 50)}..."`);
+                      console.log(`[HostMode]   Heuristics: isExtension=${isExtension}, isPrefix=${isPrefix}, hasWordOverlap=${hasWordOverlap}, mightBeRelated=${mightBeRelated}`);
+                      console.log(`[HostMode]   ⏳ AWAITING recovery promise before processing new FINAL...`);
+
+                      try {
+                        const waitStartTime = Date.now();
+                        const recoveredText = await buffer.recoveryPromise;
+                        const recoveryWaitTime = Date.now() - waitStartTime;
+                        console.log(`[HostMode] ✅ Recovery promise resolved after ${recoveryWaitTime}ms`);
+                        console.log(`[HostMode]   Recovered text: "${recoveredText?.substring(0, 60) || 'empty'}..."`);
+
+                        // ✅ always commit forced-final first if recovery was related
+                        const forcedTextToCommit = (recoveredText && recoveredText.length > 0)
+                          ? recoveredText
+                          : buffer.text;
+
+                        console.log(`[HostMode] 📝 STEP 1: Committing forced final first: "${forcedTextToCommit.substring(0, 60)}..."`);
                         syncForcedFinalBuffer();
-                        if (forcedFinalBuffer) {
-                          forcedFinalBuffer.committedByRecovery = true;
-                        }
-                        
-                        processFinalText(recoveredText, { forceFinal: true });
-                        forcedCommitEngine.clearForcedFinalBuffer();
-                        syncForcedFinalBuffer();
-                        
-                        // Reset recovery tracking
-                        recoveryStartTime = 0;
-                        nextFinalAfterRecovery = null;
-                        
-                        // Now process the new FINAL (which arrived after the forced final)
-                        console.log('[HostMode] 📝 Now processing new FINAL that arrived after forced final');
-                        // Continue with transcriptText processing below
-                      } else {
-                        console.log('[HostMode] ⚠️ Forced final recovery completed but no text was recovered');
-                        // Recovery found nothing - need to commit the forced final first, then process new FINAL
-                        console.log('[HostMode] 📝 Committing forced final first (recovery found nothing, but forced final must be committed)');
-                        
-                        // CRITICAL: Mark as committed BEFORE clearing buffer so timeout callback can skip
-                        // Even though recovery found nothing, we're committing it here due to new FINAL arriving
-                        syncForcedFinalBuffer();
-                        if (forcedFinalBuffer) {
-                          forcedFinalBuffer.committedByRecovery = true; // Mark as committed to prevent timeout from also committing
-                        }
-                        
-                        // Commit the forced final (from buffer, since recovery found nothing)
-                        const forcedFinalText = buffer.text;
-                        processFinalText(forcedFinalText, { forceFinal: true });
-                        
-                        // Now merge with new FINAL and process it
+                        if (forcedFinalBuffer) forcedFinalBuffer.committedByRecovery = true;
+
+                        processFinalText(forcedTextToCommit, { forceFinal: true });
+
                         forcedCommitEngine.clearForcedFinalBufferTimeout();
-                        const merged = partialTracker.mergeWithOverlap(forcedFinalText, transcriptText);
-                        if (merged) {
-                          transcriptText = merged;
-                        } else {
-                          console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
-                        }
                         forcedCommitEngine.clearForcedFinalBuffer();
                         syncForcedFinalBuffer();
-                        
-                        // Reset recovery tracking
+
+                        console.log(`[HostMode] 📝 STEP 2: Forced final committed, now continuing with new FINAL: "${transcriptText.substring(0, 60)}..."`);
+                        // ✅ now continue: transcriptText will be processed by normal FINAL path below
                         recoveryStartTime = 0;
                         nextFinalAfterRecovery = null;
-                        
-                        // Continue processing the new FINAL below
+                      } catch (err) {
+                        console.error('[HostMode] ❌ Error waiting for forced final recovery:', err?.message || err);
+                        console.error('[HostMode]   Error details:', err);
+                        console.error('[HostMode]   Error stack:', err.stack);
+
+                        // On error: clear buffer so you don't stall forever
+                        console.log(`[HostMode] 🧹 Clearing forced final buffer due to error, will process new FINAL normally`);
+                        forcedCommitEngine.clearForcedFinalBufferTimeout();
+                        forcedCommitEngine.clearForcedFinalBuffer();
+                        syncForcedFinalBuffer();
+
+                        recoveryStartTime = 0;
+                        nextFinalAfterRecovery = null;
+                        // continue: process transcriptText normally below
                       }
-                    } catch (error) {
-                      console.error('[HostMode] ❌ Error waiting for forced final recovery:', error.message);
-                      // On error, proceed with merge as before
-                      forcedCommitEngine.clearForcedFinalBufferTimeout();
-                      const merged = partialTracker.mergeWithOverlap(buffer.text, transcriptText);
-                      if (merged) {
-                        transcriptText = merged;
-                      } else {
-                        console.warn('[HostMode] ⚠️ Merge failed, using new FINAL transcript');
-                      }
-                      forcedCommitEngine.clearForcedFinalBuffer();
-                      syncForcedFinalBuffer();
-                      
-                      // Reset recovery tracking
-                      recoveryStartTime = 0;
-                      nextFinalAfterRecovery = null;
                     }
                   } else {
                     // No recovery in progress - merge immediately as before
@@ -2235,6 +3225,13 @@ export async function handleHostConnection(clientWs, sessionId) {
                 if (!transcriptText || transcriptText.length === 0) {
                   console.warn('[HostMode] ⚠️ transcriptText is null or empty after merge operations - skipping final processing');
                   return;
+                }
+                
+                // Log if we're processing an unrelated final after falling through
+                syncForcedFinalBuffer();
+                if (forcedFinalBuffer && forcedFinalBuffer.recoveryInProgress) {
+                  console.log(`[HostMode] 📝 Processing FINAL after unrelated fallthrough: "${transcriptText.substring(0, 60)}..."`);
+                  console.log(`[HostMode]   Forced final recovery still in progress - this FINAL will be processed independently`);
                 }
                 
                 // Capture next final if it arrives after recovery started (for deduplication)
@@ -2420,41 +3417,41 @@ export async function handleHostConnection(clientWs, sessionId) {
                   WAIT_FOR_PARTIALS_MS = BASE_WAIT_MS;
                 }
                 
-                // CRITICAL: Sentence-aware finalization - wait for complete sentences
-                // If FINAL doesn't end with a complete sentence, wait significantly longer
-                // This prevents cutting off mid-sentence and causing transcription errors
+                // CRITICAL: Check if FINAL is incomplete - if so, wait briefly for extending partials
+                // This prevents committing incomplete phrases like "you just," when they should continue
                 const finalEndsWithCompleteSentence = endsWithCompleteSentence(transcriptText);
-                if (!finalEndsWithCompleteSentence) {
-                  // FINAL doesn't end with complete sentence - wait MUCH longer for continuation
-                  // This allows long sentences to complete naturally before finalizing
-                  const SENTENCE_WAIT_MS = Math.max(4000, Math.min(8000, transcriptText.length * 20)); // 4-8 seconds based on length (increased)
-                  WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, SENTENCE_WAIT_MS);
-                  console.log(`[HostMode] ⚠️ FINAL doesn't end with complete sentence - extending wait to ${WAIT_FOR_PARTIALS_MS}ms to catch sentence completion`);
+                const finalEndsWithSentencePunctuation = /[.!?…]$/.test(transcriptText.trim());
+                // Incomplete if: doesn't end with sentence punctuation (period, exclamation, question mark)
+                // Commas, semicolons, colons are NOT sentence-ending, so text ending with them is incomplete
+                const isIncomplete = !finalEndsWithSentencePunctuation;
+                
+                if (isIncomplete) {
+                  console.log(`[HostMode] 📝 FINAL is incomplete (ends with "${transcriptText.trim().slice(-1)}" not sentence punctuation) - will wait briefly for extending partials`);
                   console.log(`[HostMode] 📝 Current text: "${transcriptText.substring(Math.max(0, transcriptText.length - 60))}"`);
-                } else {
-                  // FINAL ends with complete sentence - still check for punctuation for backward compatibility
-                  const finalEndsWithPunctuation = /[.!?…]$/.test(transcriptText.trim());
-                  if (!finalEndsWithPunctuation) {
-                    // Has sentence ending but not standard punctuation - still wait a bit
-                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1500);
-                    console.log(`[HostMode] ⚠️ FINAL doesn't end with standard punctuation - extending wait to ${WAIT_FOR_PARTIALS_MS}ms`);
+                  // For incomplete finals, extend wait time to catch extending partials
+                  // Short incomplete finals (< 50 chars) likely need more words - wait longer
+                  if (transcriptText.length < 50) {
+                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 2000); // At least 2 seconds for short incomplete phrases
+                  } else {
+                    WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1500); // 1.5 seconds for longer incomplete text
                   }
+                } else if (!finalEndsWithCompleteSentence) {
+                  // Ends with sentence punctuation but not complete sentence - still wait a bit
+                  console.log(`[HostMode] 📝 FINAL ends with sentence punctuation but not complete sentence - will commit after standard wait`);
                 }
                 
                 // CRITICAL: Before setting up finalization, check if we have longer partials that extend this final
                 // This ensures we don't lose words like "gathered" that might be in a partial but not in the FINAL
-                // ALSO: Check if final ends mid-word - if so, wait for complete word in partials
                 let finalTextToUse = transcriptText;
                 const finalTrimmed = transcriptText.trim();
                 const finalEndsCompleteWord = endsWithCompleteWord(finalTrimmed);
                 const timeSinceLongest = longestPartialTime ? (Date.now() - longestPartialTime) : Infinity;
                 const timeSinceLatest = latestPartialTime ? (Date.now() - latestPartialTime) : Infinity;
                 
-                // If final doesn't end with complete word, prioritize partials that contain the complete word
+                // Note: We no longer extend wait time for mid-word finals - commit immediately
+                // Continuations will be caught by the partial continuation detection logic
                 if (!finalEndsCompleteWord) {
-                  console.log(`[HostMode] ⚠️ FINAL ends mid-word - waiting for complete word in partials`);
-                  // Increase wait time to catch complete word
-                  WAIT_FOR_PARTIALS_MS = Math.max(WAIT_FOR_PARTIALS_MS, 1200); // At least 1200ms for mid-word finals
+                  console.log(`[HostMode] 📝 FINAL ends mid-word - will commit immediately, continuation will be caught in partials`);
                 }
                 
                 // Check if longest partial extends the final
@@ -2853,7 +3850,11 @@ export async function handleHostConnection(clientWs, sessionId) {
             
             // Commit the forced final immediately
             const forcedFinalText = buffer.text;
-            processFinalText(forcedFinalText, { forceFinal: true });
+            try {
+              processFinalText(forcedFinalText, { forceFinal: true });
+            } catch (e) {
+              console.error('[HostMode] ❌ Forced-final commit failed (stream end):', e);
+            }
             
             // Clear the buffer
             forcedCommitEngine.clearForcedFinalBuffer();
@@ -2894,7 +3895,11 @@ export async function handleHostConnection(clientWs, sessionId) {
       
       // Commit the forced final immediately
       const forcedFinalText = buffer.text;
-      processFinalText(forcedFinalText, { forceFinal: true });
+      try {
+        processFinalText(forcedFinalText, { forceFinal: true });
+      } catch (e) {
+        console.error('[HostMode] ❌ Forced-final commit failed (connection close):', e);
+      }
       
       // Clear the buffer
       forcedCommitEngine.clearForcedFinalBuffer();

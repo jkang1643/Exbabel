@@ -79,17 +79,6 @@ Input: "Says, let Brotherly Love continue, do not neces to show. Hospitality to 
 Output: "Says, 'Let brotherly love continue. Do not neglect to show hospitality to strangers, for thereby some have entertained angels unaware.' We need to encounter God in our daily lives."
 (Note: **Multi-Word Mishears:** "on a work" → "unaware", "neces" → "neglect", "for theirs" → "for strangers". **Speech Mishears:** "and counter" → "encounter". **Capitalization** corrected.)
 
-Input: "let's go back to the text it says when david found mephibosheth. we was praying last night. I no that God is good."
-Output: "Let's go back to the text — it says when David found Mephibosheth. We were praying last night. I know that God is good."
-(Note: **Punctuation/Capitalization** fixed. **Homophone:** "no" → "know". **Grammar:** "was" → "were" for subject-verb agreement.)
-
-Input: "The Sugeron General is calling loneliness. God wants us to talk about love. The pastor said we need to pray."
-Output: "The Surgeon General is calling loneliness. God wants us to talk about love. The pastor said we need to pray."
-(Note: **CRITICAL: DO NOT CHANGE SYNONYMS.** Keeps "calling," "talk," and "said." Fixes the near-homophone "Sugeron" → "Surgeon".)
-
-Input: "God wants us to show Hospitality the writer of Hebrews. Says, let Brotherly Love continue. The lord is my sheppard. let us pray for are brothers and sisters."
-Output: "God wants us to show hospitality. The writer of Hebrews says, 'Let brotherly love continue.' The Lord is my shepherd. Let us pray for our brothers and sisters."
-(Note: **Biblical/Church Fixes:** Corrects capitalization of "Hospitality" and "Brotherly Love." Fixes spelling "sheppard" → "shepherd." Homophone "are" → "our".)
 
 ### Output format:
 Output ONLY as a JSON object with the key 'corrected_text'. Example: {"corrected_text": "Your corrected text here"}.`;
@@ -114,15 +103,15 @@ function validateCorrectionResponse(corrected, original) {
     /I don't have/i,
     /I need more information/i
   ];
-  
+
   const isErrorResponse = errorPatterns.some(pattern => pattern.test(corrected));
-  
+
   if (isErrorResponse) {
     console.warn(`[GrammarWorker] ⚠️ AI returned error/question instead of correction: "${corrected.substring(0, 100)}..."`);
     console.warn(`[GrammarWorker] ⚠️ Using original text instead: "${original.substring(0, 100)}..."`);
     return original; // Use original text instead of error message
   }
-  
+
   return corrected;
 }
 
@@ -132,7 +121,7 @@ export class GrammarWorker {
     this.pendingRequests = new Map(); // Track pending requests for cancellation
     this.MAX_CACHE_SIZE = 200;
     this.CACHE_TTL = 120000; // 2 minutes cache (same as translation worker)
-    
+
     // Throttling configuration for partial corrections
     this.THROTTLE_MS = 2000; // Throttle to ~1 request every 2 seconds (was 700ms)
     this.GROWTH_THRESHOLD = 20; // Wait until text grows by 20 chars or punctuation appears (was 10)
@@ -164,7 +153,7 @@ export class GrammarWorker {
     if (!text || text.trim().length < 8) {
       return text; // Too short to correct
     }
-    
+
     // Additional validation: ensure text doesn't look like an error message
     const trimmed = text.trim();
     if (trimmed.length < 10 || /^(I'm sorry|I need|Please provide|I can help|I'll be happy)/i.test(trimmed)) {
@@ -183,13 +172,13 @@ export class GrammarWorker {
     // Cancel previous request if new one arrives
     const cancelKey = 'grammar';
     const existingRequest = this.pendingRequests.get(cancelKey);
-    
+
     // Check if new text is a reset (much shorter or completely different start)
     let isReset = false;
     if (existingRequest && existingRequest.text) {
       const previousText = existingRequest.text;
-      isReset = text.length < previousText.length * 0.6 || 
-                !text.startsWith(previousText.substring(0, Math.min(previousText.length, 100)));
+      isReset = text.length < previousText.length * 0.6 ||
+        !text.startsWith(previousText.substring(0, Math.min(previousText.length, 100)));
     }
 
     if (existingRequest && isReset) {
@@ -197,13 +186,13 @@ export class GrammarWorker {
       this.pendingRequests.delete(cancelKey);
     }
 
-    const abortController = existingRequest && !isReset 
-      ? existingRequest.abortController 
+    const abortController = existingRequest && !isReset
+      ? existingRequest.abortController
       : new AbortController();
-    
-    this.pendingRequests.set(cancelKey, { 
-      abortController, 
-      text 
+
+    this.pendingRequests.set(cancelKey, {
+      abortController,
+      text
     });
 
     // Add 2-second timeout for partials to prevent blocking UI
@@ -214,7 +203,7 @@ export class GrammarWorker {
 
     try {
       console.log(`[GrammarWorker] 🔄 Correcting PARTIAL (${text.length} chars): "${text}"`);
-      
+
       const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -233,7 +222,7 @@ export class GrammarWorker {
         }),
         signal: abortController.signal
       });
-      
+
       clearTimeout(timeoutId); // Clear timeout on success
 
       if (!response.ok) {
@@ -243,7 +232,7 @@ export class GrammarWorker {
 
       const data = await response.json();
       let corrected = text; // Default to original text
-      
+
       // Parse JSON response
       try {
         const content = data.choices[0]?.message?.content?.trim() || '';
@@ -255,10 +244,10 @@ export class GrammarWorker {
         console.warn(`[GrammarWorker] ⚠️ Failed to parse JSON response, using original text:`, parseError.message);
         corrected = text;
       }
-      
+
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
-      
+
       if (corrected !== text) {
         // Show full diff for better visibility
         console.log(`[GrammarWorker] ✨ CORRECTED (PARTIAL, ${text.length} → ${corrected.length} chars):`);
@@ -323,18 +312,18 @@ export class GrammarWorker {
 
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastPartialRequestTime;
-    const textGrowth = this.pendingPartialBuffer 
-      ? text.length - this.pendingPartialBuffer.length 
+    const textGrowth = this.pendingPartialBuffer
+      ? text.length - this.pendingPartialBuffer.length
       : text.length;
-    
+
     // Check if we should send immediately:
     // 1. Enough time has passed (throttle period)
     // 2. Text has grown significantly (growth threshold)
     // 3. Sentence punctuation detected (natural pause)
     const hasPunctuation = this.hasSentencePunctuation(text);
     const shouldSendImmediately = timeSinceLastRequest >= this.THROTTLE_MS ||
-                                   textGrowth >= this.GROWTH_THRESHOLD ||
-                                   hasPunctuation;
+      textGrowth >= this.GROWTH_THRESHOLD ||
+      hasPunctuation;
 
     if (shouldSendImmediately) {
       // Clear any pending timeout
@@ -361,7 +350,7 @@ export class GrammarWorker {
     } else {
       // Throttle: buffer the request and schedule it
       const bufferedText = text;
-      
+
       // Clear previous timeout if exists
       if (this.pendingPartialTimeout) {
         clearTimeout(this.pendingPartialTimeout);
@@ -385,7 +374,7 @@ export class GrammarWorker {
 
           try {
             const corrected = await this._processPartialCorrection(textToProcess, apiKey);
-            
+
             // Resolve all pending promises with the corrected text
             // (they're all waiting for the same batch)
             for (const resolver of this.pendingPartialResolvers.values()) {
@@ -438,7 +427,7 @@ export class GrammarWorker {
     try {
       const startTime = Date.now();
       console.log(`[GrammarWorker] 🔄 Correcting FINAL (${text.length} chars): "${text}"`);
-      
+
       // Create abort controller with 5 second timeout for finals
       const abortController = new AbortController();
       timeoutId = setTimeout(() => {
@@ -472,10 +461,10 @@ export class GrammarWorker {
 
       const data = await response.json();
       clearTimeout(timeoutId); // Clear timeout on success
-      
+
       const elapsed = Date.now() - startTime;
       let corrected = text; // Default to original text
-      
+
       // Parse JSON response
       try {
         const content = data.choices[0]?.message?.content?.trim() || '';
@@ -487,10 +476,10 @@ export class GrammarWorker {
         console.warn(`[GrammarWorker] ⚠️ Failed to parse JSON response, using original text:`, parseError.message);
         corrected = text;
       }
-      
+
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
-      
+
       if (corrected !== text) {
         // Show full diff for better visibility
         console.log(`[GrammarWorker] ✨ CORRECTED (FINAL, ${text.length} → ${corrected.length} chars, ${elapsed}ms):`);

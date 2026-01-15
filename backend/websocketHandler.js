@@ -11,7 +11,7 @@ import translationManager from './translationManager.js';
  */
 export async function handleHostConnection(clientWs, sessionId) {
   console.log(`[WebSocket] Host connecting to session ${sessionId}`);
-  
+
   const session = sessionStore.getSession(sessionId);
   if (!session) {
     clientWs.send(JSON.stringify({
@@ -28,7 +28,7 @@ export async function handleHostConnection(clientWs, sessionId) {
   let reconnectAttempts = 0;
   const MAX_RECONNECT_ATTEMPTS = 3;
   let messageQueue = [];
-  
+
   // State management for multi-turn streaming
   let isStreamingAudio = false;
   let setupComplete = false;
@@ -60,7 +60,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
     // Get all target languages needed
     const targetLanguages = sessionStore.getSessionLanguages(sessionId);
-    
+
     if (targetLanguages.length === 0) {
       console.log('[Host] No listeners yet, skipping translation');
       return;
@@ -112,7 +112,7 @@ export async function handleHostConnection(clientWs, sessionId) {
         if (response.setupComplete) {
           console.log('[Host] Gemini setup complete');
           setupComplete = true;
-          
+
           // Notify host
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({
@@ -138,12 +138,12 @@ export async function handleHostConnection(clientWs, sessionId) {
         // Process server content (transcription)
         if (response.serverContent) {
           const serverContent = response.serverContent;
-          
+
           if (serverContent.modelTurn && serverContent.modelTurn.parts) {
             for (const part of serverContent.modelTurn.parts) {
               if (part.text) {
                 const transcript = part.text.trim();
-                
+
                 // Send transcript to host
                 if (clientWs.readyState === WebSocket.OPEN) {
                   clientWs.send(JSON.stringify({
@@ -158,18 +158,18 @@ export async function handleHostConnection(clientWs, sessionId) {
               }
             }
           }
-          
+
           if (serverContent.turnComplete) {
             console.log('[Host] Model turn complete');
-            
+
             if (audioEndTimer) {
               clearTimeout(audioEndTimer);
               audioEndTimer = null;
             }
-            
+
             isStreamingAudio = false;
             lastAudioTime = null;
-            
+
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'turn_complete',
@@ -185,7 +185,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
     ws.on('close', async (code, reason) => {
       console.log(`[Host] Gemini connection closed. Code: ${code}`);
-      
+
       isStreamingAudio = false;
       setupComplete = false;
       lastAudioTime = null;
@@ -193,7 +193,7 @@ export async function handleHostConnection(clientWs, sessionId) {
         clearTimeout(audioEndTimer);
         audioEndTimer = null;
       }
-      
+
       if (code === 1011 && reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
         console.error('[Host] Persistent quota error - stopping reconnection');
         if (clientWs.readyState === WebSocket.OPEN) {
@@ -205,11 +205,11 @@ export async function handleHostConnection(clientWs, sessionId) {
         }
         return;
       }
-      
+
       if (clientWs.readyState === WebSocket.OPEN && !reconnecting) {
         reconnecting = true;
         const backoffDelay = Math.min(500 * Math.pow(2, reconnectAttempts), 4000);
-        
+
         try {
           await new Promise(resolve => setTimeout(resolve, backoffDelay));
           geminiWs = await connectToGemini();
@@ -228,15 +228,15 @@ export async function handleHostConnection(clientWs, sessionId) {
   const connectToGemini = () => {
     return new Promise((resolve, reject) => {
       console.log('[Host] Connecting to Gemini...');
-      
+
       const geminiWsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${process.env.GEMINI_API_KEY}`;
       const ws = new WebSocket(geminiWsUrl);
-      
+
       ws.on('open', () => {
         console.log('[Host] Connected to Gemini');
-        
+
         const systemInstruction = translationManager.getSystemInstruction(currentSourceLang, 'transcript');
-        
+
         const setupMessage = {
           setup: {
             model: 'models/gemini-live-2.5-flash-preview',
@@ -246,11 +246,11 @@ export async function handleHostConnection(clientWs, sessionId) {
             systemInstruction: systemInstruction
           }
         };
-        
+
         ws.send(JSON.stringify(setupMessage));
         resolve(ws);
       });
-      
+
       ws.on('error', (error) => {
         console.error('[Host] Gemini connection error:', error);
         reject(error);
@@ -269,9 +269,9 @@ export async function handleHostConnection(clientWs, sessionId) {
             currentSourceLang = message.sourceLang;
             sessionStore.updateSourceLanguage(sessionId, currentSourceLang);
           }
-          
+
           console.log(`[Host] Initialized with source language: ${currentSourceLang}`);
-          
+
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({
               type: 'session_ready',
@@ -288,7 +288,7 @@ export async function handleHostConnection(clientWs, sessionId) {
               console.log('[Host] Starting audio stream');
               isStreamingAudio = true;
             }
-            
+
             const audioMessage = {
               realtimeInput: {
                 audio: {
@@ -297,10 +297,10 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
               }
             };
-            
+
             geminiWs.send(JSON.stringify(audioMessage));
             lastAudioTime = Date.now();
-            
+
             if (audioEndTimer) clearTimeout(audioEndTimer);
             audioEndTimer = setTimeout(() => {
               sendAudioStreamEnd();
@@ -309,7 +309,7 @@ export async function handleHostConnection(clientWs, sessionId) {
             messageQueue.push({ type: 'audio', message });
           }
           break;
-        
+
         case 'audio_end':
           if (audioEndTimer) {
             clearTimeout(audioEndTimer);
@@ -326,16 +326,16 @@ export async function handleHostConnection(clientWs, sessionId) {
   // Handle host disconnect
   clientWs.on('close', () => {
     console.log('[Host] Disconnected from session');
-    
+
     if (audioEndTimer) {
       clearTimeout(audioEndTimer);
       audioEndTimer = null;
     }
-    
+
     if (geminiWs && geminiWs.readyState === WebSocket.OPEN) {
       geminiWs.close();
     }
-    
+
     sessionStore.closeSession(sessionId);
   });
 
@@ -344,11 +344,11 @@ export async function handleHostConnection(clientWs, sessionId) {
     if (!process.env.GEMINI_API_KEY) {
       throw new Error('GEMINI_API_KEY not configured');
     }
-    
+
     geminiWs = await connectToGemini();
     attachGeminiHandlers(geminiWs);
     sessionStore.setHost(sessionId, clientWs, geminiWs);
-    
+
     // Send initial session stats to host
     if (clientWs.readyState === WebSocket.OPEN) {
       const stats = sessionStore.getSessionStats(sessionId);
@@ -357,7 +357,7 @@ export async function handleHostConnection(clientWs, sessionId) {
         stats: stats
       }));
     }
-    
+
     console.log(`[Host] Session ${session.sessionCode} is now active`);
   } catch (error) {
     console.error('[Host] Initialization error:', error);
@@ -370,12 +370,16 @@ export async function handleHostConnection(clientWs, sessionId) {
   }
 }
 
+// TTS Radio Mode: Lease enforcement constants
+const TTS_PLAYING_LEASE_SECONDS = 300; // 5 minutes
+const TTS_PAUSED_LEASE_SECONDS = 60; // 1 minute
+
 /**
  * Handle listener connection
  */
 export function handleListenerConnection(clientWs, sessionId, targetLang, userName) {
   console.log(`[WebSocket] Listener connecting: ${userName} (${targetLang})`);
-  
+
   const session = sessionStore.getSession(sessionId);
   if (!session) {
     clientWs.send(JSON.stringify({
@@ -392,7 +396,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
   try {
     // Add listener to session
     sessionStore.addListener(sessionId, socketId, clientWs, targetLang, userName);
-    
+
     // Notify host about new listener
     const hostSocket = session.hostSocket;
     if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
@@ -402,7 +406,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
         stats: stats
       }));
     }
-    
+
     // Send welcome message
     if (clientWs.readyState === WebSocket.OPEN) {
       clientWs.send(JSON.stringify({
@@ -432,7 +436,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       console.log(`[Listener] ${userName} disconnected`);
       clearInterval(statsInterval);
       sessionStore.removeListener(sessionId, socketId);
-      
+
       // Notify host about listener leaving
       const updatedSession = sessionStore.getSession(sessionId);
       if (updatedSession && updatedSession.hostSocket && updatedSession.hostSocket.readyState === WebSocket.OPEN) {
@@ -445,20 +449,418 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
     });
 
     // Handle listener messages (if any)
-    clientWs.on('message', (msg) => {
+    clientWs.on('message', async (msg) => {
       try {
         const message = JSON.parse(msg.toString());
-        
+
+        // TTS command handlers
+        if (message.type === 'tts/start') {
+          console.log(`[Listener] ${userName} starting TTS playback`);
+
+          // Store TTS playback state in connection metadata
+          if (!clientWs.ttsState) {
+            clientWs.ttsState = {};
+          }
+
+          clientWs.ttsState.playbackState = 'PLAYING';
+          clientWs.ttsState.languageCode = message.languageCode || targetLang;
+          clientWs.ttsState.voiceName = message.voiceName || null;
+          clientWs.ttsState.tier = message.tier || 'gemini';
+          clientWs.ttsState.mode = message.mode || 'unary';
+          clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PLAYING_LEASE_SECONDS * 1000);
+
+          // Store full config for lease validation
+          clientWs.ttsState.ttsConfig = {
+            languageCode: message.languageCode || targetLang,
+            voiceName: message.voiceName,
+            tier: message.tier || 'gemini',
+            mode: message.mode || 'unary',
+            ssmlOptions: message.ssmlOptions,
+            promptPresetId: message.promptPresetId,
+            ttsPrompt: message.ttsPrompt,
+            intensity: message.intensity
+          };
+
+          // Send acknowledgment with lease info
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'start',
+              state: clientWs.ttsState,
+              leaseExpiresAt: clientWs.ttsState.ttsLeaseExpiresAt
+            }));
+          }
+
+          console.log(`[Listener] ${userName} TTS state:`, clientWs.ttsState);
+        }
+        else if (message.type === 'tts/pause') {
+          console.log(`[Listener] ${userName} pausing TTS playback`);
+
+          // Update playback state and refresh lease with shorter duration
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'PAUSED';
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PAUSED_LEASE_SECONDS * 1000);
+          }
+
+          // Send acknowledgment
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'pause',
+              leaseExpiresAt: clientWs.ttsState?.ttsLeaseExpiresAt
+            }));
+          }
+        }
+        else if (message.type === 'tts/resume') {
+          console.log(`[Listener] ${userName} resuming TTS playback`);
+
+          // Update playback state and refresh full lease
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'PLAYING';
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PLAYING_LEASE_SECONDS * 1000);
+          }
+
+          // Send acknowledgment
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'resume',
+              leaseExpiresAt: clientWs.ttsState?.ttsLeaseExpiresAt
+            }));
+          }
+        }
+        else if (message.type === 'tts/stop') {
+          console.log(`[Listener] ${userName} stopping TTS playback`);
+
+          // Update playback state and clear lease
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'STOPPED';
+            clientWs.ttsState.ttsLeaseExpiresAt = null;
+            clientWs.ttsState.ttsConfig = null;
+          }
+
+          // Send acknowledgment
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'stop'
+            }));
+          }
+        }
+        else if (message.type === 'tts/synthesize') {
+          console.log(`[Listener] ${userName} requesting TTS synthesis`);
+          console.log(`[Listener] Incoming message:`, {
+            segmentId: message.segmentId,
+            text: message.text?.substring(0, 50),
+            languageCode: message.languageCode,
+            voiceName: message.voiceName,
+            tier: message.tier,
+            mode: message.mode,
+            ssmlOptions: message.ssmlOptions,
+            promptPresetId: message.promptPresetId,
+            ttsPrompt: message.ttsPrompt ? 'yes' : 'no',
+            intensity: message.intensity
+          });
+
+          // Validate payload
+          if (!message.segmentId || !message.text || !message.languageCode) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'INVALID_REQUEST',
+                message: 'Missing required fields: segmentId, text, languageCode',
+                details: {
+                  segmentId: message.segmentId,
+                  hasText: !!message.text,
+                  hasLanguageCode: !!message.languageCode
+                }
+              }));
+            }
+            return;
+          }
+
+          // Radio Mode: Check if playing state is active (lease enforcement)
+          if (!clientWs.ttsState || clientWs.ttsState.playbackState !== 'PLAYING') {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_NOT_PLAYING',
+                message: 'TTS synthesis requires active playback state. Please start TTS playback first.',
+                details: {
+                  segmentId: message.segmentId,
+                  currentState: clientWs.ttsState?.playbackState || 'STOPPED'
+                }
+              }));
+            }
+            return;
+          }
+
+          // Radio Mode: Check if lease is still valid
+          if (clientWs.ttsState.ttsLeaseExpiresAt && Date.now() > clientWs.ttsState.ttsLeaseExpiresAt) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_LEASE_EXPIRED',
+                message: 'TTS playback lease expired. Please restart playback.',
+                details: {
+                  segmentId: message.segmentId,
+                  leaseExpiredAt: clientWs.ttsState.ttsLeaseExpiresAt,
+                  currentTime: Date.now()
+                }
+              }));
+            }
+            return;
+          }
+
+          // Check if streaming mode (not implemented yet)
+          if (message.mode === 'streaming') {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_STREAMING_NOT_IMPLEMENTED',
+                message: 'TTS streaming mode not implemented yet (future PR)',
+                details: {
+                  segmentId: message.segmentId
+                }
+              }));
+            }
+            return;
+          }
+
+          // Import TTS modules
+          const { GoogleTtsService } = await import('./tts/ttsService.js');
+          const { validateTtsRequest } = await import('./tts/ttsPolicy.js');
+          const { canSynthesize } = await import('./tts/ttsQuota.js');
+          const { recordUsage } = await import('./tts/ttsUsage.js');
+
+          try {
+
+            // Fix for typo in tier name if it comes from frontend/config
+            if (message.tier === 'chirp_hd') {
+              message.tier = 'chirp3_hd';
+            }
+
+            // 1. Resolve TTS routing (single source of truth)
+            const { resolveTtsRoute } = await import('./tts/ttsRouting.js');
+            const route = await resolveTtsRoute({
+              requestedTier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+              requestedVoice: message.voiceName,
+              languageCode: message.languageCode,
+              mode: 'unary',
+              orgConfig: {}, // TODO: Pass actual org config
+              userSubscription: {} // TODO: Pass actual subscription
+            });
+
+            // 2. Build TTS request
+            console.log(`[Listener] Building TTS request with ssmlOptions:`, message.ssmlOptions);
+
+            const ttsRequest = {
+              sessionId: sessionId,
+              userId: userName || 'anonymous',
+              orgId: 'default', // TODO: Get from session/auth
+              text: message.text,
+              segmentId: message.segmentId,
+              profile: {
+                engine: route.engine,
+                requestedTier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                languageCode: route.languageCode,
+                voiceName: route.voiceName,
+                modelName: route.model || message.modelName,
+                encoding: route.audioEncoding,
+                streaming: message.mode === 'streaming',
+                prompt: message.prompt
+              },
+              ssmlOptions: message.ssmlOptions || null, // CRITICAL: Pass SSML options from frontend
+              // Gemini-TTS prompt fields
+              promptPresetId: message.promptPresetId || null,
+              ttsPrompt: message.ttsPrompt || null,
+              intensity: message.intensity || null
+            };
+
+            console.log(`[Listener] TTS Request built:`, {
+              segmentId: ttsRequest.segmentId,
+              text: ttsRequest.text.substring(0, 50),
+              voiceName: ttsRequest.profile.voiceName,
+              tier: ttsRequest.profile.requestedTier,
+              ssmlOptions: ttsRequest.ssmlOptions,
+              promptPresetId: ttsRequest.promptPresetId,
+              ttsPrompt: ttsRequest.ttsPrompt ? 'yes' : 'no',
+              intensity: ttsRequest.intensity
+            });
+
+            // 3. Check quota
+            const quotaCheck = canSynthesize({
+              orgId: ttsRequest.orgId,
+              userId: ttsRequest.userId,
+              sessionId: ttsRequest.sessionId,
+              characters: ttsRequest.text.length
+            });
+
+            if (!quotaCheck.allowed) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: quotaCheck.error.code,
+                  message: quotaCheck.error.message,
+                  details: quotaCheck.error.details,
+                  segmentId: message.segmentId
+                }));
+              }
+
+              // Record failed usage
+              await recordUsage({
+                orgId: ttsRequest.orgId,
+                userId: ttsRequest.userId,
+                sessionId: ttsRequest.sessionId,
+                segmentId: message.segmentId,
+                requested: {
+                  tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                  voiceName: message.voiceName,
+                  languageCode: message.languageCode
+                },
+                route: route, // Include even if failed (best effort)
+                characters: ttsRequest.text.length,
+                audioSeconds: null,
+                status: 'failed',
+                errorCode: quotaCheck.error.code,
+                errorMessage: quotaCheck.error.message
+              });
+
+              return;
+            }
+
+            // 4. Validate policy
+            const policyError = await validateTtsRequest(ttsRequest);
+            if (policyError) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: policyError.code,
+                  message: policyError.message,
+                  details: policyError.details,
+                  segmentId: message.segmentId
+                }));
+              }
+
+              // Record failed usage
+              await recordUsage({
+                orgId: ttsRequest.orgId,
+                userId: ttsRequest.userId,
+                sessionId: ttsRequest.sessionId,
+                segmentId: message.segmentId,
+                requested: {
+                  tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                  voiceName: message.voiceName,
+                  languageCode: message.languageCode
+                },
+                route: route,
+                characters: ttsRequest.text.length,
+                audioSeconds: null,
+                status: 'failed',
+                errorCode: policyError.code,
+                errorMessage: policyError.message
+              });
+
+              return;
+            }
+
+            // 5. Synthesize audio using the resolved route
+            const ttsService = new GoogleTtsService();
+            const response = await ttsService.synthesizeUnary(ttsRequest, route);
+
+            // Send audio response with resolved routing info (streaming-compatible structure)
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/audio',
+                segmentId: response.segmentId,
+                audio: {
+                  bytesBase64: response.audio.bytesBase64,
+                  mimeType: response.audio.mimeType,
+                  durationMs: response.audio.durationMs,
+                  sampleRateHz: response.audio.sampleRateHz
+                },
+                mode: response.mode,
+                // Include resolved routing for frontend visibility
+                resolvedRoute: response.route,
+                ssmlOptions: ttsRequest.ssmlOptions || null
+              }));
+            }
+
+            // Record successful usage with routing details
+            await recordUsage({
+              orgId: ttsRequest.orgId,
+              userId: ttsRequest.userId,
+              sessionId: ttsRequest.sessionId,
+              segmentId: message.segmentId,
+              requested: {
+                tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                voiceName: message.voiceName,
+                languageCode: message.languageCode
+              },
+              route: response.route,
+              promptMetadata: response.promptMetadata || null, // Include prompt metadata from synthesis
+              characters: ttsRequest.text.length,
+              audioSeconds: response.durationMs ? response.durationMs / 1000 : null,
+              status: 'success'
+            });
+
+            console.log(`[Listener] ${userName} TTS synthesis successful: ${message.segmentId}`);
+
+          } catch (error) {
+            console.error(`[Listener] ${userName} TTS synthesis error:`, error);
+
+            // Parse error if it's a JSON string
+            let errorCode = 'SYNTHESIS_FAILED';
+            let errorMessage = error.message;
+            let errorDetails = {};
+
+            try {
+              const parsedError = JSON.parse(error.message);
+              errorCode = parsedError.code || errorCode;
+              errorMessage = parsedError.message || errorMessage;
+              errorDetails = parsedError.details || {};
+            } catch (e) {
+              // Not a JSON error, use as-is
+            }
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: errorCode,
+                message: errorMessage,
+                details: errorDetails,
+                segmentId: message.segmentId
+              }));
+            }
+
+            // Record failed usage
+            await recordUsage({
+              orgId: 'default',
+              userId: userName || 'anonymous',
+              sessionId: sessionId,
+              segmentId: message.segmentId,
+              requested: {
+                tier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
+                voiceName: message.voiceName,
+                languageCode: message.languageCode
+              },
+              // No resolved route in error case
+              route: null,
+              characters: message.text.length,
+              audioSeconds: null,
+              status: 'failed',
+              errorCode: errorCode,
+              errorMessage: errorMessage
+            });
+          }
+        }
         // Listeners might send language changes
-        if (message.type === 'change_language' && message.targetLang) {
+        else if (message.type === 'change_language' && message.targetLang) {
           console.log(`[Listener] ${userName} changing language to ${message.targetLang}`);
-          
-          // Remove from old language group
-          sessionStore.removeListener(sessionId, socketId);
-          
-          // Add to new language group
-          sessionStore.addListener(sessionId, socketId, clientWs, message.targetLang, userName);
-          
+
+          // Update listener's language (removes from old group, adds to new group)
+          sessionStore.updateListenerLanguage(sessionId, socketId, message.targetLang);
+
           // Notify host about language change
           const updatedSession = sessionStore.getSession(sessionId);
           if (updatedSession && updatedSession.hostSocket && updatedSession.hostSocket.readyState === WebSocket.OPEN) {
@@ -468,7 +870,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               stats: stats
             }));
           }
-          
+
           if (clientWs.readyState === WebSocket.OPEN) {
             clientWs.send(JSON.stringify({
               type: 'language_changed',

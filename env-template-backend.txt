@@ -76,3 +76,40 @@ WS_API_RATE_LIMIT_ADAPTIVE_THRESHOLD=5
 # API WebSocket port (default: 5000, or same as PORT if not set)
 # WS_API_PORT=5000
 
+# ===================================
+# TTS (Text-to-Speech) Configuration
+# ===================================
+
+# Feature flag - must be explicitly enabled (default: false)
+TTS_ENABLED_DEFAULT=false
+
+# TTS provider (only "google" supported in v1)
+TTS_PROVIDER=google
+
+# TTS mode: "unary" (batch) or "streaming" (real-time chunks)
+# Default: unary
+TTS_MODE=unary
+
+# Model tier: "gemini" (default) | "chirp_hd" | "custom_voice"
+# gemini: Standard Gemini TTS (cost-efficient)
+# chirp_hd: High-definition Chirp 3 voices (premium, requires subscription)
+# custom_voice: Custom voice cloning (future)
+TTS_MODEL_TIER=gemini
+
+# Audio format for unary synthesis (batch mode)
+# Options: MP3 | OGG_OPUS | LINEAR16 | ALAW | MULAW | PCM
+# Default: MP3
+TTS_AUDIO_FORMAT_UNARY=MP3
+
+# Audio format for streaming synthesis (real-time chunks)
+# Options: PCM | OGG_OPUS | ALAW | MULAW
+# IMPORTANT: MP3 is NOT supported for streaming per Google TTS API constraints
+# Default: PCM
+TTS_AUDIO_FORMAT_STREAMING=PCM
+
+# Playing lease timeout (seconds) - prevents runaway billing
+# If a client is in "playing" state for longer than this without activity,
+# the server will automatically stop synthesis to prevent cost overruns
+# Default: 30 seconds
+TTS_PLAYING_LEASE_SECONDS=30
+

@@ -67,5 +67,6 @@ logs/
 backend/gen-lang-client-*.json
 backend/*-credentials.json
 backend/*-service-account.json
+.gcp/*.json
 *.json:Zone.Identifier
 

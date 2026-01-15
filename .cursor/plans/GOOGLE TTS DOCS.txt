@@ -1,0 +1,1569 @@
+GOOGLE TTS DOCS
+
+Gemini-TTS
+
+bookmark_border
+Try Gemini-TTS in Vertex AI Studio Try in Colab View notebook on GitHub
+Gemini-TTS is the latest evolution of our Cloud TTS technology that moves beyond natural-sounding speech and provides granular control over generated audio using text-based prompts. Using Gemini-TTS, you can synthesize single or multi-speaker speech from short snippets to long-form narratives, precisely dictating style, accent, pace, tone, and even emotional expression, all steerable through natural-language prompts.
+
+Available models
+Gemini-TTS includes the following available models:
+
+Gemini 2.5 Flash TTS
+Gemini 2.5 Flash Lite TTS (Preview)
+Gemini 2.5 Pro TTS
+Model ID	gemini-2.5-flash-tts
+Optimized for	Low latency, controllable, single- and multi-speaker Cloud TTS audio generation for cost-efficient everyday applications
+Input and output modalities	
+Input: Text
+Output: Audio
+Speaker number support	Single, multi-speaker
+Supported output audio formats	
+Unary: LINEAR16 (default), ALAW, MULAW, MP3, OGG_OPUS, PCM
+Streaming: PCM (default), ALAW, MULAW, OGG_OPUS
+Region support	See Available regions.
+Voice options	See Voice options.
+Available languages	See Available languages.
+Example	
+
+model: "gemini-2.5-flash-tts"
+prompt: "Say the following"
+text: "[extremely fast] Availability and terms may vary.
+       Check our website or your local store for complete
+       details and restrictions."
+speaker: "Kore"
+            
+Additional controls
+Additional controls and capabilities include the following:
+
+Natural conversation: Voice interactions of remarkable quality, more appropriate expressivity, and patterns of rhythm are delivered with very low latency so you can converse fluidly.
+
+Style control: Using natural language prompts, you can adapt the delivery within the conversation by steering it to adopt specific accents and produce a range of tones and expressions including a whisper.
+
+Dynamic performance: These models can bring text to life for expressive readings of poetry, newscasts, and engaging storytelling. They can also perform with specific emotions and produce accents when requested.
+
+Enhanced pace and pronunciation control: Controlling delivery speed helps to ensure more accuracy in pronunciation including specific words.
+
+For information on how to choose the right API to use these voices in your application, see Choose the right API.
+
+Voice options
+Gemini-TTS offers a wide range of voice options similar to our existing Chirp 3: HD Voices, each with distinct characteristics:
+
+Select voice type
+Name	Gender	Demo
+Achernar	Female	
+Achird	Male	
+Algenib	Male	
+Algieba	Male	
+Alnilam	Male	
+Aoede	Female	
+Autonoe	Female	
+Callirrhoe	Female	
+Charon	Male	
+Despina	Female	
+Enceladus	Male	
+Erinome	Female	
+Fenrir	Male	
+Gacrux	Female	
+Iapetus	Male	
+Kore	Female	
+Laomedeia	Female	
+Leda	Female	
+Orus	Male	
+Pulcherrima	Female	
+Puck	Male	
+Rasalgethi	Male	
+Sadachbia	Male	
+Sadaltager	Male	
+Schedar	Male	
+Sulafat	Female	
+Umbriel	Male	
+Vindemiatrix	Female	
+Zephyr	Female	
+Zubenelgenubi	Male	
+Available languages
+Gemini-TTS supports the following languages:
+
+Select launch stage
+Search by language or BCP-47 code
+Language	BCP-47 code	Launch readiness
+Arabic (Egypt)	ar-EG	GA
+Bangla (Bangladesh)	bn-BD	GA
+Dutch (Netherlands)	nl-NL	GA
+English (India)	en-IN	GA
+English (United States)	en-US	GA
+French (France)	fr-FR	GA
+German (Germany)	de-DE	GA
+Hindi (India)	hi-IN	GA
+Indonesian (Indonesia)	id-ID	GA
+Italian (Italy)	it-IT	GA
+Japanese (Japan)	ja-JP	GA
+Korean (South Korea)	ko-KR	GA
+Marathi (India)	mr-IN	GA
+Polish (Poland)	pl-PL	GA
+Portuguese (Brazil)	pt-BR	GA
+Romanian (Romania)	ro-RO	GA
+Russian (Russia)	ru-RU	GA
+Spanish (Spain)	es-ES	GA
+Tamil (India)	ta-IN	GA
+Telugu (India)	te-IN	GA
+Thai (Thailand)	th-TH	GA
+Turkish (Turkey)	tr-TR	GA
+Ukrainian (Ukraine)	uk-UA	GA
+Vietnamese (Vietnam)	vi-VN	GA
+Afrikaans (South Africa)	af-ZA	Preview
+Albanian (Albania)	sq-AL	Preview
+Amharic (Ethiopia)	am-ET	Preview
+Arabic (World)	ar-001	Preview
+Armenian (Armenia)	hy-AM	Preview
+Azerbaijani (Azerbaijan)	az-AZ	Preview
+Basque (Spain)	eu-ES	Preview
+Belarusian (Belarus)	be-BY	Preview
+Bulgarian (Bulgaria)	bg-BG	Preview
+Burmese (Myanmar)	my-MM	Preview
+Catalan (Spain)	ca-ES	Preview
+Cebuano (Philippines)	ceb-PH	Preview
+Chinese, Mandarin (China)	cmn-CN	Preview
+Chinese, Mandarin (Taiwan)	cmn-tw	Preview
+Croatian (Croatia)	hr-HR	Preview
+Czech (Czech Republic)	cs-CZ	Preview
+Danish (Denmark)	da-DK	Preview
+English (Australia)	en-AU	Preview
+English (United Kingdom)	en-GB	Preview
+Estonian (Estonia)	et-EE	Preview
+Filipino (Philippines)	fil-PH	Preview
+Finnish (Finland)	fi-FI	Preview
+French (Canada)	fr-CA	Preview
+Galician (Spain)	gl-ES	Preview
+Georgian (Georgia)	ka-GE	Preview
+Greek (Greece)	el-GR	Preview
+Gujarati (India)	gu-IN	Preview
+Haitian Creole (Haiti)	ht-HT	Preview
+Hebrew (Israel)	he-IL	Preview
+Hungarian (Hungary)	hu-HU	Preview
+Icelandic (Iceland)	is-IS	Preview
+Javanese (Java)	jv-JV	Preview
+Kannada (India)	kn-IN	Preview
+Konkani (India)	kok-IN	Preview
+Lao (Laos)	lo-LA	Preview
+Latin (Vatican City)	la-VA	Preview
+Latvian (Latvia)	lv-LV	Preview
+Lithuanian (Lithuania)	lt-LT	Preview
+Luxembourgish (Luxembourg)	lb-LU	Preview
+Macedonian (North Macedonia)	mk-MK	Preview
+Maithili (India)	mai-IN	Preview
+Malagasy (Madagascar)	mg-MG	Preview
+Malay (Malaysia)	ms-MY	Preview
+Malayalam (India)	ml-IN	Preview
+Mongolian (Mongolia)	mn-MN	Preview
+Nepali (Nepal)	ne-NP	Preview
+Norwegian, Bokmål (Norway)	nb-NO	Preview
+Norwegian, Nynorsk (Norway)	nn-NO	Preview
+Odia (India)	or-IN	Preview
+Pashto (Afghanistan)	ps-AF	Preview
+Persian (Iran)	fa-IR	Preview
+Portuguese (Portugal)	pt-PT	Preview
+Punjabi (India)	pa-IN	Preview
+Serbian (Serbia)	sr-RS	Preview
+Sindhi (India)	sd-IN	Preview
+Sinhala (Sri Lanka)	si-LK	Preview
+Slovak (Slovakia)	sk-SK	Preview
+Slovenian (Slovenia)	sl-SI	Preview
+Spanish (Latin America)	es-419	Preview
+Spanish (Mexico)	es-MX	Preview
+Swahili (Kenya)	sw-KE	Preview
+Swedish (Sweden)	sv-SE	Preview
+Urdu (Pakistan)	ur-PK	Preview
+Available regions
+Gemini-TTS is available multiple regions, through Cloud Text-to-Speech API or Vertex AI API.
+
+The ML processing for these models occurs within the specific region or multi-region where the request is made. For more information , see Data residency.
+
+For Cloud Text-to-Speech API, the following regions are supported:
+
+Region	Country or Jurisdiction	Available models
+global	Global (Non-DRZ)	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+us	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+eu	European Union	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+northamerica-northeast1	Canada	gemini-2.5-flash-tts
+gemini-2.5-flash-lite-preview-tts
+These regions can be accessed using the following API endpoints: <REGION>-texttospeech.googleapis.com. Note the global region doesn't have a prefix: texttospeech.googleapis.com.
+
+For Vertex AI API, the following regions are supported:
+
+Region	Country or Jurisdiction	Available models
+global	Global (Non-DRZ)	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+europe-central2	European Union	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+europe-north1	European Union	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+europe-southwest1	European Union	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+europe-west1	European Union	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+europe-west4	European Union	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+northamerica-northeast1	Canada	gemini-2.5-flash-tts
+gemini-2.5-flash-lite-preview-tts
+us-central1	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+us-east1	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+us-east4	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+us-east5	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+us-south1	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+us-west1	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+us-west4	United States	gemini-2.5-flash-tts
+gemini-2.5-pro-tts
+gemini-2.5-flash-lite-preview-tts
+These regions can be accessed using the following API endpoints: <REGION>-aiplatform.googleapis.com. Note the global region doesn't have a prefix: aiplatform.googleapis.com.
+
+Choose the right API
+Discover how to use Gemini-TTS models to synthesize single-speaker and multi-speaker speech using Cloud Text-to-Speech API or Vertex AI API.
+
+Gemini-TTS is available through two APIs to help simplify the integration process for clients. Cloud Text-to-Speech API and Vertex AI API, with REST endpoints and SDKs in multiple programming languages.
+
+Here are some guidelines to help you choose the right API.
+
+If the following applies, choose Cloud Text-to-Speech API:
+
+If you are using Chirp 3 HD or other voices, then you can continue to use the same Cloud Text-to-Speech API with minimal incremental updates.
+If you need specific output encoding types, Cloud Text-to-Speech API can specify audio encoding. In Vertex AI API, the output is PCM 16bit 24k audio data, and doesn't have WAV headers. If you want to convert to another audio format, then the conversion needs to be handled from the client side.
+If you must stream text in multiple chunks, Cloud Text-to-Speech API supports multiple requests and multiple responses interaction. In contrast, Vertex AI API supports single request and multiple responses.
+If the following applies, choose Vertex AI API:
+
+If you are already using Gemini-TTS from AI Studio, you can switch to Vertex AI seamlessly to take advantage of the scalability and compliance of Google Cloud.
+If you are using Vertex AI API for other models, then the unified api structure makes it easier to start using Gemini-TTS by specifying the model name and voice selection options.
+Use Cloud Text-to-Speech API
+Note: The size of the text field and the prompt field individually can be at most 4,000 bytes. While the total size of the prompt and text fields can be up to 8,000 bytes, each field must be a maximum of 4000 bytes. The output audio can at most be around 655 seconds. If the input text amounts to audio longer than this limit, the audio will be truncated.
+Optionally specify audio formats and sampling rates in "audioConfig" field if non-default options are needed.
+
+Description	Limit	Type
+Text field	Less than or equal to 4,000 bytes.	Input
+Prompt field	Less than or equal to 4,000 bytes.	Input
+Text and prompt fields	Less than or equal to 8,000 bytes.	Input
+Duration for the output audio	Approximately 655 seconds. If the input text results in the audio exceeding 655 seconds, the audio is truncated.	Output
+Note: To be able to use Gemini-TTS, aiplatform.endpoints.predict permission is required for the model endpoint. This permission can be granted with the roles/aiplatform.user role.
+Before you begin
+Before you can begin using Cloud Text-to-Speech, you must enable the API in the Google Cloud console by following steps:
+
+Enable Cloud Text-to-Speech on a project.
+Make sure billing is enabled for Cloud Text-to-Speech.
+Set up authentication for your development environment.
+Assign aiplatform.endpoints.predict permission for the authenticated user. This permission can be granted with the roles/aiplatform.user role.
+Select the correct API endpoint based on Available regions.
+Set up your Google Cloud project
+Sign in to Google Cloud console
+
+Go to the project selector page
+
+You can either choose an existing project or create a new one. For more details about creating a project, see the Google Cloud documentation.
+
+If you create a new project, a message appears informing you to link a billing account. If you are using a pre-existing project, make sure to enable billing
+
+Learn how to confirm that billing is enabled for your project
+
+Note: You must enable billing to use Cloud Text-to-Speech API, however, you won't be be charged unless you exceed the free quota. For more information about pricing, see the pricing page.
+After you've selected a project and linked it to a billing account, you can enable the Cloud Text-to-Speech API. Go to the Search products and resources bar at the top of the page, and type in "speech". Select the Cloud Text-to-Speech API from the list of results.
+
+To try Cloud Text-to-Speech without linking it to your project, choose the Try this API option. To enable the Cloud Text-to-Speech API for use with your project, click Enable.
+
+Set up authentication for your development environment. For instructions, see Set up authentication for Cloud Text-to-Speech.
+
+Setting API endpoint for preferred region
+You can pick an endpoint based on Available regions.
+
+Python
+CURL
+
+
+import os
+from google.cloud import texttospeech
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+TTS_LOCATION = os.getenv("GOOGLE_CLOUD_REGION")
+
+API_ENDPOINT = (
+    f"{TTS_LOCATION}-texttospeech.googleapis.com"
+    if TTS_LOCATION != "global"
+    else "texttospeech.googleapis.com"
+)
+client = texttospeech.TextToSpeechClient(
+    client_options=ClientOptions(api_endpoint=API_ENDPOINT)
+)
+Perform synchronous single-speaker synthesis
+Python
+CURL
+
+
+# google-cloud-texttospeech minimum version 2.29.0 is required.
+
+import os
+from google.cloud import texttospeech
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+
+def synthesize(prompt: str, text: str, output_filepath: str = "output.mp3"):
+    """Synthesizes speech from the input text and saves it to an MP3 file.
+
+    Args:
+        prompt: Styling instructions on how to synthesize the content in
+          the text field.
+        text: The text to synthesize.
+        output_filepath: The path to save the generated audio file.
+          Defaults to "output.mp3".
+    """
+    client = texttospeech.TextToSpeechClient()
+
+    synthesis_input = texttospeech.SynthesisInput(text=text, prompt=prompt)
+
+    # Select the voice you want to use.
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="en-US",
+        name="Charon",  # Example voice, adjust as needed
+        model_name="gemini-2.5-pro-tts"
+    )
+
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3
+    )
+
+    # Perform the text-to-speech request on the text input with the selected
+    # voice parameters and audio file type.
+    response = client.synthesize_speech(
+        input=synthesis_input, voice=voice, audio_config=audio_config
+    )
+
+    # The response's audio_content is binary.
+    with open(output_filepath, "wb") as out:
+        out.write(response.audio_content)
+        print(f"Audio content written to file: {output_filepath}")
+Perform streaming single-speaker synthesis
+Streaming synthesis is suitable for real-time applications where fast response is critical for the user experience. In streaming connection, the API returns audio as it becomes available in small chunks.
+
+As the caller of the API, make sure to consume the audio chunks, passing them down to your clients as they arrive (for example, using socketio for web apps).
+
+Cloud Text-to-Speech API supports multiple request multiple response type streaming. While it's possible to send the input chunks to the API asynchronously as shown in the request_generator, the API only starts synthesizing when the client sends Half-Close as a signal that it won't send any more data to the API.
+
+The prompt field must be set in the first input chunk, because it's ignored in consecutive chunks.
+
+Python
+
+
+# google-cloud-texttospeech minimum version 2.29.0 is required.
+
+import datetime
+import os
+import numpy as np
+from google.cloud import texttospeech
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+
+def synthesize(prompt: str, text_chunks: list[str], model: str, voice: str, locale: str):
+    """Synthesizes speech from the input text.
+
+    Args:
+        prompt: Styling instructions on how to synthesize the content in
+          the text field.
+        text_chunks: Text chunks to synthesize. Note that The synthesis will 
+          start when the client initiates half-close. 
+        model: gemini tts model name. gemini-2.5-flash-tts, gemini-2.5-flash-lite-preview-tts, and gemini-2.5-pro-tts
+        voice: voice name. Example: leda, kore. Refer to available voices
+        locale: locale name. Example: en-us. Refer to available locales. 
+    """
+    client = texttospeech.TextToSpeechClient()
+
+    config_request = texttospeech.StreamingSynthesizeRequest(
+        streaming_config=texttospeech.StreamingSynthesizeConfig(
+            voice=texttospeech.VoiceSelectionParams(
+                name=voice,
+                language_code=locale,
+                model_name=model
+            )
+        )
+    )
+
+    # Example request generator. A function like this can be linked to an LLM
+    # text generator and the text can be passed to the TTS API asynchronously.
+    def request_generator():
+      yield config_request
+
+      for i, text in enumerate(text_chunks):
+        yield texttospeech.StreamingSynthesizeRequest(
+            input=texttospeech.StreamingSynthesisInput(
+              text=text, 
+              # Prompt is only supported in the first input chunk.
+              prompt=prompt if i == 0 else None,
+            )
+        )
+
+    request_start_time = datetime.datetime.now()
+    streaming_responses = client.streaming_synthesize(request_generator())
+
+    is_first_chunk_received = False
+    final_audio_data = np.array([])
+    num_chunks_received = 0
+    for response in streaming_responses:
+        # just a simple progress indicator
+        num_chunks_received += 1
+        print(".", end="")
+        if num_chunks_received % 40 == 0:
+            print("")
+
+        # measuring time to first audio
+        if not is_first_chunk_received:
+            is_first_chunk_received = True
+            first_chunk_received_time = datetime.datetime.now()
+
+        # accumulating audio. In a web-server scenario, you would want to 
+        # "emit" audio to the frontend as soon as it arrives.
+        #
+        # For example using flask socketio, you could do the following
+        # from flask_socketio import SocketIO, emit
+        # emit("audio", response.audio_content)
+        # socketio.sleep(0)
+        audio_data = np.frombuffer(response.audio_content, dtype=np.int16)
+        final_audio_data = np.concatenate((final_audio_data, audio_data))
+
+    time_to_first_audio = first_chunk_received_time - request_start_time
+    time_to_completion = datetime.datetime.now() - request_start_time
+    audio_duration = len(final_audio_data) / 24_000  # default sampling rate.
+
+    print("\n")
+    print(f"Time to first audio: {time_to_first_audio.total_seconds()} seconds")
+    print(f"Time to completion: {time_to_completion.total_seconds()} seconds")
+    print(f"Audio duration: {audio_duration} seconds")
+
+    return final_audio_data
+Perform synchronous multi-speaker synthesis with freeform text input
+Note: The combined size of all lines of dialogue can be at most 4,000 bytes. While the total size of the prompt and dialogue can be up to 4,000 bytes, each prompt and dialogue field must be a maximum of 4,000 bytes. Speaker aliases must consist solely of alphanumeric characters, excluding whitespace.
+Description	Constraints & Limits	Type
+Text field	Less than or equal to 4,000 bytes	Input
+Prompt field	Less than or equal to 4,000 bytes	Input
+Text and prompt fields	Less than or equal to 8,000 bytes	Input
+Speaker aliases	Alphanumeric characters and no whitespace	Input
+Duration for the output audio	Approximately 655 seconds. If the input text results in the audio exceeding 655 seconds, the audio is truncated.	Output
+Python
+CURL
+
+
+# google-cloud-texttospeech minimum version 2.31.0 is required.
+
+import os
+from google.cloud import texttospeech
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+
+def synthesize_multispeaker_freeform(
+    prompt: str,
+    text: str,
+    output_filepath: str = "output_non_turn_based.wav",
+):
+    """Synthesizes speech from non-turn-based input and saves it to a WAV file.
+
+    Args:
+        prompt: Styling instructions on how to synthesize the content in the
+          text field.
+        text: The text to synthesize, containing speaker aliases to indicate
+          different speakers. Example: "Sam: Hi Bob!\nBob: Hi Sam!"
+        output_filepath: The path to save the generated audio file. Defaults to
+          "output_non_turn_based.wav".
+    """
+    client = texttospeech.TextToSpeechClient()
+
+    synthesis_input = texttospeech.SynthesisInput(text=text, prompt=prompt)
+
+    multi_speaker_voice_config = texttospeech.MultiSpeakerVoiceConfig(
+        speaker_voice_configs=[
+            texttospeech.MultispeakerPrebuiltVoice(
+                speaker_alias="Speaker1",
+                speaker_id="Kore",
+            ),
+            texttospeech.MultispeakerPrebuiltVoice(
+                speaker_alias="Speaker2",
+                speaker_id="Charon",
+            ),
+        ]
+    )
+
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="en-US",
+        model_name="gemini-2.5-pro-tts",
+        multi_speaker_voice_config=multi_speaker_voice_config,
+    )
+
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+        sample_rate_hertz=24000,
+    )
+
+    response = client.synthesize_speech(
+        input=synthesis_input, voice=voice, audio_config=audio_config
+    )
+
+    with open(output_filepath, "wb") as out:
+        out.write(response.audio_content)
+        print(f"Audio content written to file: {output_filepath}")
+Perform synchronous multi-speaker synthesis with structured text input
+Multi-speaker with structured text input enables intelligent verbalization of text in a human-like way. For example, this kind of input is useful for addresses and dates. Freeform text input speaks the text exactly as written.
+
+Note: Speaker aliases must consist solely of alphanumeric characters, excluding whitespace. The combined size of all lines of dialogue can be at most 4,000 bytes. While the total size of the prompt and dialogue can be up to 4,000 bytes, each prompt and dialogue field must be a maximum of 4,000 bytes.
+Description	Constraints & Limits	Type
+MultiSpeakerMarkUp field	Less than or equal to 4,000 bytes	Input
+Prompt field	Less than or equal to 4,000 bytes	Input
+MultiSpeakerMarkUp and prompt fields	Less than or equal to 8,000 bytes	Input
+Speaker aliases	Alphanumeric characters and no whitespace	Input
+Duration for the output audio	Approximately 655 seconds. If the input text results in the audio exceeding 655 seconds, the audio is truncated.	Output
+Python
+CURL
+
+
+# google-cloud-texttospeech minimum version 2.31.0 is required.
+
+import os
+from google.cloud import texttospeech
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+
+def synthesize_multispeaker_structured(
+    prompt: str,
+    turns: list[texttospeech.MultiSpeakerMarkup.Turn],
+    output_filepath: str = "output_turn_based.wav",
+):
+    """Synthesizes speech from turn-based input and saves it to a WAV file.
+
+    Args:
+        prompt: Styling instructions on how to synthesize the content in the
+          text field.
+        turns: A list of texttospeech.MultiSpeakerMarkup.Turn objects representing
+          the dialogue turns.
+        output_filepath: The path to save the generated audio file. Defaults to
+          "output_turn_based.wav".
+    """
+    client = texttospeech.TextToSpeechClient()
+
+    synthesis_input = texttospeech.SynthesisInput(
+        multi_speaker_markup=texttospeech.MultiSpeakerMarkup(turns=turns),
+        prompt=prompt,
+    )
+
+    multi_speaker_voice_config = texttospeech.MultiSpeakerVoiceConfig(
+        speaker_voice_configs=[
+            texttospeech.MultispeakerPrebuiltVoice(
+                speaker_alias="Speaker1",
+                speaker_id="Kore",
+            ),
+            texttospeech.MultispeakerPrebuiltVoice(
+                speaker_alias="Speaker2",
+                speaker_id="Charon",
+            ),
+        ]
+    )
+
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="en-US",
+        model_name="gemini-2.5-pro-tts",
+        multi_speaker_voice_config=multi_speaker_voice_config,
+    )
+
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+        sample_rate_hertz=24000,
+    )
+
+    response = client.synthesize_speech(
+        input=synthesis_input, voice=voice, audio_config=audio_config
+    )
+
+    with open(output_filepath, "wb") as out:
+        out.write(response.audio_content)
+        print(f"Audio content written to file: {output_filepath}")
+Use Vertex AI API
+Discover how to use Gemini-TTS models to synthesize single-speaker and multi-speaker speech using Vertex AI API.
+
+In Cloud Text-to-Speech API, the user can provide text and prompt fields separately. In Vertex AI API, this is a single contents field, where it specifies the input in the form of "{prompt}: {text}", eg. "Say the following in a curious way: OK, so... tell me about this AI thing."
+
+Note: The total size of the prompt and text fields can be up to 8,000 bytes. The output audio can at most be around 655 seconds. If the input text amounts to audio longer than this limit, the audio is truncated.
+Description	Limit	Type
+Contents field	Less than or equal to 8,000 bytes.	Input
+Duration for the output audio	Approximately 655 seconds. If the input text results in the audio exceeding 655 seconds, the audio is truncated.	Output
+Before you begin
+Before you can begin, follow the installation steps for Vertex AI API. To take advantage of data residency options, make sure to set the LOCATION based on Available regions.
+
+Perform synchronous single-speaker synthesis
+These code samples demonstrate how to perform synchronous single-speaker synthesis.
+
+Python
+CURL
+
+
+from google import genai
+from google.genai import types
+import wave
+import os
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
+
+# Set up the wave file to save the output:
+def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
+  with wave.open(filename, "wb") as wf:
+      wf.setnchannels(channels)
+      wf.setsampwidth(sample_width)
+      wf.setframerate(rate)
+      wf.writeframes(pcm)
+
+client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
+
+response = client.models.generate_content(
+  model="gemini-2.5-flash-tts",
+  contents="Say the following in a curious way: OK, so... tell me about this [uhm] AI thing.",
+  config=types.GenerateContentConfig(
+      speech_config=types.SpeechConfig(
+        language_code="en-in",
+        voice_config=types.VoiceConfig(
+            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+              voice_name='Kore',
+            )
+        )
+      ),
+  )
+)
+
+data = response.candidates[0].content.parts[0].inline_data.data
+
+file_name='output_speech.wav'
+wave_file(file_name, data) # Saves the file to current directory
+Perform streaming single-speaker synthesis
+In Vertex AI API, unidirectional streaming is supported, that is, the client sends a single request and receives a stream of responses.
+
+This code sample demonstrates how to perform streaming single-speaker synthesis.
+
+Python
+
+
+from google import genai
+from google.genai import types
+import wave
+import os
+import datetime
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
+
+# Set up the wave file to save the output:
+def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
+  with wave.open(filename, "wb") as wf:
+      wf.setnchannels(channels)
+      wf.setsampwidth(sample_width)
+      wf.setframerate(rate)
+      wf.writeframes(pcm)
+
+def synthesize(text: str, model: str, voice: str, locale: str):
+    """Synthesizes speech from the input text.
+
+    Args:
+        text: Text to synthesize.
+        model: gemini tts model name. gemini-2.5-flash-tts, gemini-2.5-flash-lite-preview-tts, and gemini-2.5-pro-tts
+        voice: voice name. Example: leda, kore. Refer to available voices
+        locale: locale name. Example: en-us. Refer to available locales.
+    """
+    client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
+
+    generate_content_config=types.GenerateContentConfig(
+        speech_config=types.SpeechConfig(
+          language_code=locale,
+          voice_config=types.VoiceConfig(
+              prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                voice_name=voice,
+              )
+          )
+        ),
+    )
+
+    request_start_time = datetime.datetime.now()
+    is_first_chunk_received = False
+    final_audio_data = bytes()
+    num_chunks_received = 0
+
+    for chunk in client.models.generate_content_stream(
+        model=model,
+        contents=text,
+        config=generate_content_config,
+    ):
+        # just a simple progress indicator
+        num_chunks_received += 1
+        print(".", end="")
+        if num_chunks_received % 40 == 0:
+            print("")
+        # measuring time to first audio
+        if not is_first_chunk_received:
+            is_first_chunk_received = True
+            first_chunk_received_time = datetime.datetime.now()
+
+        if (
+            chunk.candidates is None
+            or not chunk.candidates
+            or chunk.candidates[0].content is None
+            or not chunk.candidates[0].content.parts
+        ):
+            continue
+        part = chunk.candidates[0].content.parts[0]
+        if part.inline_data and part.inline_data.data:
+          # accumulating audio. In a web-server scenario, you would want to
+          # "emit" audio to the frontend as soon as it arrives.
+          #
+          # For example using flask socketio, you could do the following
+          # from flask_socketio import SocketIO, emit
+          # emit("audio", chunk.candidates[0].content.parts[0].inline_data.data)
+          # socketio.sleep(0)
+          final_audio_data += chunk.candidates[0].content.parts[0].inline_data.data
+
+    time_to_first_audio = first_chunk_received_time - request_start_time
+    time_to_completion = datetime.datetime.now() - request_start_time
+
+    print("\n")
+    print(f"Time to first audio: {time_to_first_audio.total_seconds()} seconds")
+    print(f"Time to completion: {time_to_completion.total_seconds()} seconds")
+
+    return final_audio_data
+
+audio_data = synthesize(
+    "Say the following in a curious way: Radio Bakery is a New York City gem, celebrated for its exceptional and creative baked goods. The pistachio croissant is often described as a delight with perfect sweetness. The rhubarb custard croissant is a lauded masterpiece of flaky pastry and tart filling. The brown butter corn cake stands out with its crisp edges and rich flavor. Despite the bustle, the staff consistently receives praise for being friendly and helpful.",
+    "gemini-2.5-flash-tts",
+    "Kore",
+    "en-in")
+file_name='output_speech.wav'
+wave_file(file_name, audio_data)
+
+Audio("output_speech.wav")
+Perform synchronous multi-speaker synthesis
+This code sample demonstrates how to perform synchronous multi-speaker synthesis.
+
+Python
+CURL
+
+
+from google import genai
+from google.genai import types
+import wave
+import os
+import datetime
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
+
+prompt = """TTS the following conversation between Joe and Jane:
+        Joe: How's it going today Jane?
+        Jane: Not too bad, how about you?"""
+
+# Set up the wave file to save the output:
+def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
+  with wave.open(filename, "wb") as wf:
+      wf.setnchannels(channels)
+      wf.setsampwidth(sample_width)
+      wf.setframerate(rate)
+      wf.writeframes(pcm)
+
+client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
+
+response = client.models.generate_content(
+  model="gemini-2.5-flash-preview-tts",
+  contents=prompt,
+  config=types.GenerateContentConfig(
+      speech_config=types.SpeechConfig(
+        language_code="en-in",
+        multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
+            speaker_voice_configs=[
+              types.SpeakerVoiceConfig(
+                  speaker='Joe',
+                  voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name='Kore',
+                    )
+                  )
+              ),
+              types.SpeakerVoiceConfig(
+                  speaker='Jane',
+                  voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name='Puck',
+                    )
+                  )
+              ),
+            ]
+        )
+      )
+  )
+)
+
+data = response.candidates[0].content.parts[0].inline_data.data
+
+file_name='output_speech.wav'
+wave_file(file_name, data) # Saves the file to current directory
+
+Audio("output_speech.wav")
+Perform streaming multi-speaker synthesis
+In Vertex AI API, unidirectional streaming is supported, that is, the client sends a single request and receives a stream of responses.
+
+This code sample demonstrates how to perform streaming multi-speaker synthesis.
+
+Python
+
+
+from google import genai
+from google.genai import types
+import wave
+import os
+import datetime
+
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+LOCATION = os.environ.get("GOOGLE_CLOUD_REGION", "global")
+
+prompt = """TTS the following conversation between Joe and Jane:
+        Joe: How's it going today Jane?
+        Jane: Not too bad! Honestly, I'm just blown away by this new Gemini Text-to-Speech model.
+        Joe: Right?! This is a total game changer! And do you know what I just discovered?
+        Jane: What?
+        Joe: You can use the multi-speaker configuration to create a conversation, just like us!
+        Jane: Just like us!"""
+
+# Set up the wave file to save the output:
+def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
+  with wave.open(filename, "wb") as wf:
+      wf.setnchannels(channels)
+      wf.setsampwidth(sample_width)
+      wf.setframerate(rate)
+      wf.writeframes(pcm)
+
+def synthesize(text: str, model: str, voice: str, locale: str):
+    """Synthesizes speech from the input text.
+
+    Args:
+        text: Text to synthesize. Note that The synthesis will start when the
+          client initiates half-close.
+        model: gemini tts model name. gemini-2.5-flash-tts, gemini-2.5-flash-lite-preview-tts, and gemini-2.5-pro-tts
+        voice: voice name. Example: leda, kore. Refer to available voices
+        locale: locale name. Example: en-us. Refer to available locales.
+    """
+    client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
+
+    generate_content_config=types.GenerateContentConfig(
+        speech_config=types.SpeechConfig(
+        language_code="en-in",
+        multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
+            speaker_voice_configs=[
+              types.SpeakerVoiceConfig(
+                  speaker='Joe',
+                  voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name='Kore',
+                    )
+                  )
+              ),
+              types.SpeakerVoiceConfig(
+                  speaker='Jane',
+                  voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name='Puck',
+                    )
+                  )
+              ),
+            ]
+        )
+      )
+    )
+
+    request_start_time = datetime.datetime.now()
+    is_first_chunk_received = False
+    final_audio_data = bytes()
+    num_chunks_received = 0
+
+    for chunk in client.models.generate_content_stream(
+        model=model,
+        contents=text,
+        config=generate_content_config,
+    ):
+        # just a simple progress indicator
+        num_chunks_received += 1
+        print(".", end="")
+        if num_chunks_received % 40 == 0:
+            print("")
+        # measuring time to first audio
+        if not is_first_chunk_received:
+            is_first_chunk_received = True
+            first_chunk_received_time = datetime.datetime.now()
+
+        if (
+            chunk.candidates is None
+            or not chunk.candidates
+            or chunk.candidates[0].content is None
+            or not chunk.candidates[0].content.parts
+        ):
+            continue
+        part = chunk.candidates[0].content.parts[0]
+        if part.inline_data and part.inline_data.data:
+          # accumulating audio. In a web-server scenario, you would want to
+          # "emit" audio to the frontend as soon as it arrives.
+          #
+          # For example using flask socketio, you could do the following
+          # from flask_socketio import SocketIO, emit
+          # emit("audio", chunk.candidates[0].content.parts[0].inline_data.data)
+          # socketio.sleep(0)
+          final_audio_data += chunk.candidates[0].content.parts[0].inline_data.data
+
+    time_to_first_audio = first_chunk_received_time - request_start_time
+    time_to_completion = datetime.datetime.now() - request_start_time
+
+    print("\n")
+    print(f"Time to first audio: {time_to_first_audio.total_seconds()} seconds")
+    print(f"Time to completion: {time_to_completion.total_seconds()} seconds")
+
+    return final_audio_data
+
+audio_data = synthesize(
+    prompt,
+    "gemini-2.5-flash-tts",
+    "Kore",
+    "en-in")
+file_name='output_speech.wav'
+wave_file(file_name, audio_data)
+
+Audio("output_speech.wav")
+Perform speech synthesis in Media Studio
+Permissions required for this task
+You can use the Media Studio in the Google Google Cloud console to experiment with text-to-speech models. This provides a user interface for quickly generating, listening to synthesized audio and experimenting with different style instructions and parameters.
+
+In the Google Google Cloud console, go to the Vertex AI Studio > Media Studio page.
+
+Media Studio
+
+Select Speech from the media drop-down.
+
+In the text field, enter the text you want to synthesize into speech.
+
+In the Settings pane, configure the following settings:
+
+Model: Select the Cloud TTS (TTS) model that you want to use, such as Gemini 2.5 Pro TTS. For more information about available models, see Cloud TTS models.
+Style instructions: Optional: Enter a text prompt that describes the selected speaking style, tone, and emotional delivery. This lets you to guide the model's performance beyond the default narration. For example: "Narrate in a calm, professional tone for a documentary.".
+Language: Select the language and region of the input text. The model generates speech in the selected language and accent. For example, English (United States).
+Voice: Choose a predefined voice for the narration. The list contains the available voices for the selected model and language, such as Acherner (Female).
+Optional: Expand the Advanced options section to configure technical audio settings:
+
+Audio encoding: Select the encoding for the output audio file. LINEAR16 is a lossless, uncompressed format suitable for high-quality audio processing. MULAW is also available for compressed audio output.
+Audio sample rate: Select the sample rate in hertz (Hz). This determines the audio quality. Higher values like 44,100 Hz represent higher fidelity audio, equivalent to CD quality.
+Speed: Adjust the speaking rate by moving the slider or entering a value. Values less than 1 slow down the speech, and values greater than 1 speed it up. The default is 1.
+Volume gain (db): Adjust the volume of the output audio in decibels (dB). Positive values increase the volume, and negative values decrease it. The default is 0.
+Click the send icon at the right of the text-box to generate the audio.
+
+The generated audio appears in the media player. Click the play button to listen to the output. You can continue to adjust the settings, and generate new versions as needed.
+
+Prompting tips
+Creating engaging and natural-sounding audio from text requires understanding the nuances of spoken language and translating them into script form. The following tips will help you craft scripts that sound authentic and capture the chosen tone.
+
+The three levers of speech control
+For the most predictable and nuanced results, ensure all three of the following components are consistent with your desired output.
+
+Style Prompt The primary driver of the overall emotional tone and delivery. The prompt sets the context for the entire speech segment.
+
+Example: You are an AI assistant speaking in a friendly and helpful tone.
+
+Example: Narrate this in the calm, authoritative tone of a nature documentary narrator.
+
+Text Content The semantic meaning of the words you are synthesizing. An evocative phrase that is emotionally consistent with the style prompt will produce much more reliable results than neutral text.
+
+Good: A prompt for a scared tone works best with text like I think someone is in the house.
+
+Less Effective: A prompt for a scared tone with text like The meeting is at 4 PM. will produce ambiguous results.
+
+Markup Tags (Preview) Bracketed tags like [sigh] are best used for injecting a specific, localized action or style modification, not for setting the overall tone. They work in concert with the style prompt and text content.
+
+Markup tag guide
+Preview
+
+This product or feature is subject to the "Pre-GA Offerings Terms" in the General Service Terms section of the Service Specific Terms. Pre-GA products and features are available "as is" and might have limited support. For more information, see the launch stage descriptions.
+
+Our research shows that bracketed markup tags operate in one of three distinct modes. Understanding a tag's mode is key to using it effectively.
+
+Mode 1: Non-speech sounds
+The markup is replaced by an audible, non-speech vocalization (e.g., a sigh, a laugh). The tag itself is not spoken. These are excellent for adding realistic, human-like hesitations and reactions.
+
+Tag	Behavior	Reliability	Guidance
+[sigh]	Inserts a sigh sound.	High	The emotional quality of the sigh is influenced by the prompt.
+[laughing]	Inserts a laugh.	High	For best results, use a specific prompt. e.g., a generic prompt may yield a laugh of shock, while "react with an amused laugh" creates a laugh of amusement.
+[uhm]	Inserts a hesitation sound.	High	Useful for creating a more natural, conversational feel.
+Mode 2: Style modifiers
+The markup is not spoken, but it modifies the delivery of the subsequent speech. The scope and duration of the modification can vary.
+
+Tag	Behavior	Reliability	Guidance
+[sarcasm]	Imparts a sarcastic tone on the subsequent phrase.	High	This tag is a powerful modifier. It demonstrates that abstract concepts can successfully steer the model's delivery.
+[robotic]	Makes the subsequent speech sound robotic.	High	The effect can extend across an entire phrase. A supportive style prompt (e.g., "Say this in a robotic way") is still recommended for best results.
+[shouting]	Increases the volume of the subsequent speech.	High	Most effective when paired with a matching style prompt (e.g., "Shout this next part") and text that implies yelling.
+[whispering]	Decreases the volume of the subsequent speech.	High	Best results are achieved when the style prompt is also explicit (e.g., "now whisper this part as quietly as you can").
+[extremely fast]	Increases the speed of the subsequent speech.	High	Ideal for disclaimers or fast-paced dialogue. Minimal prompt support needed.
+Mode 3: Vocalized markup (adjectives)
+The markup tag itself is spoken as a word, while also influencing the tone of the entire sentence. This behavior typically applies to emotional adjectives.
+
+Warning: Because the tag itself is spoken, this mode is likely an undesired side effect for most use cases. Prefer using the Style Prompt to set these emotional tones instead.
+
+Tag	Behavior	Reliability	Guidance
+[scared]	The word "scared" is spoken, and the sentence adopts a scared tone.	High	Performance is highly dependent on text content. The phrase "I just heard a window break" produces a genuinely scared result. A neutral phrase produces a "spooky" but less authentic result.
+[curious]	The word "curious" is spoken, and the sentence adopts a curious tone.	High	Use an inquisitive phrase to support the tag's intent.
+[bored]	The word "bored" is spoken, and the sentence adopts a bored, monotone delivery.	High	Use with text that is mundane or repetitive for best effect.
+Mode 4: Pacing and pauses
+These tags insert silence into the generated audio, giving you granular control over rhythm, timing, and pacing. Standard punctuation (commas, periods, semicolons) will also create natural pauses, but these tags offer more explicit control.
+
+Tag	Behavior	Reliability	Guidance
+[short pause]	Inserts a brief pause, similar to a comma (~250ms).	High	Use to separate clauses or list items for better clarity.
+[medium pause]	Inserts a standard pause, similar to a sentence break (~500ms).	High	Effective for separating distinct sentences or thoughts.
+[long pause]	Inserts a significant pause for dramatic effect (~1000ms+).	High	Use for dramatic timing. For example: "The answer is... [long pause] ...no." Avoid overuse, as it can sound unnatural.
+Key strategies for reliable results
+Align all three levers: For maximum predictability, ensure your Style Prompt, Text Content, and any Markup Tags are all semantically consistent and working toward the same goal.
+
+Use emotionally rich text: Don't rely on prompts and tags alone. Give the model rich, descriptive text to work with. This is especially critical for nuanced emotions like sarcasm, fear, or excitement.
+
+Write specific, detailed prompts: The more specific your style prompt, the more reliable the result. "React with an amused laugh" is better than just [laughing]. "Speak like a 1940s radio news announcer" is better than "Speak in an old-fashioned way."
+
+Test and verify new tags: The behavior of a new or untested tag is not always predictable. A tag you assume is a style modifier might be vocalized. Always test a new tag or prompt combination to confirm its behavior before deploying to production.
+
+Relaxing safety filters
+Accounts with monthly invoiced billing can configure requests to relax safety filters using the relax_safety_filters field under AdvancedVoiceOptions. The relax_safety_filters field is only enabled for accounts with monthly invoiced billing.
+
+Relaxing safety filters will lower the threshold of blocking harmful content from being synthesized.
+
+These code examples demonstrate how to customize safety configurations in Cloud Text-to-Speech API. For usage in Vertex AI API, refer to Vertex AI API examples.
+
+Python
+CURL
+
+
+# google-cloud-texttospeech minimum version 2.32.0 is required.
+request = texttospeech.SynthesizeSpeechRequest(
+    input=synthesis_input,
+    voice=voice,
+    audio_config=audio_config,
+    advanced_voice_options=texttospeech.AdvancedVoiceOptions(
+        relax_safety_filters=True,
+    ),
+)
+# Perform the text-to-speech request on the text input with the selected
+# voice parameters and audio file type.
+response = client.synthesize_speech(request=request)
+Chirp 3: HD voices
+
+bookmark_border
+Try Chirp 3: HD voices in Vertex AI Studio Try in Colab View notebook on GitHub
+Cloud TTS Chirp 3: HD voices represent the latest generation of Text-to-Speech technology. Powered by our latest generation of generative models, these voices deliver realism and emotional resonance.
+
+Voice options
+A range of voice options are available, each with distinct characteristics:
+
+Name	Gender	Demo
+Achernar	Female	
+Achird	Male	
+Algenib	Male	
+Algieba	Male	
+Alnilam	Male	
+Aoede	Female	
+Autonoe	Female	
+Callirrhoe	Female	
+Charon	Male	
+Despina	Female	
+Enceladus	Male	
+Erinome	Female	
+Fenrir	Male	
+Gacrux	Female	
+Iapetus	Male	
+Kore	Female	
+Laomedeia	Female	
+Leda	Female	
+Orus	Male	
+Pulcherrima	Female	
+Puck	Male	
+Rasalgethi	Male	
+Sadachbia	Male	
+Sadaltager	Male	
+Schedar	Male	
+Sulafat	Female	
+Umbriel	Male	
+Vindemiatrix	Female	
+Zephyr	Female	
+Zubenelgenubi	Male	
+Language availability
+Chirp 3: HD voices are supported in the following languages, with Punjabi (India) and Chinese (Hong Kong) available in Preview.
+
+Language	BCP-47 Code
+Arabic (Generic)	ar-XA
+Bengali (India)	bn-IN
+Bulgarian (Bulgaria)	bg-BG
+Chinese (Hong Kong)	yue-HK
+Croatian (Croatia)	hr-HR
+Czech (Czech Republic)	cs-CZ
+Danish (Denmark)	da-DK
+Dutch (Belgium)	nl-BE
+Dutch (Netherlands)	nl-NL
+English (Australia)	en-AU
+English (India)	en-IN
+English (United Kingdom)	en-GB
+English (United States)	en-US
+Estonian (Estonia)	et-EE
+Finnish (Finland)	fi-FI
+French (Canada)	fr-CA
+French (France)	fr-FR
+German (Germany)	de-DE
+Greek (Greece)	el-GR
+Gujarati (India)	gu-IN
+Hebrew (Israel)	he-IL
+Hindi (India)	hi-IN
+Hungarian (Hungary)	hu-HU
+Indonesian (Indonesia)	id-ID
+Italian (Italy)	it-IT
+Japanese (Japan)	ja-JP
+Kannada (India)	kn-IN
+Korean (South Korea)	ko-KR
+Latvian (Latvia)	lv-LV
+Lithuanian (Lithuania)	lt-LT
+Malayalam (India)	ml-IN
+Mandarin Chinese (China)	cmn-CN
+Marathi (India)	mr-IN
+Norwegian Bokmål (Norway)	nb-NO
+Polish (Poland)	pl-PL
+Portuguese (Brazil)	pt-BR
+Punjabi (India)	pa-IN
+Romanian (Romania)	ro-RO
+Russian (Russia)	ru-RU
+Serbian (Cyrillic)	sr-RS
+Slovak (Slovakia)	sk-SK
+Slovenian (Slovenia)	sl-SI
+Spanish (Spain)	es-ES
+Spanish (United States)	es-US
+Swahili (Kenya)	sw-KE
+Swedish (Sweden)	sv-SE
+Tamil (India)	ta-IN
+Telugu (India)	te-IN
+Thai (Thailand)	th-TH
+Turkish (Turkey)	tr-TR
+Ukrainian (Ukraine)	uk-UA
+Urdu (India)	ur-IN
+Vietnamese (Vietnam)	vi-VN
+Regional availability
+Chirp 3: HD voices are available in the following Google Cloud regions respectively:
+
+Google Cloud Zone	Launch Readiness
+global	GA
+us	GA
+eu	GA
+asia-southeast1	GA
+europe-west2	GA
+asia-northeast1	GA
+Supported output formats
+The default response format is LINEAR16, but other formats which are supported include:
+
+API Method	Format
+streaming	ALAW, MULAW, OGG_OPUS and PCM
+batch	ALAW, MULAW, MP3, OGG_OPUS and PCM
+Use Chirp 3: HD voices
+Discover how to use Chirp 3: HD voices to synthesize speech.
+
+Perform streaming speech synthesis request
+Python
+To learn how to install and use the client library for Cloud TTS, see Cloud TTS client libraries. For more information, see the Cloud TTS Python API reference documentation.
+
+To authenticate to Cloud TTS, set up Application Default Credentials. For more information, see Set up authentication for a local development environment.
+
+
+
+
+"""Synthesizes speech from a stream of input text."""
+from google.cloud import texttospeech
+
+client = texttospeech.TextToSpeechClient()
+
+# See https://cloud.google.com/text-to-speech/docs/voices for all voices.
+streaming_config = texttospeech.StreamingSynthesizeConfig(
+    voice=texttospeech.VoiceSelectionParams(
+        name="en-US-Chirp3-HD-Charon",
+        language_code="en-US",
+    )
+)
+
+# Set the config for your stream. The first request must contain your config, and then each subsequent request must contain text.
+config_request = texttospeech.StreamingSynthesizeRequest(
+    streaming_config=streaming_config
+)
+
+text_iterator = [
+    "Hello there. ",
+    "How are you ",
+    "today? It's ",
+    "such nice weather outside.",
+]
+
+# Request generator. Consider using Gemini or another LLM with output streaming as a generator.
+def request_generator():
+    yield config_request
+    for text in text_iterator:
+        yield texttospeech.StreamingSynthesizeRequest(
+            input=texttospeech.StreamingSynthesisInput(text=text)
+        )
+
+streaming_responses = client.streaming_synthesize(request_generator())
+
+for response in streaming_responses:
+    print(f"Audio content size in bytes is: {len(response.audio_content)}")
+Perform online speech synthesis request
+Python
+To learn how to install and use the client library for Cloud TTS, see Cloud TTS client libraries. For more information, see the Cloud TTS Python API reference documentation.
+
+To authenticate to Cloud TTS, set up Application Default Credentials. For more information, see Set up authentication for a local development environment.
+
+
+
+
+def synthesize_text():
+    """Synthesizes speech from the input string of text."""
+    from google.cloud import texttospeech
+
+    text = "Hello there."
+    client = texttospeech.TextToSpeechClient()
+
+    input_text = texttospeech.SynthesisInput(text=text)
+
+    # Note: the voice can also be specified by name.
+    # Names of voices can be retrieved with client.list_voices().
+    voice = texttospeech.VoiceSelectionParams(
+        language_code="en-US",
+        name="en-US-Chirp3-HD-Charon",
+    )
+
+    audio_config = texttospeech.AudioConfig(
+        audio_encoding=texttospeech.AudioEncoding.MP3
+    )
+
+    response = client.synthesize_speech(
+        input=input_text,
+        voice=voice,
+        audio_config=audio_config,
+    )
+
+    # The response's audio_content is binary.
+    with open("output.mp3", "wb") as out:
+        out.write(response.audio_content)
+        print('Audio content written to file "output.mp3"')
+
+Scripting and prompting tips
+Creating engaging and natural-sounding audio from text requires understanding the nuances of spoken language and translating them into script form. The following tips will help you craft scripts that sound authentic and capture the chosen tone.
+
+Understanding the goal: Natural speech
+The primary objective is to make the synthesized voice sound as close to a natural human speaker as possible. This involves:
+
+Mimicking Natural Pacing: How quickly or slowly someone speaks.
+Creating Smooth Flow: Ensuring seamless transitions between sentences and phrases.
+Adding Realistic Pauses: Incorporating pauses for emphasis and clarity.
+Capturing Conversational Tone: Making the audio sound like a real conversation.
+Key techniques for natural speech
+Punctuation for Pacing and Flow
+
+Periods (.): Indicate a full stop and a longer pause. Use them to separate complete thoughts and create clear sentence boundaries.
+Commas (,): Signal shorter pauses within sentences. Use them to separate clauses, list items, or introduce brief breaks for breath.
+Ellipses (...): Represent a longer, more deliberate pause. They can indicate trailing thoughts, hesitation, or a dramatic pause.
+Example: "And then... it happened."
+Hyphens (-): Can be used to indicate a brief pause or a sudden break in thought.
+Example: "I wanted to say - but I couldn't."
+Incorporating Pauses and Disfluencies
+
+Strategic Pauses: Use ellipses, commas, or hyphens to create pauses in places where a human speaker would naturally pause for breath or emphasis.
+Disfluencies (Ums and Uhs): While some Cloud Text-to-Speech models handle disfluencies automatically, understanding their role is crucial. They add authenticity and make the speech sound less robotic. Even if the model adds them, being aware of where they would naturally occur in human speech helps you understand the overall flow of your script.
+Experimentation and Iteration
+
+Re-synthesizing: Don't be afraid to re-synthesize the same message with the same voice multiple times. Minor tweaks to punctuation, spacing, or word choice can significantly impact the final audio.
+Listen Critically: Pay close attention to the pacing, flow, and overall tone of the synthesized audio. Identify areas that sound unnatural and adjust your script accordingly.
+Voice Variation: If the system allows for it, try using different voices to see which one best suits your script and chosen tone.
+Practical Scripting Tips
+
+Read Aloud: Before synthesizing, read your script aloud. This will help you identify awkward phrasing, unnatural pauses, and areas that need adjustment.
+Write Conversationally: Use contractions (e.g., "it's," "we're") and informal language to make the script sound more natural.
+Consider the Context: The tone and pacing of your script should match the context of the audio. A formal presentation will require a different approach than a casual conversation.
+Break Down Complex Sentences: Long, convoluted sentences can be difficult for TTS engines to handle. Break them down into shorter, more manageable sentences.
+Sample Script Improvements
+
+Original Script (Robotic): "The product is now available. We have new features. It is very exciting."
+
+Improved Script (Natural): "The product is now available... and we've added some exciting new features. It's, well, it's very exciting."
+
+Original Script (Robotic): "This is an automated confirmation message. Your reservation has been processed. The following details pertain to your upcoming stay. Reservation number is 12345. Guest name registered is Anthony Vasquez Arrival date is March 14th. Departure date is March 16th. Room type is Deluxe Suite. Number of guests is 1 guest. Check-in time is 3 PM. Check-out time is 11 AM. Please note, cancellation policy requires notification 48 hours prior to arrival. Failure to notify within this timeframe will result in a charge of one night's stay. Additional amenities included in your reservation are: complimentary Wi-Fi, access to the fitness center, and complimentary breakfast. For any inquiries, please contact the hotel directly at 855-555-6689 Thank you for choosing our hotel."
+
+Improved Script (Natural): "Hi Anthony Vasquez! We're so excited to confirm your reservation with us! You're all set for your stay from March 14th to March 16th in our beautiful Deluxe Suite. That's for 1 guest. Your confirmation number is 12345, just in case you need it.
+
+So, just a quick reminder, check-in is at 3 PM, and check-out is at, well, 11 AM.
+
+Now, just a heads-up about our cancellation policy… if you need to cancel, just let us know at least 48 hours before your arrival, okay? Otherwise, there'll be a charge for one night's stay.
+
+And to make your stay even better, you'll have complimentary Wi-Fi, access to our fitness center, and a delicious complimentary breakfast each morning!
+
+If you have any questions at all, please don't hesitate to call us at 855-555-6689. We can't wait to welcome you to the hotel!"
+
+Explanation of Changes:
+
+The ellipses (...) create a pause for emphasis.
+"and we've" uses a contraction for a more conversational tone.
+"It's, well, it's very exciting" adds a small amount of disfluency, and emphasis.
+"Okay?" friendly reminder softens tone.
+By following these guidelines, you can create text-to-audio scripts that sound natural, engaging, and human-like. Remember that practice and experimentation are key to mastering this skill.
+
+Chirp 3: HD SSML support
+Preview
+
+This product or feature is subject to the "Pre-GA Offerings Terms" in the General Service Terms section of the Service Specific Terms. Pre-GA products and features are available "as is" and might have limited support. For more information, see the launch stage descriptions.
+
+Speech Synthesis Markup Language (SSML) tags give you more control over how text is converted into speech. By using SSML, you can specify pronunciations, paragraphs, control and influence the overall structure of the input text for more natural-sounding audio.
+
+Supported SSML elements
+Chirp 3: HD voices support a subset of the available SSML tags, which are described here. Any tags that are not on this list will be ignored during the synthesis process.
+
+<speak>: The root element of the SSML text.
+<say-as>: Lets you provide hints about how to pronounce the contained text. Note that interpret-as="expletive" or interpret-as="bleep" are not supported.
+<p>: Represents a paragraph.
+<s>: Represents a sentence.
+<phoneme>: Provides a phonetic pronunciation for the contained text.
+<sub>: Pronounces the alias value instead of the element's contained text.
+Sample SynthesizeSpeechRequest using SSML:
+
+
+
+{
+  "audio_config": {
+    "audio_encoding": "LINEAR16",
+  },
+  "input": {
+    "ssml": "<speak>Here are <say-as interpret-as=\"characters\">SSML</say-as> samples. I can also substitute phrases, like the <sub alias=\"World Wide Web Consortium\">W3C</sub>. Hi,<phoneme alphabet=\"ipa\" ph=\"ˌmænɪˈtoʊbə\">manitoba<phoneme>! Finally, I can speak a paragraph with two sentences. <p><s>This is sentence one.</s><s>This is sentence two.</s></p></speak>",
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+}
+Chirp 3: HD voice controls
+Preview
+
+This product or feature is subject to the "Pre-GA Offerings Terms" in the General Service Terms section of the Service Specific Terms. Pre-GA products and features are available "as is" and might have limited support. For more information, see the launch stage descriptions.
+
+Voice control features are specifically for HD voice synthesis. You can manage pace control, pause control, and custom pronunciations through the Chirp 3: HD voice control options.
+
+Pace control
+You can adjust the speed of the generated audio using the pace parameter. The pace parameter lets you slow down or speed up the speech, with values ranging from 0.25x (very slow) to 2x (very fast). To set the pace, use the speaking_rate parameter in your request. Choose a value between 0.25 and 2.0. Values below 1.0 slow down the speech, and values above 1.0 speed it up. A value of 1.0 indicates an unadjusted pace.
+
+Sample SynthesizeSpeechRequest using pace control:
+
+
+
+{
+  "audio_config": {
+    "audio_encoding": "LINEAR16",
+    "speaking_rate": 2.0,
+  },
+  "input": {
+    "text": "Once upon a time, there was a cute cat. He was so cute that he got lots of treats.",
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+}
+Sample StreamingSynthesizeConfig using pace control:
+
+
+
+{
+  "streaming_audio_config": {
+    "audio_encoding": "LINEAR16",
+    "speaking_rate": 2.0,
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+}
+Pace control audio samples:
+
+Speaking rate	Output
+0.5	
+1.0	
+2.0	
+Pause control
+You can insert pauses into AI-generated speech by embedding special tags directly into your text using the markup input field. Note that pause tags will only work in the markup field, and not in the text field.
+
+These tags signal the AI to create silences, but the precise length of these pauses isn't fixed. The AI adjusts the duration based on context, much like natural human speech varies with speaker, location, and sentence structure. The available pause tags are [pause short], [pause long], and [pause]. For alternative methods of creating pauses without using markup tags, refer to our prompting and crafting guidelines.
+
+The AI model might occasionally disregard the pause tags, especially if they are placed in unnatural positions in the text. You can combine multiple pause tags for longer silences, but excessive use can lead to problems.
+
+Sample SynthesizeSpeechRequest using pause control:
+
+
+
+{
+  "audio_config": {
+    "audio_encoding": "LINEAR16",
+  },
+  "input": {
+    "markup": "Let me take a look, [pause long] yes, I see it.",
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+}
+Sample StreamingSynthesisInput using pause control:
+
+
+
+{
+  "markup": "Let me take a look, [pause long] yes, I see it.",
+}
+Pause control audio samples:
+
+Markup input	Output
+"Let me take a look, yes, I see it."	
+"Let me take a look, [pause long] yes, I see it."	
+Custom pronunciations
+You can specify custom pronunciations using IPA or X-SAMPA phonetic representations for words within the input text. Be sure to use language-appropriate phonemes for accurate rendering. You can learn more about phoneme override in our phoneme documentation.
+
+Sample SynthesizeSpeechRequest using custom pronunciations:
+
+
+
+{
+  "audio_config": {
+    "audio_encoding": "LINEAR16",
+  },
+  "input": {
+    "text": "There is a dog in the boat",
+    "custom_pronunciations": {
+      "phrase": "dog",
+      "phonetic_encoding": "PHONETIC_ENCODING_X_SAMPA",
+      "pronunciation": "\"k{t",
+    }
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+}
+Sample StreamingSynthesizeConfig using custom pronunciations:
+
+
+
+{
+  "streaming_audio_config": {
+    "audio_encoding": "LINEAR16",
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+  "custom_pronunciations": {
+    "phrase": "dog",
+    "phonetic_encoding": "PHONETIC_ENCODING_X_SAMPA",
+    "pronunciation": "\"k{t",
+  }
+}
+Custom pronunciations audio samples:
+
+Custom pronunciations applied	Output
+None	
+"dog" pronounced as ""k{t"	
+The overridden phrases can be formatted in any way, including using symbols. For example, in case of potential context-based ambiguity in phrase matching (which is common in languages like Chinese and Japanese) or sentences where one word might be pronounced in different ways, the phrase can be formatted to remove ambiguity. For example, to avoid accidentally overriding other instances of the word read in the input, the phrase "read" could be formatted as "read1", "[read]", or "(read)" for both the input text and the overridden phrase.
+
+See this example of applying custom pronunciations to a sentence where the word read is pronounced in two different ways:
+
+
+
+{
+  "audio_config": {
+    "audio_encoding": "LINEAR16",
+  },
+  "input": {
+    "text": "I read1 a book, and I will now read2 it to you.",
+    "custom_pronunciations": {
+      "phrase": "read1",
+      "phonetic_encoding": "PHONETIC_ENCODING_IPA",
+      "pronunciation": "rɛd",
+    }
+    "custom_pronunciations": {
+      "phrase": "read2",
+      "phonetic_encoding": "PHONETIC_ENCODING_IPA",
+      "pronunciation": "riːd",
+    }
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+}
+Custom pronunciations applied	Output
+"read" overridden two ways	
+Furthermore, custom pronunciations may be used with markup input, which enables the usage of pause tags as well:
+
+
+
+{
+  "audio_config": {
+    "audio_encoding": "LINEAR16",
+  },
+  "input": {
+    "markup": "Did you [pause long] read this book?",
+    "custom_pronunciations": {
+      "phrase": "read",
+      "phonetic_encoding": "PHONETIC_ENCODING_IPA",
+      "pronunciation": "riːd",
+    }
+  },
+  "voice": {
+    "language_code": "en-US",
+    "name": "en-us-Chirp3-HD-Leda",
+  }
+}
+Custom pronunciations used	Output
+Override pronunciation with pause tag	
+Language availability for voice controls
+Pace control is available across all locales.
+
+Pause control is available across all locales except: bg-bg, cs-cz, el-gr, et-ee, he-il, hr-hr, hu-hu, lt-lt, lv-lv, pa-in, ro-ro, sk-sk, sl-si, sr-rs, and yue-hk.
+
+Custom pronunciations is available across all locales except: bg-bg, bn-in, cs-cz, da-dk, el-gr, et-ee, fi-fi, gu-in, he-il, hr-hr, hu-hu, lt-lt, lv-lv, nb-no, nl-be, pa-in, ro-ro, sk-sk, sl-si, sr-rs, sv-se, sw-ke, th-th, uk-ua, ur-in, vi-vn, and yue-hk.
+
+FAQ
+Common questions and their answers:
+
+How do I control pacing and flow to improve the speech output?
+You can utilize our prompting and crafting guidelines and improve your text prompt to improve your speech output.
+
+How do I access voices in supported languages?
+Voice names follow a specific format, allowing usage across supported languages by specifying the voice uniquely. The format follows \<locale\>-\<model\>-\<voice\>. For example, to use the Kore voice for English (United States) using the Chirp 3: HD voices model, you would specify it as en-US-Chirp3-HD-Kore.
+
+Was this helpful?
+
+Send feedback

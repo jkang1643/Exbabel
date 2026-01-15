@@ -496,12 +496,43 @@ function mergeRecoveryText(bufferedText, recoveredText, options = {}) {
         // Step 4: No overlap at all - append entire recovery (prevents word loss)
         console.log(`[${mode}] ⚠️ No overlap found (best fuzzy: ${(bestMatch.score * 100).toFixed(0)}% < ${FUZZY_THRESHOLD * 100}%)`);
         console.log(`[${mode}] 📎 Appending entire recovery to prevent word loss`);
-        const mergedText = bufferedNormalized + ' ' + recoveredNormalized;
-        return {
-          merged: true,
-          mergedText: mergedText.trim(),
-          reason: 'No overlap - full append'
-        };
+        
+        // Deduplicate recovered words against next partial/final before appending
+        const nextTexts = [];
+        if (nextFinalText) nextTexts.push(nextFinalText);
+        if (nextPartialText) nextTexts.push(nextPartialText);
+        
+        let recoveredWordsToAppend = recoveredWords;
+        if (nextTexts.length > 0) {
+          const originalRecoveredLength = recoveredWords.length;
+          recoveredWordsToAppend = deduplicateTail(recoveredWords, nextTexts);
+          
+          if (recoveredWordsToAppend.length < originalRecoveredLength) {
+            console.log(`[${mode}] ✂️ Deduplicated ${originalRecoveredLength - recoveredWordsToAppend.length} word(s) from recovery. Keeping: "${recoveredWordsToAppend.join(' ')}"`);
+          }
+        }
+        
+        // Build merged text with deduplicated recovery
+        const recoveredTextToAppend = recoveredWordsToAppend.length > 0 
+          ? recoveredWordsToAppend.join(' ')
+          : '';
+        
+        if (recoveredTextToAppend) {
+          const mergedText = bufferedNormalized + ' ' + recoveredTextToAppend;
+          return {
+            merged: true,
+            mergedText: mergedText.trim(),
+            reason: 'No overlap - full append (deduplicated)'
+          };
+        } else {
+          // All recovered words were duplicates
+          console.log(`[${mode}] ✅ All recovered words already in next text - no append needed`);
+          return {
+            merged: true,
+            mergedText: bufferedNormalized,
+            reason: 'No overlap - all recovery words duplicated in next text'
+          };
+        }
       }
     }
   }
