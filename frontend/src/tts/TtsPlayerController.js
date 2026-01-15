@@ -929,8 +929,8 @@ export class TtsPlayerController {
 
                 console.log(`[TtsPlayerController] Removed segment ${segmentId} from queue. New length: ${this.queue.length}`);
 
-                // Play next in queue
-                setTimeout(() => this._processQueue(), 0);
+                // Play next in queue - direct call maintains gesture context on Safari iOS
+                this._processQueue();
             };
 
             audio.onerror = (error) => {
