@@ -83,13 +83,13 @@ assert(result3.wasTextTruncated, 'wasTextTruncated should be true');
 
 console.log('\n=== Testing resolvePrompt (Combined Limits) ===');
 const prompt3k = 'P'.repeat(3000);
-const text4k = 'T'.repeat(4000);
+const text4k = 'T '.repeat(2000); // 4000 chars, 2000 words (avoids short text safeguard)
 const result4 = resolvePrompt({
     customPrompt: prompt3k,
     text: text4k
 });
 // Combined max is 8000. 
-// Prompt 3000 + Hardening 55 + Text 4000 = 7055 (Both within individual and combined limits)
+// Prompt 3000 + Hardening + Text 4000 = ~7100 (Both within individual and combined limits)
 const hardeningLength = utf8ByteLength("(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.) ");
 assertEquals(result4.promptBytes, 3000 + hardeningLength, `Prompt should be 3000 + ${hardeningLength} hardening`);
 assertEquals(result4.textBytes, 4000, 'Text should stay 4000');
@@ -128,6 +128,24 @@ try {
     console.log('✓ Invalid resolution (high prompt) correctly failed validation');
     passed++;
 }
+
+console.log('\n=== Testing resolvePrompt (Speed Instruction Removal) ===');
+const resultSpeed = resolvePrompt({
+    text: 'Hello world',
+    rate: 1.5,
+    customPrompt: 'Test prompt'
+});
+assert(!resultSpeed.prompt.includes('SPEED'), 'Prompt should NOT ensure speed information (handled by audioConfig)');
+assert(!resultSpeed.prompt.includes('1.5X'), 'Prompt should NOT include rate value');
+assert(!resultSpeed.prompt.includes('NO REPETITION'), 'Prompt should NOT include NO REPETITION safeguard');
+
+console.log('\n=== Testing resolvePrompt (Rate Only) ===');
+const resultRateOnly = resolvePrompt({
+    text: 'Hello world',
+    rate: 1.5
+});
+assert(resultRateOnly.prompt === null || resultRateOnly.prompt === '', 'Prompt should be empty if only rate is provided (handled by audioConfig)');
+
 
 // Summary
 console.log('\n=== Test Summary ===');

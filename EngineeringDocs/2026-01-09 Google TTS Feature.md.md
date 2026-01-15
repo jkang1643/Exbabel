@@ -10,6 +10,21 @@ This is a running "what is done" document capturing what we changed, why, and wh
 **Most recent at the top.**
 
 
+### BUG 20: FIXED — Gemini TTS Double Speak (Redundant Speed Instructions)
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved an issue where Gemini TTS would repeat segments (effectively doubling itself) during playback, especially when speed modifiers were active.
+
+#### Root Cause:
+1. **Instruction Conflict:** The backend `promptResolver.js` was injecting explicit speed instructions into the system prompt (e.g., `SPEAK AT 1.45X SPEED`) as well as appending a `[SPEED: 1.45X]` suffix.
+2. **Double-Processing:** While these were intended to help the generative model, Gemini interpreted them as content to be processed twice or as delimiters that triggered a re-read of the entire segment. Since speed is already mechanically guaranteed via `audioConfig.speaking_rate` (backend) and `playbackRate` (frontend reinforcement), these prompt instructions were redundant and harmful.
+
+#### Key Fixes:
+1. **Prompt Sanitization:** Modified `promptResolver.js` to completely remove speed-related instructions and suffixes from the prompt generation logic. Gemini now receives only style/persona instructions and the direct text.
+2. **Outcome:** Prompt noise is reduced, and the "double-speak" glitch is eliminated while maintaining precise speed control through the API's native audio configuration.
+
+---
+
 ### BUG 19: FIXED — Speed Control Fallback (Browser Reinforcement)
 **Status:** ✅ RESOLVED (2026-01-15)
 

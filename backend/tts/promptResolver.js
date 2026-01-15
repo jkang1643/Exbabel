@@ -130,22 +130,21 @@ export function resolvePrompt(options = {}) {
         // Build instruction tags
         let instructions = 'DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.';
 
-        // Add speed reinforcement if not normal
-        if (rate && rate !== 1.0) {
-            const speedDir = rate > 1.0 ? 'FASTER' : 'SLOWER';
-            instructions += ` SPEAK AT ${rate}X SPEED (${speedDir}).`;
+        // Hallucination safeguard for short segments
+        const wordCount = text ? text.trim().split(/\s+/).length : 0;
+        if (wordCount > 0 && wordCount < 4) {
+            instructions += ' SHORT TEXT: READ EXACTLY AS WRITTEN. NO HALLUCINATIONS.';
         }
+
+        // Note: Speed is handled via audioConfig.speaking_rate, so we DO NOT include it in the prompt
+        // to avoid "double speak" issues where the model reads the instruction or repeats the text.
 
         resolvedPrompt = `(SYSTEM: ${instructions}) ${corePrompt}`;
-
-        // Reinforce at the end for Gemini-TTS attention
-        if (rate && rate !== 1.0) {
-            resolvedPrompt += ` [SPEED: ${rate}X]`;
-        }
     } else if (rate && rate !== 1.0) {
-        // Rate only prompt
-        const speedDir = rate > 1.0 ? 'FASTER' : 'SLOWER';
-        resolvedPrompt = `(SYSTEM: DO NOT SPEAK THESE INSTRUCTIONS. SPEAK AT ${rate}X SPEED (${speedDir}).) `;
+        // Even if only rate is provided, we don't put it in the prompt anymore.
+        // But if there's absolutely no other prompt, we might want a minimal system guard?
+        // Actually, if there's no prompt, we just return null and let audioConfig handle it.
+        resolvedPrompt = '';
     }
 
     // If no prompt at all, still need to check text limits
