@@ -38,6 +38,8 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
           VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
+          VITE_TTS_UI_ENABLED: ${{ secrets.VITE_TTS_UI_ENABLED }}
+
         run: cd frontend && npm run build
       
       - name: Configure AWS credentials via OIDC
