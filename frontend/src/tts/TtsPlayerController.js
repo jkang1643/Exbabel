@@ -70,7 +70,18 @@ export class TtsPlayerController {
                 const pending = this.queue.filter(i => i.status === 'pending').length;
                 const requesting = this.queue.filter(i => i.status === 'requesting').length;
                 const ready = this.queue.filter(i => i.status === 'ready').length;
-                const playing = this.queue.filter(i => i.status === 'playing').length;
+
+                // Actual playing count should be 0 or 1 based on currentAudio
+                const playing = this.currentAudio ? 1 : 0;
+                const playingInQueue = this.queue.filter(i => i.status === 'playing').length;
+
+                // Invariant checks
+                if (playingInQueue > 1) {
+                    console.error('[TTS INVARIANT VIOLATION] Multiple items marked playing in queue:', playingInQueue);
+                }
+                if (this.currentAudio && playingInQueue === 0) {
+                    console.warn('[TTS STATE DRIFT] currentAudio exists but no item marked playing in queue');
+                }
 
                 console.log('[TTS QUEUE HEALTH]', {
                     total: this.queue.length,
@@ -78,6 +89,7 @@ export class TtsPlayerController {
                     requesting,
                     ready,
                     playing,
+                    playingSegmentId: this.currentAudio ? this.queue.find(i => i.status === 'playing')?.segmentId : null,
                     currentRequestCount: this.currentRequestCount,
                     maxConcurrent: this.maxConcurrentRequests,
                     utilizationPct: Math.round((this.currentRequestCount / this.maxConcurrentRequests) * 100)
@@ -898,27 +910,39 @@ export class TtsPlayerController {
             audio.onstalled = () => console.warn('[TtsPlayerController] Audio stalled:', queueItem.segmentId);
 
             audio.onended = () => {
-                console.log('[TtsPlayerController] Audio playback ended for segment:', queueItem.segmentId);
+                console.log('[TtsPlayerController] Audio playback ended for segment:', segmentId);
                 if (this.currentAudio === audio) {
                     this.currentAudio = null;
                 }
-                queueItem.status = 'done';
                 URL.revokeObjectURL(audioUrl);
 
-                // Remove item from queue to keep it clean (optional, could mark instead)
+                // Drain both queues
                 this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
+
+                // Find matching radio item for dedupe cleanup before filtering
+                const radioItem = this.queue.find(item => item.segmentId === segmentId);
+                if (radioItem) {
+                    const contentHash = `${radioItem.text?.trim() || ''}_${radioItem.timestamp || 0}`;
+                    this.dedupeSet.delete(contentHash);
+                }
+                this.queue = this.queue.filter(item => item.segmentId !== segmentId);
+
+                console.log(`[TtsPlayerController] Removed segment ${segmentId} from queue. New length: ${this.queue.length}`);
 
                 // Play next in queue
                 setTimeout(() => this._processQueue(), 0);
             };
 
             audio.onerror = (error) => {
-                console.error('[TtsPlayerController] Audio playback error for segment:', queueItem.segmentId, error);
+                console.error('[TtsPlayerController] Audio playback error for segment:', segmentId, error);
                 if (this.currentAudio === audio) {
                     this.currentAudio = null;
                 }
-                queueItem.status = 'error';
                 URL.revokeObjectURL(audioUrl);
+
+                // Drain both queues on error too to prevent getting stuck
+                this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
+                this.queue = this.queue.filter(item => item.segmentId !== segmentId);
 
                 setTimeout(() => this._processQueue(), 0);
 

@@ -60,10 +60,13 @@ export function TtsSettingsModal({
                                 Speaking Rate: {settings.speakingRate}x
                             </label>
                             <button
-                                onClick={() => handleSettingChange('speakingRate', 1.0)}
+                                onClick={() => {
+                                    const resetRate = isGemini ? 1.45 : (voiceSupportsSSML(selectedVoice, tier) ? 1.1 : 1.0);
+                                    handleSettingChange('speakingRate', resetRate);
+                                }}
                                 className="text-xs text-blue-600 hover:text-blue-800"
                             >
-                                Reset
+                                Reset to {isGemini ? '1.45x' : (voiceSupportsSSML(selectedVoice, tier) ? '1.1x' : '1.0x')}
                             </button>
                         </div>
                         <input

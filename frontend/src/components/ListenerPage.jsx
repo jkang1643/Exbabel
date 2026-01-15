@@ -123,7 +123,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [selectedVoice, setSelectedVoice] = useState('Kore');
   // Default settings for hidden controls (matches TtsPanel defaults)
   const [ttsSettings, setTtsSettings] = useState({
-    speakingRate: 1.1,
+    speakingRate: 1.45,
     deliveryStyle: 'standard_preaching',
     ssmlEnabled: true,
     promptPresetId: 'preacher_warm_build',
@@ -393,6 +393,26 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     }
   }, [targetLang]);
 
+  // Nudge speed for Gemini/Chirp3 if currently at default 1.0x
+  useEffect(() => {
+    if (!selectedVoice) return;
+    const voices = getVoicesForLanguage(targetLang);
+    const voiceOption = voices.find(v => v.value === selectedVoice);
+    if (voiceOption) {
+      const tier = voiceOption.tier || 'standard';
+      const isGemini = tier === 'gemini' || voiceOption.label?.includes('Studio');
+      const isChirp3 = tier === 'chirp3_hd';
+
+      if (isGemini && ttsSettings.speakingRate === 1.0) {
+        console.log('[ListenerPage] Nudging speaking rate to 1.45x for Gemini voice');
+        setTtsSettings(prev => ({ ...prev, speakingRate: 1.45 }));
+      } else if (isChirp3 && ttsSettings.speakingRate === 1.0) {
+        console.log('[ListenerPage] Nudging speaking rate to 1.1x for Chirp3 voice');
+        setTtsSettings(prev => ({ ...prev, speakingRate: 1.1 }));
+      }
+    }
+  }, [selectedVoice, targetLang, ttsSettings.speakingRate]);
+
   const handleTtsPlay = () => {
     if (!ttsControllerRef.current) return;
     if (connectionState !== 'open') {
@@ -498,9 +518,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       setError('Disconnected from session');
     };
 
-    ws.onerror = (error) => {
-      console.error('[Listener] WebSocket error:', error);
-      setConnectionState('error');
+    ws.onclose = () => {
+      console.log('[Listener] WebSocket disconnected');
+      setConnectionState('closed');
+
+      // Stop TTS playback to clear queue on disconnect
+      if (ttsControllerRef.current && ttsControllerRef.current.getState().state === 'PLAYING') {
+        console.log('[Listener] Stopping TTS due to WebSocket disconnect');
+        ttsControllerRef.current.stop();
+      }
     };
 
     ws.onmessage = (event) => {

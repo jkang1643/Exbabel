@@ -1,5 +1,5 @@
 # Exbabel — Feat/Google TTS Integration
-**Last updated:** 2026-01-15 (America/Chicago) - Universal TTS Speed & Queue Stability
+**Last updated:** 2026-01-15 (America/Chicago) - Global 1.45x Gemini Speed Alignment
 
 This is a running "what is done" document capturing what we changed, why, and where we are now regarding the Google Text-to-Speech integration.
 **Newest items are at the top.**
@@ -180,18 +180,21 @@ Resolved a frontend crash that occurred when switching to or monitoring "Radio M
 ### BUG 12: FIXED — Gemini TTS Speed Reliability & Multi-Layered Enforcement
 **Status:** ✅ RESOLVED (2026-01-14)
 
-Resolved the fundamental "unreliability" of Gemini-TTS speed control by implementing a multi-layered enforcement strategy that combines backend prompt injection with frontend playback normalization.
+Resolved the fundamental "unreliability" of Gemini-TTS speed control by implementing a multi-layered enforcement strategy that combines backend prompt injection with frontend playback normalization. Gemini voices now default to **1.45x** in the UI to match the perceived baseline of other premium engines.
 
 #### Root Cause:
 1.  **Model Variance:** Even with numeric instructions, the Gemini-TTS model (generative) would occasionally articualte with correct "energy" but suboptimal "real-time duration," leading to speech that felt slower than the requested rate.
 2.  **API Limitation:** Unlike standard Google voices, the current Gemini-TTS beta doesn't always handle the `speaking_rate` in `audioConfig` with the same mechanical precision as standard voices.
 3.  **State Mismatch:** The frontend occasionally lost track of the specific speed requested for a segment if multiple translations arrive rapidly.
+4.  **Hardcoded Component Defaults:** Independent components (e.g., `ListenerPage.jsx`) maintained their own legacy `1.1x` state, overriding the global `TtsPanel` configuration for listeners.
 
 #### Key Fixes:
 1.  **Double-Reinforcement Prompting:** Updated `promptResolver.js` to inject speed instructions at both the start and the end of the system prompt (e.g., `(SYSTEM: SPEAK AT 1.2X SPEED) ... [SPEED: 1.2X]`).
 2.  **Hard Browser-Side Enforcement:** Modified `TtsPlayerController.js` to manually set the `playbackRate` on the HTML5 `Audio` element for all Gemini/Kore voices. This provides a 100% mechanical guarantee that the audio plays at the user's selected speed, regardless of how the model synthesized it.
 3.  **Request Tracking:** Implemented a `_pendingRequests` map in the frontend to store the exact SSML configuration (including rate) sent to the server, ensuring that when the audio returns, the correct speed is applied to the specific segment.
-4.  **Legacy Voice Protection:** Explicitly excluded Neural2 and Standard voices from browser-side speed reinforcement to prevent "double-speed" issues, as these voices handle speed reliably on the server.
+4.  **Baseline Alignment:** Standardized the UI default speaking rate to **1.45x** for Gemini voices (and 1.1x for Chirp 3 HD), and updated the "Reset" logic to respect these premium baselines.
+5.  **Legacy Voice Protection:** Explicitly excluded Neural2 and Standard voices from browser-side speed reinforcement to prevent "double-speed" issues, as these voices handle speed reliably on the server.
+6.  **Cross-Component Synchronization:** Unified all TTS entry points (`TtsPanel`, `ListenerPage`, `TtsSettingsModal`) to use a consistent **1.45x** baseline for Gemini, ensuring that listeners and hosts hear the same high-energy delivery by default.
 
 ---
 

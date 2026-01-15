@@ -108,7 +108,7 @@ export function resolvePrompt(options = {}) {
         customPrompt,
         intensity,
         text = '',
-        rate = 1.0 // Default to 1.0
+        rate = 1.45 // Default to 1.45 (user requested baseline)
     } = options;
 
     // Start with empty prompt

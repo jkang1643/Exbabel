@@ -31,7 +31,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     // SSML state (Chirp 3 HD)
     const [deliveryStyle, setDeliveryStyle] = useState('standard_preaching');
-    const [speakingRate, setSpeakingRate] = useState(1.1);
+    const [speakingRate, setSpeakingRate] = useState(1.45); // Default to 1.45 (Gemini optimized)
     const [pitchAdjust, setPitchAdjust] = useState('+1st');
     const [powerWordsEnabled, setPowerWordsEnabled] = useState(true);
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -305,7 +305,26 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                         </label>
                         <select
                             value={selectedVoice}
-                            onChange={(e) => setSelectedVoice(e.target.value)}
+                            onChange={(e) => {
+                                const newVoice = e.target.value;
+                                setSelectedVoice(newVoice);
+
+                                // Nudge speed for Gemini/Chirp3 if currently at default 1.0x
+                                const voiceOption = availableVoices.find(v => v.value === newVoice);
+                                if (voiceOption) {
+                                    const tier = voiceOption.tier || 'standard';
+                                    const isGemini = tier === 'gemini' || voiceOption.label?.includes('Studio');
+                                    const isChirp3 = tier === 'chirp3_hd';
+
+                                    if (isGemini && speakingRate === 1.0) {
+                                        console.log('[TtsPanel] Nudging speaking rate to 1.45x for Gemini voice');
+                                        setSpeakingRate(1.45);
+                                    } else if (isChirp3 && speakingRate === 1.0) {
+                                        console.log('[TtsPanel] Nudging speaking rate to 1.1x for Chirp3 voice');
+                                        setSpeakingRate(1.1);
+                                    }
+                                }
+                            }}
                             disabled={!isConnected}
                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                         >
@@ -387,10 +406,13 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                                     Speaking Speed: {speakingRate.toFixed(2)}x
                                                 </label>
                                                 <button
-                                                    onClick={() => setSpeakingRate(1.0)}
+                                                    onClick={() => {
+                                                        const rate = isGeminiVoice ? 1.45 : (supportsSSML ? 1.1 : 1.0);
+                                                        setSpeakingRate(rate);
+                                                    }}
                                                     className="text-[10px] text-blue-600 hover:underline"
                                                 >
-                                                    Reset to 1.0x
+                                                    Reset to {isGeminiVoice ? '1.45x' : (supportsSSML ? '1.1x' : '1.0x')}
                                                 </button>
                                             </div>
                                             <input
