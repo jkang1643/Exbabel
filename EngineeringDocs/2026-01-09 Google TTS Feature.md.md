@@ -10,6 +10,38 @@ This is a running "what is done" document capturing what we changed, why, and wh
 **Most recent at the top.**
 
 
+### BUG 17: FIXED — Radio Mode Lag (Gemini Latency)
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved noticeable lag/gaps between segments in Radio Mode when using Gemini voices, despite the previous concurrency setting of 3.
+
+#### Root Cause:
+1. **Latency vs. Concurrency:** Gemini TTS generation latency (often >4s) was higher than the buffer depth provided by a concurrency limit of 3. With short segments, the player would exhaust the buffer before the next segment arrived.
+2. **Buffer Underrun:** The `maxConcurrentRequests=3` setting was sufficient for faster engines (Neural2) but created a bottleneck for the slower generative model, preventing enough segments from being pre-fetched to hide the latency.
+
+#### Key Fixes:
+1. **Increased Concurrency:** Updated `TtsPlayerController.js` to increase `maxConcurrentRequests` from 3 to **5**.
+2. **Impact:** This larger parallel window allows the system to pre-fetch more segments simultaneously, effectively masking the higher generation latency of Gemini and ensuring smooth, gap-free playback.
+
+---
+
+### BUG 16: FIXED — Out-of-Order Playback (Radio Mode)
+**Status:** ✅ RESOLVED (2026-01-14)
+
+Resolved an issue where increasing concurrency caused segments to be spoken out of order (e.g., segment 2 playing before segment 1).
+
+#### Root Cause:
+1. **Arrival-Based Playback:** The previous queue logic (`_processQueue`) simply played the next "ready" item in the audio queue based on arrival time.
+2. **Race Condition:** With higher concurrency, shorter/easier segments (e.g., "Amen") would finish generation and arrive at the frontend *before* earlier, longer segments. The player would immediately play them, breaking the logical narrative order.
+
+#### Key Fixes:
+1. **Strict Sequential Logic:** detailed the `_processQueue` method in `TtsPlayerController.js` to enforce strict sequential ordering in Radio Mode.
+2. **Queue Walk:** The player now iterates through the ordered `Radio Queue` to find the *logical next segment*.
+3. **Wait State:** If the next logical segment is not yet ready, the player *waits* for it—even if subsequent segments are already available. This ensures that narrative order (1 -> 2 -> 3) is always preserved, regardless of network arrival times.
+
+---
+
+
 ### BUG 15: FIXED — Chirp 3 HD Voice Quality Degradation
 **Status:** ✅ RESOLVED (2026-01-14)
 

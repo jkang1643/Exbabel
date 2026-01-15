@@ -37,7 +37,7 @@ export class TtsPlayerController {
         this.inFlight = new Map(); // Map<segmentId, abortToken> for cancellation
         this.dedupeSet = new Set(); // Set<segmentId> to prevent duplicate requests
         this.queueLimit = 25; // Maximum queue size
-        this.maxConcurrentRequests = 3; // Limit concurrent TTS requests (increased for prefetching)
+        this.maxConcurrentRequests = 5; // Limit concurrent TTS requests (increased to 5 for smoother Gemini prefetching)
         this.currentRequestCount = 0; // Track active requests
 
         // Callbacks
@@ -576,6 +576,10 @@ export class TtsPlayerController {
      * Process the audio queue
      * @private
      */
+    /**
+     * Process the audio queue
+     * @private
+     */
     _processQueue() {
         // If already playing something, wait for it to finish
         if (this.currentAudio) {
@@ -589,32 +593,92 @@ export class TtsPlayerController {
             return;
         }
 
-        // Find the next ready item
-        const nextItem = this.audioQueue.find(item => item.status === 'ready');
+        let nextItem = null;
+
+        // STRATEGY: Determine what to play based on mode
+
+        // Mode 1: Radio Mode (Strict Sequential)
+        // If we have items in the radio queue and a start marker, strict ordering applies.
+        if (this.queue.length > 0 && this.lastSeenSegmentId) {
+            // Find the *first* undelivered item in the ordered queue
+            // Statuses: 'pending' (waiting for network start), 'requesting' (network in flight), 
+            // 'ready' (audio received), 'playing' (currently playing), 'done', 'failed'
+            const nextOrdered = this.queue.find(item =>
+                item.status !== 'done' && item.status !== 'playing'
+            );
+
+            if (!nextOrdered) {
+                console.log('[TtsPlayerController] Queue processing: No active segments in radio queue');
+                return;
+            }
+
+            // Found the next expected item. Is it ready?
+            if (nextOrdered.status === 'ready') {
+                // It is ready! We need to find its audio payload.
+                // In onWsMessage, we pushed a corresponding item to audioQueue.
+                // Let's find THAT item to get the audio data.
+                nextItem = this.audioQueue.find(item => item.segmentId === nextOrdered.segmentId);
+
+                // Fallback: If for some reason it's not in audioQueue but marked ready (shouldn't happen),
+                // check if we stored audioData on the radio item itself (we do this in onWsMessage now).
+                if (!nextItem && nextOrdered.audioData) {
+                    console.log('[TtsPlayerController] Recovering audio from radio queue item:', nextOrdered.segmentId);
+                    nextItem = {
+                        segmentId: nextOrdered.segmentId,
+                        audioData: nextOrdered.audioData,
+                        status: 'ready',
+                        type: 'unary', // Assume unary for recovered items
+                        ssmlOptions: nextOrdered.ssmlOptions,
+                        resolvedRoute: nextOrdered.resolvedRoute
+                    };
+                }
+            } else if (nextOrdered.status === 'failed') {
+                // If the *next* item failed, we should probably skip it to unblock the queue.
+                console.warn('[TtsPlayerController] Next item failed, skipping:', nextOrdered.segmentId);
+                nextOrdered.status = 'done'; // Mark done to skip
+                this._processQueue(); // Recurse to try next one
+                return;
+            } else {
+                // It is 'pending' or 'requesting'.
+                // We MUST WAIT. Playing out of order breaks the radio experience.
+                console.log(`[TtsPlayerController] Waiting for sequential segment: ${nextOrdered.segmentId} (currently ${nextOrdered.status})`);
+                return;
+            }
+        }
+        // Mode 2: Manual/Fallback (Play whatever is ready)
+        else {
+            // Find the next ready item in arrival order
+            nextItem = this.audioQueue.find(item => item.status === 'ready');
+        }
+
         if (!nextItem) {
-            console.log('[TtsPlayerController] Queue processing: No ready items found');
+            console.log('[TtsPlayerController] Queue processing: No ready items found to play');
             return;
         }
 
         // Mark as playing and execute
         nextItem.status = 'playing';
 
+        // Also update radio queue status if applicable
+        const radioItem = this.queue.find(i => i.segmentId === nextItem.segmentId);
+        if (radioItem) radioItem.status = 'playing';
+
         if (nextItem.type === 'unary') {
             // Audio source interface: extract from structured audioData object
-            // V1: Create object URL from base64 blob
-            // Future: This is where we'll add SourceBuffer support for streaming
             const audioBlob = this._base64ToBlob(nextItem.audioData.bytesBase64, nextItem.audioData.mimeType);
             if (audioBlob) {
                 this._playAudio(audioBlob, nextItem);
             } else {
                 console.error('[TtsPlayerController] Failed to decode audio for segment:', nextItem.segmentId);
                 nextItem.status = 'error';
+                if (radioItem) radioItem.status = 'failed';
                 this._processQueue(); // Try next one
             }
         } else {
             // Placeholder for streaming
             console.warn('[TtsPlayerController] Streaming chunks not yet supported in sequential player');
             nextItem.status = 'error';
+            if (radioItem) radioItem.status = 'failed';
             this._processQueue();
         }
     }
