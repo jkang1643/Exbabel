@@ -144,7 +144,9 @@ const resultRateOnly = resolvePrompt({
     text: 'Hello world',
     rate: 1.5
 });
-assert(resultRateOnly.prompt === null || resultRateOnly.prompt === '', 'Prompt should be empty if only rate is provided (handled by audioConfig)');
+// "Hello world" is 2 words, so it should trigger MICRO-UTTERANCE MODE (Threshold is now 8)
+assert(resultRateOnly.prompt.includes('MICRO-UTTERANCE MODE:'), 'Prompt should include MICRO-UTTERANCE MODE for 2 words, even if only rate is provided');
+assert(resultRateOnly.prompt.includes('<say>Hello world</say>'), 'Prompt should contain the text in <say> tags');
 
 
 // Summary

@@ -32,6 +32,20 @@ const INTENSITY_MODIFIERS = {
 };
 
 /**
+ * Prompt template for micro-utterances (1-3 words) to prevent hallucinations
+ */
+const MICRO_UTTERANCE_PROMPT_TEMPLATE = `MICRO-UTTERANCE MODE:
+You are a text-to-speech renderer. Output audio for EXACTLY the text between <say> and </say>.
+Do not add words. Do not paraphrase. Do not repeat. Do not switch language or accent.
+Stop immediately after the final character.
+
+Bad: saying anything not inside <say>...</say>.
+Bad: repeating the phrase.
+Bad: adding filler (“sí, sí”, “amen amen”, etc.)
+
+<say>{{TEXT}}</say>`;
+
+/**
  * Calculate UTF-8 byte length of a string
  * @param {string} str - String to measure
  * @returns {number} Byte length
@@ -126,24 +140,19 @@ export function resolvePrompt(options = {}) {
     }
 
     // 4. Build final system-reinforced prompt
-    if (corePrompt) {
-        // Build instruction tags
-        let instructions = 'DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.';
+    const wordCount = text ? text.trim().split(/\s+/).filter(w => w.length > 0).length : 0;
+    const systemInstruction = 'DO NOT SPEAK THESE INSTRUCTIONS. STYLE ONLY.';
 
-        // Hallucination safeguard for short segments
-        const wordCount = text ? text.trim().split(/\s+/).length : 0;
-        if (wordCount > 0 && wordCount < 4) {
-            instructions += ' SHORT TEXT: READ EXACTLY AS WRITTEN. NO HALLUCINATIONS.';
-        }
-
-        // Note: Speed is handled via audioConfig.speaking_rate, so we DO NOT include it in the prompt
-        // to avoid "double speak" issues where the model reads the instruction or repeats the text.
-
-        resolvedPrompt = `(SYSTEM: ${instructions}) ${corePrompt}`;
-    } else if (rate && rate !== 1.0) {
-        // Even if only rate is provided, we don't put it in the prompt anymore.
-        // But if there's absolutely no other prompt, we might want a minimal system guard?
-        // Actually, if there's no prompt, we just return null and let audioConfig handle it.
+    if (wordCount > 0 && wordCount < 9) {
+        // MICRO-UTTERANCE MODE for short segments (1-3 words)
+        // Combine style instructions with strict rendering constraints
+        const styleSection = corePrompt ? `(SYSTEM: ${systemInstruction}) ${corePrompt}\n\n` : '';
+        resolvedPrompt = `${styleSection}${MICRO_UTTERANCE_PROMPT_TEMPLATE.replace('{{TEXT}}', text.trim())}`;
+    } else if (corePrompt) {
+        // Standard style-only mode for 4+ words
+        resolvedPrompt = `(SYSTEM: ${systemInstruction}) ${corePrompt}`;
+    } else {
+        // No prompt and not a micro-utterance
         resolvedPrompt = '';
     }
 

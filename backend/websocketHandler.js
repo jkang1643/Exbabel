@@ -781,7 +781,8 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 },
                 mode: response.mode,
                 // Include resolved routing for frontend visibility
-                resolvedRoute: response.route
+                resolvedRoute: response.route,
+                ssmlOptions: ttsRequest.ssmlOptions || null
               }));
             }
 

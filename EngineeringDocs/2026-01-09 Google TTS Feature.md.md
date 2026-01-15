@@ -40,19 +40,20 @@ Resolved an issue where the "browser-based speeding fallback" failsafe was not t
 
 ---
 
-### BUG 18: FIXED — Hallucination Safeguard for Short Segments
+
+### BUG 18: FIXED — Hallucination Safeguard for Short Segments (MICRO-UTTERANCE MODE)
 **Status:** ✅ RESOLVED (2026-01-15)
 
-Resolved an issue where short segments (1-3 words) frequently caused Gemini TTS to "hallucinate" or speak unrelated content instead of the requested text.
+Resolved an issue where short segments (1-3 words) frequently caused Gemini TTS to "hallucinate" or speak unrelated content instead of the requested text. The previous instruction-based safeguard was replaced with a more robust, template-based approach.
 
 #### Root Cause:
 1. **Model Over-Creativity:** The Gemini generative model occasionally interpreting short, isolated phrases as a seed for creative continuation rather than a direct read task.
-2. **Lack of Constraints:** The previous strict system instruction (`DO NOT SPEAK THESE INSTRUCTIONS`) was sufficient for long text but not aggressive enough for micro-segments.
+2. **Lack of Constraints:** The previous strict system instruction (`SHORT TEXT: READ EXACTLY AS WRITTEN...`) was sometimes ignored or interpreted as part of the style, especially for micro-segments.
 
 #### Key Fixes:
-1. **Dynamic Prompt Injection:** Modified `promptResolver.js` to analyze the word count of the input text.
-2. **Strict Instruction:** For texts with fewer than 4 words, the system now appends a forceful instruction: `SHORT TEXT: READ EXACTLY AS WRITTEN. NO HALLUCINATIONS.`
-3. **Outcome:** This forces the model into a strict "read-only" mode for short phrases (e.g., "Amen", "Yes, Lord"), eliminating creative deviations while preserving the requested style.
+1. **Micro-Utterance Template (Combined):** Modified `promptResolver.js` to combine style instructions (persona presets, intensity) with a strict, structured rendering template for texts with **8 words or less**.
+2. **Logic Enhancement:** The safeguard applies the standard system instruction and persona style (e.g., "Apostolic Fire") before the `MICRO-UTTERANCE MODE` block, ensuring that segments up to 8 words maintain their character while adhering to rigid rendering constraints.
+3. **Outcome:** This broader threshold (expanded from 3 to 8 words) effectively eliminates creative hallucinations and fillers for a wider variety of short and medium phrases common in sermon delivery.
 
 ---
 

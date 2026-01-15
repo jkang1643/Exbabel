@@ -695,7 +695,6 @@ export class TtsPlayerController {
             const audio = new Audio(audioUrl);
 
             // Apply playback rate reinforcement for Gemini-TTS (solid guarantee)
-            // Note: Chirp 3 HD and Neural2/Standard voices handle speed via backend synthesis parameters
             if (queueItem.resolvedRoute?.tier === TtsTier.GEMINI || queueItem.resolvedRoute?.engine === 'gemini_tts' || queueItem.resolvedRoute?.voiceName === 'Kore') {
                 if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {
                     const rate = parseFloat(queueItem.ssmlOptions.rate);
@@ -707,6 +706,14 @@ export class TtsPlayerController {
             }
 
             this.currentAudio = audio;
+
+            // Log metadata for debugging, but don't block logic on it
+            audio.onloadedmetadata = () => {
+                console.log(`[TtsPlayerController] Audio loaded: duration=${audio.duration}s, segment=${queueItem.segmentId}`);
+            };
+
+            // Log if metadata loading fails/times out (optional safety)
+            audio.onstalled = () => console.warn('[TtsPlayerController] Audio stalled:', queueItem.segmentId);
 
             audio.onended = () => {
                 console.log('[TtsPlayerController] Audio playback ended for segment:', queueItem.segmentId);
