@@ -8,7 +8,7 @@
  * PR3: Full integration with audio playback
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Volume2, VolumeX, Play, Square, ChevronDown, ChevronUp } from 'lucide-react';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
@@ -17,8 +17,12 @@ import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
 import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js';
 
-export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerReady, translations }) {
-    const [controller] = useState(() => new TtsPlayerController(sendMessage));
+export function TtsPanel({ controller, targetLang, isConnected, translations }) {
+    // Controller is now passed from parent (ListenerPage) to ensure stability across re-renders
+    if (!controller) {
+        console.warn('[TtsPanel] No controller provided!');
+    }
+
     const [playerState, setPlayerState] = useState(TtsPlayerState.STOPPED);
     const [enabled, setEnabled] = useState(false);
     const [selectedVoice, setSelectedVoice] = useState('Kore');
@@ -104,11 +108,19 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
             setResolvedRoute(route);
         };
 
-        // Expose controller to parent component
-        if (onControllerReady) {
-            onControllerReady(controller);
-        }
-    }, [controller, onControllerReady]);
+        controller.onRouteResolved = (route) => {
+            console.log('[TtsPanel] Route resolved:', route);
+            setResolvedRoute(route);
+        };
+
+        return () => {
+            console.log('[TtsPanel] Component unmounting, clearing listeners');
+            // Remove listeners when panel unmounts, but do NOT dispose controller
+            controller.onStateChange = null;
+            controller.onError = null;
+            controller.onRouteResolved = null;
+        };
+    }, [controller]);
 
     // Update controller language when targetLang changes
     useEffect(() => {
@@ -731,71 +743,69 @@ export function TtsPanel({ sendMessage, targetLang, isConnected, onControllerRea
                             </button>
 
                             {/* Speak Last Final Segment */}
-                            {true && (
-                                <button
-                                    onClick={() => {
-                                        console.log('[TtsPanel] Speak Last Final Segment clicked!');
-                                        console.log('[TtsPanel] Available translations:', translations);
+                            <button
+                                onClick={() => {
+                                    console.log('[TtsPanel] Speak Last Final Segment clicked!');
+                                    console.log('[TtsPanel] Available translations:', translations);
 
-                                        if (!translations || translations.length === 0) {
-                                            console.log('[TtsPanel] No translations available');
-                                            alert('No translations available');
-                                            return;
+                                    if (!translations || translations.length === 0) {
+                                        console.log('[TtsPanel] No translations available');
+                                        alert('No translations available');
+                                        return;
+                                    }
+
+                                    // Get the most recent final segment
+                                    const lastSegment = [...translations].reverse().find(t => {
+                                        // Check if this is a valid final segment
+                                        // Priority: translated text > original text
+                                        const hasTranslatedText = !!(t.translated || t.translatedText);
+                                        const hasOriginalText = !!(t.original || t.text || t.originalText);
+                                        let isValid = hasTranslatedText || hasOriginalText;
+
+                                        // For auto-segmented entries: must not be partial
+                                        if (t.isPartial !== undefined) {
+                                            isValid = isValid && !t.isPartial;
                                         }
 
-                                        // Get the most recent final segment
-                                        const lastSegment = [...translations].reverse().find(t => {
-                                            // Check if this is a valid final segment
-                                            // Priority: translated text > original text
-                                            const hasTranslatedText = !!(t.translated || t.translatedText);
-                                            const hasOriginalText = !!(t.original || t.text || t.originalText);
-                                            let isValid = hasTranslatedText || hasOriginalText;
+                                        return isValid;
+                                    });
 
-                                            // For auto-segmented entries: must not be partial
-                                            if (t.isPartial !== undefined) {
-                                                isValid = isValid && !t.isPartial;
-                                            }
+                                    console.log('[TtsPanel] Found last segment:', lastSegment);
 
-                                            return isValid;
+                                    if (lastSegment) {
+                                        // Prioritize translated text over original text
+                                        const segmentText = lastSegment.translated || lastSegment.translatedText || lastSegment.original || lastSegment.text;
+                                        const segmentId = `final-${Date.now()}`;
+
+                                        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+                                        const tier = voiceOption?.tier || 'neural2';
+
+                                        console.log('[TtsPanel] Speaking last final segment:', {
+                                            text: segmentText.substring(0, 50) + '...',
+                                            segmentId,
+                                            tier,
+                                            controller: !!controller
                                         });
 
-                                        console.log('[TtsPanel] Found last segment:', lastSegment);
-
-                                        if (lastSegment) {
-                                            // Prioritize translated text over original text
-                                            const segmentText = lastSegment.translated || lastSegment.translatedText || lastSegment.original || lastSegment.text;
-                                            const segmentId = `final-${Date.now()}`;
-
-                                            const voiceOption = availableVoices.find(v => v.value === selectedVoice);
-                                            const tier = voiceOption?.tier || 'neural2';
-
-                                            console.log('[TtsPanel] Speaking last final segment:', {
-                                                text: segmentText.substring(0, 50) + '...',
-                                                segmentId,
-                                                tier,
-                                                controller: !!controller
-                                            });
-
-                                            if (controller && segmentText && segmentText.trim()) {
-                                                console.log('[TtsPanel] Calling controller.speakTextNow with:', segmentText, segmentId, tier);
-                                                controller.speakTextNow(segmentText, segmentId, { tier });
-                                                // Removed alert(...) to prevent breaking user gesture chain and timing issues
-                                            } else {
-                                                console.error('[TtsPanel] Cannot speak - controller:', !!controller, 'text:', !!segmentText);
-                                                alert('Cannot speak - check console for details');
-                                            }
+                                        if (controller && segmentText && segmentText.trim()) {
+                                            console.log('[TtsPanel] Calling controller.speakTextNow with:', segmentText, segmentId, tier);
+                                            controller.speakTextNow(segmentText, segmentId, { tier });
+                                            // Removed alert(...) to prevent breaking user gesture chain and timing issues
                                         } else {
-                                            console.log('[TtsPanel] No final segments found');
-                                            alert('No final segments available to speak');
+                                            console.error('[TtsPanel] Cannot speak - controller:', !!controller, 'text:', !!segmentText);
+                                            alert('Cannot speak - check console for details');
                                         }
-                                    }}
-                                    disabled={!isConnected}
-                                    title={isConnected ? 'Click to speak last final segment' : 'Not connected'}
-                                    className="w-full px-3 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    🎤 Speak Last Final Segment
-                                </button>
-                            )}
+                                    } else {
+                                        console.log('[TtsPanel] No final segments found');
+                                        alert('No final segments available to speak');
+                                    }
+                                }}
+                                disabled={!isConnected}
+                                title={isConnected ? 'Click to speak last final segment' : 'Not connected'}
+                                className="w-full px-3 py-2 bg-green-600 text-white text-sm rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                🎤 Speak Last Final Segment
+                            </button>
                         </div>
                     )}
 

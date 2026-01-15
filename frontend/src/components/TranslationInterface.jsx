@@ -247,39 +247,40 @@ function TranslationInterface({ onBackToHome }) {
               });
 
               if (DEBUG) console.log(`[TranslationInterface] ✅ STATE UPDATED - New history total: ${newHistory.length} items (sorted by seqId/timestamp)`);
+
+              // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+              const suspicious = newHistory.slice(-5).filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated)));
+              if (suspicious.length) {
+                console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                  path: 'FINAL_HANDLER',
+                  suspicious: suspicious.map(it => ({
+                    translated: it.translated,
+                    fp: fp(it.translated),
+                    seqId: it.sequenceId,
+                    sourceSeqId: it.sourceSeqId,
+                    isSegmented: it.isSegmented
+                  }))
+                });
+              }
+
+              // COMMIT LOGGING: Log exact final text being committed to history
+              console.log('[SOLO_COMMIT]', {
+                commitId: Date.now(),
+                path: 'FINAL_HANDLER',
+                side: 'SOLO',
+                commitOriginal: newItem.original,
+                commitTranslated: newItem.translated,
+                originalFp: fp(newItem.original),
+                translatedFp: fp(newItem.translated),
+                seqId: finalData.seqId,
+                sourceSeqId: finalData.sourceSeqId,
+                isPartial: false,
+                ts: Date.now()
+              });
+
               return newHistory;
             })
           })
-
-          // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-          const suspicious = newHistory.slice(-5).filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated)));
-          if (suspicious.length) {
-            console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-              path: 'FINAL_HANDLER',
-              suspicious: suspicious.map(it => ({
-                translated: it.translated,
-                fp: fp(it.translated),
-                seqId: it.sequenceId,
-                sourceSeqId: it.sourceSeqId,
-                isSegmented: it.isSegmented
-              }))
-            });
-          }
-
-          // COMMIT LOGGING: Log exact final text being committed to history
-          console.log('[SOLO_COMMIT]', {
-            commitId: Date.now(),
-            path: 'FINAL_HANDLER',
-            side: 'SOLO',
-            commitOriginal: newItem.original,
-            commitTranslated: newItem.translated,
-            originalFp: fp(newItem.original),
-            translatedFp: fp(newItem.translated),
-            seqId: finalSeqId,
-            sourceSeqId: message?.sourceSeqId,
-            isPartial: false,
-            ts: Date.now()
-          });
 
           if (DEBUG) console.log(`[TranslationInterface] ✅ Added to history: "${joinedText.substring(0, 50)}..."`);
         }
@@ -475,7 +476,7 @@ function TranslationInterface({ onBackToHome }) {
         }
         break
 
-      case 'TRANSCRIPT_FINAL':
+      case 'TRANSCRIPT_FINAL': {
         // English source transcript final - commit to history
         if (message.isPartial === true) {
           console.warn(`[TranslationInterface] ⚠️ SAFEGUARD: Received TRANSCRIPT_FINAL marked as partial - ignoring`);
@@ -501,7 +502,7 @@ function TranslationInterface({ onBackToHome }) {
           }
 
           // Add to history
-          setTranslationHistory(prev => {
+          setFinalTranslations(prev => {
             const recentEntries = prev.slice(-3);
             const isDuplicate = recentEntries.some(entry => entry.text === transcriptFinalText);
             if (isDuplicate) {
@@ -519,8 +520,9 @@ function TranslationInterface({ onBackToHome }) {
           });
         }
         break
+      }
 
-      case 'TRANSLATION_FINAL':
+      case 'TRANSLATION_FINAL': {
         // Translation final - commit to history only if targetLang matches
         if (message.isPartial === true) {
           console.warn(`[TranslationInterface] ⚠️ SAFEGUARD: Received TRANSLATION_FINAL marked as partial - ignoring`);
@@ -557,7 +559,7 @@ function TranslationInterface({ onBackToHome }) {
           // Commit to history (use existing final handling logic)
           const finalOriginalText = message.correctedText || message.originalText || '';
 
-          setTranslationHistory(prev => {
+          setFinalTranslations(prev => {
             const recentEntries = prev.slice(-3);
             const isDuplicate = recentEntries.some(entry => entry.text === translationFinalText);
             if (isDuplicate) {
@@ -576,6 +578,7 @@ function TranslationInterface({ onBackToHome }) {
           });
         }
         break
+      }
 
       case 'translation':
         if (message.isPartial) {
@@ -734,23 +737,23 @@ function TranslationInterface({ onBackToHome }) {
                     return (a.timestamp || 0) - (b.timestamp || 0);
                   });
 
+                  // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+                  const suspicious = newHistory.slice(-5).filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated)));
+                  if (suspicious.length) {
+                    console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                      path: 'FINAL_HANDLER_FALLBACK',
+                      suspicious: suspicious.map(it => ({
+                        translated: it.translated,
+                        fp: fp(it.translated),
+                        seqId: it.sequenceId,
+                        sourceSeqId: it.sourceSeqId,
+                        isSegmented: it.isSegmented
+                      }))
+                    });
+                  }
+
                   return newHistory;
                 });
-
-                // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-                const suspicious = newHistory.slice(-5).filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated)));
-                if (suspicious.length) {
-                  console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-                    path: 'FINAL_HANDLER_FALLBACK',
-                    suspicious: suspicious.map(it => ({
-                      translated: it.translated,
-                      fp: fp(it.translated),
-                      seqId: it.sequenceId,
-                      sourceSeqId: it.sourceSeqId,
-                      isSegmented: it.isSegmented
-                    }))
-                  });
-                }
 
                 if (DEBUG) console.log(`[TranslationInterface] ✅ FALLBACK: Added to history: "${textToAdd.substring(0, 50)}..."`);
               }
@@ -978,11 +981,6 @@ function TranslationInterface({ onBackToHome }) {
     // Clear live partials when stopping
     setLivePartial('')
     setLivePartialOriginal('')
-
-    // Reset catch-up mode and lag detection
-    catchUpModeRef.current = false
-    messageTimestampsRef.current = []
-    lastTextLengthRef.current = 0
 
     // Reset segmenter deduplication memory after significant stop
     // This prevents old text from interfering with new sessions

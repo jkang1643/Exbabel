@@ -52,6 +52,27 @@ export class TtsPlayerController {
             this.primingAudio = new Audio();
             this.primingAudio.volume = 0;
         }
+
+        // Diagnostic tracking
+        this.instanceId = Math.random().toString(16).slice(2);
+        console.log(`[TtsPlayerController] init ${this.instanceId}`);
+
+        // Safeties
+        this.playedSet = new Set(); // Prevent duplicate playback of the same segment
+        this.receivedAudioBySegment = new Map(); // Track received audio to prevent double-processing: Map<segmentId, {msgId, fingerprint}>
+        this.requestIdBySegment = new Map(); // Track requestId per segmentId
+        this._isProcessingQueue = false; // Serialize queue processing
+    }
+
+    /**
+     * Compute a cheap hash for audio bytes to detect re-synthesis vs re-play
+     * @private
+     */
+    _cheapAudioFingerprint(uint8) {
+        const len = uint8.length;
+        const head = Array.from(uint8.slice(0, 16)).join(',');
+        const tail = Array.from(uint8.slice(Math.max(0, len - 16))).join(',');
+        return `${len}:${head}:${tail}`;
     }
 
     /**
@@ -85,6 +106,9 @@ export class TtsPlayerController {
         this.queue = [];
         this.inFlight.clear();
         this.dedupeSet.clear();
+        this.playedSet.clear(); // Clear playback history on start
+        this.receivedAudioBySegment.clear();
+        this.requestIdBySegment.clear();
         this.currentRequestCount = 0;
         this.lastSeenSegmentId = startFromSegmentId;
 
@@ -132,6 +156,9 @@ export class TtsPlayerController {
         this.queue = [];
         this.inFlight.clear();
         this.dedupeSet.clear();
+        this.playedSet.clear();
+        this.receivedAudioBySegment.clear();
+        this.requestIdBySegment.clear();
         this.currentRequestCount = 0;
         this.lastSeenSegmentId = null;
 
@@ -346,6 +373,9 @@ export class TtsPlayerController {
                 ttsPrompt: this.ttsPrompt,
                 intensity: this.intensity
             });
+
+            // Track request ID
+            this.requestIdBySegment.set(nextPending.segmentId, Date.now());
         }
     }
 
@@ -360,18 +390,32 @@ export class TtsPlayerController {
                 console.log('[TtsPlayerController] Received ack:', msg.action);
                 break;
 
-            case 'tts/audio':
+            case 'tts/audio': {
                 // Unary audio response (streaming-compatible structure)
-                console.log('[TtsPlayerController] Received audio for segment:', msg.segmentId);
+                const wsMessageId = Math.random().toString(16).slice(2, 6);
+                const segmentId = msg.segmentId;
+                const requestId = this.requestIdBySegment.get(segmentId) || 'unknown';
 
-                // Check for out-of-order responses (protected against overlap)
+                console.log(`[TTS RX] [idx:${this.instanceId}] [msg:${wsMessageId}] segment:${segmentId} requestId:${requestId}`);
+
+                // Deduplication: check if we already received audio for this segment
+                if (this.receivedAudioBySegment.has(segmentId)) {
+                    const existing = this.receivedAudioBySegment.get(segmentId);
+                    console.warn(`[TTS] [idx:${this.instanceId}] Duplicate audio ignored`, {
+                        segmentId,
+                        newMsgId: wsMessageId,
+                        existingMsgId: existing.msgId
+                    });
+                    return;
+                }
+
                 // Check for out-of-order responses (protected against overlap)
                 if (msg.segmentId && String(msg.segmentId).includes('_ts')) {
                     const parts = String(msg.segmentId).split('_ts');
-                    const requestId = parseInt(parts[parts.length - 1], 10);
-                    if (requestId < this.lastRequestId) {
+                    const msgRequestId = parseInt(parts[parts.length - 1], 10);
+                    if (msgRequestId < this.lastRequestId) {
                         console.warn('[TtsPlayerController] Ignoring out-of-order audio response', {
-                            receivedId: requestId,
+                            receivedId: msgRequestId,
                             currentId: this.lastRequestId,
                             segmentId: msg.segmentId
                         });
@@ -396,10 +440,10 @@ export class TtsPlayerController {
                     segmentId: msg.segmentId,
                     mode: msg.mode || 'unary',
                     audioData: {
-                        bytesBase64: msg.audio.bytesBase64,
                         mimeType: msg.audio.mimeType,
                         durationMs: msg.audio.durationMs,
-                        sampleRateHz: msg.audio.sampleRateHz
+                        sampleRateHz: msg.audio.sampleRateHz,
+                        bytesBase64: msg.audio.bytesBase64 // Keep reference for fingerprinting if needed
                     },
                     resolvedRoute: msg.resolvedRoute,
                     ssmlOptions: msg.ssmlOptions || (msg.segmentId && this._pendingRequests?.get(msg.segmentId)) || null,
@@ -417,18 +461,31 @@ export class TtsPlayerController {
                     radioQueueItem.resolvedRoute = msg.resolvedRoute;
                     radioQueueItem.ssmlOptions = queueItem.ssmlOptions;
                     this.currentRequestCount--;
-                    console.log(`[TtsPlayerController] Marked segment ${msg.segmentId} as ready. Request count: ${this.currentRequestCount}`);
+                    console.log(`[TtsPlayerController] [idx:${this.instanceId}] Marked segment ${msg.segmentId} as ready. Request count: ${this.currentRequestCount}`);
 
                     // Request next pending item
                     this._requestNextPending();
                 }
 
                 this.audioQueue.push(queueItem);
-                console.log(`[TtsPlayerController] Added to queue. New length: ${this.audioQueue.length}`);
+
+                // Diagnostic: Log fingerprint and store in dedupe map
+                try {
+                    const bytes = Uint8Array.from(atob(msg.audio.bytesBase64), c => c.charCodeAt(0));
+                    const fingerprint = this._cheapAudioFingerprint(bytes);
+                    this.receivedAudioBySegment.set(segmentId, { msgId: wsMessageId, fingerprint });
+                    console.log(`[TTS RX FINGERPRINT] [idx:${this.instanceId}] [msg:${wsMessageId}] segment:${segmentId} fingerprint:${fingerprint}`);
+                } catch (e) {
+                    console.warn('[TtsPlayerController] Failed to compute fingerprint', e);
+                    this.receivedAudioBySegment.set(segmentId, { msgId: wsMessageId });
+                }
+
+                console.log(`[TtsPlayerController] Added to queue [idx:${this.instanceId}]. New length: ${this.audioQueue.length}`); // Updated log
 
                 // Attempt to play next in queue
                 this._processQueue();
                 break;
+            }
 
             case 'tts/audio_chunk':
                 // Streaming audio chunk
@@ -545,6 +602,7 @@ export class TtsPlayerController {
             // Track the rate for this request to apply it in the browser if synthesis-side fails (Gemini)
             if (!this._pendingRequests) this._pendingRequests = new Map();
             this._pendingRequests.set(trackedSegmentId, resolvedSsmlOptions);
+            this.requestIdBySegment.set(trackedSegmentId, requestId);
 
             console.log('[TtsPlayerController] Sending synthesis request:', message);
             this.sendMessage(message);
@@ -560,6 +618,7 @@ export class TtsPlayerController {
     _base64ToBlob(base64, mimeType) {
         try {
             const byteCharacters = atob(base64);
+            console.log(`[TtsPlayerController] Decoded base64: ${byteCharacters.length} bytes`);
             const byteNumbers = new Array(byteCharacters.length);
             for (let i = 0; i < byteCharacters.length; i++) {
                 byteNumbers[i] = byteCharacters.charCodeAt(i);
@@ -577,10 +636,28 @@ export class TtsPlayerController {
      * @private
      */
     /**
-     * Process the audio queue
+     * Process the audio queue with serialization guard
      * @private
      */
     _processQueue() {
+        if (this._isProcessingQueue) {
+            console.log(`[TtsPlayerController] Skipping _processQueue (already processing) [idx:${this.instanceId}]`);
+            return;
+        }
+
+        this._isProcessingQueue = true;
+        try {
+            this._processQueueInternal();
+        } finally {
+            this._isProcessingQueue = false;
+        }
+    }
+
+    /**
+     * Internal implementation of queue processing
+     * @private
+     */
+    _processQueueInternal() {
         // If already playing something, wait for it to finish
         if (this.currentAudio) {
             console.log('[TtsPlayerController] Queue processing: Audio already playing, waiting...');
@@ -636,7 +713,7 @@ export class TtsPlayerController {
                 // If the *next* item failed, we should probably skip it to unblock the queue.
                 console.warn('[TtsPlayerController] Next item failed, skipping:', nextOrdered.segmentId);
                 nextOrdered.status = 'done'; // Mark done to skip
-                this._processQueue(); // Recurse to try next one
+                setTimeout(() => this._processQueue(), 0); // Recurse to try next one
                 return;
             } else {
                 // It is 'pending' or 'requesting'.
@@ -672,14 +749,14 @@ export class TtsPlayerController {
                 console.error('[TtsPlayerController] Failed to decode audio for segment:', nextItem.segmentId);
                 nextItem.status = 'error';
                 if (radioItem) radioItem.status = 'failed';
-                this._processQueue(); // Try next one
+                setTimeout(() => this._processQueue(), 0); // Try next one
             }
         } else {
             // Placeholder for streaming
             console.warn('[TtsPlayerController] Streaming chunks not yet supported in sequential player');
             nextItem.status = 'error';
             if (radioItem) radioItem.status = 'failed';
-            this._processQueue();
+            setTimeout(() => this._processQueue(), 0);
         }
     }
 
@@ -690,9 +767,23 @@ export class TtsPlayerController {
      * @param {Object} queueItem
      */
     _playAudio(audioBlob, queueItem) {
+        const segmentId = queueItem.segmentId;
+        const requestId = this.requestIdBySegment.get(segmentId) || 'unknown';
+
+        if (this.playedSet.has(segmentId)) {
+            console.warn(`[TTS] Blocked duplicate play [idx:${this.instanceId}] segment:${segmentId} requestId:${requestId}`);
+            queueItem.status = 'done';
+            setTimeout(() => this._processQueue(), 0);
+            return;
+        }
+
+        this.playedSet.add(segmentId);
+
         try {
             const audioUrl = URL.createObjectURL(audioBlob);
             const audio = new Audio(audioUrl);
+            audio.volume = 1.0; // Explicitly ensure volume is up
+            console.log(`[TtsPlayerController] Created Audio object for segment: ${segmentId}, volume: ${audio.volume}, blobSize: ${audioBlob.size}`);
 
             // Apply playback rate reinforcement for Gemini-TTS (solid guarantee)
             if (queueItem.resolvedRoute?.tier === TtsTier.GEMINI || queueItem.resolvedRoute?.engine === 'gemini_tts' || queueItem.resolvedRoute?.voiceName === 'Kore') {
@@ -709,7 +800,17 @@ export class TtsPlayerController {
 
             // Log metadata for debugging, but don't block logic on it
             audio.onloadedmetadata = () => {
-                console.log(`[TtsPlayerController] Audio loaded: duration=${audio.duration}s, segment=${queueItem.segmentId}`);
+                console.log(`[TtsPlayerController] Audio loaded [idx:${this.instanceId}]: duration=${audio.duration}s, segment=${queueItem.segmentId}`);
+
+                // Diagnostic: Too-long-for-text warning
+                const radioItem = this.queue.find(item => item.segmentId === queueItem.segmentId);
+                const text = radioItem ? radioItem.text : (queueItem.text || '');
+                if (text) {
+                    const wc = text.trim().split(/\s+/).filter(Boolean).length;
+                    if (wc <= 5 && audio.duration > 3.5) {
+                        console.warn(`[TTS] [idx:${this.instanceId}] suspicious duration`, { segmentId: queueItem.segmentId, wc, duration: audio.duration, text });
+                    }
+                }
             };
 
             // Log if metadata loading fails/times out (optional safety)
@@ -727,7 +828,7 @@ export class TtsPlayerController {
                 this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
 
                 // Play next in queue
-                this._processQueue();
+                setTimeout(() => this._processQueue(), 0);
             };
 
             audio.onerror = (error) => {
@@ -738,7 +839,7 @@ export class TtsPlayerController {
                 queueItem.status = 'error';
                 URL.revokeObjectURL(audioUrl);
 
-                this._processQueue();
+                setTimeout(() => this._processQueue(), 0);
 
                 if (this.onError) {
                     this.onError({
@@ -748,9 +849,9 @@ export class TtsPlayerController {
                 }
             };
 
-            console.log('[TtsPlayerController] Starting audio play() for segment:', queueItem.segmentId);
+            console.log(`[TtsPlayerController] Starting audio play() [idx:${this.instanceId}] for segment:`, queueItem.segmentId);
             audio.play().then(() => {
-                console.log('[TtsPlayerController] Audio playing:', queueItem.segmentId);
+                console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
             }).catch(error => {
                 if (error.name === 'AbortError') {
                     console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
@@ -769,7 +870,7 @@ export class TtsPlayerController {
                 }
                 URL.revokeObjectURL(audioUrl);
                 // Even on play error, try next in queue
-                this._processQueue();
+                setTimeout(() => this._processQueue(), 0);
             });
         } catch (error) {
             console.error('[TtsPlayerController] Error in _playAudio:', error);
@@ -781,7 +882,7 @@ export class TtsPlayerController {
                     message: error.message
                 });
             }
-            this._processQueue();
+            setTimeout(() => this._processQueue(), 0);
         }
     }
 
@@ -849,5 +950,29 @@ export class TtsPlayerController {
             queueLength: this.audioQueue.length,
             lastResolvedRoute: this.lastResolvedRoute
         };
+    }
+
+    /**
+     * Dispose of resources
+     */
+    dispose() {
+        console.log(`[TtsPlayerController] Disposing controller [idx:${this.instanceId}]`);
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio.onended = null;
+            this.currentAudio.onerror = null;
+            this.currentAudio = null;
+        }
+        if (this.primingAudio) {
+            this.primingAudio.pause();
+            this.primingAudio = null;
+        }
+        this.audioQueue = [];
+        this.queue = [];
+        this.playedSet.clear();
+        this.receivedAudioBySegment.clear();
+        this.requestIdBySegment.clear();
+        this.inFlight.clear();
+        this.dedupeSet.clear();
     }
 }

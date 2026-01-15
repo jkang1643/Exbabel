@@ -8,6 +8,7 @@ import { Header } from './Header';
 import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
 import { TtsPanel } from './TtsPanel';
+import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { SentenceSegmenter } from '../utils/sentenceSegmenter';
 import { TRANSLATION_LANGUAGES } from '../config/languages.js';
 
@@ -300,6 +301,26 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     };
   }, []);
 
+  // Initialize TTS Controller once
+  useEffect(() => {
+    if (TTS_UI_ENABLED && !ttsControllerRef.current) {
+      console.log('[ListenerPage] Initializing stable TTS controller');
+      ttsControllerRef.current = new TtsPlayerController((msg) => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify(msg));
+        }
+      });
+    }
+
+    return () => {
+      if (ttsControllerRef.current) {
+        console.log('[ListenerPage] Disposing stable TTS controller on cleanup');
+        ttsControllerRef.current.dispose();
+        ttsControllerRef.current = null;
+      }
+    };
+  }, []);
+
   const handleJoinSession = async () => {
     if (!sessionCode.trim()) {
       setError('Please enter a session code');
@@ -536,7 +557,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             }
             break;
 
-          case 'TRANSCRIPT_FINAL':
+          case 'TRANSCRIPT_FINAL': {
             // English source transcript final - update original text history
             const originalText = message.originalText || '';
             const correctedOriginalText = message.correctedText || originalText;
@@ -593,8 +614,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               });
             }
             break;
+          }
 
-          case 'TRANSLATION_FINAL':
+          case 'TRANSLATION_FINAL': {
             // Translation final - add to history only if targetLang matches
             const finalText = message.translatedText || undefined;
             const finalOriginalText = message.originalText || '';
@@ -687,24 +709,24 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     });
                   }
 
+                  // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+                  const suspicious = newEntry.translated ? [newEntry].filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated))) : [];
+                  if (suspicious.length) {
+                    console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                      path: 'FINAL_HANDLER',
+                      suspicious: suspicious.map(it => ({
+                        translated: it.translated,
+                        fp: fp(it.translated),
+                        seqId: it.seqId,
+                        sourceSeqId: it.sourceSeqId,
+                        isSegmented: it.isSegmented
+                      }))
+                    });
+                  }
+
                   return next;
                 });
               });
-
-              // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-              const suspicious = newEntry.translated ? [newEntry].filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated))) : [];
-              if (suspicious.length) {
-                console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-                  path: 'FINAL_HANDLER',
-                  suspicious: suspicious.map(it => ({
-                    translated: it.translated,
-                    fp: fp(it.translated),
-                    seqId: it.seqId,
-                    sourceSeqId: it.sourceSeqId,
-                    isSegmented: it.isSegmented
-                  }))
-                });
-              }
 
               // Radio Mode: Auto-enqueue finalized segment for TTS
               if (ttsControllerRef.current &&
@@ -729,6 +751,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               }
             }
             break;
+          }
 
           case 'translation':
             console.log('[LISTENER_CASE_TRANSLATION]', { type: message.type, isPartial: message.isPartial });
@@ -1350,25 +1373,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         </div>
 
         {/* TTS Panel - Only shown when feature flag enabled */}
-        {TTS_UI_ENABLED && (() => {
-          console.log('[ListenerPage] Rendering TTS Panel - TTS_UI_ENABLED is true');
-          return (
-            <TtsPanel
-              sendMessage={(msg) => {
-                if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                  wsRef.current.send(JSON.stringify(msg));
-                }
-              }}
-              targetLang={targetLang}
-              isConnected={connectionState === 'open'}
-              translations={translations}
-              onControllerReady={(controller) => {
-                ttsControllerRef.current = controller;
-                console.log('[ListenerPage] TTS controller ready');
-              }}
-            />
-          );
-        })()}
+        {TTS_UI_ENABLED && (
+          <TtsPanel
+            controller={ttsControllerRef.current}
+            targetLang={targetLang}
+            isConnected={connectionState === 'open'}
+            translations={translations}
+          />
+        )}
 
         {/* Translation History */}
         <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-2 sm:mx-0">

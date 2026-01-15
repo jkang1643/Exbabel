@@ -10,6 +10,24 @@ This is a running "what is done" document capturing what we changed, why, and wh
 **Most recent at the top.**
 
 
+### BUG 21: FIXED — Audio Playback Regression & Component Lifecycle
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved a system-wide audio regression where browser audio was blocked, and the TTS system would fail to play audio despite successful backend synthesis.
+
+#### Root Cause:
+1. **Lifecycle Instability:** In `ListenerPage.jsx`, the `TtsPlayerController` was being disposed of during React lifecycle transitions (especially in Strict Mode) but its reference was not being cleared. This created a "zombie" controller that held an invalid audio context, preventing the browser's audio engine from being "primed" by user gestures.
+2. **Lexical Scoping Errors:** Multiple components (`ListenerPage`, `HostPage`, `TranslationInterface`) had logic bugs where variables defined inside `useState` setter callbacks (like `newHistory` or `newEntry`) were accessed outside those callbacks. This caused `ReferenceError` crashes during real-time updates.
+3. **Linting Violations:** `TtsPlayerController.js` had case-block lexical declarations without block scopes, which prevented clean builds and introduced subtle reference risks.
+
+#### Key Fixes:
+1. **Stable Lifecycle:** Refactored `ListenerPage.jsx` to consolidate TTS initialization and disposal into a single `useEffect`. The controller reference is now explicitly nulled on cleanup, ensuring only one valid, primed controller exists at any time.
+2. **Scoping Correction:** Wrapped case blocks with curly braces and moved logic dependent on local setter variables (like invariant checks and logging) inside the correct lexical scope.
+3. **Redundancy Cleanup:** Removed unnecessary logic wrappers in `TtsPanel.jsx` that were complicating the render cycle.
+4. **Outcome:** Audio playback is fully restored and reliable across all pages. The codebase is now free of these specific runtime scoping errors.
+
+---
+
 ### BUG 20: FIXED — Gemini TTS Double Speak (Redundant Speed Instructions)
 **Status:** ✅ RESOLVED (2026-01-15)
 

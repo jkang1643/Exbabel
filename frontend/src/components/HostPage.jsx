@@ -244,26 +244,25 @@ export function HostPage({ onBackToHome }) {
                   });
                 }
 
+                // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+                const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
+                if (suspicious.length) {
+                  console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                    path: 'SEGMENTER_ONFLUSH',
+                    suspicious: suspicious.map(it => ({
+                      text: it.text,
+                      fp: fp(it.text),
+                      seqId: it.seqId,
+                      sourceSeqId: it.sourceSeqId,
+                      isSegmented: it.isSegmented
+                    }))
+                  });
+                }
+
+                console.log(`[HostPage] ✅ Flushed to history with paint: "${joinedText.substring(0, 40)}..."`);
                 return newHistory;
               });
             });
-
-            // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-            const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
-            if (suspicious.length) {
-              console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-                path: 'SEGMENTER_ONFLUSH',
-                suspicious: suspicious.map(it => ({
-                  text: it.text,
-                  fp: fp(it.text),
-                  seqId: it.seqId,
-                  sourceSeqId: it.sourceSeqId,
-                  isSegmented: it.isSegmented
-                }))
-              });
-            }
-
-            console.log(`[HostPage] ✅ Flushed to history with paint: "${joinedText.substring(0, 40)}..."`);
           }, 0);
         }
       }
@@ -793,24 +792,25 @@ export function HostPage({ onBackToHome }) {
                       }
 
                       console.log(`[HostPage] ✅ STATE UPDATED - New history total: ${newHistory.length} items (sorted by seqId/timestamp)`);
+
+                      // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+                      const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
+                      if (suspicious.length) {
+                        console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                          path: 'FINAL_HANDLER',
+                          suspicious: suspicious.map(it => ({
+                            text: it.text,
+                            fp: fp(it.text),
+                            seqId: it.seqId,
+                            sourceSeqId: it.sourceSeqId,
+                            isSegmented: it.isSegmented
+                          }))
+                        });
+                      }
+
                       return newHistory.slice(-50); // Keep last 50 entries
                     });
                   });
-
-                  // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-                  const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
-                  if (suspicious.length) {
-                    console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-                      path: 'FINAL_HANDLER',
-                      suspicious: suspicious.map(it => ({
-                        text: it.text,
-                        fp: fp(it.text),
-                        seqId: it.seqId,
-                        sourceSeqId: it.sourceSeqId,
-                        isSegmented: it.isSegmented
-                      }))
-                    });
-                  }
 
                   console.log(`[HostPage] ✅ Added to history: "${joinedText.substring(0, 50)}..."`);
                 }
@@ -938,24 +938,24 @@ export function HostPage({ onBackToHome }) {
                         });
                       }
 
+                      // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
+                      const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
+                      if (suspicious.length) {
+                        console.log('[SUSPICIOUS_COMMIT_ROWS]', {
+                          path: 'FINAL_HANDLER_FALLBACK',
+                          suspicious: suspicious.map(it => ({
+                            text: it.text,
+                            fp: fp(it.text),
+                            seqId: it.seqId,
+                            sourceSeqId: it.sourceSeqId,
+                            isSegmented: it.isSegmented
+                          }))
+                        });
+                      }
+
                       return newHistory.slice(-50);
                     });
                   });
-
-                  // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-                  const suspicious = newHistory.slice(-5).filter(it => it?.text && !seenRawInFpsRef.current.has(fp(it.text)));
-                  if (suspicious.length) {
-                    console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-                      path: 'FINAL_HANDLER_FALLBACK',
-                      suspicious: suspicious.map(it => ({
-                        text: it.text,
-                        fp: fp(it.text),
-                        seqId: it.seqId,
-                        sourceSeqId: it.sourceSeqId,
-                        isSegmented: it.isSegmented
-                      }))
-                    });
-                  }
 
                   // Log after state update completes
                   const finalHistory = transcriptRef.current;
