@@ -396,14 +396,15 @@ export class GoogleTtsService extends TtsService {
             }
         };
 
-        // Standard speed control (supported by all engines via audioConfig)
-        // CRITICAL: We only apply this to audioConfig if:
-        // 1. It's Gemini-TTS (which doesn't use SSML prosody)
-        // 2. It's any other engine using 'text' input (not SSML)
+        // Standard speed control: DISABLED in backend to prevent "double-speed" issues.
+        // We now use browser-side reinforcement (audio.playbackRate) in TtsPlayerController.js
+        // for ALL voices to ensure consistent behavior across Gemini, Chirp 3, and Neural2.
+        /*
         if (ssmlOptions && ssmlOptions.rate && (isGeminiTts || inputType === 'text' || route.tier === 'chirp3_hd')) {
             googleRequest.audioConfig.speaking_rate = ssmlOptions.rate;
             console.log(`[GoogleTtsService] Applied to audioConfig: speaking_rate=${ssmlOptions.rate}`);
         }
+        */
 
         // Handle engine-specific configuration
         if (isGeminiTts) {

@@ -32,13 +32,14 @@ export class TtsPlayerController {
         this.currentAudio = null;
 
         // Radio mode queue management (PR3)
-        this.queue = []; // Array<{ segmentId, text, status: 'pending'|'requesting'|'ready'|'playing'|'done'|'failed', audioBlob?, timestamp }>
+        this.queue = []; // Array<{ segmentId, text, status: 'pending'|'requesting'|'ready'|'playing'|'done'|'failed', audioBlob?, timestamp, timeoutId? }>
         this.lastSeenSegmentId = null; // Track "start from now" marker
         this.inFlight = new Map(); // Map<segmentId, abortToken> for cancellation
-        this.dedupeSet = new Set(); // Set<segmentId> to prevent duplicate requests
+        this.dedupeSet = new Set(); // Set<contentHash> to prevent duplicate requests (uses content hash, not dynamic IDs)
         this.queueLimit = 25; // Maximum queue size
         this.maxConcurrentRequests = 5; // Limit concurrent TTS requests (increased to 5 for smoother Gemini prefetching)
         this.currentRequestCount = 0; // Track active requests
+        this._concurrencyFullSince = null; // Track when concurrency became saturated
 
         // Callbacks
         this.onStateChange = null;
@@ -62,6 +63,43 @@ export class TtsPlayerController {
         this.receivedAudioBySegment = new Map(); // Track received audio to prevent double-processing: Map<segmentId, {msgId, fingerprint}>
         this.requestIdBySegment = new Map(); // Track requestId per segmentId
         this._isProcessingQueue = false; // Serialize queue processing
+
+        // Queue health monitoring (every 5 seconds)
+        this.queueHealthInterval = setInterval(() => {
+            if (this.state === TtsPlayerState.PLAYING) {
+                const pending = this.queue.filter(i => i.status === 'pending').length;
+                const requesting = this.queue.filter(i => i.status === 'requesting').length;
+                const ready = this.queue.filter(i => i.status === 'ready').length;
+                const playing = this.queue.filter(i => i.status === 'playing').length;
+
+                console.log('[TTS QUEUE HEALTH]', {
+                    total: this.queue.length,
+                    pending,
+                    requesting,
+                    ready,
+                    playing,
+                    currentRequestCount: this.currentRequestCount,
+                    maxConcurrent: this.maxConcurrentRequests,
+                    utilizationPct: Math.round((this.currentRequestCount / this.maxConcurrentRequests) * 100)
+                });
+
+                // Alert if queue is growing too large
+                if (this.queue.length > 10) {
+                    console.warn('[TTS] Queue is growing large, may indicate lag:', this.queue.length);
+                }
+
+                // Alert if all concurrency slots are used for >10s
+                if (this.currentRequestCount >= this.maxConcurrentRequests) {
+                    if (!this._concurrencyFullSince) {
+                        this._concurrencyFullSince = Date.now();
+                    } else if (Date.now() - this._concurrencyFullSince > 10000) {
+                        console.error('[TTS] Concurrency saturated for >10s, system is lagging behind');
+                    }
+                } else {
+                    this._concurrencyFullSince = null;
+                }
+            }
+        }, 5000);
     }
 
     /**
@@ -302,9 +340,11 @@ export class TtsPlayerController {
             return;
         }
 
-        // Dedupe check
-        if (this.dedupeSet.has(segment.id)) {
-            console.log('[TtsPlayerController] Skipping duplicate segment', segment.id);
+        // Dedupe check using content hash (not dynamic ID)
+        // This prevents duplicates even when segment.id is dynamically generated (e.g., seg_${Date.now()})
+        const contentHash = `${segment.text.trim()}_${segment.timestamp || 0}`;
+        if (this.dedupeSet.has(contentHash)) {
+            console.log('[TtsPlayerController] Skipping duplicate segment (content hash)', contentHash);
             return;
         }
 
@@ -316,7 +356,7 @@ export class TtsPlayerController {
             timestamp: segment.timestamp || Date.now()
         });
 
-        this.dedupeSet.add(segment.id);
+        this.dedupeSet.add(contentHash);
 
         // Enforce queue limit (drop oldest pending/done)
         if (this.queue.length > this.queueLimit) {
@@ -324,8 +364,12 @@ export class TtsPlayerController {
                 item.status === 'pending' || item.status === 'done'
             )[0];
             if (toRemove) {
+                // Remove from queue
                 this.queue = this.queue.filter(item => item !== toRemove);
-                this.dedupeSet.delete(toRemove.segmentId);
+
+                // Remove content hash from dedupeSet
+                const removeHash = `${toRemove.text.trim()}_${toRemove.timestamp || 0}`;
+                this.dedupeSet.delete(removeHash);
                 console.log('[TtsPlayerController] Dropped oldest item from queue:', toRemove.segmentId);
             }
         }
@@ -357,6 +401,26 @@ export class TtsPlayerController {
         this.currentRequestCount++;
 
         console.log(`[TtsPlayerController] Requesting synthesis for ${nextPending.segmentId}`);
+
+        // Set timeout for stuck requests (15 seconds)
+        const timeoutId = setTimeout(() => {
+            if (nextPending.status === 'requesting') {
+                console.warn(`[TtsPlayerController] Request timeout for ${nextPending.segmentId} after 15s`);
+                nextPending.status = 'failed';
+                nextPending.error = { code: 'TIMEOUT', message: 'Request timed out after 15s' };
+                this.currentRequestCount--;
+                console.log(`[TtsPlayerController] Decremented request count after timeout. New count: ${this.currentRequestCount}`);
+
+                // Try to request next pending item
+                this._requestNextPending();
+
+                // Try to play next ready segment
+                this._processQueue();
+            }
+        }, 15000); // 15 second timeout
+
+        // Store timeout ID for cleanup
+        nextPending.timeoutId = timeoutId;
 
         // Send synthesis request
         if (this.sendMessage) {
@@ -456,6 +520,12 @@ export class TtsPlayerController {
                 // Radio mode: Update queue item status
                 const radioQueueItem = this.queue.find(item => item.segmentId === msg.segmentId);
                 if (radioQueueItem) {
+                    // Clear timeout if it exists
+                    if (radioQueueItem.timeoutId) {
+                        clearTimeout(radioQueueItem.timeoutId);
+                        radioQueueItem.timeoutId = null;
+                    }
+
                     radioQueueItem.status = 'ready';
                     radioQueueItem.audioData = queueItem.audioData;
                     radioQueueItem.resolvedRoute = msg.resolvedRoute;
@@ -465,6 +535,13 @@ export class TtsPlayerController {
 
                     // Request next pending item
                     this._requestNextPending();
+                } else {
+                    // Decrement even if not in radio queue (manual requests via speakTextNow)
+                    // Check if this was a tracked request to prevent double-decrement
+                    if (this.requestIdBySegment.has(msg.segmentId)) {
+                        this.currentRequestCount--;
+                        console.log(`[TtsPlayerController] Decremented request count for non-radio segment: ${msg.segmentId}. New count: ${this.currentRequestCount}`);
+                    }
                 }
 
                 this.audioQueue.push(queueItem);
@@ -511,6 +588,12 @@ export class TtsPlayerController {
                 if (msg.segmentId) {
                     const radioQueueItem = this.queue.find(item => item.segmentId === msg.segmentId);
                     if (radioQueueItem && radioQueueItem.status === 'requesting') {
+                        // Clear timeout if it exists
+                        if (radioQueueItem.timeoutId) {
+                            clearTimeout(radioQueueItem.timeoutId);
+                            radioQueueItem.timeoutId = null;
+                        }
+
                         radioQueueItem.status = 'failed';
                         radioQueueItem.error = { code: msg.code, message: msg.message };
                         this.currentRequestCount--;
@@ -785,14 +868,12 @@ export class TtsPlayerController {
             audio.volume = 1.0; // Explicitly ensure volume is up
             console.log(`[TtsPlayerController] Created Audio object for segment: ${segmentId}, volume: ${audio.volume}, blobSize: ${audioBlob.size}`);
 
-            // Apply playback rate reinforcement for Gemini-TTS (solid guarantee)
-            if (queueItem.resolvedRoute?.tier === TtsTier.GEMINI || queueItem.resolvedRoute?.engine === 'gemini_tts' || queueItem.resolvedRoute?.voiceName === 'Kore') {
-                if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {
-                    const rate = parseFloat(queueItem.ssmlOptions.rate);
-                    if (!isNaN(rate) && rate !== 1.0) {
-                        console.log(`[TtsPlayerController] Reinforcing playbackRate in browser for Gemini: ${rate}x`);
-                        audio.playbackRate = rate;
-                    }
+            // Apply playback rate reinforcement for ALL voices (solid guarantee)
+            if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {
+                const rate = parseFloat(queueItem.ssmlOptions.rate);
+                if (!isNaN(rate) && rate !== 1.0) {
+                    console.log(`[TtsPlayerController] Reinforcing playbackRate in browser [${queueItem.resolvedRoute?.tier || 'unknown'}]: ${rate}x`);
+                    audio.playbackRate = rate;
                 }
             }
 
@@ -957,6 +1038,13 @@ export class TtsPlayerController {
      */
     dispose() {
         console.log(`[TtsPlayerController] Disposing controller [idx:${this.instanceId}]`);
+
+        // Clear queue health monitoring interval
+        if (this.queueHealthInterval) {
+            clearInterval(this.queueHealthInterval);
+            this.queueHealthInterval = null;
+        }
+
         if (this.currentAudio) {
             this.currentAudio.pause();
             this.currentAudio.onended = null;

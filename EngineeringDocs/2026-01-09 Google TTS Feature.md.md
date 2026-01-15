@@ -1,5 +1,5 @@
 # Exbabel — Feat/Google TTS Integration
-**Last updated:** 2026-01-14 (America/Chicago) - Radio Mode Streaming-Compatible Architecture
+**Last updated:** 2026-01-15 (America/Chicago) - Universal TTS Speed & Queue Stability
 
 This is a running "what is done" document capturing what we changed, why, and where we are now regarding the Google Text-to-Speech integration.
 **Newest items are at the top.**
@@ -9,6 +9,33 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
 
+### BUG 22: FIXED — Gemini TTS Lag, Queue Deadlocks & Universal Speed Control
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved critical issues where Gemini TTS would fall behind the live transcript, deadlocking the queue under high load, and fixed the ineffective speed control for non-Gemini (Chirp 3, Neural2) voices.
+
+#### Root Cause:
+1. **Request Deadlocks:** TTS requests that hung backend-side stayed in a perpetual `requesting` state, permanently occupying concurrency slots. After 5 hangs, the system would stop processing all new audio.
+2. **Concurrency Leak:** Manual "Speak" clicks (non-radio mode) were not decrementing the concurrency counter (`currentRequestCount`), causing a slow bleed of available slots.
+3. **Dual-Path Enqueuing:** Redundant handlers in `ListenerPage.jsx` were enqueuing segments twice for TTS, leading to guaranteed duplicate audio.
+4. **ID-Based Deduplication Fail:** Previous deduplication relied on dynamic segment IDs (e.g., `seg_${Date.now()}`) which were not unique across different triggers for the same text.
+5. **Ineffective Speed Control:** Chirp 3 HD with SSML ignored the backend `speaking_rate` parameter, and browser-side speed reinforcement was restricted only to Gemini/Kore voices.
+
+#### Key Fixes:
+1. **15s Request Timeout:** Implemented a watchdog in `TtsPlayerController.js` that fails and cleans up any request taking longer than 15s, unblocking concurrency slots.
+2. **Universal Count Tracking:** Ensured `currentRequestCount` is decremented for ALL tracked requests in `onWsMessage` (audio or error).
+3. **Content-Hash Deduplication:** Switched from dynamic IDs to **Content-Hash** (`text_timestamp`) for 100% reliable duplication prevention.
+4. **Path Consolidation:** Disabled the redundant TTS enqueuing in `ListenerPage.jsx`, leaving the generic translation handler as the single source of truth.
+5. **Universal Speed Reinforcement:** Shifted speed responsibility from backend to browser-side `audio.playbackRate` for **ALL** voices (Gemini, Chirp 3 HD, Neural2, Standard).
+6. **Queue Health Monitoring:** Added a 5-second diagnostic heartbeat to monitor queue depth and concurrency utilization in real-time.
+
+#### Outcome:
+- ✅ **Auto-Recovery:** The system now clears its own bottlenecks without refresh.
+- ✅ **No Duplicates:** Single audio delivery per translation segment.
+- ✅ **Reliable Speed:** Speed control slider now works consistently across all voices.
+- ✅ **Stability:** Zero deadlocks observed under high-throughput radio mode.
+
+---
 
 ### BUG 21: FIXED — Audio Playback Regression & Component Lifecycle
 **Status:** ✅ RESOLVED (2026-01-15)

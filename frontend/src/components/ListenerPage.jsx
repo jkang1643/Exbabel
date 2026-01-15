@@ -7,10 +7,15 @@ import { flushSync } from 'react-dom';
 import { Header } from './Header';
 import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
-import { TtsPanel } from './TtsPanel';
+
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { SentenceSegmenter } from '../utils/sentenceSegmenter';
 import { TRANSLATION_LANGUAGES } from '../config/languages.js';
+import { Play, Square, Settings } from 'lucide-react';
+import { TtsSettingsModal } from './TtsSettingsModal';
+import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
+import { TtsMode, TtsPlayerState } from '../tts/types.js';
+import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -109,7 +114,21 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   const wsRef = useRef(null);
   const translationsEndRef = useRef(null);
+
   const ttsControllerRef = useRef(null); // TTS controller for audio playback
+
+  // TTS UI State (Lifted from TtsPanel)
+  const [ttsState, setTtsState] = useState(TtsPlayerState.STOPPED);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState('Kore');
+  // Default settings for hidden controls (matches TtsPanel defaults)
+  const [ttsSettings, setTtsSettings] = useState({
+    speakingRate: 1.1,
+    deliveryStyle: 'standard_preaching',
+    ssmlEnabled: true,
+    promptPresetId: 'preacher_warm_build',
+    intensity: 3
+  });
 
   // Commit counter for tracing leaked rows
   const commitCounterRef = useRef(0);
@@ -312,6 +331,16 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       });
     }
 
+    // Attach listeners to update local state
+    if (ttsControllerRef.current) {
+      ttsControllerRef.current.onStateChange = (newState) => {
+        setTtsState(newState);
+      };
+      ttsControllerRef.current.onError = (err) => {
+        console.error('[ListenerPage] TTS Error:', err);
+      };
+    }
+
     return () => {
       if (ttsControllerRef.current) {
         console.log('[ListenerPage] Disposing stable TTS controller on cleanup');
@@ -320,6 +349,94 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       }
     };
   }, []);
+
+  // Sync Voice/Lang Selection with Controller
+  useEffect(() => {
+    if (!ttsControllerRef.current) return;
+
+    // Update language
+    if (targetLang) {
+      ttsControllerRef.current.currentLanguageCode = normalizeLanguageCode(targetLang);
+    }
+
+    // Update voice
+    if (selectedVoice) {
+      ttsControllerRef.current.currentVoiceName = selectedVoice;
+    }
+
+    // Update settings (SSML/Prompts) - Syncing minimal defaults
+    const isGemini = ['Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir', 'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam'].includes(selectedVoice);
+
+    // Sync SSML options
+    ttsControllerRef.current.ssmlOptions = {
+      enabled: ttsSettings.ssmlEnabled,
+      deliveryStyle: ttsSettings.deliveryStyle,
+      rate: ttsSettings.speakingRate,
+      pitch: '+1st',
+      pauseIntensity: getDeliveryStyle(ttsSettings.deliveryStyle).pauseIntensity,
+      emphasizePowerWords: true,
+      emphasisLevel: 'moderate',
+      supportsPhraseProsody: true // Simplified assumption for internal logic preservation
+    };
+
+    // Sync Prompt options
+    ttsControllerRef.current.promptPresetId = ttsSettings.promptPresetId;
+    ttsControllerRef.current.intensity = ttsSettings.intensity;
+
+  }, [targetLang, selectedVoice, ttsSettings]);
+
+  // Ensure selected voice is valid for current language
+  useEffect(() => {
+    const voices = getVoicesForLanguage(targetLang);
+    if (voices.length > 0 && !voices.some(v => v.value === selectedVoice)) {
+      setSelectedVoice(voices[0].value);
+    }
+  }, [targetLang]);
+
+  const handleTtsPlay = () => {
+    if (!ttsControllerRef.current) return;
+    if (connectionState !== 'open') {
+      alert('Not connected to session');
+      return;
+    }
+
+    const voices = getVoicesForLanguage(targetLang);
+    const voiceOption = voices.find(v => v.value === selectedVoice);
+    const tier = voiceOption?.tier || 'neural2';
+    // Strictly rely on tier - 'Gemini' voices are explicitly marked as tier: 'gemini'
+    // Chirp 3 HD voices with the same name (e.g. Kore) will have tier: 'chirp3_hd'
+    const isGemini = tier === 'gemini';
+
+    const requestData = {
+      languageCode: targetLang,
+      voiceName: selectedVoice,
+      tier: tier,
+      mode: TtsMode.UNARY, // Forced UNARY as requested ("only working mode")
+      startFromSegmentId: Date.now(),
+      ssmlOptions: {
+        enabled: ttsSettings.ssmlEnabled,
+        deliveryStyle: ttsSettings.deliveryStyle,
+        rate: ttsSettings.speakingRate,
+        pitch: '+1st',
+        pauseIntensity: getDeliveryStyle(ttsSettings.deliveryStyle).pauseIntensity,
+        emphasizePowerWords: true,
+        emphasisLevel: 'moderate',
+        supportsPhraseProsody: voiceSupportsSSML(selectedVoice, tier)
+      }
+    };
+
+    if (isGemini) {
+      requestData.promptPresetId = ttsSettings.promptPresetId;
+      requestData.intensity = ttsSettings.intensity;
+    }
+
+    console.log('[ListenerPage] Starting TTS (Radio UI)', requestData);
+    ttsControllerRef.current.start(requestData);
+  };
+
+  const handleTtsStop = () => {
+    ttsControllerRef.current?.stop();
+  };
 
   const handleJoinSession = async () => {
     if (!sessionCode.trim()) {
@@ -485,273 +602,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           case 'session_joined':
             console.log('[Listener] Joined session:', message.sessionCode);
             break;
-
-          case 'TRANSCRIPT_PARTIAL':
-            // English source transcript partial - update original text for ALL listeners
-            if (message.isPartial) {
-              const correctedText = message.correctedText;
-              const originalText = message.originalText || '';
-              const textToDisplay = correctedText && correctedText.trim() ? correctedText : originalText;
-
-              if (textToDisplay) {
-                // TRANSLATION STALL DETECTION: Track when source partials arrive
-                lastSourcePartialTimeRef.current = Date.now();
-
-                // Removed partial logging - was causing event loop lag
-                setCurrentOriginal(textToDisplay);
-                cacheOriginal(textToDisplay, message.sourceSeqId ?? message.seqId);
-              }
-            }
-            break;
-
-          case 'TRANSLATION_PARTIAL':
-            // Translation partial - update translation text only if targetLang matches
-            if (message.isPartial) {
-              // Cache original text if present in message
-              const originalText = message.originalText || '';
-              const correctedText = message.correctedText;
-              const originalToCache = correctedText && correctedText.trim() ? correctedText : originalText;
-              if (originalToCache && originalToCache.trim()) {
-                cacheOriginal(originalToCache, message.sourceSeqId ?? message.seqId);
-              }
-
-              const translatedText = message.translatedText || '';
-              const isForMyLanguage = message.targetLang === targetLangRef.current;
-
-              // TRANSLATION STALL DETECTION: Track when translations arrive for my language
-              if (isForMyLanguage) {
-                lastTranslationTimeRef.current = Date.now();
-              }
-
-              if (isForMyLanguage && translatedText.trim()) {
-                // Process translated text through segmenter (auto-flushes complete sentences)
-                const { liveText } = segmenterRef.current.processPartial(translatedText);
-
-                // THROTTLING: Limit render frequency to ~10-15 fps (66-100ms) to prevent UI freezes
-                const THROTTLE_MS = 66; // ~15 fps
-                const MIN_CHAR_DELTA = 3; // Minimum character growth to trigger render
-                const now = Date.now();
-                const timeSinceLastRender = now - lastRenderTimeRef.current;
-                const charDelta = liveText.length - lastTextLengthRef.current;
-
-                // CRITICAL: Always render first partial after reset (when lastRenderTimeRef is 0)
-                // This ensures immediate display when new segment starts
-                const isFirstPartialAfterReset = lastRenderTimeRef.current === 0;
-
-                // Always render if significant text growth or enough time passed
-                const shouldRender =
-                  isFirstPartialAfterReset || // Always render first partial after reset
-                  charDelta >= MIN_CHAR_DELTA || // Significant text growth
-                  timeSinceLastRender >= THROTTLE_MS; // Enough time passed
-
-                if (shouldRender) {
-                  lastRenderTimeRef.current = now;
-                  lastTextLengthRef.current = liveText.length;
-                  // CRITICAL: Use flushSync for partial updates to ensure immediate responsiveness
-                  // Throttling limits frequency, but when we DO update, make it immediate
-                  flushSync(() => {
-                    setCurrentTranslation(liveText);
-                  });
-                }
-              }
-            }
-            break;
-
-          case 'TRANSCRIPT_FINAL': {
-            // English source transcript final - update original text history
-            const originalText = message.originalText || '';
-            const correctedOriginalText = message.correctedText || originalText;
-
-            if (correctedOriginalText) {
-              // Removed final transcript logging - reduces console noise
-
-              // Update current original to show the final
-              setCurrentOriginal(correctedOriginalText);
-              cacheOriginal(correctedOriginalText, message.sourceSeqId ?? message.seqId);
-
-              // Add to translations history (as original text entry)
-              setTranslations(prev => {
-                const recentEntries = prev.slice(-3);
-                const isDuplicate = recentEntries.some(entry =>
-                  entry.text === correctedOriginalText ||
-                  entry.originalText === correctedOriginalText
-                );
-                if (isDuplicate) {
-                  // Removed duplicate logging - reduces console noise
-                  return prev;
-                }
-                // B) LISTENER_ROW_KEY logging: how rows are keyed
-                const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
-                console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
-
-                const next = [...prev, {
-                  text: correctedOriginalText,
-                  originalText: correctedOriginalText,
-                  timestamp: message.timestamp || Date.now(),
-                  isTranscription: true
-                }];
-
-                // LOG ONLY THE NEW/CHANGED ROW(S)
-                const added = next.length - prev.length;
-                if (added > 0) {
-                  const last = next[next.length - 1];
-                  console.log('[COMMIT]', {
-                    page: 'LISTENER',
-                    path: 'TRANSCRIPT_FINAL',
-                    added,
-                    last: {
-                      seqId: last.seqId,
-                      sourceSeqId: last.sourceSeqId,
-                      isSegmented: last.isSegmented,
-                      isPartial: last.isPartial,
-                      o: (last.original || last.originalText || '').slice(0, 140),
-                      t: (last.translated || last.text || '').slice(0, 140),
-                    }
-                  });
-                }
-
-                return next;
-              });
-            }
-            break;
-          }
-
-          case 'TRANSLATION_FINAL': {
-            // Translation final - add to history only if targetLang matches
-            const finalText = message.translatedText || undefined;
-            const finalOriginalText = message.originalText || '';
-            const finalCorrectedOriginalText = message.correctedText || finalOriginalText;
-            const isForMyLanguageFinal = message.targetLang === targetLangRef.current;
-
-            // Cache original text if available
-            cacheOriginal(finalCorrectedOriginalText, message.sourceSeqId ?? message.seqId);
-
-            if (isForMyLanguageFinal && finalText) {
-              // Removed final translation logging - reduces console noise
-
-              // CRITICAL: Use flushSync for final updates to ensure immediate UI feedback
-              flushSync(() => {
-                // Update current translation to show the final
-                setCurrentTranslation(finalText);
-
-                // Add to translations history
-                setTranslations(prev => {
-                  const recentEntries = prev.slice(-3);
-                  const isDuplicate = recentEntries.some(entry =>
-                    entry.text === finalText ||
-                    entry.translatedText === finalText
-                  );
-                  if (isDuplicate) {
-                    console.log('[ListenerPage] ⏭️ Skipping duplicate final translation');
-                    return prev;
-                  }
-
-                  // Use fallback if original text is missing
-                  const cachedFromSeqId = message.seqId !== undefined ? originalBySeqIdRef.current.get(message.seqId) : undefined;
-                  const fallbackOriginal = cachedFromSeqId || lastNonEmptyOriginalRef.current || '';
-
-                  const safeOriginal = finalCorrectedOriginalText && finalCorrectedOriginalText.trim()
-                    ? finalCorrectedOriginalText.trim()
-                    : fallbackOriginal;
-
-                  // Diagnostic logging: log correlation info if original was missing
-                  if (!finalCorrectedOriginalText || !finalCorrectedOriginalText.trim()) {
-                    console.log(`[ListenerPage] 🔗 Filled missing original: seqId=${message.seqId}, cachedFromSeqId=${!!cachedFromSeqId}, fallbackLen=${fallbackOriginal.length}, safeOriginalLen=${safeOriginal.length}`);
-                  }
-
-                  const newEntry = {
-                    text: finalText,
-                    originalText: safeOriginal,
-                    translatedText: finalText,
-                    timestamp: message.timestamp || Date.now(),
-                    hasTranslation: true
-                  };
-
-                  // B) LISTENER_ROW_KEY logging: how rows are keyed
-                  const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
-                  console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
-
-                  const next = [...prev, newEntry];
-
-                  // LOG ONLY THE NEW/CHANGED ROW(S)
-                  const added = next.length - prev.length;
-                  if (added > 0) {
-                    const last = next[next.length - 1];
-                    console.log('[COMMIT]', {
-                      page: 'LISTENER',
-                      path: 'FINAL_HANDLER',
-                      added,
-                      last: {
-                        seqId: last.seqId,
-                        sourceSeqId: last.sourceSeqId,
-                        isSegmented: last.isSegmented,
-                        isPartial: last.isPartial,
-                        o: (last.original || last.originalText || '').slice(0, 140),
-                        t: (last.translated || last.translatedText || last.text || '').slice(0, 140),
-                      }
-                    });
-                  }
-
-                  // COMMIT filter print for history commits only
-                  const last = next[next.length - 1];
-                  const blob = `${last?.original || last?.originalText || ''} ${last?.translated || last?.translatedText || last?.text || ''}`;
-                  if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
-                    console.log('[LISTENER_COMMIT_MATCH]', {
-                      path: 'FINAL_HANDLER',
-                      last: {
-                        seqId: last.seqId,
-                        sourceSeqId: last.sourceSeqId,
-                        isPartial: last.isPartial,
-                        isSegmented: last.isSegmented,
-                        original: (last.original || last.originalText || '').slice(0, 220),
-                        translated: (last.translated || last.translatedText || last.text || '').slice(0, 220),
-                      }
-                    });
-                  }
-
-                  // Post-commit invariant checker: detect suspicious rows that appeared without RAW_IN
-                  const suspicious = newEntry.translated ? [newEntry].filter(it => it?.translated && !seenRawInFpsRef.current.has(fp(it.translated))) : [];
-                  if (suspicious.length) {
-                    console.log('[SUSPICIOUS_COMMIT_ROWS]', {
-                      path: 'FINAL_HANDLER',
-                      suspicious: suspicious.map(it => ({
-                        translated: it.translated,
-                        fp: fp(it.translated),
-                        seqId: it.seqId,
-                        sourceSeqId: it.sourceSeqId,
-                        isSegmented: it.isSegmented
-                      }))
-                    });
-                  }
-
-                  return next;
-                });
-              });
-
-              // Radio Mode: Auto-enqueue finalized segment for TTS
-              if (ttsControllerRef.current &&
-                ttsControllerRef.current.getState().state === 'PLAYING' &&
-                isForMyLanguageFinal &&
-                finalText) {
-                ttsControllerRef.current.onFinalSegment({
-                  id: message.seqId || `seg_${Date.now()}`,
-                  text: finalText,
-                  timestamp: message.timestamp || Date.now()
-                });
-              }
-
-              // CRITICAL: Reset throttling refs so new partials can immediately update after final
-              // Without this, throttling might skip the first partials of the new segment
-              lastRenderTimeRef.current = 0;
-              lastTextLengthRef.current = 0;
-
-              // Reset segmenter to clear any buffered partial text for new segment
-              if (segmenterRef.current) {
-                segmenterRef.current.reset();
-              }
-            }
-            break;
-          }
 
           case 'translation':
             console.log('[LISTENER_CASE_TRANSLATION]', { type: message.type, isPartial: message.isPartial });
@@ -1044,7 +894,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     (isForMyLanguage || isTranscriptionMode) &&
                     textToDisplay) {
                     ttsControllerRef.current.onFinalSegment({
-                      id: message.seqId || `seg_${Date.now()}`,
+                      id: (message.sourceSeqId ?? message.seqId ?? `seg_${Date.now()}`).toString(),
                       text: textToDisplay,
                       timestamp: message.timestamp || Date.now()
                     });
@@ -1232,41 +1082,135 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       <Header />
 
       <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
-        {/* Session Info Bar */}
+        {/* Unified Control Bar (Session + TTS) */}
         <div className="bg-white rounded-lg shadow-lg p-3 sm:p-4 mb-4 sm:mb-6">
-          <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 sm:gap-4">
-            <div className="text-center sm:text-left">
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-end gap-4">
+
+            {/* Session Code */}
+            <div className="flex-shrink-0 text-center sm:text-left">
               <p className="text-xs sm:text-sm text-gray-600">Session Code:</p>
-              <p className="text-xl sm:text-2xl font-bold text-emerald-600">{sessionInfo?.sessionCode}</p>
+              <p className="text-xl sm:text-2xl font-bold text-emerald-600 leading-none">{sessionInfo?.sessionCode}</p>
             </div>
 
-            <div className="flex-1 sm:max-w-xs">
-              <LanguageSelector
-                label="Your Language"
-                languages={LANGUAGES}
-                selectedLanguage={targetLang}
-                onLanguageChange={handleChangeLanguage}
-              />
+            {/* TTS Voice Model (Mid-Section) */}
+            {TTS_UI_ENABLED && (
+              <div className="flex-1">
+                <label className="block text-xs sm:text-sm text-gray-600 mb-1 font-medium">
+                  Voice Model
+                </label>
+                <select
+                  value={selectedVoice}
+                  onChange={(e) => setSelectedVoice(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
+                >
+                  {/* Group voices by tier for explicit separation */}
+                  {Object.entries(
+                    getVoicesForLanguage(targetLang).reduce((acc, voice) => {
+                      const tier = voice.tier || 'standard';
+                      let group = 'Standard';
+
+                      if (tier === 'gemini') {
+                        group = 'Gemini & Studio';
+                      } else if (tier === 'chirp3_hd') {
+                        group = 'Chirp 3 HD';
+                      } else if (tier === 'neural2') {
+                        group = 'Neural2';
+                      }
+
+                      if (!acc[group]) acc[group] = [];
+                      acc[group].push(voice);
+                      return acc;
+                    }, {})
+                  ).map(([group, voices]) => (
+                    <optgroup key={group} label={group}>
+                      {voices.map(v => (
+                        <option key={v.value} value={v.value}>{v.label}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Right Side: Language + Actions */}
+            <div className="flex items-end gap-3 justify-between lg:justify-start">
+
+              {/* Language Selector */}
+              <div className="flex-1 lg:flex-none lg:w-48">
+                <LanguageSelector
+                  label="Your Language"
+                  languages={LANGUAGES}
+                  selectedLanguage={targetLang}
+                  onLanguageChange={handleChangeLanguage}
+                />
+              </div>
+
+              {/* TTS Controls */}
+              {TTS_UI_ENABLED && (
+                <div className="flex-shrink-0 flex items-center gap-2 mb-0.5">
+                  {/* Settings Button */}
+                  <button
+                    onClick={() => setIsSettingsOpen(true)}
+                    className="flex items-center justify-center w-10 h-10 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 shadow-md transition-all active:scale-95 border border-gray-300"
+                    title="Voice Settings"
+                  >
+                    <Settings className="w-5 h-5" />
+                  </button>
+
+                  {/* Play/Stop Button */}
+                  {ttsState === 'PLAYING' ? (
+                    <button
+                      onClick={handleTtsStop}
+                      className="flex items-center justify-center w-10 h-10 bg-red-500 text-white rounded-lg hover:bg-red-600 shadow-md transition-all active:scale-95"
+                      title="Stop"
+                    >
+                      <Square className="w-5 h-5 fill-current" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleTtsPlay}
+                      disabled={connectionState !== 'open'}
+                      className="flex items-center justify-center gap-2 px-4 h-10 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 shadow-md transition-all hover:scale-105 active:scale-95 disabled:bg-gray-300 disabled:scale-100 disabled:shadow-none font-medium"
+                      title="Start Playback"
+                    >
+                      <Play className="w-5 h-5 fill-current" />
+                      <span className="hidden sm:inline">Play</span>
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
-            <div className="flex items-center justify-between sm:flex-col sm:items-end gap-3">
-              <ConnectionStatus state={connectionState} />
-
-              <button
-                onClick={handleLeaveSession}
-                className="px-3 sm:px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm sm:text-base font-semibold rounded-lg transition-all"
-              >
-                Leave
-              </button>
-            </div>
           </div>
+        </div>
+
+        {/* Settings Modal */}
+        <TtsSettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={ttsSettings}
+          onSettingsChange={setTtsSettings}
+          selectedVoice={selectedVoice}
+          targetLang={targetLang}
+        />
+
+        <div className="flex items-center justify-between sm:flex-col sm:items-end gap-3">
+          <ConnectionStatus state={connectionState} />
+
+          <button
+            onClick={handleLeaveSession}
+            className="px-3 sm:px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm sm:text-base font-semibold rounded-lg transition-all"
+          >
+            Leave
+          </button>
         </div>
 
         {error && (
           <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
             {error}
           </div>
-        )}
+        )
+        }
 
         {/* LIVE STREAMING TRANSLATION BOX - Shows both original and translation */}
         <div className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-3 sm:p-6 shadow-2xl mb-4 sm:mb-6 -mx-2 sm:mx-0">
@@ -1372,15 +1316,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           </div>
         </div>
 
-        {/* TTS Panel - Only shown when feature flag enabled */}
-        {TTS_UI_ENABLED && (
-          <TtsPanel
-            controller={ttsControllerRef.current}
-            targetLang={targetLang}
-            isConnected={connectionState === 'open'}
-            translations={translations}
-          />
-        )}
+
 
         {/* Translation History */}
         <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-2 sm:mx-0">
