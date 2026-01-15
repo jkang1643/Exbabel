@@ -9,6 +9,57 @@
 
 import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
 
+// Global debug buffer for on-screen visual debugging (mobile)
+if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
+    window.__AUDIO_DEBUG__ = [];
+    window.audioDebug = function (msg, data) {
+        const entry = {
+            t: new Date().toLocaleTimeString(),
+            msg,
+            data: data ? JSON.parse(JSON.stringify(data)) : null
+        };
+        window.__AUDIO_DEBUG__.push(entry);
+        console.log(`[AUDIO_DEBUG] ${msg}`, data);
+        if (window.__AUDIO_DEBUG__.length > 30) {
+            window.__AUDIO_DEBUG__.shift();
+        }
+
+        // Ensure overlay exists
+        let overlay = document.getElementById('audio-debug-overlay');
+        if (!overlay && document.body) {
+            overlay = document.createElement('div');
+            overlay.id = 'audio-debug-overlay';
+            Object.assign(overlay.style, {
+                position: 'fixed',
+                bottom: '10px',
+                left: '10px',
+                right: '10px',
+                maxHeight: '40vh',
+                overflowY: 'auto',
+                backgroundColor: 'rgba(0,0,0,0.85)',
+                color: '#0f0',
+                padding: '10px',
+                borderRadius: '8px',
+                zIndex: '99999',
+                fontSize: '10px',
+                fontFamily: 'monospace',
+                pointerEvents: 'none',
+                border: '1px solid #333'
+            });
+            document.body.appendChild(overlay);
+        }
+
+        if (overlay) {
+            overlay.innerHTML = window.__AUDIO_DEBUG__.map(e =>
+                `<div style="border-bottom:1px solid #444;padding:2px 0;white-space:pre-wrap;">
+                    <span style="color:#aaa">[${e.t}]</span> <b style="color:#fff">${e.msg}</b>: ${JSON.stringify(e.data)}
+                </div>`
+            ).reverse().join('');
+        }
+    };
+}
+
+
 export class TtsPlayerController {
     constructor(sendMessage) {
         this.sendMessage = sendMessage;
@@ -957,13 +1008,39 @@ export class TtsPlayerController {
             console.log(`[TtsPlayerController] Starting audio play() [idx:${this.instanceId}] for segment:`, queueItem.segmentId);
 
             // Add state transition logging for mobile debugging
-            audio.onplay = () => console.log(`[TtsPlayerController] Audio 'onplay' event [idx:${this.instanceId}]:`, queueItem.segmentId);
-            audio.onplaying = () => console.log(`[TtsPlayerController] Audio 'onplaying' event [idx:${this.instanceId}]:`, queueItem.segmentId);
-            audio.onpause = () => console.log(`[TtsPlayerController] Audio 'onpause' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+            audio.onplay = () => {
+                console.log(`[TtsPlayerController] Audio 'onplay' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onplay event", { segment: queueItem.segmentId });
+            };
+            audio.onplaying = () => {
+                console.log(`[TtsPlayerController] Audio 'onplaying' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onplaying event", { segment: queueItem.segmentId });
+            };
+            audio.onpause = () => {
+                console.log(`[TtsPlayerController] Audio 'onpause' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onpause event", { segment: queueItem.segmentId });
+            };
+
+            if (window.audioDebug) {
+                window.audioDebug("play() attempt", {
+                    segment: queueItem.segmentId,
+                    src: audio.src?.substring(0, 50) + '...',
+                    readyState: audio.readyState,
+                    paused: audio.paused
+                });
+            }
 
             audio.play().then(() => {
                 console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("play() success", { segmentID: queueItem.segmentId });
             }).catch(error => {
+                if (window.audioDebug) {
+                    window.audioDebug("play() REJECTED", {
+                        segment: queueItem.segmentId,
+                        name: error.name,
+                        message: error.message
+                    });
+                }
                 if (error.name === 'AbortError') {
                     console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
                 } else if (error.name === 'NotAllowedError') {
