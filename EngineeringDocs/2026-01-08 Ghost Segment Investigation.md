@@ -1,5 +1,5 @@
 # Exbabel Debugging Log — Host/Listener Emission, Correlation, Grammar Canonicalization, and "Ghost" Segment Investigation
-**Last updated:** 2026-01-08 (America/Chicago)
+**Last updated:** 2026-01-08 (America/Chicago) (updated)
 
 This is a running "what is done" document capturing what we changed, why, and where we are now.
 **Newest items are at the top.**
