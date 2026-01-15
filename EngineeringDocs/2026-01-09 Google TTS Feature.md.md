@@ -8,6 +8,26 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+### BUG 23: FIXED — Mobile Safari Audio Playback (User Gesture Context)
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved a critical issue where TTS playback would stop after one segment on iPhone Safari, despite working perfectly on desktop browsers.
+
+#### Root Cause:
+1. **Loss of User Gesture Context:** iOS Safari requires audio playback to be initiated directly by a user gesture. The original implementation used `setTimeout(() => this._processQueue(), 0)` in the `onended` handler to trigger the next segment. This asynchronous delay caused the "user gesture context" to be lost, leading Safari to block subsequent `audio.play()` calls.
+2. **Browser-Specific Enforcement:** Desktop browsers and some other mobile browsers are more lenient with this restriction, which is why the bug was invisible during desktop testing.
+
+#### Key Fixes:
+1. **Preload Mechanism (Mobile Only):** Added logic to detect mobile browsers and automatically preload the next audio segment while the current one is playing.
+2. **Synchronous Playback:** On mobile browsers, the next segment is now played **synchronously** within the `onended` event handler of the previous segment. This preserves the user gesture chain and satisfies Safari's security policy.
+3. **Detection Guard:** Integrated feature detection (touch support, screen size, and UA) to limit the preloading and synchronous playback behavior to mobile environments, keeping desktop behavior unchanged.
+
+#### Outcome:
+- ✅ **Continuous Playback:** iPhone Safari users now experience gapless, automatic playback across multiple segments.
+- ✅ **Scoped Impact:** The fix is surgically limited to mobile browsers, ensuring zero regression risk for desktop users.
+- ✅ **Performance:** Preloading reduces inter-segment latency on mobile devices.
+
+---
 
 ### BUG 22: FIXED — Gemini TTS Lag, Queue Deadlocks & Universal Speed Control
 **Status:** ✅ RESOLVED (2026-01-15)
