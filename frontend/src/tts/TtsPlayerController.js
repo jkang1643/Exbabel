@@ -8,6 +8,7 @@
  */
 
 import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
+import { unlockIOSAudio } from './audioUnlock.js';
 
 // Global debug buffer for on-screen visual debugging (mobile)
 if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
@@ -213,7 +214,13 @@ export class TtsPlayerController {
         this.currentRequestCount = 0;
         this.lastSeenSegmentId = startFromSegmentId;
 
-        // Prime the audio system
+        // CRITICAL: Unlock iOS audio IMMEDIATELY in user gesture
+        // This must happen before any async operations to maintain gesture context
+        unlockIOSAudio().catch(err => {
+            console.warn('[TtsPlayerController] iOS audio unlock failed:', err);
+        });
+
+        // Prime the audio system (legacy fallback)
         this._prime();
 
         // Send WebSocket message to backend
