@@ -10,6 +10,37 @@ This is a running "what is done" document capturing what we changed, why, and wh
 **Most recent at the top.**
 
 
+### BUG 19: FIXED — Speed Control Fallback (Browser Reinforcement)
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved an issue where the "browser-based speeding fallback" failsafe was not taking effect, causing audio to play at the default rate even when a faster speed was requested.
+
+#### Root Cause:
+1. **Missing Frontend Data:** The `TtsPlayerController` logic for reinforcing speed (`playbackRate`) depended on `ssmlOptions.rate`, but this object was not being returned in the `tts/audio` WebSocket response from the backend.
+2. **Race Condition (Reverted):** An attempt to move speed reinforcement to the `onloadedmetadata` event caused playback failures in some browsers due to race conditions.
+
+#### Key Fixes:
+1. **Backend Payload:** Updated `websocketHandler.js` to explicitly include `ssmlOptions` in the `tts/audio` response payload.
+2. **Synchronous Reinforcement:** Reverted the async event listener approach in `TtsPlayerController.js`. The player now synchronously sets `audio.playbackRate = rate` immediately before calling `audio.play()`, ensuring the browser respects the speed setting without blocking or stalling.
+
+---
+
+### BUG 18: FIXED — Hallucination Safeguard for Short Segments
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved an issue where short segments (1-3 words) frequently caused Gemini TTS to "hallucinate" or speak unrelated content instead of the requested text.
+
+#### Root Cause:
+1. **Model Over-Creativity:** The Gemini generative model occasionally interpreting short, isolated phrases as a seed for creative continuation rather than a direct read task.
+2. **Lack of Constraints:** The previous strict system instruction (`DO NOT SPEAK THESE INSTRUCTIONS`) was sufficient for long text but not aggressive enough for micro-segments.
+
+#### Key Fixes:
+1. **Dynamic Prompt Injection:** Modified `promptResolver.js` to analyze the word count of the input text.
+2. **Strict Instruction:** For texts with fewer than 4 words, the system now appends a forceful instruction: `SHORT TEXT: READ EXACTLY AS WRITTEN. NO HALLUCINATIONS.`
+3. **Outcome:** This forces the model into a strict "read-only" mode for short phrases (e.g., "Amen", "Yes, Lord"), eliminating creative deviations while preserving the requested style.
+
+---
+
 ### BUG 17: FIXED — Radio Mode Lag (Gemini Latency)
 **Status:** ✅ RESOLVED (2026-01-14)
 
