@@ -955,13 +955,30 @@ export class TtsPlayerController {
             };
 
             console.log(`[TtsPlayerController] Starting audio play() [idx:${this.instanceId}] for segment:`, queueItem.segmentId);
+
+            // Add state transition logging for mobile debugging
+            audio.onplay = () => console.log(`[TtsPlayerController] Audio 'onplay' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+            audio.onplaying = () => console.log(`[TtsPlayerController] Audio 'onplaying' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+            audio.onpause = () => console.log(`[TtsPlayerController] Audio 'onpause' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+
             audio.play().then(() => {
                 console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
             }).catch(error => {
                 if (error.name === 'AbortError') {
                     console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
+                } else if (error.name === 'NotAllowedError') {
+                    console.error('[TtsPlayerController] SAFARI PLAY REJECTION: Audio playback was blocked by browser policies (likely missing user gesture context).', {
+                        segmentId: queueItem.segmentId,
+                        errorName: error.name,
+                        errorMessage: error.message
+                    });
                 } else {
-                    console.error('[TtsPlayerController] Failed to start playback:', queueItem.segmentId, error);
+                    console.error('[TtsPlayerController] Failed to start playback:', queueItem.segmentId, {
+                        name: error.name,
+                        message: error.message,
+                        error
+                    });
+
                     if (this.currentAudio === audio) {
                         this.currentAudio = null;
                     }
@@ -974,8 +991,8 @@ export class TtsPlayerController {
                     }
                 }
                 URL.revokeObjectURL(audioUrl);
-                // Even on play error, try next in queue
-                setTimeout(() => this._processQueue(), 0);
+                // Even on play error, try next in queue - direct call if possible to attempt recovery
+                this._processQueue();
             });
         } catch (error) {
             console.error('[TtsPlayerController] Error in _playAudio:', error);
