@@ -61,12 +61,12 @@ export function TtsSettingsModal({
                             </label>
                             <button
                                 onClick={() => {
-                                    const resetRate = isGemini ? 1.45 : (voiceSupportsSSML(selectedVoice, tier) ? 1.1 : 1.0);
+                                    const resetRate = isGemini ? 1.45 : 1.1;
                                     handleSettingChange('speakingRate', resetRate);
                                 }}
                                 className="text-xs text-blue-600 hover:text-blue-800"
                             >
-                                Reset to {isGemini ? '1.45x' : (voiceSupportsSSML(selectedVoice, tier) ? '1.1x' : '1.0x')}
+                                Reset to {isGemini ? '1.45x' : '1.1x'}
                             </button>
                         </div>
                         <input

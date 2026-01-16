@@ -25,7 +25,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     const [playerState, setPlayerState] = useState(TtsPlayerState.STOPPED);
     const [enabled, setEnabled] = useState(false);
-    const [selectedVoice, setSelectedVoice] = useState('Kore');
+    const [selectedVoice, setSelectedVoice] = useState('gemini-Kore');
     const [selectedMode, setSelectedMode] = useState(TtsMode.UNARY);
     const [resolvedRoute, setResolvedRoute] = useState(null);
 
@@ -56,10 +56,8 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
         const tier = voiceOption?.tier || 'neural2';
         if (tier === 'gemini') return true;
 
-        // Check if it's a Gemini studio voice name
-        const geminiVoices = ['Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
-            'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam'];
-        return geminiVoices.includes(selectedVoice);
+        // Fallback: Check for namespace prefix
+        return selectedVoice?.startsWith('gemini-');
     }, [selectedVoice, availableVoices]);
 
     // Group voices by tier for organized display
@@ -418,12 +416,12 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                                 </label>
                                                 <button
                                                     onClick={() => {
-                                                        const rate = isGeminiVoice ? 1.45 : (supportsSSML ? 1.1 : 1.0);
+                                                        const rate = isGeminiVoice ? 1.45 : 1.1;
                                                         setSpeakingRate(rate);
                                                     }}
                                                     className="text-[10px] text-blue-600 hover:underline"
                                                 >
-                                                    Reset to {isGeminiVoice ? '1.45x' : (supportsSSML ? '1.1x' : '1.0x')}
+                                                    Reset to {isGeminiVoice ? '1.45x' : '1.1x'}
                                                 </button>
                                             </div>
                                             <input

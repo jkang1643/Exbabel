@@ -9,6 +9,28 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
 
+### BUG 25: FIXED — Gemini Voice Speed Defaults Stuck at 1.1x (ID Collision)
+**Status:** ✅ RESOLVED (2026-01-16)
+
+Resolved an issue where Gemini voices stuck to the global 1.1x default instead of their intended 1.45x premium baseline, caused by ID collisions with legacy voice names.
+
+#### Root Cause:
+1.  **ID Collision:** Gemini voices (e.g., "Kore") shared the exact same value/ID as legacy Standard voices in `ttsVoices.json`.
+2.  **Ambiguous Detection:** The `ListenerPage` logic used `voices.find(v => v.value === selectedVoice)` which nondeterministically returned the Standard voice object (tier: 'standard') instead of the Gemini object (tier: 'gemini'), forcing the wrong default speed.
+3.  **First-Load Logic Gap:** The "first load" logic only applied defaults if the current speed was exactly 1.0x. Since the global application default was shifted to 1.1x, this check failed for Gemini voices, leaving them stuck at the lower rate.
+
+#### Key Fixes:
+1.  **Namespaced IDs:** Refactored `ttsVoices.js` to namespace all Gemini voices with a `gemini-` prefix (e.g., `gemini-Kore`), ensuring global uniqueness.
+2.  **Robust Tier Detection:** Updated `ListenerPage.jsx` and `TtsPanel.jsx` to rely on strict tier checking and the new namespace prefix, removing ambiguous name-list checks.
+3.  **Aggressive First-Load Enforcement:** Updated `ListenerPage.jsx` to enforce the tier-specific default (1.45x) on first load if the current setting matches *any* generic default (1.0x or 1.1x).
+
+#### Impact:
+- ✅ **Correct Defaults:** Gemini voices now instantly default to 1.45x as intended.
+- ✅ **Collision Free:** No more ambiguity between Standard "Kore" and Gemini "Kore".
+- ✅ **Reliable UX:** Speed slider behaves consistently when switching tiers.
+
+---
+
 ### BUG 24: FIXED — TTS Payload Missing Configuration (Pitch, Volume, Prompts)
 **Status:** ✅ RESOLVED (2026-01-16)
 
