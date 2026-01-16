@@ -8,6 +8,23 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+### BUG 23: FIXED — iOS Safari NotAllowedError & Persistent HTMLAudioElement
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved a persistent issue where iOS Safari would block audio playback with a `NotAllowedError` even after a user gesture.
+
+#### Root Cause:
+1. **HTMLAudioElement Policy:** iOS Safari's media policy requires that the **exact same instance** of an `HTMLAudioElement` that will play audio must be "primed" (touched) by a user gesture.
+2. **Instance Mismatch:** The previous logic created a `new Audio()` for every individual segment. Even though a global WebAudio unlock was performed, it did not grant permission to these new, un-primed audio instances.
+3. **WebAudio vs. MediaElement:** Unlocking WebAudio (`AudioContext.resume()`) does not automatically unlock separate `HTMLAudioElement` objects on iOS.
+
+#### Key Fixes:
+1. **Persistent Element:** Modified `TtsPlayerController.js` to create a single, persistent `this.audioEl` (HTMLAudioElement) in the constructor that is reused for the entire session.
+2. **Gesture-Based Priming:** Implemented `unlockFromUserGesture()` in the controller. This method is called synchronously during the Play button click and plays a tiny silent WAV on the persistent element to "unlock" it.
+3. **Instance Reuse:** Updated `_playAudio` to stop playback on the existing element, update its `src`, call `load()`, and then `play()`, satisfying Safari's requirement for instance-level permissions.
+4. **Outcome:** Audio now plays reliably across all segments on iPhone Safari without any browser blocks.
+
+---
 
 ### BUG 22: FIXED — Gemini TTS Lag, Queue Deadlocks & Universal Speed Control
 **Status:** ✅ RESOLVED (2026-01-15)

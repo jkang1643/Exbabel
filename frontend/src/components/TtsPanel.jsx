@@ -17,7 +17,6 @@ import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
 import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js';
 
-
 export function TtsPanel({ controller, targetLang, isConnected, translations }) {
     // Controller is now passed from parent (ListenerPage) to ensure stability across re-renders
     if (!controller) {
@@ -229,18 +228,15 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
     };
 
     const handlePlay = () => {
+<<<<<<< Updated upstream
+=======
         // CRITICAL: iOS Safari audio unlock MUST be called FIRST, synchronously in the gesture handler
         // This must happen before ANY async operations, state updates, or other code that could yield
-        if (window.audioDebug) {
-            window.audioDebug('PLAY TAP (user gesture)', {});
-        }
 
         // Call unlock on the controller's persistent audio element (iOS Safari requirement)
         controller.unlockFromUserGesture();
-        if (window.audioDebug) {
-            window.audioDebug('unlockFromUserGesture() called', {});
-        }
 
+>>>>>>> Stashed changes
         if (!isConnected) {
             alert('Not connected to session');
             return;
@@ -276,7 +272,6 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
         console.log('[TtsPanel] Starting radio mode with startFromSegmentId:', requestData.startFromSegmentId);
         controller.start(requestData);
     };
-
 
     const handleStop = () => {
         controller.stop();
