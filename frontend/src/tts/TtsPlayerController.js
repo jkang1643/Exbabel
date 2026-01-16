@@ -997,9 +997,21 @@ export class TtsPlayerController {
 
         try {
             const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-            audio.volume = 1.0; // Explicitly ensure volume is up
-            console.log(`[TtsPlayerController] Created Audio object for segment: ${segmentId}, volume: ${audio.volume}, blobSize: ${audioBlob.size}`);
+            // USE PERSISTENT ELEMENT FOR ALL PLAYBACK (iOS REQUIREMENT)
+            const audio = this.audioEl || new Audio();
+            if (!this.audioEl) {
+                this.audioEl = audio;
+            }
+
+            // Stop any current playback on this instance
+            audio.pause();
+            audio.currentTime = 0;
+
+            audio.src = audioUrl;
+            audio.load();
+            audio.volume = 1.0;
+
+            console.log(`[TtsPlayerController] Reusing Audio element [id:${audio.__id || 'none'}] for segment: ${segmentId}, volume: ${audio.volume}`);
 
             // Apply playback rate reinforcement for ALL voices (solid guarantee)
             if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {
@@ -1047,6 +1059,7 @@ export class TtsPlayerController {
                     this.dedupeSet.delete(contentHash);
                 }
                 this.queue = this.queue.filter(item => item.segmentId !== segmentId);
+
 
                 console.log(`[TtsPlayerController] Removed segment ${segmentId} from queue. New length: ${this.queue.length}`);
 
@@ -1160,11 +1173,11 @@ export class TtsPlayerController {
      * @private
      */
     _prime() {
-        if (!this.primingAudio) return;
+        if (!this.audioEl) return;
 
-        console.log('[TtsPlayerController] Priming audio system...');
+        console.log('[TtsPlayerController] Priming audio system via persistent audioEl...');
         // Playing an empty source or a short silent sound works to "unlock" audio in most browsers
-        this.primingAudio.play().catch(err => {
+        this.audioEl.play().catch(err => {
             // We expect an error because there's no source, but the play() call still "primes" the browser gesture tracking
             console.log('[TtsPlayerController] Audio primed (ignored harmless error):', err.message);
         });
@@ -1229,9 +1242,9 @@ export class TtsPlayerController {
             this.currentAudio.onerror = null;
             this.currentAudio = null;
         }
-        if (this.primingAudio) {
-            this.primingAudio.pause();
-            this.primingAudio = null;
+        if (this.audioEl) {
+            this.audioEl.pause();
+            this.audioEl = null;
         }
         this.audioQueue = [];
         this.queue = [];
