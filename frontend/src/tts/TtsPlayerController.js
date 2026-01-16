@@ -12,6 +12,7 @@ import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
 if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
     window.__AUDIO_DEBUG__ = [];
     window.audioDebug = function (msg, data) {
+        // Pure logger - NO DOM/overlay updates to guarantee zero timing/behavior change
         const entry = {
             t: new Date().toLocaleTimeString(),
             msg,
@@ -21,39 +22,6 @@ if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
         console.log(`[AUDIO_DEBUG] ${msg}`, data);
         if (window.__AUDIO_DEBUG__.length > 30) {
             window.__AUDIO_DEBUG__.shift();
-        }
-
-        // Ensure overlay exists
-        let overlay = document.getElementById('audio-debug-overlay');
-        if (!overlay && document.body) {
-            overlay = document.createElement('div');
-            overlay.id = 'audio-debug-overlay';
-            Object.assign(overlay.style, {
-                position: 'fixed',
-                bottom: '10px',
-                left: '10px',
-                right: '10px',
-                maxHeight: '40vh',
-                overflowY: 'auto',
-                backgroundColor: 'rgba(0,0,0,0.85)',
-                color: '#0f0',
-                padding: '10px',
-                borderRadius: '8px',
-                zIndex: '99999',
-                fontSize: '10px',
-                fontFamily: 'monospace',
-                pointerEvents: 'none',
-                border: '1px solid #333'
-            });
-            document.body.appendChild(overlay);
-        }
-
-        if (overlay) {
-            overlay.innerHTML = window.__AUDIO_DEBUG__.map(e =>
-                `<div style="border-bottom:1px solid #444;padding:2px 0;white-space:pre-wrap;">
-                    <span style="color:#aaa">[${e.t}]</span> <b style="color:#fff">${e.msg}</b>: ${JSON.stringify(e.data)}
-                </div>`
-            ).reverse().join('');
         }
     };
 }
