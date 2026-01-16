@@ -228,15 +228,12 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
     };
 
     const handlePlay = () => {
-<<<<<<< Updated upstream
-=======
         // CRITICAL: iOS Safari audio unlock MUST be called FIRST, synchronously in the gesture handler
         // This must happen before ANY async operations, state updates, or other code that could yield
 
         // Call unlock on the controller's persistent audio element (iOS Safari requirement)
         controller.unlockFromUserGesture();
 
->>>>>>> Stashed changes
         if (!isConnected) {
             alert('Not connected to session');
             return;

@@ -8,14 +8,8 @@
  */
 
 import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
-<<<<<<< Updated upstream
-=======
 import { unlockIOSAudio } from './audioUnlock.js';
 
-
-
-
->>>>>>> Stashed changes
 
 export class TtsPlayerController {
     constructor(sendMessage) {
@@ -134,8 +128,6 @@ export class TtsPlayerController {
     }
 
     /**
-<<<<<<< Updated upstream
-=======
      * Unlock iOS Safari audio by priming the actual audio element
      * MUST be called from within a user gesture (e.g., Play button click)
      */
@@ -181,7 +173,7 @@ export class TtsPlayerController {
     }
 
     /**
->>>>>>> Stashed changes
+
      * Start TTS playback
      * 
      * @param {Object} config - Playback configuration
@@ -1011,11 +1003,6 @@ export class TtsPlayerController {
             };
 
             console.log(`[TtsPlayerController] Starting audio play() [idx:${this.instanceId}] for segment:`, queueItem.segmentId);
-<<<<<<< Updated upstream
-            audio.play().then(() => {
-                console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
-            }).catch(error => {
-=======
 
             // Add state transition logging for mobile debugging
             audio.onplay = () => {
@@ -1028,13 +1015,10 @@ export class TtsPlayerController {
                 console.log(`[TtsPlayerController] Audio 'onpause' event [idx:${this.instanceId}]:`, queueItem.segmentId);
             };
 
-
-
             audio.play().then(() => {
                 console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
             }).catch(error => {
 
->>>>>>> Stashed changes
                 if (error.name === 'AbortError') {
                     console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
                 } else {
