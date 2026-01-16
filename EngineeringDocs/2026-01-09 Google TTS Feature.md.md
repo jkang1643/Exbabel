@@ -8,6 +8,28 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+
+### BUG 24: FIXED — TTS Payload Missing Configuration (Pitch, Volume, Prompts)
+**Status:** ✅ RESOLVED (2026-01-16)
+
+Resolved critical regressions where listener-side TTS settings (pitch, volume, and custom prompt configurations) were being completely ignored by the backend because they were omitted from the WebSocket payload.
+
+#### Root Cause:
+1.  **Ignored Panel Settings:** `ListenerPage.jsx` used a hardcoded `pitch: '+1st'` and completely omitted `volume`, ignoring user selections from the settings panel.
+2.  **Missing State Initialization:** The initial `ttsSettings` state lacked `pitch` and `volume` fields, causing undefined values until manual user interaction.
+3.  **Tier-Gated Prompts:** Prompt settings (`promptPresetId`, `intensity`) were conditionally excluded for non-'gemini' tiers. However, since 'Kore' (a Gemini voice) is technically routed as `chirp3_hd`, these critical settings were being dropped for the most important voice.
+
+#### Key Fixes:
+1.  **State Initialization:** Added `pitch: '0st'` and `volume: '0dB'` to the default `ttsSettings` state in `ListenerPage.jsx`.
+2.  **Dynamic Payload Construction:** Updated `handleTtsPlay` to use dynamic `ttsSettings.pitch` and `ttsSettings.volume` instead of hardcoded/missing values.
+3.  **Universal Prompt Transmission:** Modified logic to **ALWAYS** include `promptPresetId` and `intensity` in the payload regardless of the detected tier, allowing the backend to decide applicability.
+
+#### Impact:
+- ✅ **Panel Sync:** Pitch and Volume sliders now work correctly for all voices.
+- ✅ **Gemini Presets:** "Preacher" presets now correctly apply to Kore and other Gemini voices even when routed via Chirp 3 HD.
+- ✅ **Full Configuration:** Backend logs confirm receipt of the complete configuration payload.
+
+---
 ### BUG 23: FIXED — iOS Safari NotAllowedError & Persistent HTMLAudioElement
 **Status:** ✅ RESOLVED (2026-01-15)
 

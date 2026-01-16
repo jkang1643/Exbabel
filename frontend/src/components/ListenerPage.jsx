@@ -137,7 +137,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     deliveryStyle: 'standard_preaching',
     ssmlEnabled: true,
     promptPresetId: 'preacher_warm_build',
-    intensity: 3
+    intensity: 3,
+    pitch: '0st',
+    volume: '0dB'
   });
 
   // Commit counter for tracing leaked rows
@@ -466,7 +468,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         enabled: ttsSettings.ssmlEnabled,
         deliveryStyle: ttsSettings.deliveryStyle,
         rate: ttsSettings.speakingRate,
-        pitch: '+1st',
+        pitch: ttsSettings.pitch || '0st',
+        volume: ttsSettings.volume || '0dB',
         pauseIntensity: getDeliveryStyle(ttsSettings.deliveryStyle).pauseIntensity,
         emphasizePowerWords: true,
         emphasisLevel: 'moderate',
@@ -474,10 +477,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       }
     };
 
-    if (isGemini) {
-      requestData.promptPresetId = ttsSettings.promptPresetId;
-      requestData.intensity = ttsSettings.intensity;
-    }
+    // Always include prompt settings - backend/controller will ignore if not applicable
+    requestData.promptPresetId = ttsSettings.promptPresetId;
+    requestData.intensity = ttsSettings.intensity;
 
     console.log('[ListenerPage] Starting TTS (Radio UI)', requestData);
     ttsControllerRef.current.start(requestData);
