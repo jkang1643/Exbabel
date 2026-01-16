@@ -130,7 +130,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // TTS UI State (Lifted from TtsPanel)
   const [ttsState, setTtsState] = useState(TtsPlayerState.STOPPED);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState('en-US-Chirp3-HD-Kore');
+  const [selectedVoice, setSelectedVoice] = useState(null);
   // Default settings for hidden controls (Kore is Chirp3, so default to 1.1x)
   const [ttsSettings, setTtsSettings] = useState({
     speakingRate: 1.1,
@@ -397,13 +397,35 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   }, [targetLang, selectedVoice, ttsSettings]);
 
-  // Ensure selected voice is valid for current language
+  // Ensure selected voice is valid for current language, with smart defaulting
   useEffect(() => {
     const voices = getVoicesForLanguage(targetLang);
     if (voices.length > 0 && !voices.some(v => v.value === selectedVoice)) {
+      // Priority 1: Chirp 3 HD "Kore" (User preference)
+      const chirpKore = voices.find(v => v.value.includes('Chirp3-HD-Kore'));
+      if (chirpKore) {
+        setSelectedVoice(chirpKore.value);
+        return;
+      }
+
+      // Priority 2: Any Chirp 3 HD voice
+      const anyChirp = voices.find(v => v.tier === 'chirp3_hd');
+      if (anyChirp) {
+        setSelectedVoice(anyChirp.value);
+        return;
+      }
+
+      // Priority 3: Any Standard/Neural2 voice (avoiding Gemini default if possible)
+      const anyStandard = voices.find(v => v.tier === 'standard' || v.tier === 'neural2');
+      if (anyStandard) {
+        setSelectedVoice(anyStandard.value);
+        return;
+      }
+
+      // Fallback: Just take the first one (likely Gemini)
       setSelectedVoice(voices[0].value);
     }
-  }, [targetLang]);
+  }, [targetLang, selectedVoice]);
 
   // Track previous tier to detect tier changes and reset speed accordingly
   const prevTierRef = useRef(null);

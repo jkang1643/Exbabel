@@ -25,13 +25,13 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     const [playerState, setPlayerState] = useState(TtsPlayerState.STOPPED);
     const [enabled, setEnabled] = useState(false);
-    const [selectedVoice, setSelectedVoice] = useState('en-US-Chirp3-HD-Kore');
+    const [selectedVoice, setSelectedVoice] = useState(null);
     const [selectedMode, setSelectedMode] = useState(TtsMode.UNARY);
     const [resolvedRoute, setResolvedRoute] = useState(null);
 
     // SSML state (Chirp 3 HD)
     const [deliveryStyle, setDeliveryStyle] = useState('standard_preaching');
-    const [speakingRate, setSpeakingRate] = useState(1.45); // Default to 1.45 (Gemini optimized)
+    const [speakingRate, setSpeakingRate] = useState(1.1); // Default to 1.1 (Chirp3 optimized)
     const [pitchAdjust, setPitchAdjust] = useState('+1st');
     const [powerWordsEnabled, setPowerWordsEnabled] = useState(true);
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -132,14 +132,31 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
     // Update selected voice when language changes
     useEffect(() => {
         if (targetLang && availableVoices.length > 0) {
-            // If current selected voice is not available for new language, switch to first available
+            // If current selected voice is not available for new language, switch to smart default
             const isCurrentVoiceAvailable = availableVoices.some(voice => voice.value === selectedVoice);
             if (!isCurrentVoiceAvailable) {
-                console.log('[TtsPanel] Switching voice for language change:', {
-                    from: selectedVoice,
-                    to: availableVoices[0].value,
-                    language: targetLang
-                });
+                // Priority 1: Chirp 3 HD "Kore"
+                const chirpKore = availableVoices.find(v => v.value.includes('Chirp3-HD-Kore'));
+                if (chirpKore) {
+                    setSelectedVoice(chirpKore.value);
+                    return;
+                }
+
+                // Priority 2: Any Chirp 3 HD voice
+                const anyChirp = availableVoices.find(v => v.tier === 'chirp3_hd');
+                if (anyChirp) {
+                    setSelectedVoice(anyChirp.value);
+                    return;
+                }
+
+                // Priority 3: Any Standard/Neural2 voice
+                const anyStandard = availableVoices.find(v => v.tier === 'standard' || v.tier === 'neural2');
+                if (anyStandard) {
+                    setSelectedVoice(anyStandard.value);
+                    return;
+                }
+
+                // Fallback: Just take the first one (likely Gemini)
                 setSelectedVoice(availableVoices[0].value);
             }
         }
