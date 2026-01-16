@@ -28,6 +28,7 @@ Resolved an issue where Gemini voices stuck to the global 1.1x default instead o
 - ✅ **Correct Defaults:** Gemini voices now instantly default to 1.45x as intended.
 - ✅ **Collision Free:** No more ambiguity between Standard "Kore" and Gemini "Kore".
 - ✅ **Reliable UX:** Speed slider behaves consistently when switching tiers.
+- ✅ **Default Voice:** Changed application default voice to `en-US-Chirp3-HD-Kore` (1.1x) to align with standard usage, reserving Gemini (1.45x) for intentional opt-in.
 
 ---
 

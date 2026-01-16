@@ -130,7 +130,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // TTS UI State (Lifted from TtsPanel)
   const [ttsState, setTtsState] = useState(TtsPlayerState.STOPPED);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState('gemini-Kore');
+  const [selectedVoice, setSelectedVoice] = useState('en-US-Chirp3-HD-Kore');
   // Default settings for hidden controls (Kore is Chirp3, so default to 1.1x)
   const [ttsSettings, setTtsSettings] = useState({
     speakingRate: 1.1,

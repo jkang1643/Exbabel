@@ -25,7 +25,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     const [playerState, setPlayerState] = useState(TtsPlayerState.STOPPED);
     const [enabled, setEnabled] = useState(false);
-    const [selectedVoice, setSelectedVoice] = useState('gemini-Kore');
+    const [selectedVoice, setSelectedVoice] = useState('en-US-Chirp3-HD-Kore');
     const [selectedMode, setSelectedMode] = useState(TtsMode.UNARY);
     const [resolvedRoute, setResolvedRoute] = useState(null);
 
