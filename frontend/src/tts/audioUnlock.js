@@ -18,7 +18,9 @@ let __audioUnlocked = false;
  */
 export async function unlockIOSAudio() {
     if (__audioUnlocked) {
-        console.log('[iOS Audio Unlock] Already unlocked, skipping');
+        if (window.audioDebug) {
+            window.audioDebug('iOS unlock skipped (already unlocked)', {});
+        }
         return;
     }
 
@@ -47,6 +49,9 @@ export async function unlockIOSAudio() {
 
             __audioUnlocked = true;
             console.log('[iOS Audio Unlock] ✅ Audio successfully unlocked via WebAudio');
+            if (window.audioDebug) {
+                window.audioDebug('iOS AUDIO UNLOCKED ✅', { method: 'WebAudio' });
+            }
         }
 
         // 2) Optional HTMLAudioElement fallback (not always reliable, but doesn't hurt)
@@ -60,6 +65,9 @@ export async function unlockIOSAudio() {
 
     } catch (err) {
         console.warn('[iOS Audio Unlock] ⚠️ Failed to unlock audio:', err.message);
+        if (window.audioDebug) {
+            window.audioDebug('iOS unlock failed', { error: err.name, message: err.message });
+        }
     }
 }
 

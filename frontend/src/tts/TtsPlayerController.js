@@ -8,8 +8,55 @@
  */
 
 import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
-import { unlockIOSAudio } from './audioUnlock.js';
+// Global debug buffer for on-screen visual debugging (mobile)
+if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
+    window.__AUDIO_DEBUG__ = [];
+    window.audioDebug = function (msg, data) {
+        const entry = {
+            t: new Date().toLocaleTimeString(),
+            msg,
+            data: data ? JSON.parse(JSON.stringify(data)) : null
+        };
+        window.__AUDIO_DEBUG__.push(entry);
+        console.log(`[AUDIO_DEBUG] ${msg}`, data);
+        if (window.__AUDIO_DEBUG__.length > 30) {
+            window.__AUDIO_DEBUG__.shift();
+        }
 
+        // Ensure overlay exists
+        let overlay = document.getElementById('audio-debug-overlay');
+        if (!overlay && document.body) {
+            overlay = document.createElement('div');
+            overlay.id = 'audio-debug-overlay';
+            Object.assign(overlay.style, {
+                position: 'fixed',
+                bottom: '10px',
+                left: '10px',
+                right: '10px',
+                maxHeight: '40vh',
+                overflowY: 'auto',
+                backgroundColor: 'rgba(0,0,0,0.85)',
+                color: '#0f0',
+                padding: '10px',
+                borderRadius: '8px',
+                zIndex: '99999',
+                fontSize: '10px',
+                fontFamily: 'monospace',
+                pointerEvents: 'none',
+                border: '1px solid #333'
+            });
+            document.body.appendChild(overlay);
+        }
+
+        if (overlay) {
+            overlay.innerHTML = window.__AUDIO_DEBUG__.map(e =>
+                `<div style="border-bottom:1px solid #444;padding:2px 0;white-space:pre-wrap;">
+                    <span style="color:#aaa">[${e.t}]</span> <b style="color:#fff">${e.msg}</b>: ${JSON.stringify(e.data)}
+                </div>`
+            ).reverse().join('');
+        }
+    };
+}
 
 export class TtsPlayerController {
     constructor(sendMessage) {
@@ -50,11 +97,21 @@ export class TtsPlayerController {
 
         this.lastRequestId = 0; // Track latest request ID to prevent out-of-order playback
 
-        // Create a hidden audio element for priming if in browser
+        // Create persistent audio element for ALL playback (iOS Safari unlock requirement)
         if (typeof window !== 'undefined' && typeof Audio !== 'undefined') {
-            this.primingAudio = new Audio();
-            this.primingAudio.volume = 0;
+            this.audioEl = new Audio();
+            this.audioEl.playsInline = true;
+            this.audioEl.preload = 'auto';
+            this.audioEl.volume = 1.0;
+
+            // Add unique ID for debugging element identity
+            this.audioEl.__id = Math.random().toString(16).slice(2);
+            console.log('[TtsPlayerController] Created persistent audioEl with ID:', this.audioEl.__id);
         }
+
+        // iOS unlock state
+        this._iosUnlocked = false;
+
 
         // Diagnostic tracking
         this.instanceId = Math.random().toString(16).slice(2);
@@ -134,7 +191,9 @@ export class TtsPlayerController {
     unlockFromUserGesture() {
         if (this._iosUnlocked) {
             console.log('[TtsPlayerController] iOS already unlocked, skipping');
-
+            if (window.audioDebug) {
+                window.audioDebug('iOS unlock skipped (already unlocked)', { elementId: this.audioEl?.__id });
+            }
             return;
         }
 
@@ -160,20 +219,33 @@ export class TtsPlayerController {
                     this._iosUnlocked = true;
 
                     console.log('[TtsPlayerController] iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
-
+                    if (window.audioDebug) {
+                        window.audioDebug('iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
+                    }
                 }).catch(err => {
                     console.warn('[TtsPlayerController] iOS media unlock failed:', err);
-
+                    if (window.audioDebug) {
+                        window.audioDebug('iOS MEDIA UNLOCK FAILED', {
+                            elementId: this.audioEl.__id,
+                            error: err.name,
+                            message: err.message
+                        });
+                    }
                 });
             }
         } catch (err) {
             console.warn('[TtsPlayerController] iOS media unlock threw:', err);
-
+            if (window.audioDebug) {
+                window.audioDebug('iOS MEDIA UNLOCK THREW', {
+                    elementId: this.audioEl?.__id,
+                    error: err.name,
+                    message: err.message
+                });
+            }
         }
     }
 
     /**
-
      * Start TTS playback
      * 
      * @param {Object} config - Playback configuration
@@ -188,6 +260,7 @@ export class TtsPlayerController {
      * @param {number} [config.startFromSegmentId] - Start from this segment ID (radio mode)
      */
     start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null, promptPresetId = null, ttsPrompt = null, intensity = null, startFromSegmentId = null }) {
+
         console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode, ssmlOptions, startFromSegmentId });
 
         this.currentLanguageCode = languageCode;
@@ -1007,17 +1080,37 @@ export class TtsPlayerController {
             // Add state transition logging for mobile debugging
             audio.onplay = () => {
                 console.log(`[TtsPlayerController] Audio 'onplay' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onplay event", { segment: queueItem.segmentId });
             };
             audio.onplaying = () => {
                 console.log(`[TtsPlayerController] Audio 'onplaying' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onplaying event", { segment: queueItem.segmentId });
             };
             audio.onpause = () => {
                 console.log(`[TtsPlayerController] Audio 'onpause' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onpause event", { segment: queueItem.segmentId });
             };
+            if (window.audioDebug) {
+                window.audioDebug("play() attempt", {
+                    segment: queueItem.segmentId,
+                    src: audio.src?.substring(0, 50) + '...',
+                    readyState: audio.readyState,
+                    paused: audio.paused
+                });
+            }
 
             audio.play().then(() => {
                 console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("play() success", { segmentID: queueItem.segmentId });
             }).catch(error => {
+
+                if (window.audioDebug) {
+                    window.audioDebug("play() REJECTED", {
+                        segment: queueItem.segmentId,
+                        name: error.name,
+                        message: error.message
+                    });
+                }
 
                 if (error.name === 'AbortError') {
                     console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
