@@ -100,11 +100,20 @@ export class TtsPlayerController {
 
         this.lastRequestId = 0; // Track latest request ID to prevent out-of-order playback
 
-        // Create a hidden audio element for priming if in browser
+        // Create persistent audio element for ALL playback (iOS Safari unlock requirement)
         if (typeof window !== 'undefined' && typeof Audio !== 'undefined') {
-            this.primingAudio = new Audio();
-            this.primingAudio.volume = 0;
+            this.audioEl = new Audio();
+            this.audioEl.playsInline = true;
+            this.audioEl.preload = 'auto';
+            this.audioEl.volume = 1.0;
+
+            // Add unique ID for debugging element identity
+            this.audioEl.__id = Math.random().toString(16).slice(2);
+            console.log('[TtsPlayerController] Created persistent audioEl with ID:', this.audioEl.__id);
         }
+
+        // iOS unlock state
+        this._iosUnlocked = false;
 
         // Diagnostic tracking
         this.instanceId = Math.random().toString(16).slice(2);
@@ -166,6 +175,7 @@ export class TtsPlayerController {
         }, 5000);
     }
 
+
     /**
      * Compute a cheap hash for audio bytes to detect re-synthesis vs re-play
      * @private
@@ -175,6 +185,67 @@ export class TtsPlayerController {
         const head = Array.from(uint8.slice(0, 16)).join(',');
         const tail = Array.from(uint8.slice(Math.max(0, len - 16))).join(',');
         return `${len}:${head}:${tail}`;
+    }
+
+    /**
+     * Unlock iOS Safari audio by priming the actual audio element
+     * MUST be called from within a user gesture (e.g., Play button click)
+     */
+    unlockFromUserGesture() {
+        if (this._iosUnlocked) {
+            console.log('[TtsPlayerController] iOS already unlocked, skipping');
+            if (window.audioDebug) {
+                window.audioDebug('iOS unlock skipped (already unlocked)', { elementId: this.audioEl?.__id });
+            }
+            return;
+        }
+
+        if (!this.audioEl) {
+            console.warn('[TtsPlayerController] No audioEl available for unlock');
+            return;
+        }
+
+        try {
+            // Prime the *same* audio element you'll reuse later
+            this.audioEl.muted = true;
+            this.audioEl.playsInline = true;
+
+            // Tiny silent WAV (more reliable than MP3 data URI on iOS)
+            this.audioEl.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+
+            const p = this.audioEl.play();
+            if (p?.then) {
+                p.then(() => {
+                    this.audioEl.pause();
+                    this.audioEl.currentTime = 0;
+                    this.audioEl.muted = false;
+                    this._iosUnlocked = true;
+
+                    console.log('[TtsPlayerController] iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
+                    if (window.audioDebug) {
+                        window.audioDebug('iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
+                    }
+                }).catch(err => {
+                    console.warn('[TtsPlayerController] iOS media unlock failed:', err);
+                    if (window.audioDebug) {
+                        window.audioDebug('iOS MEDIA UNLOCK FAILED', {
+                            elementId: this.audioEl.__id,
+                            error: err.name,
+                            message: err.message
+                        });
+                    }
+                });
+            }
+        } catch (err) {
+            console.warn('[TtsPlayerController] iOS media unlock threw:', err);
+            if (window.audioDebug) {
+                window.audioDebug('iOS MEDIA UNLOCK THREW', {
+                    elementId: this.audioEl?.__id,
+                    error: err.name,
+                    message: err.message
+                });
+            }
+        }
     }
 
     /**
@@ -934,9 +1005,23 @@ export class TtsPlayerController {
 
         try {
             const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-            audio.volume = 1.0; // Explicitly ensure volume is up
-            console.log(`[TtsPlayerController] Created Audio object for segment: ${segmentId}, volume: ${audio.volume}, blobSize: ${audioBlob.size}`);
+
+            // CRITICAL: Reuse the SAME audio element that was unlocked (iOS Safari requirement)
+            const audio = this.audioEl;
+            if (!audio) {
+                console.error('[TtsPlayerController] No audioEl available for playback');
+                queueItem.status = 'error';
+                setTimeout(() => this._processQueue(), 0);
+                return;
+            }
+
+            // Stop any current playback and reset
+            audio.pause();
+            audio.src = audioUrl;
+            audio.load();
+            audio.volume = 1.0;
+
+            console.log(`[TtsPlayerController] Using persistent audioEl for segment: ${segmentId}, elementId: ${audio.__id}, blobSize: ${audioBlob.size}`);
 
             // Apply playback rate reinforcement for ALL voices (solid guarantee)
             if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {

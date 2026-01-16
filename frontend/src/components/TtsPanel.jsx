@@ -12,11 +12,11 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Volume2, VolumeX, Play, Square, ChevronDown, ChevronUp } from 'lucide-react';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
-import { unlockIOSAudio } from '../tts/audioUnlock.js';
 
 import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
 import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js';
+
 
 export function TtsPanel({ controller, targetLang, isConnected, translations }) {
     // Controller is now passed from parent (ListenerPage) to ensure stability across re-renders
@@ -235,10 +235,10 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
             window.audioDebug('PLAY TAP (user gesture)', {});
         }
 
-        // Call unlock synchronously (do NOT await - keep it in the gesture context)
-        unlockIOSAudio();
+        // Call unlock on the controller's persistent audio element (iOS Safari requirement)
+        controller.unlockFromUserGesture();
         if (window.audioDebug) {
-            window.audioDebug('unlockIOSAudio() called', {});
+            window.audioDebug('unlockFromUserGesture() called', {});
         }
 
         if (!isConnected) {
