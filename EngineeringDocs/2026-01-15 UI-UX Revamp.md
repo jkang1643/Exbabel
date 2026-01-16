@@ -112,6 +112,34 @@ Streamlined the Listener Page by merging redundant UI bars into a single unified
 
 ---
 
+### 2026-01-16 — PR 3: Live Translation Clarity & Visual Revamp
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Refined the live translation experience to prioritize dual-language clarity and improve visual density on the Listener Page.
+
+**Key Changes:**
+- **Dual-Language Live Box:**
+    - Restored simultaneous display of both original (Host) and translated text in the live partials box.
+    - Added high-visibility "LIVE" pulse indicator for active streaming.
+- **"Tap-to-Reveal" History:**
+    - Modified history segments to show **Translation Only** by default for a cleaner look.
+    -Implemented a "Flip" interaction: users can tap any history segment to reveal the original source text.
+- **Visual Space Optimization:**
+    - Significantly increased font sizes for both live text and history segments (`text-xl` to `text-3xl`) to fill available screen space and reduce dead white space.
+- **Auto-Scroll Behavior:**
+    - Fixed auto-scroll logic to pin the view to the **bottom** (newest segments) of the history list instead of the top.
+- **Precision Voice Defaults:**
+    - Isolated speaking rate defaults on a per-tier basis.
+    - **Chirp 3 HD:** Reduced default speed to **1.1x** (from 1.45x) for clearer delivery.
+    - **Gemini & Studio:** Preserved **1.45x** default for high-performance AI synthesis.
+- **Header Removal:**
+    - Removed the redundant Exbabel branding header to maximize vertical screen space for translation content.
+
+**Where implemented:**
+- **Frontend:** `frontend/src/components/ListenerPage.jsx`
+
+---
+
 ## 2) Where we are now (implementation status)
 
 ### ✅ Implemented
@@ -119,8 +147,10 @@ Streamlined the Listener Page by merging redundant UI bars into a single unified
 - **Manual Input:** High-visibility manual code entry with auto-focus and auto-capitalization.
 - **Unified Menu Bar:** Single-row header for Listener Page session and TTS management.
 - **Advanced TTS Settings:** Full control over AI personality and delivery style via settings modal.
-- **Visual Feedback:** Scanning animations, loading states, and clear error messaging.
-- **Navigation:** Integrated with existing `onSelectMode` session logic.
+- **Dual-Language Live View:** Simultaneous visibility of host original and translation.
+- **Interactive History:** Tap-to-reveal original text flip logic in history list.
+- **Adaptive Auto-Scroll:** Pins viewport to newest content at bottom of history.
+- **Fine-tuned Speed Defaults:** 1.1x for Chirp3 vs 1.45x for Gemini.
 
 ### 🔍 Known / Remaining
 - **Torch Support:** Some mobile browsers support a flashlight toggle; currently not implemented.

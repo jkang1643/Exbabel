@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
+import { useImperativePainter } from '../hooks/useImperativePainter';
 import { Header } from './Header';
 import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
@@ -111,9 +112,18 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [sessionInfo, setSessionInfo] = useState(null);
   const [error, setError] = useState('');
   const [isJoining, setIsJoining] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false); // Toggle for showing original text
 
   const wsRef = useRef(null);
   const translationsEndRef = useRef(null);
+
+  // DOM refs for imperative partial painting (flicker-free)
+  const currentTranslationElRef = useRef(null);
+  const currentOriginalElRef = useRef(null);
+
+  // Imperative painters for live partial text (avoids React state churn)
+  const { updateText: updateTranslationText, clearText: clearTranslationText } = useImperativePainter(currentTranslationElRef, { shrinkDelayMs: 200 });
+  const { updateText: updateOriginalText, clearText: clearOriginalText } = useImperativePainter(currentOriginalElRef, { shrinkDelayMs: 0 }); // No delay for transcription - show last word immediately
 
   const ttsControllerRef = useRef(null); // TTS controller for audio playback
 
@@ -121,9 +131,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [ttsState, setTtsState] = useState(TtsPlayerState.STOPPED);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState('Kore');
-  // Default settings for hidden controls (matches TtsPanel defaults)
+  // Default settings for hidden controls (Kore is Chirp3, so default to 1.1x)
   const [ttsSettings, setTtsSettings] = useState({
-    speakingRate: 1.45,
+    speakingRate: 1.1,
     deliveryStyle: 'standard_preaching',
     ssmlEnabled: true,
     promptPresetId: 'preacher_warm_build',
@@ -267,9 +277,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     });
   }
 
-  // Auto-scroll to latest translation
+  // Auto-scroll to latest translation (bottom of list)
   useEffect(() => {
-    translationsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    translationsEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [translations]);
 
   // TRANSLATION STALL DETECTION: Check periodically if source partials arrive but translations don't
@@ -645,8 +655,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
               // Always update original text immediately (transcription, then corrected when available)
               if (textToDisplay) {
-                // Removed partial logging - was causing event loop lag
-                setCurrentOriginal(textToDisplay);
+                // Use imperative painter for flicker-free updates
+                updateOriginalText(textToDisplay);
+                setCurrentOriginal(textToDisplay); // Keep state for UI conditionals
                 cacheOriginal(textToDisplay, message.sourceSeqId ?? message.seqId);
               }
 
@@ -748,12 +759,37 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   });
                   lastRenderTimeRef.current = now;
                   lastTextLengthRef.current = liveText.length;
-                  // CRITICAL: Use flushSync for partial updates to ensure immediate responsiveness
-                  // Throttling limits frequency, but when we DO update, make it immediate
-                  flushSync(() => {
+
+                  // TRANSLATION LANGUAGE GUARD: Skip if translatedText is suspiciously similar to originalText (API misfire)
+                  const isSuspiciousEnglish = !isTranscriptionMode && originalText && translatedText &&
+                    translatedText.toLowerCase().trim() === originalText.toLowerCase().trim();
+
+                  // REFUSAL FILTER: Skip AI refusal messages (sorry, I can't help, etc.)
+                  const lowerText = (translatedText || liveText || '').toLowerCase();
+                  const isAIRefusal =
+                    lowerText.includes('sorry') ||
+                    lowerText.includes('lo siento') ||  // Spanish
+                    lowerText.includes('désolé') ||     // French
+                    lowerText.includes('desculpe') ||   // Portuguese
+                    lowerText.includes("i can't") ||
+                    lowerText.includes("i cannot") ||
+                    lowerText.includes("no puedo") ||   // Spanish
+                    lowerText.includes("je ne peux") || // French
+                    lowerText.includes('unfortunately') ||
+                    lowerText.includes('lamentablemente');
+
+                  if (isSuspiciousEnglish && targetLangRef.current !== 'en') {
+                    console.log('[SKIP_ENGLISH_TRANSLATION]', { translatedText: translatedText?.slice(0, 50) });
+                    // Don't update translation display - keep previous content
+                  } else if (isAIRefusal) {
+                    console.log('[SKIP_AI_REFUSAL]', { text: lowerText.slice(0, 60) });
+                    // Don't update translation display - AI is refusing to translate
+                  } else {
+                    // Use imperative painter for flicker-free updates (replaces flushSync)
                     console.log('[LISTENER_UI_UPDATE]', { liveText: liveText.substring(0, 30) });
-                    setCurrentTranslation(liveText);
-                  });
+                    updateTranslationText(liveText);
+                    setCurrentTranslation(liveText); // Keep state for UI conditionals
+                  }
                 }
               }
             } else {
@@ -931,6 +967,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 }
 
                 // Clear live displays immediately after adding to history
+                clearTranslationText(); // Clear imperative painter
+                clearOriginalText();     // Clear imperative painter
                 setCurrentTranslation('');
                 setCurrentOriginal('');
               });
@@ -1105,44 +1143,34 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // Listener view (after joining)
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100">
-      <Header />
 
       <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
-        {/* Unified Control Bar (Session + TTS) */}
+        {/* Unified Session Info Bar */}
         <div className="bg-white rounded-lg shadow-lg p-3 sm:p-4 mb-4 sm:mb-6">
-          <div className="flex flex-col lg:flex-row items-stretch lg:items-end gap-4">
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3 lg:gap-4">
 
             {/* Session Code */}
-            <div className="flex-shrink-0 text-center sm:text-left">
-              <p className="text-xs sm:text-sm text-gray-600">Session Code:</p>
-              <p className="text-xl sm:text-2xl font-bold text-emerald-600 leading-none">{sessionInfo?.sessionCode}</p>
+            <div className="flex-shrink-0">
+              <p className="text-xs text-gray-600">Session Code:</p>
+              <p className="text-lg sm:text-xl font-bold text-emerald-600">{sessionInfo?.sessionCode}</p>
             </div>
 
-            {/* TTS Voice Model (Mid-Section) */}
+            {/* Voice Model */}
             {TTS_UI_ENABLED && (
-              <div className="flex-1">
-                <label className="block text-xs sm:text-sm text-gray-600 mb-1 font-medium">
-                  Voice Model
-                </label>
+              <div className="flex-1 lg:max-w-xs">
+                <label className="block text-xs text-gray-600 mb-1">Voice Model</label>
                 <select
                   value={selectedVoice}
                   onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
+                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
                 >
-                  {/* Group voices by tier for explicit separation */}
                   {Object.entries(
                     getVoicesForLanguage(targetLang).reduce((acc, voice) => {
                       const tier = voice.tier || 'standard';
                       let group = 'Standard';
-
-                      if (tier === 'gemini') {
-                        group = 'Gemini & Studio';
-                      } else if (tier === 'chirp3_hd') {
-                        group = 'Chirp 3 HD';
-                      } else if (tier === 'neural2') {
-                        group = 'Neural2';
-                      }
-
+                      if (tier === 'gemini') group = 'Gemini & Studio';
+                      else if (tier === 'chirp3_hd') group = 'Chirp 3 HD';
+                      else if (tier === 'neural2') group = 'Neural2';
                       if (!acc[group]) acc[group] = [];
                       acc[group].push(voice);
                       return acc;
@@ -1158,53 +1186,62 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               </div>
             )}
 
-            {/* Right Side: Language + Actions */}
-            <div className="flex items-end gap-3 justify-between lg:justify-start">
+            {/* Language Selector */}
+            <div className="flex-1 lg:max-w-xs">
+              <LanguageSelector
+                label="Your Language"
+                languages={LANGUAGES}
+                selectedLanguage={targetLang}
+                onLanguageChange={handleChangeLanguage}
+              />
+            </div>
 
-              {/* Language Selector */}
-              <div className="flex-1 lg:flex-none lg:w-48">
-                <LanguageSelector
-                  label="Your Language"
-                  languages={LANGUAGES}
-                  selectedLanguage={targetLang}
-                  onLanguageChange={handleChangeLanguage}
-                />
-              </div>
-
-              {/* TTS Controls */}
+            {/* Controls: Settings, Play, Connection, Leave */}
+            <div className="flex items-center gap-2 lg:ml-auto">
+              {/* Settings */}
               {TTS_UI_ENABLED && (
-                <div className="flex-shrink-0 flex items-center gap-2 mb-0.5">
-                  {/* Settings Button */}
-                  <button
-                    onClick={() => setIsSettingsOpen(true)}
-                    className="flex items-center justify-center w-10 h-10 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 shadow-md transition-all active:scale-95 border border-gray-300"
-                    title="Voice Settings"
-                  >
-                    <Settings className="w-5 h-5" />
-                  </button>
-
-                  {/* Play/Stop Button */}
-                  {ttsState === 'PLAYING' ? (
-                    <button
-                      onClick={handleTtsStop}
-                      className="flex items-center justify-center w-10 h-10 bg-red-500 text-white rounded-lg hover:bg-red-600 shadow-md transition-all active:scale-95"
-                      title="Stop"
-                    >
-                      <Square className="w-5 h-5 fill-current" />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleTtsPlay}
-                      disabled={connectionState !== 'open'}
-                      className="flex items-center justify-center gap-2 px-4 h-10 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 shadow-md transition-all hover:scale-105 active:scale-95 disabled:bg-gray-300 disabled:scale-100 disabled:shadow-none font-medium"
-                      title="Start Playback"
-                    >
-                      <Play className="w-5 h-5 fill-current" />
-                      <span className="hidden sm:inline">Play</span>
-                    </button>
-                  )}
-                </div>
+                <button
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-all"
+                  title="Settings"
+                >
+                  <Settings className="w-4 h-4" />
+                </button>
               )}
+
+              {/* Play/Stop */}
+              {TTS_UI_ENABLED && (
+                ttsState === 'PLAYING' ? (
+                  <button
+                    onClick={handleTtsStop}
+                    className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all"
+                    title="Stop"
+                  >
+                    <Square className="w-4 h-4 fill-current" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleTtsPlay}
+                    disabled={connectionState !== 'open'}
+                    className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all disabled:bg-gray-300 text-sm font-medium"
+                    title="Play"
+                  >
+                    <Play className="w-4 h-4 fill-current inline mr-1" />
+                    <span className="hidden sm:inline">Play</span>
+                  </button>
+                )
+              )}
+
+              {/* Connection Status */}
+              <ConnectionStatus state={connectionState} />
+
+              {/* Leave Button */}
+              <button
+                onClick={handleLeaveSession}
+                className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg transition-all text-sm"
+              >
+                Leave
+              </button>
             </div>
 
           </div>
@@ -1220,16 +1257,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           targetLang={targetLang}
         />
 
-        <div className="flex items-center justify-between sm:flex-col sm:items-end gap-3">
-          <ConnectionStatus state={connectionState} />
 
-          <button
-            onClick={handleLeaveSession}
-            className="px-3 sm:px-4 py-2 bg-red-500 hover:bg-red-600 text-white text-sm sm:text-base font-semibold rounded-lg transition-all"
-          >
-            Leave
-          </button>
-        </div>
 
         {error && (
           <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
@@ -1238,114 +1266,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         )
         }
 
-        {/* LIVE STREAMING TRANSLATION BOX - Shows both original and translation */}
-        <div className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-3 sm:p-6 shadow-2xl mb-4 sm:mb-6 -mx-2 sm:mx-0">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
-            <div className="flex items-center space-x-2 sm:space-x-3">
-              {connectionState === 'open' && (
-                <div className="flex space-x-1">
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce"></div>
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.15s' }}></div>
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
-                </div>
-              )}
-              <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider flex items-center gap-1 sm:gap-2">
-                {connectionState === 'open' ? (
-                  <>
-                    <span className="relative flex h-2 w-2 sm:h-2.5 sm:w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 sm:h-2.5 sm:w-2.5 bg-white"></span>
-                    </span>
-                    <span className="hidden sm:inline">LIVE TRANSLATION</span>
-                    <span className="sm:hidden">LIVE</span>
-                  </>
-                ) : (
-                  'CONNECTING...'
-                )}
-              </span>
-            </div>
-            {currentTranslation && (
-              <button
-                onClick={() => navigator.clipboard.writeText(currentTranslation)}
-                className="p-1 sm:p-1.5 text-white/80 hover:text-white transition-colors"
-                title="Copy live translation"
-              >
-                📋
-              </button>
-            )}
-          </div>
-
-          {/* Show both original and translation */}
-          <div className="space-y-2 sm:space-y-3">
-            {/* Original Text from Host */}
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg sm:rounded-xl p-2 sm:p-3">
-              <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-1 sm:mb-2">
-                Original (Host)
-              </div>
-              {currentOriginal ? (
-                <p className="text-white text-sm sm:text-base leading-relaxed whitespace-pre-wrap">
-                  {currentOriginal}
-                  {connectionState === 'open' && (
-                    <span className="inline-block w-0.5 h-4 sm:h-5 ml-1 bg-white animate-pulse"></span>
-                  )}
-                </p>
-              ) : (
-                <p className="text-white/40 text-xs sm:text-sm italic">Listening for host...</p>
-              )}
-            </div>
-
-            {/* Translated Text */}
-            <div className="bg-white/15 backdrop-blur-sm rounded-lg sm:rounded-xl p-2 sm:p-3 border-2 border-white/20">
-              <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-1 sm:mb-2 flex items-center gap-2">
-                <span>Translation ({targetLang.toUpperCase()})</span>
-                {currentTranslation && currentTranslation !== currentOriginal && (
-                  <span className="inline-flex items-center gap-1 text-emerald-300">
-                    <span className="inline-block w-1 h-1 sm:w-1.5 sm:h-1.5 bg-emerald-300 rounded-full animate-pulse"></span>
-                    <span className="text-xs">Live</span>
-                  </span>
-                )}
-              </div>
-              {currentTranslation ? (
-                <p className="text-white text-base sm:text-lg font-medium leading-relaxed whitespace-pre-wrap">
-                  {currentTranslation}
-                  {connectionState === 'open' && (
-                    <span className="inline-block w-0.5 h-5 sm:h-6 ml-1 bg-emerald-300 animate-pulse"></span>
-                  )}
-                </p>
-              ) : isTranslationStalled && currentOriginal ? (
-                <div className="space-y-2">
-                  <p className="text-white/70 text-sm sm:text-base leading-relaxed whitespace-pre-wrap italic">
-                    {currentOriginal}
-                  </p>
-                  <p className="text-white/50 text-xs sm:text-sm italic animate-pulse">
-                    ⏳ Waiting for translation...
-                  </p>
-                </div>
-              ) : currentOriginal ? (
-                <p className="text-white/50 text-xs sm:text-sm italic animate-pulse">Translating...</p>
-              ) : (
-                <p className="text-white/40 text-xs sm:text-sm italic">Waiting for host to speak...</p>
-              )}
-            </div>
-
-            <div className="mt-2 text-xs text-white/70 font-medium">
-              {currentOriginal && currentTranslation && currentTranslation !== currentOriginal ? (
-                <>✨ Live translation updating...</>
-              ) : currentOriginal ? (
-                <>⏳ Translation in progress...</>
-              ) : connectionState === 'open' ? (
-                <>🎤 Connected • Waiting for host to speak...</>
-              ) : (
-                <>Connecting to session...</>
-              )}
-            </div>
-          </div>
-        </div>
-
-
-
         {/* Translation History */}
-        <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-2 sm:mx-0">
+        <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-2 sm:mx-0 mb-4 sm:mb-6">
           <div className="flex items-center justify-between mb-3 sm:mb-4">
             <h3 className="text-xs sm:text-sm font-semibold text-gray-700 flex items-center gap-1 sm:gap-2">
               <span className="text-green-600">📝</span>
@@ -1388,61 +1310,137 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           ) : (
             <div className="space-y-2 sm:space-y-3 max-h-80 sm:max-h-96 overflow-y-auto pr-1 sm:pr-2">
               {translations.map((item, index) => (
-                <div key={index} className="bg-white rounded-lg p-3 sm:p-4 shadow-sm hover:shadow-md transition-all border border-gray-200">
-                  {item.original && (
-                    <div className="mb-2 sm:mb-3 pb-2 sm:pb-3 border-b border-gray-100">
-                      <div className="flex items-center justify-between mb-1 sm:mb-1.5">
-                        <span className="text-xs font-semibold text-blue-600 uppercase">Original</span>
+                <div
+                  key={index}
+                  onClick={() => {
+                    const updatedTranslations = [...translations];
+                    updatedTranslations[index] = { ...item, showOriginal: !item.showOriginal };
+                    setTranslations(updatedTranslations);
+                  }}
+                  className="bg-white rounded-lg p-4 sm:p-5 shadow-sm hover:shadow-md transition-all border border-gray-200 cursor-pointer"
+                >
+                  {/* Show translation by default, tap to reveal original */}
+                  {item.showOriginal && item.original ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-blue-600 uppercase">Original (Tap to hide)</span>
                         <button
-                          onClick={() => navigator.clipboard.writeText(item.original)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigator.clipboard.writeText(item.original);
+                          }}
                           className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                           title="Copy"
                         >
                           📋
                         </button>
                       </div>
-                      <p className="text-gray-700 text-sm sm:text-base leading-relaxed">{item.original}</p>
+                      <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.original}</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-green-600 uppercase">Translation (Tap to see original)</span>
+                        <div className="flex items-center space-x-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigator.clipboard.writeText(item.translated);
+                            }}
+                            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                            title="Copy"
+                          >
+                            📋
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const utterance = new SpeechSynthesisUtterance(item.translated);
+                              speechSynthesis.speak(utterance);
+                            }}
+                            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                            title="Listen"
+                          >
+                            🔊
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.translated}</p>
                     </div>
                   )}
 
-                  <div>
-                    <div className="flex items-center justify-between mb-1 sm:mb-1.5">
-                      <span className="text-xs font-semibold text-green-600 uppercase">Translation</span>
-                      <div className="flex items-center space-x-1">
-                        <button
-                          onClick={() => navigator.clipboard.writeText(item.translated)}
-                          className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                          title="Copy"
-                        >
-                          📋
-                        </button>
-                        <button
-                          onClick={() => {
-                            const utterance = new SpeechSynthesisUtterance(item.translated)
-                            speechSynthesis.speak(utterance)
-                          }}
-                          className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                          title="Speak"
-                        >
-                          🔊
-                        </button>
-                      </div>
-                    </div>
-                    <p className="text-gray-900 text-sm sm:text-base font-medium leading-relaxed">{item.translated}</p>
-                  </div>
-
-                  <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-gray-100 text-xs text-gray-400 flex items-center justify-between">
+                  <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400 flex items-center justify-between">
                     <span>{new Date(item.timestamp).toLocaleTimeString()}</span>
                     <span className="text-gray-300">#{translations.length - index}</span>
                   </div>
                 </div>
               ))}
-              <div ref={translationsEndRef} />
             </div>
           )}
+          <div ref={translationsEndRef} />
         </div>
+
+        {/* LIVE TRANSLATION BOX - Shows both original and translation */}
+        <div className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-4 sm:p-6 shadow-2xl -mx-2 sm:mx-0">
+          <div className="flex items-center justify-between mb-3 sm:mb-4">
+            <div className="flex items-center space-x-2 sm:space-x-3">
+              {connectionState === 'open' && (
+                <div className="flex space-x-1">
+                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce"></div>
+                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.15s' }}></div>
+                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
+                </div>
+              )}
+              <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">
+                {connectionState === 'open' ? 'LIVE TRANSLATION' : 'CONNECTING...'}
+              </span>
+            </div>
+          </div>
+
+          {/* Show both original and translation */}
+          <div className="space-y-2 sm:space-y-3">
+            {/* Original Text from Host */}
+            {!showOriginal && (
+              <div className="bg-white/10 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4">
+                <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-2">
+                  Original (Host)
+                </div>
+                {currentOriginal ? (
+                  <p ref={currentOriginalElRef} className="text-white text-xl sm:text-2xl md:text-3xl font-medium leading-relaxed live-partial-container" />
+                ) : (
+                  <p className="text-white/40 text-sm italic">Listening for host...</p>
+                )}
+              </div>
+            )}
+
+            {/* Translated Text */}
+            <div className="bg-white/15 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4 border-2 border-white/20">
+              <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-2 flex items-center gap-2">
+                <span>Translation ({targetLang.toUpperCase()})</span>
+                {currentTranslation && currentTranslation !== currentOriginal && (
+                  <span className="inline-flex items-center gap-1 text-emerald-300">
+                    <span className="inline-block w-1 h-1 sm:w-1.5 sm:h-1.5 bg-emerald-300 rounded-full animate-pulse"></span>
+                    <span className="text-xs">Live</span>
+                  </span>
+                )}
+              </div>
+              {currentTranslation ? (
+                <p ref={currentTranslationElRef} className="text-white text-xl sm:text-2xl md:text-3xl font-medium leading-relaxed live-partial-container" />
+              ) : isTranslationStalled && currentOriginal ? (
+                <div className="space-y-2">
+                  <p className="text-white/70 text-base italic">{currentOriginal}</p>
+                  <p className="text-white/50 text-sm italic animate-pulse">⏳ Translating...</p>
+                </div>
+              ) : currentOriginal ? (
+                <p className="text-white/50 text-sm italic animate-pulse">Translating...</p>
+              ) : (
+                <p className="text-white/40 text-sm italic">Waiting for host...</p>
+              )}
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   );
 }
-

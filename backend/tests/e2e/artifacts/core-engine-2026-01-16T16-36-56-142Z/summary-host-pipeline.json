@@ -1,0 +1,672 @@
+{
+  "counts": {
+    "total": 67,
+    "translation": 66,
+    "ttsAck": 0,
+    "ttsAudio": 0
+  },
+  "lifecycle": {
+    "en": {
+      "0": {
+        "seqId": 0,
+        "firstTs": 1768581437975,
+        "lastTs": 1768581437975,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 7,
+        "finalText": null
+      },
+      "1": {
+        "seqId": 1,
+        "firstTs": 1768581437976,
+        "lastTs": 1768581437976,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 7,
+        "finalText": null
+      },
+      "2": {
+        "seqId": 2,
+        "firstTs": 1768581437977,
+        "lastTs": 1768581437977,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 7,
+        "finalText": null
+      },
+      "3": {
+        "seqId": 3,
+        "firstTs": 1768581438068,
+        "lastTs": 1768581438068,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 7,
+        "finalText": null
+      },
+      "4": {
+        "seqId": 4,
+        "firstTs": 1768581438765,
+        "lastTs": 1768581438765,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 10,
+        "finalText": null
+      },
+      "5": {
+        "seqId": 5,
+        "firstTs": 1768581438766,
+        "lastTs": 1768581438766,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 10,
+        "finalText": null
+      },
+      "6": {
+        "seqId": 6,
+        "firstTs": 1768581438943,
+        "lastTs": 1768581438943,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 15,
+        "finalText": null
+      },
+      "7": {
+        "seqId": 7,
+        "firstTs": 1768581438944,
+        "lastTs": 1768581438944,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 15,
+        "finalText": null
+      },
+      "8": {
+        "seqId": 8,
+        "firstTs": 1768581438945,
+        "lastTs": 1768581438945,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 15,
+        "finalText": null
+      },
+      "9": {
+        "seqId": 9,
+        "firstTs": 1768581439229,
+        "lastTs": 1768581439229,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 15,
+        "finalText": null
+      },
+      "10": {
+        "seqId": 10,
+        "firstTs": 1768581439396,
+        "lastTs": 1768581439396,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 15,
+        "finalText": null
+      },
+      "11": {
+        "seqId": 11,
+        "firstTs": 1768581439521,
+        "lastTs": 1768581439521,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 10,
+        "finalText": null
+      },
+      "12": {
+        "seqId": 12,
+        "firstTs": 1768581440117,
+        "lastTs": 1768581440117,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 20,
+        "finalText": null
+      },
+      "13": {
+        "seqId": 13,
+        "firstTs": 1768581440118,
+        "lastTs": 1768581440118,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 20,
+        "finalText": null
+      },
+      "14": {
+        "seqId": 14,
+        "firstTs": 1768581440435,
+        "lastTs": 1768581440435,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 25,
+        "finalText": null
+      },
+      "15": {
+        "seqId": 15,
+        "firstTs": 1768581440436,
+        "lastTs": 1768581440436,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 25,
+        "finalText": null
+      },
+      "16": {
+        "seqId": 16,
+        "firstTs": 1768581440588,
+        "lastTs": 1768581440588,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 25,
+        "finalText": null
+      },
+      "17": {
+        "seqId": 17,
+        "firstTs": 1768581440886,
+        "lastTs": 1768581440886,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 25,
+        "finalText": null
+      },
+      "18": {
+        "seqId": 18,
+        "firstTs": 1768581441369,
+        "lastTs": 1768581441369,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 29,
+        "finalText": null
+      },
+      "19": {
+        "seqId": 19,
+        "firstTs": 1768581441369,
+        "lastTs": 1768581441369,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 29,
+        "finalText": null
+      },
+      "20": {
+        "seqId": 20,
+        "firstTs": 1768581441374,
+        "lastTs": 1768581441374,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 20,
+        "finalText": null
+      },
+      "21": {
+        "seqId": 21,
+        "firstTs": 1768581441375,
+        "lastTs": 1768581441375,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 25,
+        "finalText": null
+      },
+      "22": {
+        "seqId": 22,
+        "firstTs": 1768581441380,
+        "lastTs": 1768581441380,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 33,
+        "finalText": null
+      },
+      "23": {
+        "seqId": 23,
+        "firstTs": 1768581441383,
+        "lastTs": 1768581441383,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 33,
+        "finalText": null
+      },
+      "24": {
+        "seqId": 24,
+        "firstTs": 1768581441812,
+        "lastTs": 1768581441812,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 33,
+        "finalText": null
+      },
+      "25": {
+        "seqId": 25,
+        "firstTs": 1768581441816,
+        "lastTs": 1768581441816,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 33,
+        "finalText": null
+      },
+      "26": {
+        "seqId": 26,
+        "firstTs": 1768581442232,
+        "lastTs": 1768581442232,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 29,
+        "finalText": null
+      },
+      "27": {
+        "seqId": 27,
+        "firstTs": 1768581442243,
+        "lastTs": 1768581442243,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 38,
+        "finalText": null
+      },
+      "28": {
+        "seqId": 28,
+        "firstTs": 1768581442243,
+        "lastTs": 1768581442243,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 38,
+        "finalText": null
+      },
+      "29": {
+        "seqId": 29,
+        "firstTs": 1768581442303,
+        "lastTs": 1768581442303,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 43,
+        "finalText": null
+      },
+      "30": {
+        "seqId": 30,
+        "firstTs": 1768581442306,
+        "lastTs": 1768581442306,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 43,
+        "finalText": null
+      },
+      "31": {
+        "seqId": 31,
+        "firstTs": 1768581442475,
+        "lastTs": 1768581442475,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 46,
+        "finalText": null
+      },
+      "32": {
+        "seqId": 32,
+        "firstTs": 1768581442476,
+        "lastTs": 1768581442476,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 46,
+        "finalText": null
+      },
+      "33": {
+        "seqId": 33,
+        "firstTs": 1768581442705,
+        "lastTs": 1768581442705,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 46,
+        "finalText": null
+      },
+      "34": {
+        "seqId": 34,
+        "firstTs": 1768581442778,
+        "lastTs": 1768581442778,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 55,
+        "finalText": null
+      },
+      "35": {
+        "seqId": 35,
+        "firstTs": 1768581442779,
+        "lastTs": 1768581442779,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 55,
+        "finalText": null
+      },
+      "36": {
+        "seqId": 36,
+        "firstTs": 1768581442779,
+        "lastTs": 1768581442779,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 55,
+        "finalText": null
+      },
+      "37": {
+        "seqId": 37,
+        "firstTs": 1768581442910,
+        "lastTs": 1768581442910,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 55,
+        "finalText": null
+      },
+      "38": {
+        "seqId": 38,
+        "firstTs": 1768581443172,
+        "lastTs": 1768581443172,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 61,
+        "finalText": null
+      },
+      "39": {
+        "seqId": 39,
+        "firstTs": 1768581443172,
+        "lastTs": 1768581443172,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 61,
+        "finalText": null
+      },
+      "40": {
+        "seqId": 40,
+        "firstTs": 1768581443173,
+        "lastTs": 1768581443173,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 61,
+        "finalText": null
+      },
+      "41": {
+        "seqId": 41,
+        "firstTs": 1768581443261,
+        "lastTs": 1768581443261,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 61,
+        "finalText": null
+      },
+      "42": {
+        "seqId": 42,
+        "firstTs": 1768581443470,
+        "lastTs": 1768581443470,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 64,
+        "finalText": null
+      },
+      "43": {
+        "seqId": 43,
+        "firstTs": 1768581443470,
+        "lastTs": 1768581443470,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 64,
+        "finalText": null
+      },
+      "44": {
+        "seqId": 44,
+        "firstTs": 1768581443471,
+        "lastTs": 1768581443471,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 64,
+        "finalText": null
+      },
+      "45": {
+        "seqId": 45,
+        "firstTs": 1768581443631,
+        "lastTs": 1768581443631,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 64,
+        "finalText": null
+      },
+      "46": {
+        "seqId": 46,
+        "firstTs": 1768581443707,
+        "lastTs": 1768581443707,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 69,
+        "finalText": null
+      },
+      "47": {
+        "seqId": 47,
+        "firstTs": 1768581443707,
+        "lastTs": 1768581443707,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 69,
+        "finalText": null
+      },
+      "48": {
+        "seqId": 48,
+        "firstTs": 1768581443709,
+        "lastTs": 1768581443709,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 38,
+        "finalText": null
+      },
+      "49": {
+        "seqId": 49,
+        "firstTs": 1768581443709,
+        "lastTs": 1768581443709,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 46,
+        "finalText": null
+      },
+      "50": {
+        "seqId": 50,
+        "firstTs": 1768581443793,
+        "lastTs": 1768581443793,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 79,
+        "finalText": null
+      },
+      "51": {
+        "seqId": 51,
+        "firstTs": 1768581443796,
+        "lastTs": 1768581443796,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 79,
+        "finalText": null
+      },
+      "52": {
+        "seqId": 52,
+        "firstTs": 1768581443993,
+        "lastTs": 1768581443993,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 79,
+        "finalText": null
+      },
+      "53": {
+        "seqId": 53,
+        "firstTs": 1768581444106,
+        "lastTs": 1768581444106,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 81,
+        "finalText": null
+      },
+      "54": {
+        "seqId": 54,
+        "firstTs": 1768581444106,
+        "lastTs": 1768581444106,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 81,
+        "finalText": null
+      },
+      "55": {
+        "seqId": 55,
+        "firstTs": 1768581444118,
+        "lastTs": 1768581444118,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 83,
+        "finalText": null
+      },
+      "56": {
+        "seqId": 56,
+        "firstTs": 1768581444119,
+        "lastTs": 1768581444119,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 83,
+        "finalText": null
+      },
+      "57": {
+        "seqId": 57,
+        "firstTs": 1768581444174,
+        "lastTs": 1768581444174,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 83,
+        "finalText": null
+      },
+      "58": {
+        "seqId": 58,
+        "firstTs": 1768581444243,
+        "lastTs": 1768581444243,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 83,
+        "finalText": null
+      },
+      "59": {
+        "seqId": 59,
+        "firstTs": 1768581444396,
+        "lastTs": 1768581444396,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 89,
+        "finalText": null
+      },
+      "60": {
+        "seqId": 60,
+        "firstTs": 1768581444396,
+        "lastTs": 1768581444396,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 89,
+        "finalText": null
+      },
+      "61": {
+        "seqId": 61,
+        "firstTs": 1768581444396,
+        "lastTs": 1768581444396,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 89,
+        "finalText": null
+      },
+      "62": {
+        "seqId": 62,
+        "firstTs": 1768581444468,
+        "lastTs": 1768581444468,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 81,
+        "finalText": null
+      },
+      "63": {
+        "seqId": 63,
+        "firstTs": 1768581444586,
+        "lastTs": 1768581444586,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 89,
+        "finalText": null
+      },
+      "64": {
+        "seqId": 64,
+        "firstTs": 1768581444800,
+        "lastTs": 1768581444800,
+        "partialCount": 1,
+        "finalCount": 0,
+        "hasForceFinal": false,
+        "lastPartialLen": 69,
+        "finalText": null
+      },
+      "65": {
+        "seqId": 65,
+        "firstTs": 1768581448284,
+        "lastTs": 1768581448284,
+        "partialCount": 0,
+        "finalCount": 1,
+        "hasForceFinal": true,
+        "lastPartialLen": 0,
+        "finalText": "Church in town. I've been, oh boy, I've been to the grocery store, so we're friendlier than them."
+      }
+    }
+  }
+}

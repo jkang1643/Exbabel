@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
-    "test:unit": "node tests/tts/unit/ttsPolicy.test.js",
-    "test:integration": "node tests/tts/integration/tts-flow.test.js"
+    "test:unit": "node tests/unit/tts/ttsPolicy.test.js",
+    "test:integration": "node tests/integration/tts/tts-flow.test.js",
+    "test:e2e": "NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest tests/e2e/e2e.coreEngine.int.test.js"
   },
   "dependencies": {
     "@google-cloud/speech": "^7.2.1",
@@ -22,6 +23,7 @@
     "ws": "^8.14.2"
   },
   "devDependencies": {
+    "jest": "^30.2.0",
     "nodemon": "^3.0.2"
   },
   "author": "Exbabel",

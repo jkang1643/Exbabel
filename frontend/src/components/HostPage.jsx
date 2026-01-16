@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { flushSync } from 'react-dom';
+import { useImperativePainter } from '../hooks/useImperativePainter';
 import QRCode from 'qrcode';
 import { Settings } from 'lucide-react';
 import { useAudioCapture } from '../hooks/useAudioCapture';
@@ -88,6 +89,12 @@ export function HostPage({ onBackToHome }) {
   const isInitializedRef = useRef(false); // Prevent duplicate initialization in Strict Mode
   const sessionCreatedRef = useRef(false); // Prevent duplicate session creation
   const processedSeqIdsRef = useRef(new Set()); // Track processed seqIds to prevent duplicate processing
+
+  // DOM ref for imperative partial painting (flicker-free)
+  const currentTranscriptElRef = useRef(null);
+
+  // Imperative painter for live transcript text (avoids React state churn)
+  const { updateText: updateTranscriptText, clearText: clearTranscriptText } = useImperativePainter(currentTranscriptElRef, { shrinkDelayMs: 0 }); // No delay for transcription - immediate updates
 
   // Commit counter for tracing leaked rows
   const commitCounterRef = useRef(0);
@@ -476,11 +483,9 @@ export function HostPage({ onBackToHome }) {
               lastPartialTextRef.current = rawText;
               lastPartialTimeRef.current = Date.now();
 
-              // REAL-TIME STREAMING FIX: Update immediately on every delta for true real-time streaming
-              // No throttling - let React batch updates naturally for optimal performance
-              flushSync(() => {
-                setCurrentTranscript(liveText);
-              });
+              // Use imperative painter for flicker-free updates (replaces flushSync)
+              updateTranscriptText(liveText);
+              setCurrentTranscript(liveText); // Keep state for UI conditionals
             } else {
               // Lock finals to prevent partial overwrites
               if (!message?.isPartial && message?.sourceSeqId != null && message?.seqId != null) {
@@ -965,6 +970,7 @@ export function HostPage({ onBackToHome }) {
                 }
               }
 
+              clearTranscriptText(); // Clear imperative painter
               setCurrentTranscript('');
             }
             break;
@@ -1350,12 +1356,7 @@ export function HostPage({ onBackToHome }) {
 
           <div className="bg-white/95 backdrop-blur rounded-lg sm:rounded-xl p-3 sm:p-6 min-h-[100px] sm:min-h-[140px] max-h-[300px] sm:max-h-[400px] overflow-y-auto transition-none scroll-smooth">
             {currentTranscript ? (
-              <p className="text-gray-900 font-semibold text-xl sm:text-2xl md:text-3xl leading-relaxed tracking-wide break-words">
-                {currentTranscript}
-                {isStreaming && (
-                  <span className="inline-block w-0.5 sm:w-1 h-6 sm:h-8 ml-1 sm:ml-2 bg-blue-600 animate-pulse"></span>
-                )}
-              </p>
+              <p ref={currentTranscriptElRef} className="text-gray-900 font-semibold text-xl sm:text-2xl md:text-3xl leading-relaxed tracking-wide live-partial-container-lg" />
             ) : (
               <div className="flex items-center justify-center h-full min-h-[100px] sm:min-h-[140px]">
                 <p className="text-gray-400 text-base sm:text-lg md:text-xl text-center px-2">

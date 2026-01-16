@@ -200,8 +200,8 @@ export class GoogleSpeechStream {
 
     // Build request config - conditionally include model based on language support
     const requestConfig = {
-      encoding: 'LINEAR16',
-      sampleRateHertz: 24000, // Match frontend audio capture
+      encoding: this.initOptions?.encoding || 'LINEAR16',
+      sampleRateHertz: this.initOptions?.sampleRateHertz || 24000, // Default to 24kHz (frontend)
       languageCode: this.languageCode,
       enableAutomaticPunctuation: this.initOptions?.disablePunctuation ? false : true, // Allow disabling for recovery streams
       alternativeLanguageCodes: [],
