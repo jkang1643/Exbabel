@@ -12,6 +12,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Volume2, VolumeX, Play, Square, ChevronDown, ChevronUp } from 'lucide-react';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
+import { unlockIOSAudio } from '../tts/audioUnlock.js';
 
 import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
@@ -228,6 +229,18 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
     };
 
     const handlePlay = () => {
+        // CRITICAL: iOS Safari audio unlock MUST be called FIRST, synchronously in the gesture handler
+        // This must happen before ANY async operations, state updates, or other code that could yield
+        if (window.audioDebug) {
+            window.audioDebug('PLAY TAP (user gesture)', {});
+        }
+
+        // Call unlock synchronously (do NOT await - keep it in the gesture context)
+        unlockIOSAudio();
+        if (window.audioDebug) {
+            window.audioDebug('unlockIOSAudio() called', {});
+        }
+
         if (!isConnected) {
             alert('Not connected to session');
             return;
@@ -263,6 +276,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
         console.log('[TtsPanel] Starting radio mode with startFromSegmentId:', requestData.startFromSegmentId);
         controller.start(requestData);
     };
+
 
     const handleStop = () => {
         controller.stop();
