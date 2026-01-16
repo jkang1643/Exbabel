@@ -403,25 +403,44 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     }
   }, [targetLang]);
 
-  // Nudge speed for Gemini/Chirp3 if currently at default 1.0x
+  // Track previous tier to detect tier changes and reset speed accordingly
+  const prevTierRef = useRef(null);
+
+  // Reset speed to tier-specific default when tier changes
   useEffect(() => {
     if (!selectedVoice) return;
     const voices = getVoicesForLanguage(targetLang);
     const voiceOption = voices.find(v => v.value === selectedVoice);
     if (voiceOption) {
       const tier = voiceOption.tier || 'standard';
-      const isGemini = tier === 'gemini' || voiceOption.label?.includes('Studio');
-      const isChirp3 = tier === 'chirp3_hd';
 
-      if (isGemini && ttsSettings.speakingRate === 1.0) {
-        console.log('[ListenerPage] Nudging speaking rate to 1.45x for Gemini voice');
-        setTtsSettings(prev => ({ ...prev, speakingRate: 1.45 }));
-      } else if (isChirp3 && ttsSettings.speakingRate === 1.0) {
-        console.log('[ListenerPage] Nudging speaking rate to 1.1x for Chirp3 voice');
-        setTtsSettings(prev => ({ ...prev, speakingRate: 1.1 }));
+      // Detect tier change
+      const tierChanged = prevTierRef.current !== null && prevTierRef.current !== tier;
+
+      // Update previous tier ref
+      const isFirstLoad = prevTierRef.current === null;
+      prevTierRef.current = tier;
+
+      // Determine tier-specific default speed
+      let defaultSpeed = 1.0;
+      if (tier === 'gemini') {
+        defaultSpeed = 1.45;
+      } else if (tier === 'chirp3_hd') {
+        defaultSpeed = 1.1;
+      } else if (tier === 'neural2' || tier === 'standard') {
+        defaultSpeed = 1.0;
+      }
+
+      // Reset to tier-specific default when tier changes OR on first load if at 1.0
+      if (tierChanged) {
+        console.log(`[ListenerPage] Tier changed to ${tier}, resetting speed to ${defaultSpeed}x`);
+        setTtsSettings(prev => ({ ...prev, speakingRate: defaultSpeed }));
+      } else if (isFirstLoad && ttsSettings.speakingRate === 1.0 && defaultSpeed !== 1.0) {
+        console.log(`[ListenerPage] First load with ${tier} tier, setting speed to ${defaultSpeed}x`);
+        setTtsSettings(prev => ({ ...prev, speakingRate: defaultSpeed }));
       }
     }
-  }, [selectedVoice, targetLang, ttsSettings.speakingRate]);
+  }, [selectedVoice, targetLang]);
 
   const handleTtsPlay = () => {
     if (!ttsControllerRef.current) return;
