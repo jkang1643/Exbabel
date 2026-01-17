@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "createdAt": "2026-01-16T17:45:15.232Z"
+  },
+  "streams": {
+    "unknown": [
+      {
+        "k": "info"
+      },
+      {
+        "k": "session_ready"
+      }
+    ],
+    "es": [
+      {
+        "k": "stt.partial",
+        "seq": 0
+      },
+      {
+        "k": "stt.partial",
+        "seq": 1
+      },
+      {
+        "k": "stt.partial",
+        "seq": 2
+      },
+      {
+        "k": "stt.partial",
+        "seq": 3
+      },
+      {
+        "k": "stt.partial",
+        "seq": 4,
+        "t": "Iglesia."
+      },
+      {
+        "k": "stt.partial",
+        "seq": 9,
+        "t": "Iglesia en la ciudad."
+      },
+      {
+        "k": "stt.partial",
+        "seq": 14
+      },
+      {
+        "k": "stt.partial",
+        "seq": 19
+      },
+      {
+        "k": "stt.final",
+        "seq": 23,
+        "t": "Church in town. I've been"
+      },
+      {
+        "k": "stt.final",
+        "seq": 23,
+        "t": "Church in town. I've been"
+      },
+      {
+        "k": "stt.final",
+        "seq": 23,
+        "t": "Iglesia en el pueblo. He estado."
+      }
+    ]
+  }
+}

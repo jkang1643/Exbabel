@@ -25,13 +25,13 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     const [playerState, setPlayerState] = useState(TtsPlayerState.STOPPED);
     const [enabled, setEnabled] = useState(false);
-    const [selectedVoice, setSelectedVoice] = useState('Kore');
+    const [selectedVoice, setSelectedVoice] = useState(null);
     const [selectedMode, setSelectedMode] = useState(TtsMode.UNARY);
     const [resolvedRoute, setResolvedRoute] = useState(null);
 
     // SSML state (Chirp 3 HD)
     const [deliveryStyle, setDeliveryStyle] = useState('standard_preaching');
-    const [speakingRate, setSpeakingRate] = useState(1.45); // Default to 1.45 (Gemini optimized)
+    const [speakingRate, setSpeakingRate] = useState(1.1); // Default to 1.1 (Chirp3 optimized)
     const [pitchAdjust, setPitchAdjust] = useState('+1st');
     const [powerWordsEnabled, setPowerWordsEnabled] = useState(true);
     const [showAdvanced, setShowAdvanced] = useState(false);
@@ -56,10 +56,8 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
         const tier = voiceOption?.tier || 'neural2';
         if (tier === 'gemini') return true;
 
-        // Check if it's a Gemini studio voice name
-        const geminiVoices = ['Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
-            'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam'];
-        return geminiVoices.includes(selectedVoice);
+        // Fallback: Check for namespace prefix
+        return selectedVoice?.startsWith('gemini-');
     }, [selectedVoice, availableVoices]);
 
     // Group voices by tier for organized display
@@ -134,14 +132,31 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
     // Update selected voice when language changes
     useEffect(() => {
         if (targetLang && availableVoices.length > 0) {
-            // If current selected voice is not available for new language, switch to first available
+            // If current selected voice is not available for new language, switch to smart default
             const isCurrentVoiceAvailable = availableVoices.some(voice => voice.value === selectedVoice);
             if (!isCurrentVoiceAvailable) {
-                console.log('[TtsPanel] Switching voice for language change:', {
-                    from: selectedVoice,
-                    to: availableVoices[0].value,
-                    language: targetLang
-                });
+                // Priority 1: Chirp 3 HD "Kore"
+                const chirpKore = availableVoices.find(v => v.value.includes('Chirp3-HD-Kore'));
+                if (chirpKore) {
+                    setSelectedVoice(chirpKore.value);
+                    return;
+                }
+
+                // Priority 2: Any Chirp 3 HD voice
+                const anyChirp = availableVoices.find(v => v.tier === 'chirp3_hd');
+                if (anyChirp) {
+                    setSelectedVoice(anyChirp.value);
+                    return;
+                }
+
+                // Priority 3: Any Standard/Neural2 voice
+                const anyStandard = availableVoices.find(v => v.tier === 'standard' || v.tier === 'neural2');
+                if (anyStandard) {
+                    setSelectedVoice(anyStandard.value);
+                    return;
+                }
+
+                // Fallback: Just take the first one (likely Gemini)
                 setSelectedVoice(availableVoices[0].value);
             }
         }
@@ -226,8 +241,19 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
             controller.stop();
         }
     };
-
     const handlePlay = () => {
+        // CRITICAL: iOS Safari audio unlock MUST be called FIRST, synchronously in the gesture handler
+        // This must happen before ANY async operations, state updates, or other code that could yield
+        if (window.audioDebug) {
+            window.audioDebug('PLAY TAP (user gesture)', {});
+        }
+
+        // Call unlock on the controller's persistent audio element (iOS Safari requirement)
+        controller.unlockFromUserGesture();
+        if (window.audioDebug) {
+            window.audioDebug('unlockFromUserGesture() called', {});
+        }
+
         if (!isConnected) {
             alert('Not connected to session');
             return;
@@ -407,12 +433,12 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                                 </label>
                                                 <button
                                                     onClick={() => {
-                                                        const rate = isGeminiVoice ? 1.45 : (supportsSSML ? 1.1 : 1.0);
+                                                        const rate = isGeminiVoice ? 1.45 : 1.1;
                                                         setSpeakingRate(rate);
                                                     }}
                                                     className="text-[10px] text-blue-600 hover:underline"
                                                 >
-                                                    Reset to {isGeminiVoice ? '1.45x' : (supportsSSML ? '1.1x' : '1.0x')}
+                                                    Reset to {isGeminiVoice ? '1.45x' : '1.1x'}
                                                 </button>
                                             </div>
                                             <input

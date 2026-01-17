@@ -1,0 +1,187 @@
+# CURSOR PROMPT — Exbabel “Live Partials Stability Fix” (No Flicker, Smooth Growth, Stable Containers, Live Grammar)
+
+You are working in the Exbabel repo. Implement a single end-to-end stability revamp for the **Listener live partials UI** and related rendering logic.
+
+## Goal
+Eliminate flicker, layout jump, and “partial growth” jitter while keeping **live grammar correction** and **live translation partials**. The live box must feel smooth and stable at human-friendly cadence (~10–15 fps), even when partial text backtracks.
+
+## Non-Negotiables
+- Do **NOT** change backend STT/translation semantics, ordering, or final commitment behavior.
+- Do **NOT** break Host Mode, history, or TTS queue behavior.
+- Preserve existing message routing (target language guard, transcription mode logic).
+- For partials: **remove flushSync** usage and stop using React state for the live partial text display.
+- Finals can still use existing state updates; only partial live line rendering changes.
+
+---
+
+# Implementation Plan (Break into PRs)
+Create separate PR-sized commits (but you can implement in one go locally). Each PR must be small, testable, and reversible.
+
+---
+
+## PR1 — Frontend: Container + Layout Hardening (Stop UI bounce)
+### Files
+- `frontend/src/components/ListenerPage.jsx`
+- Relevant CSS file(s) / Tailwind classes / DaisyUI classes used for live boxes
+
+### Requirements
+1) Make the live partial containers **layout-stable**:
+   - fixed/consistent `line-height`
+   - `white-space: pre-wrap`
+   - `word-break: break-word`
+   - reserve height using `min-height` (and optional `max-height + overflow`)
+   - isolate reflow using `contain: layout paint`
+   - predictable wrapping: `max-width: 72ch` (or equivalent)
+
+2) If Original + Translation are side-by-side:
+   - Use `display: grid` with `align-items: start` (avoid stretching)
+   - Give both boxes the same `min-height` to prevent column bounce
+   - Remove any `transition: all` on parent containers; only allow opacity transitions
+
+3) Add/adjust CSS classes (or Tailwind) so the **live line does not resize its parent** unexpectedly.
+
+Deliverable:
+- Live UI containers no longer bounce/jump when text wraps.
+
+---
+
+## PR2 — Frontend: Replace flushSync + React State for Live Partials with Imperative Painter
+### Files
+- `frontend/src/components/ListenerPage.jsx`
+
+### Context
+Current code uses:
+- `flushSync(() => setCurrentTranslation(liveText))`
+- throttle logic (15 FPS)
+- segmenter processes partials
+
+This causes flicker due to React reconciliation + forced sync paints.
+
+### Requirements
+1) Create DOM refs for the live partial display(s):
+   - `currentTranslationElRef`
+   - (optional) `currentOriginalElRef` if original box flickers too
+
+2) Implement an **imperative paint loop**:
+   - WS handler updates `latestRef` only
+   - Rendering is done via `requestAnimationFrame` (or a scheduled coalescer)
+   - Enforce max paint rate ≈ 10–15 fps (66–100ms)
+   - Paint via `element.textContent = text`
+
+3) Implement “no-backtrack window”:
+   - Growth applies immediately
+   - Shrink/backtrack is delayed 150–350ms (default 220ms)
+   - If growth arrives before timer fires, cancel shrink update
+   - This removes the most noticeable flicker from ASR revisions
+
+4) Retain your existing logic:
+   - `isForMyLanguage`, `isTranscriptionMode`, `shouldUpdateTranslation`
+   - stall detection timestamps
+   - segmenter call: `segmenterRef.current.processPartial(...)`
+   - Use your existing `MIN_CHAR_DELTA` + time threshold as a *gate* to scheduling paints (not React state updates)
+
+5) Remove `flushSync` for partial updates.
+   - Keep React state updates for finals/history if already working.
+   - The “live partial” UI must not be driven by `setState` on every partial.
+
+Deliverable:
+- Live partial line updates smoothly with minimal CPU usage.
+- No “shimmer” from backtracking.
+
+---
+
+## PR3 — Frontend: Live Grammar Correction Without Flicker (Ghost Overlay)
+### Files
+- `frontend/src/components/ListenerPage.jsx`
+- CSS / classes for overlay
+
+### Requirements
+Implement a premium “ghost overlay” model:
+
+1) Show two layers in the live area (for transcription mode / original stream):
+   - Layer A: **raw partial** (fast, stable typing)
+   - Layer B: **grammar-corrected** overlay (updates when available)
+   - Overlay cross-fades opacity over ~120ms
+
+2) Rules:
+   - Raw partial paints continuously via the same imperative painter approach.
+   - Corrected overlay paints with a slightly slower cadence (e.g. 100–150ms) and only when meaningful change occurs.
+   - Do not allow corrected overlay to cause layout changes:
+     - Both layers share same container size and wrapping
+     - Corrected layer is absolutely positioned (`position: absolute; inset: 0;`)
+
+3) Corrected overlay eligibility:
+   - Only show corrected if `correctedText` exists and differs meaningfully from raw (e.g., >= 2 char delta OR different words)
+   - Use shrink-delay rules for corrected updates too
+
+4) Translation mode:
+   - If you are showing translation partials, keep them in a stable container.
+   - Do NOT let “translation derived from raw” overwrite “translation derived from corrected” rapidly.
+   - Prefer a single policy: translation should be based on correctedText when available; otherwise hold previous translation rather than flip-flopping.
+
+Deliverable:
+- Live grammar correction appears “instant” without jitter.
+- No layout jump when corrected appears/disappears.
+
+---
+
+## PR4 — Optional Backend: Coalesced Broadcast Frames (Reduce UI churn)
+### Files
+- `backend/hostModeHandler.js` (or wherever partials are emitted)
+- any broadcast helper files
+
+### Requirements (Optional; do if it’s straightforward and safe)
+1) Add a per-session coalescer to reduce micro-emits:
+   - Maintain latest partial frame per `(sourceSeqId, lang)`:
+     - `originalText`, `correctedText`, `translatedText`, `targetLang`, `sourceLang`, `seqId`, `sourceSeqId`, `isPartial`
+   - Broadcast at stable cadence 50–80ms rather than emitting on every async completion.
+
+2) Add metadata:
+   - `rev` monotonic per `(sourceSeqId, lang)` or per stream
+   - `kind`: `"raw" | "corrected" | "translated"`
+   - ensure existing ordering / seqId behavior remains intact
+
+3) Must not break existing OOO drop logic on client:
+   - seqId must remain monotonic per `(sourceSeqId, lang)` as expected
+
+Deliverable:
+- fewer partial events; same perceived latency; improved stability.
+
+---
+
+# Acceptance Criteria (Must Verify)
+1) Live partial box:
+   - no flicker or shimmer
+   - smooth “growth” feel
+   - backtracking does not visibly snap smaller (shrink-delay works)
+
+2) Containers:
+   - no bouncing/jumping when wrapping occurs
+   - original+translation (if present) do not cause each other to resize
+
+3) Grammar:
+   - grammar correction remains live
+   - appears smoothly via overlay (cross-fade)
+   - does not break translation or history logic
+
+4) No regressions:
+   - finals still commit to history
+   - sentence segmenter still flushes to history as before
+   - TTS queue still enqueues finals as before
+
+---
+
+# Implementation Notes / Guardrails
+- Do not call `flushSync` for partials.
+- Avoid React state churn for the live partial text. Use `useRef` + `textContent`.
+- Keep the “segmenter” input consistent with what you display.
+- Use `performance.now()` for paint timing (smoother than `Date.now()`).
+- Ensure cleanup of timers in `useEffect` cleanup (pending shrink timers).
+- Add minimal logging only if needed; keep noisy logs disabled.
+
+---
+
+# Output
+- Provide a summary of changes per PR.
+- Show the exact code edits in `ListenerPage.jsx` (and CSS changes) and explain any new utility functions added.
+- Ensure code compiles.

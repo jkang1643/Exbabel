@@ -1,0 +1,94 @@
+# E2E Timeline
+
+- 2026-01-16T16:55:03.441Z **info** {"type":"info","message":"Connected to Google Speech + OpenAI Translation. Waiting for initialization...","_receivedAt":1768582503441,"serve…
+- 2026-01-16T16:55:03.564Z **session_ready** {"type":"session_ready","sessionId":"session_1768582503310","message":"Translation session ready: en → es","_receivedAt":1768582503564,"serv…
+- 2026-01-16T16:55:07.673Z **translation/PART** lang=es seq=0 :: Church.
+- 2026-01-16T16:55:07.687Z **translation/PART** lang=es seq=1 :: Church.
+- 2026-01-16T16:55:07.769Z **translation/PART** lang=es seq=2 :: Church.
+- 2026-01-16T16:55:07.772Z **translation/PART** lang=es seq=3 :: Church.
+- 2026-01-16T16:55:07.902Z **translation/PART** lang=es seq=4 :: Church in.
+- 2026-01-16T16:55:07.968Z **translation/PART** lang=es seq=5 :: Church in town.
+- 2026-01-16T16:55:08.016Z **translation/PART** lang=es seq=6 :: Church in town.
+- 2026-01-16T16:55:08.031Z **translation/PART** lang=es seq=7 :: Church in town.
+- 2026-01-16T16:55:08.156Z **translation/PART** lang=es seq=8 :: Church in town. I've
+- 2026-01-16T16:55:08.237Z **translation/PART** lang=es seq=9 :: Church in town. I've been
+- 2026-01-16T16:55:08.282Z **translation/PART** lang=es seq=10 :: Church in town. I've been
+- 2026-01-16T16:55:08.346Z **translation/PART** lang=es seq=11 :: Church in town. I've been
+- 2026-01-16T16:55:08.405Z **translation/PART** lang=es seq=12 :: Church.
+- 2026-01-16T16:55:08.461Z **translation/PART** lang=es seq=13 :: Church in town. I've been oh,
+- 2026-01-16T16:55:08.494Z **translation/PART** lang=es seq=14 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.500Z **translation/PART** lang=es seq=15 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.500Z **translation/PART** lang=es seq=16 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.500Z **translation/PART** lang=es seq=17 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.501Z **translation/PART** lang=es seq=18 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.501Z **translation/PART** lang=es seq=19 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.559Z **translation/PART** lang=es seq=20 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.563Z **translation/PART** lang=es seq=21 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:08.687Z **translation/PART** lang=es seq=22 :: Church in town.
+- 2026-01-16T16:55:08.753Z **translation/PART** lang=es seq=23 :: Church in town. I've been oh boy, I've
+- 2026-01-16T16:55:08.786Z **translation/PART** lang=es seq=24 :: Church in town. I've been oh boy, I've been
+- 2026-01-16T16:55:08.867Z **translation/PART** lang=es seq=25 :: Church in town.
+- 2026-01-16T16:55:08.918Z **translation/PART** lang=es seq=26 :: Church in town. I've been oh boy, I've been to
+- 2026-01-16T16:55:08.964Z **translation/PART** lang=es seq=27 :: Church in town.
+- 2026-01-16T16:55:09.014Z **translation/PART** lang=es seq=28 :: Church in town.
+- 2026-01-16T16:55:09.016Z **translation/PART** lang=es seq=29 :: Church in town.
+- 2026-01-16T16:55:09.092Z **translation/PART** lang=es seq=30 :: Church in town. I've been oh,
+- 2026-01-16T16:55:09.103Z **translation/PART** lang=es seq=31 :: Church in town. I've been
+- 2026-01-16T16:55:09.162Z **translation/PART** lang=es seq=32 :: Church in town. I've been oh boy, I've been to
+- 2026-01-16T16:55:09.206Z **translation/PART** lang=es seq=33 :: Church in town. I've been
+- 2026-01-16T16:55:09.228Z **translation/PART** lang=es seq=34 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:09.231Z **translation/PART** lang=es seq=35 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:09.232Z **translation/PART** lang=es seq=36 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:09.232Z **translation/PART** lang=es seq=37 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:09.232Z **translation/PART** lang=es seq=38 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:09.256Z **translation/PART** lang=es seq=39 :: Church in town. I've
+- 2026-01-16T16:55:09.308Z **translation/PART** lang=es seq=40 :: Church in town.
+- 2026-01-16T16:55:09.340Z **translation/PART** lang=es seq=41 :: Church in town. I've been, oh boy.
+- 2026-01-16T16:55:09.347Z **translation/PART** lang=es seq=42 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:09.401Z **translation/PART** lang=es seq=43 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:09.462Z **translation/PART** lang=es seq=44 :: Church in town. I've been, oh boy.
+- 2026-01-16T16:55:09.482Z **translation/PART** lang=es seq=45 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:09.482Z **translation/PART** lang=es seq=46 :: Church in town. I've been oh boy, I've
+- 2026-01-16T16:55:09.485Z **translation/PART** lang=es seq=47 :: Church in town. I've been oh boy.
+- 2026-01-16T16:55:09.610Z **translation/PART** lang=es seq=48 :: Church in town. I've been oh boy, I've been to grocery store.
+- 2026-01-16T16:55:09.699Z **translation/PART** lang=es seq=49 :: Church in town. I've been oh boy, I've been to grocery store.
+- 2026-01-16T16:55:09.893Z **translation/PART** lang=es seq=50 :: Church in town. I've been oh boy, I've been to grocery store so.
+- 2026-01-16T16:55:09.961Z **translation/PART** lang=es seq=51 :: Church in town. I've been oh boy, I've been to
+- 2026-01-16T16:55:10.026Z **translation/PART** lang=es seq=52 :: Church in town. I've been, oh boy, I've been to the grocery.
+- 2026-01-16T16:55:10.050Z **translation/PART** lang=es seq=53 :: Church in town. I've been
+- 2026-01-16T16:55:10.050Z **translation/PART** lang=es seq=54 :: Church in town. I've been oh boy, I've been
+- 2026-01-16T16:55:10.071Z **translation/PART** lang=es seq=55 :: Church in town. I've been oh boy, I've been to grocery store so.
+- 2026-01-16T16:55:10.076Z **translation/PART** lang=es seq=56 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:10.122Z **translation/PART** lang=es seq=57 :: Church in town. I've been oh boy, I've been to grocery.
+- 2026-01-16T16:55:10.133Z **translation/PART** lang=es seq=58 :: Church in town. I've been oh boy, I've been to grocery store so we're
+- 2026-01-16T16:55:10.139Z **translation/PART** lang=es seq=59 :: Church in town. I've been, oh boy, I've been to the grocery.
+- 2026-01-16T16:55:10.204Z **translation/PART** lang=es seq=60 :: Church in town. I've been oh boy, I've been to grocery store so we're
+- 2026-01-16T16:55:10.226Z **translation/PART** lang=es seq=61 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly.
+- 2026-01-16T16:55:10.236Z **translation/PART** lang=es seq=62 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly.
+- 2026-01-16T16:55:10.369Z **translation/PART** lang=es seq=63 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly.
+- 2026-01-16T16:55:10.502Z **translation/PART** lang=es seq=64 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly or
+- 2026-01-16T16:55:10.541Z **translation/PART** lang=es seq=65 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than
+- 2026-01-16T16:55:10.601Z **translation/PART** lang=es seq=66 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than
+- 2026-01-16T16:55:10.642Z **translation/PART** lang=es seq=67 :: Church in town. I've been oh boy, I've been to grocery store so.
+- 2026-01-16T16:55:10.670Z **translation/PART** lang=es seq=68 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than
+- 2026-01-16T16:55:10.716Z **translation/PART** lang=es seq=69 :: Church in town. I've been, oh boy, I've been to the grocery store.
+- 2026-01-16T16:55:10.830Z **translation/PART** lang=es seq=70 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:10.832Z **translation/PART** lang=es seq=71 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:10.832Z **translation/PART** lang=es seq=72 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:10.832Z **translation/PART** lang=es seq=73 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:10.832Z **translation/PART** lang=es seq=74 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:10.968Z **translation/PART** lang=es seq=75 :: Church in town. I've been oh boy, I've been to grocery store.
+- 2026-01-16T16:55:10.986Z **translation/PART** lang=es seq=76 :: Church in town. I've been, oh boy, I've been to the grocery store.
+- 2026-01-16T16:55:10.992Z **translation/PART** lang=es seq=77 :: Church in town. I've been oh boy, I've been to grocery store.
+- 2026-01-16T16:55:11.019Z **translation/PART** lang=es seq=78 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:11.113Z **translation/PART** lang=es seq=79 :: Church in town. I've been oh boy, I've been to grocery store so.
+- 2026-01-16T16:55:11.463Z **translation/PART** lang=es seq=80 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly.
+- 2026-01-16T16:55:11.483Z **translation/PART** lang=es seq=81 :: Church in town. I've been, oh boy, I've been to the grocery store, so we're friendly.
+- 2026-01-16T16:55:11.682Z **translation/PART** lang=es seq=82 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly.
+- 2026-01-16T16:55:11.945Z **translation/PART** lang=es seq=83 :: Church in town. I've been, oh boy, I've been to the grocery store, so we're friendlier than them.
+- 2026-01-16T16:55:12.142Z **translation/PART** lang=es seq=84 :: Church in town. I've been, oh boy, I've been to the grocery store, so we're friendlier than them.
+- 2026-01-16T16:55:12.296Z **translation/PART** lang=es seq=85 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:12.741Z **translation/PART** lang=es seq=86 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:13.425Z **translation/FINAL(force)** lang=es seq=87 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:13.426Z **translation/FINAL(force)** lang=es seq=87 :: Church in town. I've been oh boy, I've been to grocery store so we're friendly than them.
+- 2026-01-16T16:55:14.581Z **translation/FINAL(force)** lang=es seq=87 :: Iglesia en la ciudad. He estado, oh chico, he estado en la tienda de comestibles, así que somos más amigables que ellos.

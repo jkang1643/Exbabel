@@ -8,6 +8,7 @@
       opacity: 0;
       transform: translateY(-10px);
     }
+
     to {
       opacity: 1;
       transform: translateY(0);
@@ -15,10 +16,23 @@
   }
 
   @keyframes scan-line {
-    0% { top: 0%; opacity: 0; }
-    5% { opacity: 1; }
-    95% { opacity: 1; }
-    100% { top: 100%; opacity: 0; }
+    0% {
+      top: 0%;
+      opacity: 0;
+    }
+
+    5% {
+      opacity: 1;
+    }
+
+    95% {
+      opacity: 1;
+    }
+
+    100% {
+      top: 100%;
+      opacity: 0;
+    }
   }
 
   .animate-fadeIn {
@@ -42,4 +56,41 @@ body {
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
+}
+
+/* Live partial container stability - prevents flicker and layout jumping */
+.live-partial-container {
+  contain: layout paint;
+  /* Isolate reflow from parent */
+  line-height: 1.6;
+  /* Slightly more line height for readability */
+  white-space: pre-wrap;
+  /* Preserve wrapping behavior */
+  word-break: break-word;
+  /* Predictable word breaks */
+  min-height: 1.5rem;
+  /* Minimal reserved height */
+  width: 100%;
+  /* Use full width */
+}
+
+/* Host page live box - larger variant */
+.live-partial-container-lg {
+  contain: layout paint;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 2rem;
+  width: 100%;
+  /* Use full width */
+}
+
+/* Smooth cross-fade for grammar overlay */
+.live-partial-crossfade {
+  transition: opacity 120ms ease-out;
+}
+
+/* No-transition helper */
+.no-transition {
+  transition: none !important;
 }

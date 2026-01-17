@@ -8,6 +8,23 @@
  */
 
 import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
+// Global debug buffer for on-screen visual debugging (mobile)
+if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
+    window.__AUDIO_DEBUG__ = [];
+    window.audioDebug = function (msg, data) {
+        // Pure logger - NO DOM/overlay updates to guarantee zero timing/behavior change
+        const entry = {
+            t: new Date().toLocaleTimeString(),
+            msg,
+            data: data ? JSON.parse(JSON.stringify(data)) : null
+        };
+        window.__AUDIO_DEBUG__.push(entry);
+        console.log(`[AUDIO_DEBUG] ${msg}`, data);
+        if (window.__AUDIO_DEBUG__.length > 30) {
+            window.__AUDIO_DEBUG__.shift();
+        }
+    };
+}
 
 export class TtsPlayerController {
     constructor(sendMessage) {
@@ -30,7 +47,6 @@ export class TtsPlayerController {
         // Audio queue (PR1: stored but not played)
         this.audioQueue = [];
         this.currentAudio = null;
-        this.nextAudio = null; // Preloaded next audio for Safari iOS gesture context
 
         // Radio mode queue management (PR3)
         this.queue = []; // Array<{ segmentId, text, status: 'pending'|'requesting'|'ready'|'playing'|'done'|'failed', audioBlob?, timestamp, timeoutId? }>
@@ -49,19 +65,25 @@ export class TtsPlayerController {
 
         this.lastRequestId = 0; // Track latest request ID to prevent out-of-order playback
 
-        // Create a hidden audio element for priming if in browser
+        // Create persistent audio element for ALL playback (iOS Safari unlock requirement)
         if (typeof window !== 'undefined' && typeof Audio !== 'undefined') {
-            this.primingAudio = new Audio();
-            this.primingAudio.volume = 0;
+            this.audioEl = new Audio();
+            this.audioEl.playsInline = true;
+            this.audioEl.preload = 'auto';
+            this.audioEl.volume = 1.0;
+
+            // Add unique ID for debugging element identity
+            this.audioEl.__id = Math.random().toString(16).slice(2);
+            console.log('[TtsPlayerController] Created persistent audioEl with ID:', this.audioEl.__id);
         }
+
+        // iOS unlock state
+        this._iosUnlocked = false;
+
 
         // Diagnostic tracking
         this.instanceId = Math.random().toString(16).slice(2);
         console.log(`[TtsPlayerController] init ${this.instanceId}`);
-
-        // Detect mobile Safari for conditional behavior
-        this.isMobileBrowser = this._detectMobileBrowser();
-        console.log(`[TtsPlayerController] Mobile browser detected: ${this.isMobileBrowser}`);
 
         // Safeties
         this.playedSet = new Set(); // Prevent duplicate playback of the same segment
@@ -131,6 +153,67 @@ export class TtsPlayerController {
     }
 
     /**
+     * Unlock iOS Safari audio by priming the actual audio element
+     * MUST be called from within a user gesture (e.g., Play button click)
+     */
+    unlockFromUserGesture() {
+        if (this._iosUnlocked) {
+            console.log('[TtsPlayerController] iOS already unlocked, skipping');
+            if (window.audioDebug) {
+                window.audioDebug('iOS unlock skipped (already unlocked)', { elementId: this.audioEl?.__id });
+            }
+            return;
+        }
+
+        if (!this.audioEl) {
+            console.warn('[TtsPlayerController] No audioEl available for unlock');
+            return;
+        }
+
+        try {
+            // Prime the *same* audio element you'll reuse later
+            this.audioEl.muted = true;
+            this.audioEl.playsInline = true;
+
+            // Tiny silent WAV (more reliable than MP3 data URI on iOS)
+            this.audioEl.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+
+            const p = this.audioEl.play();
+            if (p?.then) {
+                p.then(() => {
+                    this.audioEl.pause();
+                    this.audioEl.currentTime = 0;
+                    this.audioEl.muted = false;
+                    this._iosUnlocked = true;
+
+                    console.log('[TtsPlayerController] iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
+                    if (window.audioDebug) {
+                        window.audioDebug('iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
+                    }
+                }).catch(err => {
+                    console.warn('[TtsPlayerController] iOS media unlock failed:', err);
+                    if (window.audioDebug) {
+                        window.audioDebug('iOS MEDIA UNLOCK FAILED', {
+                            elementId: this.audioEl.__id,
+                            error: err.name,
+                            message: err.message
+                        });
+                    }
+                });
+            }
+        } catch (err) {
+            console.warn('[TtsPlayerController] iOS media unlock threw:', err);
+            if (window.audioDebug) {
+                window.audioDebug('iOS MEDIA UNLOCK THREW', {
+                    elementId: this.audioEl?.__id,
+                    error: err.name,
+                    message: err.message
+                });
+            }
+        }
+    }
+
+    /**
      * Start TTS playback
      * 
      * @param {Object} config - Playback configuration
@@ -145,6 +228,7 @@ export class TtsPlayerController {
      * @param {number} [config.startFromSegmentId] - Start from this segment ID (radio mode)
      */
     start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null, promptPresetId = null, ttsPrompt = null, intensity = null, startFromSegmentId = null }) {
+
         console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode, ssmlOptions, startFromSegmentId });
 
         this.currentLanguageCode = languageCode;
@@ -203,14 +287,6 @@ export class TtsPlayerController {
         if (this.currentAudio) {
             this.currentAudio.pause();
             this.currentAudio = null;
-        }
-
-        // Clear preloaded audio
-        if (this.nextAudio) {
-            this.nextAudio.pause();
-            this.nextAudio.onended = null;
-            this.nextAudio.onerror = null;
-            this.nextAudio = null;
         }
 
         this.audioQueue = [];
@@ -746,9 +822,8 @@ export class TtsPlayerController {
     /**
      * Process the audio queue with serialization guard
      * @private
-     * @param {boolean} preloadOnly - If true, prepare next audio without playing it
      */
-    _processQueue(preloadOnly = false) {
+    _processQueue() {
         if (this._isProcessingQueue) {
             console.log(`[TtsPlayerController] Skipping _processQueue (already processing) [idx:${this.instanceId}]`);
             return;
@@ -756,7 +831,7 @@ export class TtsPlayerController {
 
         this._isProcessingQueue = true;
         try {
-            this._processQueueInternal(preloadOnly);
+            this._processQueueInternal();
         } finally {
             this._isProcessingQueue = false;
         }
@@ -765,18 +840,16 @@ export class TtsPlayerController {
     /**
      * Internal implementation of queue processing
      * @private
-     * @param {boolean} preloadOnly - If true, prepare next audio without playing it
      */
-    _processQueueInternal(preloadOnly = false) {
-        // If preloading, we can proceed even if currentAudio exists
-        // If playing, wait for current audio to finish
-        if (!preloadOnly && this.currentAudio) {
+    _processQueueInternal() {
+        // If already playing something, wait for it to finish
+        if (this.currentAudio) {
             console.log('[TtsPlayerController] Queue processing: Audio already playing, waiting...');
             return;
         }
 
-        // If paused or stopped, don't start new audio (unless preloading)
-        if (!preloadOnly && (this.state === TtsPlayerState.PAUSED || this.state === TtsPlayerState.STOPPED)) {
+        // If paused or stopped, don't start new audio (unless we want to allow manual triggers)
+        if (this.state === TtsPlayerState.PAUSED || this.state === TtsPlayerState.STOPPED) {
             console.log(`[TtsPlayerController] Queue processing: Player is ${this.state}, skipping auto-advance`);
             return;
         }
@@ -844,38 +917,30 @@ export class TtsPlayerController {
             return;
         }
 
-        // Mark as playing and execute (or just prepare if preloading)
-        if (!preloadOnly) {
-            nextItem.status = 'playing';
+        // Mark as playing and execute
+        nextItem.status = 'playing';
 
-            // Also update radio queue status if applicable
-            const radioItem = this.queue.find(i => i.segmentId === nextItem.segmentId);
-            if (radioItem) radioItem.status = 'playing';
-        }
+        // Also update radio queue status if applicable
+        const radioItem = this.queue.find(i => i.segmentId === nextItem.segmentId);
+        if (radioItem) radioItem.status = 'playing';
 
         if (nextItem.type === 'unary') {
             // Audio source interface: extract from structured audioData object
             const audioBlob = this._base64ToBlob(nextItem.audioData.bytesBase64, nextItem.audioData.mimeType);
             if (audioBlob) {
-                this._playAudio(audioBlob, nextItem, preloadOnly);
+                this._playAudio(audioBlob, nextItem);
             } else {
                 console.error('[TtsPlayerController] Failed to decode audio for segment:', nextItem.segmentId);
                 nextItem.status = 'error';
-                if (!preloadOnly) {
-                    const radioItem = this.queue.find(i => i.segmentId === nextItem.segmentId);
-                    if (radioItem) radioItem.status = 'failed';
-                    setTimeout(() => this._processQueue(), 0); // Try next one
-                }
+                if (radioItem) radioItem.status = 'failed';
+                setTimeout(() => this._processQueue(), 0); // Try next one
             }
         } else {
             // Placeholder for streaming
             console.warn('[TtsPlayerController] Streaming chunks not yet supported in sequential player');
             nextItem.status = 'error';
-            if (!preloadOnly) {
-                const radioItem = this.queue.find(i => i.segmentId === nextItem.segmentId);
-                if (radioItem) radioItem.status = 'failed';
-                setTimeout(() => this._processQueue(), 0);
-            }
+            if (radioItem) radioItem.status = 'failed';
+            setTimeout(() => this._processQueue(), 0);
         }
     }
 
@@ -884,29 +949,37 @@ export class TtsPlayerController {
      * @private
      * @param {Blob} audioBlob
      * @param {Object} queueItem
-     * @param {boolean} preloadOnly - If true, prepare audio but don't play it yet
      */
-    _playAudio(audioBlob, queueItem, preloadOnly = false) {
+    _playAudio(audioBlob, queueItem) {
         const segmentId = queueItem.segmentId;
         const requestId = this.requestIdBySegment.get(segmentId) || 'unknown';
 
-        // Skip duplicate play check if we're just preloading
-        if (!preloadOnly && this.playedSet.has(segmentId)) {
+        if (this.playedSet.has(segmentId)) {
             console.warn(`[TTS] Blocked duplicate play [idx:${this.instanceId}] segment:${segmentId} requestId:${requestId}`);
             queueItem.status = 'done';
             setTimeout(() => this._processQueue(), 0);
             return;
         }
 
-        if (!preloadOnly) {
-            this.playedSet.add(segmentId);
-        }
+        this.playedSet.add(segmentId);
 
         try {
             const audioUrl = URL.createObjectURL(audioBlob);
-            const audio = new Audio(audioUrl);
-            audio.volume = 1.0; // Explicitly ensure volume is up
-            console.log(`[TtsPlayerController] Created Audio object for segment: ${segmentId}, volume: ${audio.volume}, blobSize: ${audioBlob.size}, preloadOnly: ${preloadOnly}`);
+            // USE PERSISTENT ELEMENT FOR ALL PLAYBACK (iOS REQUIREMENT)
+            const audio = this.audioEl || new Audio();
+            if (!this.audioEl) {
+                this.audioEl = audio;
+            }
+
+            // Stop any current playback on this instance
+            audio.pause();
+            audio.currentTime = 0;
+
+            audio.src = audioUrl;
+            audio.load();
+            audio.volume = 1.0;
+
+            console.log(`[TtsPlayerController] Reusing Audio element [id:${audio.__id || 'none'}] for segment: ${segmentId}, volume: ${audio.volume}`);
 
             // Apply playback rate reinforcement for ALL voices (solid guarantee)
             if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {
@@ -917,13 +990,7 @@ export class TtsPlayerController {
                 }
             }
 
-            // Store reference based on mode
-            if (preloadOnly) {
-                this.nextAudio = audio;
-                console.log(`[TtsPlayerController] Preloaded next audio [idx:${this.instanceId}]:`, segmentId);
-            } else {
-                this.currentAudio = audio;
-            }
+            this.currentAudio = audio;
 
             // Log metadata for debugging, but don't block logic on it
             audio.onloadedmetadata = () => {
@@ -943,130 +1010,119 @@ export class TtsPlayerController {
             // Log if metadata loading fails/times out (optional safety)
             audio.onstalled = () => console.warn('[TtsPlayerController] Audio stalled:', queueItem.segmentId);
 
-            // Only set up playback event handlers if not preloading
-            if (!preloadOnly) {
-                audio.onended = () => {
-                    console.log('[TtsPlayerController] Audio playback ended for segment:', segmentId);
+            audio.onended = () => {
+                console.log('[TtsPlayerController] Audio playback ended for segment:', segmentId);
+                if (this.currentAudio === audio) {
+                    this.currentAudio = null;
+                }
+                URL.revokeObjectURL(audioUrl);
 
-                    // Drain both queues
-                    this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
+                // Drain both queues
+                this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
 
-                    // Find matching radio item for dedupe cleanup before filtering
-                    const radioItem = this.queue.find(item => item.segmentId === segmentId);
-                    if (radioItem) {
-                        const contentHash = `${radioItem.text?.trim() || ''}_${radioItem.timestamp || 0}`;
-                        this.dedupeSet.delete(contentHash);
-                    }
-                    this.queue = this.queue.filter(item => item.segmentId !== segmentId);
+                // Find matching radio item for dedupe cleanup before filtering
+                const radioItem = this.queue.find(item => item.segmentId === segmentId);
+                if (radioItem) {
+                    const contentHash = `${radioItem.text?.trim() || ''}_${radioItem.timestamp || 0}`;
+                    this.dedupeSet.delete(contentHash);
+                }
+                this.queue = this.queue.filter(item => item.segmentId !== segmentId);
 
-                    console.log(`[TtsPlayerController] Removed segment ${segmentId} from queue. New length: ${this.queue.length}`);
 
-                    // MOBILE-ONLY FIX FOR SAFARI iOS: Play next audio synchronously to maintain user gesture context
-                    // Desktop browsers use standard async processing for compatibility
-                    if (this.isMobileBrowser && this.nextAudio) {
-                        console.log('[TtsPlayerController] [MOBILE] Playing preloaded next audio synchronously (Safari iOS fix)');
+                console.log(`[TtsPlayerController] Removed segment ${segmentId} from queue. New length: ${this.queue.length}`);
 
-                        // Transfer nextAudio to currentAudio
-                        this.currentAudio = this.nextAudio;
-                        this.nextAudio = null;
+                // Play next in queue
+                setTimeout(() => this._processQueue(), 0);
+            };
 
-                        // Mark the corresponding queue item as playing
-                        const nextQueueItem = this.audioQueue.find(item => item.status === 'ready');
-                        if (nextQueueItem) {
-                            nextQueueItem.status = 'playing';
-                            const nextRadioItem = this.queue.find(i => i.segmentId === nextQueueItem.segmentId);
-                            if (nextRadioItem) nextRadioItem.status = 'playing';
+            audio.onerror = (error) => {
+                console.error('[TtsPlayerController] Audio playback error for segment:', segmentId, error);
+                if (this.currentAudio === audio) {
+                    this.currentAudio = null;
+                }
+                URL.revokeObjectURL(audioUrl);
 
-                            // Add to played set
-                            this.playedSet.add(nextQueueItem.segmentId);
-                        }
+                // Drain both queues on error too to prevent getting stuck
+                this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
+                this.queue = this.queue.filter(item => item.segmentId !== segmentId);
 
-                        // Play synchronously (maintains user gesture context on Safari iOS)
-                        this.currentAudio.play().then(() => {
-                            console.log('[TtsPlayerController] [MOBILE] Synchronous next audio playing successfully');
+                setTimeout(() => this._processQueue(), 0);
 
-                            // Preload the next segment after this one
-                            setTimeout(() => this._processQueue(true), 100);
-                        }).catch(error => {
-                            console.error('[TtsPlayerController] [MOBILE] Failed to play preloaded audio:', error);
-                            this.currentAudio = null;
-
-                            // Fall back to async processing
-                            setTimeout(() => this._processQueue(), 0);
-                        });
-                    } else {
-                        // Desktop or no preloaded audio: use standard async processing
-                        console.log(`[TtsPlayerController] ${this.isMobileBrowser ? '[MOBILE]' : '[DESKTOP]'} Using async processing`);
-                        this.currentAudio = null;
-                        setTimeout(() => this._processQueue(), 0);
-                    }
-
-                    URL.revokeObjectURL(audioUrl);
-                };
-
-                audio.onerror = (error) => {
-                    console.error('[TtsPlayerController] Audio playback error for segment:', segmentId, error);
-                    if (this.currentAudio === audio) {
-                        this.currentAudio = null;
-                    }
-                    URL.revokeObjectURL(audioUrl);
-
-                    // Drain both queues on error too to prevent getting stuck
-                    this.audioQueue = this.audioQueue.filter(item => item !== queueItem);
-                    this.queue = this.queue.filter(item => item.segmentId !== segmentId);
-
-                    setTimeout(() => this._processQueue(), 0);
-
-                    if (this.onError) {
-                        this.onError({
-                            code: 'PLAYBACK_ERROR',
-                            message: `Failed to play audio for ${queueItem.segmentId}`
-                        });
-                    }
-                };
-
-                console.log(`[TtsPlayerController] Starting audio play() [idx:${this.instanceId}] for segment:`, queueItem.segmentId);
-                audio.play().then(() => {
-                    console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
-
-                    // Immediately preload the next segment while this one is playing (mobile only for Safari iOS fix)
-                    if (this.isMobileBrowser) {
-                        setTimeout(() => this._processQueue(true), 100);
-                    }
-                }).catch(error => {
-                    if (error.name === 'AbortError') {
-                        console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
-                    } else {
-                        console.error('[TtsPlayerController] Failed to start playback:', queueItem.segmentId, error);
-                        if (this.currentAudio === audio) {
-                            this.currentAudio = null;
-                        }
-                        queueItem.status = 'error';
-                        if (this.onError) {
-                            this.onError({
-                                code: 'PLAYBACK_ERROR',
-                                message: `Failed to start playback: ${error.message}`
-                            });
-                        }
-                    }
-                    URL.revokeObjectURL(audioUrl);
-                    // Even on play error, try next in queue
-                    setTimeout(() => this._processQueue(), 0);
-                });
-            }
-        } catch (error) {
-            console.error('[TtsPlayerController] Error in _playAudio:', error);
-            if (!preloadOnly) {
-                this.currentAudio = null;
-                queueItem.status = 'error';
                 if (this.onError) {
                     this.onError({
                         code: 'PLAYBACK_ERROR',
+                        message: `Failed to play audio for ${queueItem.segmentId}`
+                    });
+                }
+            };
+
+            console.log(`[TtsPlayerController] Starting audio play() [idx:${this.instanceId}] for segment:`, queueItem.segmentId);
+
+            // Add state transition logging for mobile debugging
+            audio.onplay = () => {
+                console.log(`[TtsPlayerController] Audio 'onplay' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onplay event", { segment: queueItem.segmentId });
+            };
+            audio.onplaying = () => {
+                console.log(`[TtsPlayerController] Audio 'onplaying' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onplaying event", { segment: queueItem.segmentId });
+            };
+            audio.onpause = () => {
+                console.log(`[TtsPlayerController] Audio 'onpause' event [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("onpause event", { segment: queueItem.segmentId });
+            };
+            if (window.audioDebug) {
+                window.audioDebug("play() attempt", {
+                    segment: queueItem.segmentId,
+                    src: audio.src?.substring(0, 50) + '...',
+                    readyState: audio.readyState,
+                    paused: audio.paused
+                });
+            }
+
+            audio.play().then(() => {
+                console.log(`[TtsPlayerController] Audio playing [idx:${this.instanceId}]:`, queueItem.segmentId);
+                if (window.audioDebug) window.audioDebug("play() success", { segmentID: queueItem.segmentId });
+            }).catch(error => {
+
+                if (window.audioDebug) {
+                    window.audioDebug("play() REJECTED", {
+                        segment: queueItem.segmentId,
+                        name: error.name,
                         message: error.message
                     });
                 }
+
+                if (error.name === 'AbortError') {
+                    console.log('[TtsPlayerController] Playback aborted:', queueItem.segmentId);
+                } else {
+                    console.error('[TtsPlayerController] Failed to start playback:', queueItem.segmentId, error);
+                    if (this.currentAudio === audio) {
+                        this.currentAudio = null;
+                    }
+                    queueItem.status = 'error';
+                    if (this.onError) {
+                        this.onError({
+                            code: 'PLAYBACK_ERROR',
+                            message: `Failed to start playback: ${error.message}`
+                        });
+                    }
+                }
+                URL.revokeObjectURL(audioUrl);
+                // Even on play error, try next in queue
                 setTimeout(() => this._processQueue(), 0);
+            });
+        } catch (error) {
+            console.error('[TtsPlayerController] Error in _playAudio:', error);
+            this.currentAudio = null;
+            queueItem.status = 'error';
+            if (this.onError) {
+                this.onError({
+                    code: 'PLAYBACK_ERROR',
+                    message: error.message
+                });
             }
+            setTimeout(() => this._processQueue(), 0);
         }
     }
 
@@ -1080,33 +1136,16 @@ export class TtsPlayerController {
     }
 
     /**
-     * Detect if running on mobile browser (primarily for Safari iOS gesture context fix)
-     * @private
-     */
-    _detectMobileBrowser() {
-        // Check for touch support and mobile-like screen size
-        const hasTouchScreen = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-        const isMobileScreenSize = window.innerWidth <= 768;
-
-        // Check user agent for mobile indicators (iOS, Android, mobile)
-        const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-        const isMobileUA = /iPhone|iPad|iPod|Android|webOS|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
-
-        // Consider it mobile if it has touch + small screen OR mobile user agent
-        return (hasTouchScreen && isMobileScreenSize) || isMobileUA;
-    }
-
-    /**
      * Prime the audio system to allow subsequent play() calls
      * Must be called from a user gesture (like click)
      * @private
      */
     _prime() {
-        if (!this.primingAudio) return;
+        if (!this.audioEl) return;
 
-        console.log('[TtsPlayerController] Priming audio system...');
+        console.log('[TtsPlayerController] Priming audio system via persistent audioEl...');
         // Playing an empty source or a short silent sound works to "unlock" audio in most browsers
-        this.primingAudio.play().catch(err => {
+        this.audioEl.play().catch(err => {
             // We expect an error because there's no source, but the play() call still "primes" the browser gesture tracking
             console.log('[TtsPlayerController] Audio primed (ignored harmless error):', err.message);
         });
@@ -1171,15 +1210,9 @@ export class TtsPlayerController {
             this.currentAudio.onerror = null;
             this.currentAudio = null;
         }
-        if (this.nextAudio) {
-            this.nextAudio.pause();
-            this.nextAudio.onended = null;
-            this.nextAudio.onerror = null;
-            this.nextAudio = null;
-        }
-        if (this.primingAudio) {
-            this.primingAudio.pause();
-            this.primingAudio = null;
+        if (this.audioEl) {
+            this.audioEl.pause();
+            this.audioEl = null;
         }
         this.audioQueue = [];
         this.queue = [];
