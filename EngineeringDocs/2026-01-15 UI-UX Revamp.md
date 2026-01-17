@@ -1,5 +1,5 @@
 # Exbabel — UI/UX Revamp
-**Last updated:** 2026-01-15 (America/Chicago) - QR Scanner Stability & Performance
+**Last updated:** 2026-01-16 (America/Chicago) - Mobile Header Optimization
 
 This is a running "what is done" document capturing frontend enhancements, user flow improvements, and visual revamps for the Exbabel platform.
 **Newest items are at the top.**
@@ -135,8 +135,22 @@ Refined the live translation experience to prioritize dual-language clarity and 
 - **Header Removal:**
     - Removed the redundant Exbabel branding header to maximize vertical screen space for translation content.
 
-**Where implemented:**
 - **Frontend:** `frontend/src/components/ListenerPage.jsx`
+---
+
+### 2026-01-16 — PR 4: Listener Mobile Header Optimization
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Refactored the mobile session information header on the Listener page to reclaim vertical space for translation content.
+
+**Key Changes:**
+- **Compact Horizontal Layout:** Replaced the large card-based session info with a single horizontal flex-row on mobile devices.
+- **Dynamic Labeling:** Conditionally hid "Session Code" and "Language" labels on mobile, relying on visual cues and icons to reduce vertical height by ~60%.
+- **Compact Language Selector:** Enhanced the `LanguageSelector` component with a `compact` property, allowing it to render as a minimal pill for use in dense headers.
+- **Consistency:** Shared the compact logic across the Listener Page while intentionally preserving the original layout for the Host Page.
+
+**Where implemented:**
+- **Frontend:** `frontend/src/components/ListenerPage.jsx`, `frontend/src/components/LanguageSelector.jsx`
 
 ---
 
@@ -151,6 +165,7 @@ Refined the live translation experience to prioritize dual-language clarity and 
 - **Interactive History:** Tap-to-reveal original text flip logic in history list.
 - **Adaptive Auto-Scroll:** Pins viewport to newest content at bottom of history.
 - **Fine-tuned Speed Defaults:** 1.1x for Chirp3 vs 1.45x for Gemini.
+- **Compact Mobile Header (Listener):** Maximized vertical real-estate by condensing the session bar.
 
 ### 🔍 Known / Remaining
 - **Torch Support:** Some mobile browsers support a flashlight toggle; currently not implemented.

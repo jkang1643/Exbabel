@@ -115,7 +115,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [showOriginal, setShowOriginal] = useState(false); // Toggle for showing original text
 
   const wsRef = useRef(null);
-  const translationsEndRef = useRef(null);
 
   // DOM refs for imperative partial painting (flicker-free)
   const currentTranslationElRef = useRef(null);
@@ -279,10 +278,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     });
   }
 
-  // Auto-scroll to latest translation (bottom of list)
-  useEffect(() => {
-    translationsEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [translations]);
 
   // TRANSLATION STALL DETECTION: Check periodically if source partials arrive but translations don't
   useEffect(() => {
@@ -1189,34 +1184,33 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   // Listener view (after joining)
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100">
+    <div className="h-screen flex flex-col bg-gradient-to-br from-green-50 to-emerald-100 overflow-hidden">
 
-      <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
+      <div className="flex-none container mx-auto px-2 sm:px-4 pt-4 sm:pt-8">
         {/* Unified Session Info Bar */}
-        <div className="bg-white rounded-lg shadow-lg p-3 sm:p-4 mb-4 sm:mb-6">
-          <div className="flex flex-col lg:flex-row items-stretch lg:items-center gap-3 lg:gap-4">
+        <div className="bg-white rounded-lg shadow-md p-1.5 sm:p-4 mb-3 sm:mb-6">
+          <div className="flex flex-row items-center gap-2 sm:gap-4 overflow-x-auto sm:overflow-visible no-scrollbar">
 
             {/* Session Code */}
-            <div className="flex-shrink-0">
-              <p className="text-xs text-gray-600">Session Code:</p>
-              <p className="text-lg sm:text-xl font-bold text-emerald-600">{sessionInfo?.sessionCode}</p>
+            <div className="flex-shrink-0 flex items-center gap-1">
+              <span className="text-[10px] uppercase font-bold text-gray-400 sm:text-gray-600 sm:font-normal sm:capitalize sm:block hidden">Code:</span>
+              <p className="text-sm sm:text-xl font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{sessionInfo?.sessionCode}</p>
             </div>
 
             {/* Voice Model */}
             {TTS_UI_ENABLED && (
-              <div className="flex-1 lg:max-w-xs">
-                <label className="block text-xs text-gray-600 mb-1">Voice Model</label>
+              <div className="flex-shrink-0 w-24 sm:flex-1 sm:max-w-xs">
                 <select
                   value={selectedVoice}
                   onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+                  className="w-full px-1 py-1 border border-gray-200 rounded text-[10px] sm:text-sm focus:ring-2 focus:ring-emerald-500 outline-none truncate"
                 >
                   {Object.entries(
                     getVoicesForLanguage(targetLang).reduce((acc, voice) => {
                       const tier = voice.tier || 'standard';
                       let group = 'Standard';
-                      if (tier === 'gemini') group = 'Gemini & Studio';
-                      else if (tier === 'chirp3_hd') group = 'Chirp 3 HD';
+                      if (tier === 'gemini') group = 'Gemini';
+                      else if (tier === 'chirp3_hd') group = 'Chirp3';
                       else if (tier === 'neural2') group = 'Neural2';
                       if (!acc[group]) acc[group] = [];
                       acc[group].push(voice);
@@ -1225,7 +1219,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   ).map(([group, voices]) => (
                     <optgroup key={group} label={group}>
                       {voices.map(v => (
-                        <option key={v.value} value={v.value}>{v.label}</option>
+                        <option key={v.value} value={v.value}>{v.label.replace('Premium, ', '').replace('Female', 'F').replace('Male', 'M')}</option>
                       ))}
                     </optgroup>
                   ))}
@@ -1234,25 +1228,26 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             )}
 
             {/* Language Selector */}
-            <div className="flex-1 lg:max-w-xs">
+            <div className="flex-shrink-0 w-24 sm:flex-1 sm:max-w-xs">
               <LanguageSelector
-                label="Your Language"
+                label=""
                 languages={LANGUAGES}
                 selectedLanguage={targetLang}
                 onLanguageChange={handleChangeLanguage}
+                compact={true}
               />
             </div>
 
             {/* Controls: Settings, Play, Connection, Leave */}
-            <div className="flex items-center gap-2 lg:ml-auto">
+            <div className="flex items-center gap-1.5 sm:gap-2 ml-auto">
               {/* Settings */}
               {TTS_UI_ENABLED && (
                 <button
                   onClick={() => setIsSettingsOpen(true)}
-                  className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-all"
+                  className="p-1.5 sm:p-2 bg-gray-50 text-gray-500 rounded border border-gray-200 hover:bg-gray-100 transition-all"
                   title="Settings"
                 >
-                  <Settings className="w-4 h-4" />
+                  <Settings className="w-3.5 h-3.5" />
                 </button>
               )}
 
@@ -1261,31 +1256,33 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 ttsState === 'PLAYING' ? (
                   <button
                     onClick={handleTtsStop}
-                    className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all"
+                    className="p-1.5 sm:p-2 bg-red-500 text-white rounded hover:bg-red-600 transition-all shadow-sm"
                     title="Stop"
                   >
-                    <Square className="w-4 h-4 fill-current" />
+                    <Square className="w-3.5 h-3.5 fill-current" />
                   </button>
                 ) : (
                   <button
                     onClick={handleTtsPlay}
                     disabled={connectionState !== 'open'}
-                    className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all disabled:bg-gray-300 text-sm font-medium"
+                    className="p-1.5 sm:px-3 sm:py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-all disabled:bg-gray-200 shadow-sm"
                     title="Play"
                   >
-                    <Play className="w-4 h-4 fill-current inline mr-1" />
-                    <span className="hidden sm:inline">Play</span>
+                    <Play className="w-3.5 h-3.5 fill-current inline sm:mr-1" />
+                    <span className="hidden sm:inline text-sm font-medium">Play</span>
                   </button>
                 )
               )}
 
               {/* Connection Status */}
-              <ConnectionStatus state={connectionState} />
+              <div className="scale-75 sm:scale-100 origin-right">
+                <ConnectionStatus state={connectionState} />
+              </div>
 
               {/* Leave Button */}
               <button
                 onClick={handleLeaveSession}
-                className="px-3 py-2 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-lg transition-all text-sm"
+                className="px-2 py-1 sm:px-3 sm:py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 text-gray-600 font-bold rounded border border-gray-200 transition-all text-[10px] sm:text-xs uppercase tracking-tight"
               >
                 Leave
               </button>
@@ -1312,184 +1309,190 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           </div>
         )
         }
+      </div>
 
-        {/* Translation History */}
-        <div className="bg-gray-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 -mx-2 sm:mx-0 mb-4 sm:mb-6">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
-            <h3 className="text-xs sm:text-sm font-semibold text-gray-700 flex items-center gap-1 sm:gap-2">
-              <span className="text-green-600">📝</span>
-              History
-              {translations.length > 0 && (
-                <span className="text-xs text-gray-500 font-normal">
-                  ({translations.length})
-                </span>
-              )}
-            </h3>
-            {translations.length > 0 && (
-              <button
-                onClick={() => {
-                  const content = translations.map(t =>
-                    `Original: ${t.original}\nTranslation: ${t.translated}\n---`
-                  ).join('\n')
-                  const blob = new Blob([content], { type: 'text/plain' })
-                  const url = URL.createObjectURL(blob)
-                  const a = document.createElement('a')
-                  a.href = url
-                  a.download = `translation-${new Date().toISOString().split('T')[0]}.txt`
-                  document.body.appendChild(a)
-                  a.click()
-                  document.body.removeChild(a)
-                  URL.revokeObjectURL(url)
-                }}
-                className="flex items-center space-x-1 px-2 sm:px-3 py-1 text-xs sm:text-sm text-gray-600 hover:text-gray-800 transition-colors"
-              >
-                <span>📥</span>
-                <span className="hidden sm:inline">Download</span>
-              </button>
-            )}
+      {/* NEW: Full-page scrollable area with bottom anchoring */}
+      <div className="flex-1 overflow-y-auto flex flex-col-reverse px-2 sm:px-4 pb-4 sm:pb-8">
+        <div className="container mx-auto w-full flex flex-col-reverse relative">
+
+          {/* LIVE TRANSLATION BOX - Sticky at the start of the reversed container (visual bottom) */}
+          <div className="sticky bottom-0 z-10 pb-2 pt-4 mt-2">
+            <div className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-4 sm:p-6 shadow-2xl border-4 border-white/20 ring-1 ring-black/5">
+              <div className="flex items-center justify-between mb-3 sm:mb-4">
+                <div className="flex items-center space-x-2 sm:space-x-3">
+                  {connectionState === 'open' && (
+                    <div className="flex space-x-1">
+                      <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce"></div>
+                      <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.15s' }}></div>
+                      <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
+                    </div>
+                  )}
+                  <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">
+                    {connectionState === 'open' ? 'LIVE TRANSLATION' : 'CONNECTING...'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Show both original and translation */}
+              <div className="space-y-2 sm:space-y-3">
+                {/* Original Text from Host */}
+                {!showOriginal && (
+                  <div className="bg-white/10 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4">
+                    <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-2">
+                      Original (Host)
+                    </div>
+                    {currentOriginal ? (
+                      <p ref={currentOriginalElRef} className="text-white text-xl sm:text-2xl md:text-3xl font-medium leading-relaxed live-partial-container" />
+                    ) : (
+                      <p className="text-white/40 text-sm italic">Listening for host...</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Translated Text */}
+                <div className="bg-white/15 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4 border-2 border-white/20">
+                  <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-2 flex items-center gap-2">
+                    <span>Translation ({targetLang.toUpperCase()})</span>
+                    {currentTranslation && currentTranslation !== currentOriginal && (
+                      <span className="inline-flex items-center gap-1 text-emerald-300">
+                        <span className="inline-block w-1 h-1 sm:w-1.5 sm:h-1.5 bg-emerald-300 rounded-full animate-pulse"></span>
+                        <span className="text-xs">Live</span>
+                      </span>
+                    )}
+                  </div>
+                  {currentTranslation ? (
+                    <p ref={currentTranslationElRef} className="text-white text-xl sm:text-2xl md:text-3xl font-medium leading-relaxed live-partial-container" />
+                  ) : isTranslationStalled && currentOriginal ? (
+                    <div className="space-y-2">
+                      <p className="text-white/70 text-base italic">{currentOriginal}</p>
+                      <p className="text-white/50 text-sm italic animate-pulse">⏳ Translating...</p>
+                    </div>
+                  ) : currentOriginal ? (
+                    <p className="text-white/50 text-sm italic animate-pulse">Translating...</p>
+                  ) : (
+                    <p className="text-white/40 text-sm italic">Waiting for host...</p>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
-          {translations.length === 0 ? (
-            <div className="text-center py-8 sm:py-12 text-gray-500">
-              <p className="text-base sm:text-lg">No translations yet</p>
-              <p className="text-xs sm:text-sm mt-2">Translations will appear here after each phrase</p>
+          {/* Translation History - Part of the same reversed flow */}
+          <div className="bg-gray-50/50 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 mt-4 mb-2">
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <h3 className="text-xs sm:text-sm font-semibold text-gray-700 flex items-center gap-1 sm:gap-2">
+                <span className="text-green-600">📝</span>
+                History
+                {translations.length > 0 && (
+                  <span className="text-xs text-gray-500 font-normal">
+                    ({translations.length})
+                  </span>
+                )}
+              </h3>
+              {translations.length > 0 && (
+                <button
+                  onClick={() => {
+                    const content = translations.map(t =>
+                      `Original: ${t.original}\nTranslation: ${t.translated}\n---`
+                    ).join('\n')
+                    const blob = new Blob([content], { type: 'text/plain' })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = `translation-${new Date().toISOString().split('T')[0]}.txt`
+                    document.body.appendChild(a)
+                    a.click()
+                    document.body.removeChild(a)
+                    URL.revokeObjectURL(url)
+                  }}
+                  className="flex items-center space-x-1 px-2 sm:px-3 py-1 text-xs sm:text-sm text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  <span>📥</span>
+                  <span className="hidden sm:inline">Download</span>
+                </button>
+              )}
             </div>
-          ) : (
-            <div className="space-y-2 sm:space-y-3 max-h-80 sm:max-h-96 overflow-y-auto pr-1 sm:pr-2 flex flex-col-reverse">
-              <div ref={translationsEndRef} />
-              {[...translations].reverse().map((item, index) => {
-                const actualIndex = translations.length - 1 - index;
-                return (
-                  <div
-                    key={index}
-                    onClick={() => {
-                      const updatedTranslations = [...translations];
-                      updatedTranslations[actualIndex] = { ...item, showOriginal: !item.showOriginal };
-                      setTranslations(updatedTranslations);
-                    }}
-                    className="bg-white rounded-lg p-4 sm:p-5 shadow-sm hover:shadow-md transition-all border border-gray-200 cursor-pointer"
-                  >
-                    {/* Show translation by default, tap to reveal original */}
-                    {item.showOriginal && item.original ? (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-semibold text-blue-600 uppercase">Original (Tap to hide)</span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigator.clipboard.writeText(item.original);
-                            }}
-                            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                            title="Copy"
-                          >
-                            📋
-                          </button>
-                        </div>
-                        <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.original}</p>
-                      </div>
-                    ) : (
-                      <div>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-semibold text-green-600 uppercase">Translation (Tap to see original)</span>
-                          <div className="flex items-center space-x-1">
+
+            {translations.length === 0 ? (
+              <div className="text-center py-8 sm:py-12 text-gray-500">
+                <p className="text-base sm:text-lg">No translations yet</p>
+                <p className="text-xs sm:text-sm mt-2">Translations will appear here after each phrase</p>
+              </div>
+            ) : (
+              <div className="space-y-2 sm:space-y-3 flex flex-col-reverse">
+                {[...translations].reverse().map((item, index) => {
+                  const actualIndex = translations.length - 1 - index;
+                  return (
+                    <div
+                      key={index}
+                      onClick={() => {
+                        const updatedTranslations = [...translations];
+                        updatedTranslations[actualIndex] = { ...item, showOriginal: !item.showOriginal };
+                        setTranslations(updatedTranslations);
+                      }}
+                      className="bg-white rounded-lg p-4 sm:p-5 shadow-sm hover:shadow-md transition-all border border-gray-200 cursor-pointer"
+                    >
+                      {/* Show translation by default, tap to reveal original */}
+                      {item.showOriginal && item.original ? (
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-semibold text-blue-600 uppercase">Original (Tap to hide)</span>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                navigator.clipboard.writeText(item.translated);
+                                navigator.clipboard.writeText(item.original);
                               }}
                               className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                               title="Copy"
                             >
                               📋
                             </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const utterance = new SpeechSynthesisUtterance(item.translated);
-                                speechSynthesis.speak(utterance);
-                              }}
-                              className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                              title="Listen"
-                            >
-                              🔊
-                            </button>
                           </div>
+                          <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.original}</p>
                         </div>
-                        <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.translated}</p>
+                      ) : (
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-semibold text-green-600 uppercase">Translation (Tap to see original)</span>
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(item.translated);
+                                }}
+                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Copy"
+                              >
+                                📋
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const utterance = new SpeechSynthesisUtterance(item.translated);
+                                  speechSynthesis.speak(utterance);
+                                }}
+                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Listen"
+                              >
+                                🔊
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.translated}</p>
+                        </div>
+                      )}
+
+                      <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400 flex items-center justify-between">
+                        <span>{new Date(item.timestamp).toLocaleTimeString()}</span>
+                        <span className="text-gray-300">#{index + 1}</span>
                       </div>
-                    )}
-
-                    <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-400 flex items-center justify-between">
-                      <span>{new Date(item.timestamp).toLocaleTimeString()}</span>
-                      <span className="text-gray-300">#{index + 1}</span>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* LIVE TRANSLATION BOX - Shows both original and translation */}
-        <div className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-4 sm:p-6 shadow-2xl -mx-2 sm:mx-0">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
-            <div className="flex items-center space-x-2 sm:space-x-3">
-              {connectionState === 'open' && (
-                <div className="flex space-x-1">
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce"></div>
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.15s' }}></div>
-                  <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
-                </div>
-              )}
-              <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">
-                {connectionState === 'open' ? 'LIVE TRANSLATION' : 'CONNECTING...'}
-              </span>
-            </div>
-          </div>
-
-          {/* Show both original and translation */}
-          <div className="space-y-2 sm:space-y-3">
-            {/* Original Text from Host */}
-            {!showOriginal && (
-              <div className="bg-white/10 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4">
-                <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-2">
-                  Original (Host)
-                </div>
-                {currentOriginal ? (
-                  <p ref={currentOriginalElRef} className="text-white text-xl sm:text-2xl md:text-3xl font-medium leading-relaxed live-partial-container" />
-                ) : (
-                  <p className="text-white/40 text-sm italic">Listening for host...</p>
-                )}
+                  );
+                })}
               </div>
             )}
-
-            {/* Translated Text */}
-            <div className="bg-white/15 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4 border-2 border-white/20">
-              <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-2 flex items-center gap-2">
-                <span>Translation ({targetLang.toUpperCase()})</span>
-                {currentTranslation && currentTranslation !== currentOriginal && (
-                  <span className="inline-flex items-center gap-1 text-emerald-300">
-                    <span className="inline-block w-1 h-1 sm:w-1.5 sm:h-1.5 bg-emerald-300 rounded-full animate-pulse"></span>
-                    <span className="text-xs">Live</span>
-                  </span>
-                )}
-              </div>
-              {currentTranslation ? (
-                <p ref={currentTranslationElRef} className="text-white text-xl sm:text-2xl md:text-3xl font-medium leading-relaxed live-partial-container" />
-              ) : isTranslationStalled && currentOriginal ? (
-                <div className="space-y-2">
-                  <p className="text-white/70 text-base italic">{currentOriginal}</p>
-                  <p className="text-white/50 text-sm italic animate-pulse">⏳ Translating...</p>
-                </div>
-              ) : currentOriginal ? (
-                <p className="text-white/50 text-sm italic animate-pulse">Translating...</p>
-              ) : (
-                <p className="text-white/40 text-sm italic">Waiting for host...</p>
-              )}
-            </div>
           </div>
         </div>
-
       </div>
     </div>
   );
