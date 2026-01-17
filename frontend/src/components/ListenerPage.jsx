@@ -1485,23 +1485,24 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           </div>
         </div>
 
-        {/* Settings Modal */}
-        <TtsSettingsModal
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-          settings={ttsSettings}
-          onSettingsChange={setTtsSettings}
-          selectedVoice={selectedVoice}
-          targetLang={targetLang}
-        />
 
-        {error && (
-          <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
-            {error}
-          </div>
-        )
-        }
       </div>
+
+      {/* Settings Modal - Outside sticky container for correct stacking context */}
+      <TtsSettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        settings={ttsSettings}
+        onSettingsChange={setTtsSettings}
+        selectedVoice={selectedVoice}
+        targetLang={targetLang}
+      />
+
+      {error && (
+        <div className="fixed bottom-20 left-4 right-4 z-[60] p-4 bg-red-100 border border-red-400 text-red-700 rounded shadow-lg animate-in slide-in-from-bottom duration-300">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
