@@ -1187,130 +1187,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   return (
     <div className="h-screen flex flex-col bg-gradient-to-br from-green-50 to-emerald-100 overflow-hidden">
 
-      <div className="flex-none container mx-auto px-2 sm:px-4 pt-4 sm:pt-8 sticky top-0 z-50">
-        {/* Unified Session Info Bar */}
-        <div className="bg-white rounded-lg shadow-md p-1.5 sm:p-4 mb-3 sm:mb-6">
-          <div className="flex flex-row items-center gap-2 sm:gap-4 overflow-x-auto sm:overflow-visible no-scrollbar">
-
-            {/* Session Code */}
-            <div className="flex-shrink-0 flex items-center gap-1">
-              <span className="text-[10px] uppercase font-bold text-gray-400 sm:text-gray-600 sm:font-normal sm:capitalize sm:block hidden">Code:</span>
-              <p className="text-sm sm:text-xl font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{sessionInfo?.sessionCode}</p>
-            </div>
-
-            {/* Voice Model */}
-            {TTS_UI_ENABLED && (
-              <div className="flex-shrink-0 w-24 sm:flex-1 sm:max-w-xs">
-                <select
-                  value={selectedVoice}
-                  onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="w-full px-1 py-1 border border-gray-200 rounded text-[10px] sm:text-sm focus:ring-2 focus:ring-emerald-500 outline-none truncate"
-                >
-                  {Object.entries(
-                    getVoicesForLanguage(targetLang).reduce((acc, voice) => {
-                      const tier = voice.tier || 'standard';
-                      let group = 'Standard';
-                      if (tier === 'gemini') group = 'Gemini';
-                      else if (tier === 'chirp3_hd') group = 'Chirp3';
-                      else if (tier === 'neural2') group = 'Neural2';
-                      if (!acc[group]) acc[group] = [];
-                      acc[group].push(voice);
-                      return acc;
-                    }, {})
-                  ).map(([group, voices]) => (
-                    <optgroup key={group} label={group}>
-                      {voices.map(v => (
-                        <option key={v.value} value={v.value}>{v.label.replace('Premium, ', '').replace('Female', 'F').replace('Male', 'M')}</option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            {/* Language Selector */}
-            <div className="flex-shrink-0 w-24 sm:flex-1 sm:max-w-xs">
-              <LanguageSelector
-                label=""
-                languages={LANGUAGES}
-                selectedLanguage={targetLang}
-                onLanguageChange={handleChangeLanguage}
-                compact={true}
-              />
-            </div>
-
-            {/* Controls: Settings, Play, Connection, Leave */}
-            <div className="flex items-center gap-1.5 sm:gap-2 ml-auto">
-              {/* Settings */}
-              {TTS_UI_ENABLED && (
-                <button
-                  onClick={() => setIsSettingsOpen(true)}
-                  className="p-1.5 sm:p-2 bg-gray-50 text-gray-500 rounded border border-gray-200 hover:bg-gray-100 transition-all"
-                  title="Settings"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                </button>
-              )}
-
-              {/* Play/Stop */}
-              {TTS_UI_ENABLED && (
-                ttsState === 'PLAYING' ? (
-                  <button
-                    onClick={handleTtsStop}
-                    className="p-1.5 sm:p-2 bg-red-500 text-white rounded hover:bg-red-600 transition-all shadow-sm"
-                    title="Stop"
-                  >
-                    <Square className="w-3.5 h-3.5 fill-current" />
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleTtsPlay}
-                    disabled={connectionState !== 'open'}
-                    className="p-1.5 sm:px-3 sm:py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-all disabled:bg-gray-200 shadow-sm"
-                    title="Play"
-                  >
-                    <Play className="w-3.5 h-3.5 fill-current inline sm:mr-1" />
-                    <span className="hidden sm:inline text-sm font-medium">Play</span>
-                  </button>
-                )
-              )}
-
-              {/* Connection Status */}
-              <div className="scale-75 sm:scale-100 origin-right">
-                <ConnectionStatus state={connectionState} />
-              </div>
-
-              {/* Leave Button */}
-              <button
-                onClick={handleLeaveSession}
-                className="px-2 py-1 sm:px-3 sm:py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 text-gray-600 font-bold rounded border border-gray-200 transition-all text-[10px] sm:text-xs uppercase tracking-tight"
-              >
-                Leave
-              </button>
-            </div>
-
-          </div>
-        </div>
-
-        {/* Settings Modal */}
-        <TtsSettingsModal
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-          settings={ttsSettings}
-          onSettingsChange={setTtsSettings}
-          selectedVoice={selectedVoice}
-          targetLang={targetLang}
-        />
-
-
-
-        {error && (
-          <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
-            {error}
-          </div>
-        )
-        }
-      </div>
 
       {/* NEW: Full-page scrollable area with bottom anchoring */}
       <div className="flex-1 overflow-y-auto flex flex-col-reverse px-2 sm:px-4 pb-4 sm:pb-8">
@@ -1502,6 +1378,129 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="flex-none container mx-auto px-2 sm:px-4 py-2 sm:py-4 sticky bottom-0 z-50 bg-white/80 backdrop-blur-md border-t border-gray-200 shadow-lg">
+        {/* Unified Session Info Bar */}
+        <div className="bg-white rounded-lg shadow-sm p-1.5 sm:p-3">
+          <div className="flex flex-row items-center gap-2 sm:gap-4 overflow-x-auto sm:overflow-visible no-scrollbar">
+
+            {/* Session Code */}
+            <div className="flex-shrink-0 flex items-center gap-1">
+              <span className="text-[10px] uppercase font-bold text-gray-400 sm:text-gray-600 sm:font-normal sm:capitalize sm:block hidden">Code:</span>
+              <p className="text-sm sm:text-xl font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{sessionInfo?.sessionCode}</p>
+            </div>
+
+            {/* Voice Model */}
+            {TTS_UI_ENABLED && (
+              <div className="flex-shrink-0 w-24 sm:flex-1 sm:max-w-xs">
+                <select
+                  value={selectedVoice}
+                  onChange={(e) => setSelectedVoice(e.target.value)}
+                  className="w-full px-1 py-1 border border-gray-200 rounded text-[10px] sm:text-sm focus:ring-2 focus:ring-emerald-500 outline-none truncate"
+                >
+                  {Object.entries(
+                    getVoicesForLanguage(targetLang).reduce((acc, voice) => {
+                      const tier = voice.tier || 'standard';
+                      let group = 'Standard';
+                      if (tier === 'gemini') group = 'Gemini';
+                      else if (tier === 'chirp3_hd') group = 'Chirp3';
+                      else if (tier === 'neural2') group = 'Neural2';
+                      if (!acc[group]) acc[group] = [];
+                      acc[group].push(voice);
+                      return acc;
+                    }, {})
+                  ).map(([group, voices]) => (
+                    <optgroup key={group} label={group}>
+                      {voices.map(v => (
+                        <option key={v.value} value={v.value}>{v.label.replace('Premium, ', '').replace('Female', 'F').replace('Male', 'M')}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Language Selector */}
+            <div className="flex-shrink-0 w-24 sm:flex-1 sm:max-w-xs">
+              <LanguageSelector
+                label=""
+                languages={LANGUAGES}
+                selectedLanguage={targetLang}
+                onLanguageChange={handleChangeLanguage}
+                compact={true}
+              />
+            </div>
+
+            {/* Controls: Settings, Play, Connection, Leave */}
+            <div className="flex items-center gap-1.5 sm:gap-2 ml-auto">
+              {/* Settings */}
+              {TTS_UI_ENABLED && (
+                <button
+                  onClick={() => setIsSettingsOpen(true)}
+                  className="p-1.5 sm:p-2 bg-gray-50 text-gray-500 rounded border border-gray-200 hover:bg-gray-100 transition-all"
+                  title="Settings"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {/* Play/Stop */}
+              {TTS_UI_ENABLED && (
+                ttsState === 'PLAYING' ? (
+                  <button
+                    onClick={handleTtsStop}
+                    className="p-1.5 sm:p-2 bg-red-500 text-white rounded hover:bg-red-600 transition-all shadow-sm"
+                    title="Stop"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleTtsPlay}
+                    disabled={connectionState !== 'open'}
+                    className="p-1.5 sm:px-3 sm:py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 transition-all disabled:bg-gray-200 shadow-sm"
+                    title="Play"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current inline sm:mr-1" />
+                    <span className="hidden sm:inline text-sm font-medium">Play</span>
+                  </button>
+                )
+              )}
+
+              {/* Connection Status */}
+              <div className="scale-75 sm:scale-100 origin-right">
+                <ConnectionStatus state={connectionState} />
+              </div>
+
+              {/* Leave Button */}
+              <button
+                onClick={handleLeaveSession}
+                className="px-2 py-1 sm:px-3 sm:py-2 bg-gray-100 hover:bg-red-50 hover:text-red-600 text-gray-600 font-bold rounded border border-gray-200 transition-all text-[10px] sm:text-xs uppercase tracking-tight"
+              >
+                Leave
+              </button>
+            </div>
+
+          </div>
+        </div>
+
+        {/* Settings Modal */}
+        <TtsSettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          settings={ttsSettings}
+          onSettingsChange={setTtsSettings}
+          selectedVoice={selectedVoice}
+          targetLang={targetLang}
+        />
+
+        {error && (
+          <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+            {error}
+          </div>
+        )
+        }
       </div>
     </div>
   );

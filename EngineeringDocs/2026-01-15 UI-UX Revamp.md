@@ -165,7 +165,8 @@ Enhanced the "Live Translation" experience by introducing focus-mode defaults, i
     - **Tap-to-Expand:** Implemented a toggle interaction where tapping the box reveals/hides the original text.
     - **Visual Cues:** Added subtle "(Tap to expand)" text and hover states to indicate interactivity.
 - **Sticky Session Header:**
-    - **Persistent Navigation:** Pinned the compact session info bar (`sticky top-0 z-50`) to ensure controls and status remain accessible while scrolling through history.
+    - **Bottom Docking:** Pinned the compact session info bar (`sticky bottom-0 z-50`) to the footer area. This resolves conflicts with mobile browser toolbars/notches and improves thumb accessibility.
+
 
 **Where implemented:**
 - **Frontend:** `frontend/src/components/ListenerPage.jsx`
@@ -185,7 +186,7 @@ Enhanced the "Live Translation" experience by introducing focus-mode defaults, i
 - **Fine-tuned Speed Defaults:** 1.1x for Chirp3 vs 1.45x for Gemini.
 - **Compact Mobile Header (Listener):** Maximized vertical real-estate by condensing the session bar.
 - **Interactive Live Box:** Tap-to-reveal original text for focused translation viewing.
-- **Sticky Header:** Persistent session controls during scroll.
+- **Bottom Sticky Header:** Persistent session controls docked at the bottom for better reachability and notch compatibility.
 
 ### 🔍 Known / Remaining
 - **Torch Support:** Some mobile browsers support a flashlight toggle; currently not implemented.
