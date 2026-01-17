@@ -96,6 +96,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   const [sessionCode, setSessionCode] = useState(sessionCodeProp || '');
   const [isJoined, setIsJoined] = useState(false);
+  const [showLiveOriginal, setShowLiveOriginal] = useState(false);
   const [userName, setUserName] = useState('');
   const [targetLang, setTargetLang] = useState('es');
   const targetLangRef = useRef('es'); // Ref to avoid closure issues in WebSocket handler
@@ -1186,7 +1187,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   return (
     <div className="h-screen flex flex-col bg-gradient-to-br from-green-50 to-emerald-100 overflow-hidden">
 
-      <div className="flex-none container mx-auto px-2 sm:px-4 pt-4 sm:pt-8">
+      <div className="flex-none container mx-auto px-2 sm:px-4 pt-4 sm:pt-8 sticky top-0 z-50">
         {/* Unified Session Info Bar */}
         <div className="bg-white rounded-lg shadow-md p-1.5 sm:p-4 mb-3 sm:mb-6">
           <div className="flex flex-row items-center gap-2 sm:gap-4 overflow-x-auto sm:overflow-visible no-scrollbar">
@@ -1317,7 +1318,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
           {/* LIVE TRANSLATION BOX - Sticky at the start of the reversed container (visual bottom) */}
           <div className="sticky bottom-0 z-10 pb-2 pt-4 mt-2">
-            <div className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-4 sm:p-6 shadow-2xl border-4 border-white/20 ring-1 ring-black/5">
+            <div
+              onClick={() => setShowLiveOriginal(!showLiveOriginal)}
+              className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-4 sm:p-6 shadow-2xl border-4 border-white/20 ring-1 ring-black/5 cursor-pointer hover:ring-white/20 transition-all active:scale-[0.99]"
+            >
               <div className="flex items-center justify-between mb-3 sm:mb-4">
                 <div className="flex items-center space-x-2 sm:space-x-3">
                   {connectionState === 'open' && (
@@ -1327,8 +1331,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                       <div className="w-1.5 h-1.5 sm:w-2.5 sm:h-2.5 bg-white rounded-full animate-bounce" style={{ animationDelay: '0.3s' }}></div>
                     </div>
                   )}
-                  <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">
+                  <span className="text-xs sm:text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
                     {connectionState === 'open' ? 'LIVE TRANSLATION' : 'CONNECTING...'}
+                    {connectionState === 'open' && !showLiveOriginal && (
+                      <span className="normal-case opacity-70 font-normal text-[10px] sm:text-xs tracking-normal">
+                        (Tap to expand)
+                      </span>
+                    )}
                   </span>
                 </div>
               </div>
@@ -1336,7 +1345,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               {/* Show both original and translation */}
               <div className="space-y-2 sm:space-y-3">
                 {/* Original Text from Host */}
-                {!showOriginal && (
+                {showLiveOriginal && (
                   <div className="bg-white/10 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-4">
                     <div className="text-xs font-semibold text-white/70 uppercase tracking-wide mb-2">
                       Original (Host)

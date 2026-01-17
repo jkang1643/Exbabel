@@ -154,6 +154,24 @@ Refactored the mobile session information header on the Listener page to reclaim
 
 ---
 
+### 2026-01-16 — PR 5: Live Partials Interaction & Sticky Header
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Enhanced the "Live Translation" experience by introducing focus-mode defaults, interactive text revealing, and sticky header positioning.
+
+**Key Changes:**
+- **Interactive Live Box:**
+    - **Refined Default State:** Hides the original English text by default to reduce cognitive load, showing only the target translation.
+    - **Tap-to-Expand:** Implemented a toggle interaction where tapping the box reveals/hides the original text.
+    - **Visual Cues:** Added subtle "(Tap to expand)" text and hover states to indicate interactivity.
+- **Sticky Session Header:**
+    - **Persistent Navigation:** Pinned the compact session info bar (`sticky top-0 z-50`) to ensure controls and status remain accessible while scrolling through history.
+
+**Where implemented:**
+- **Frontend:** `frontend/src/components/ListenerPage.jsx`
+
+---
+
 ## 2) Where we are now (implementation status)
 
 ### ✅ Implemented
@@ -166,6 +184,8 @@ Refactored the mobile session information header on the Listener page to reclaim
 - **Adaptive Auto-Scroll:** Pins viewport to newest content at bottom of history.
 - **Fine-tuned Speed Defaults:** 1.1x for Chirp3 vs 1.45x for Gemini.
 - **Compact Mobile Header (Listener):** Maximized vertical real-estate by condensing the session bar.
+- **Interactive Live Box:** Tap-to-reveal original text for focused translation viewing.
+- **Sticky Header:** Persistent session controls during scroll.
 
 ### 🔍 Known / Remaining
 - **Torch Support:** Some mobile browsers support a flashlight toggle; currently not implemented.
