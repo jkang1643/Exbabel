@@ -8,24 +8,87 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
-### BUG 23: FIXED — Mobile Safari Audio Playback (User Gesture Context)
-**Status:** ✅ RESOLVED (2026-01-15)
+### BUG 26: FIXED — Bottom-Anchored Scroll & History Interaction Logic
+**Status:** ✅ RESOLVED (2026-01-16)
 
-Resolved a critical issue where TTS playback would stop after one segment on iPhone Safari, despite working perfectly on desktop browsers.
+Resolved UI issues where history elements were difficult to follow (needed bottom anchoring) and the subsequent reversal of the DOM broke the "Tap to reveal original" interaction.
 
 #### Root Cause:
-1. **Loss of User Gesture Context:** iOS Safari requires audio playback to be initiated directly by a user gesture. The original implementation used `setTimeout(() => this._processQueue(), 0)` in the `onended` handler to trigger the next segment. This asynchronous delay caused the "user gesture context" to be lost, leading Safari to block subsequent `audio.play()` calls.
-2. **Browser-Specific Enforcement:** Desktop browsers and some other mobile browsers are more lenient with this restriction, which is why the bug was invisible during desktop testing.
+1. **Conventional Scroll Inconvenience:** New translations were added to the bottom, but the container didn't automatically anchor there in a way that felt "chat-like" (filling from bottom up).
+2. **Reversal Desync:** Switched the history list to `flex-col-reverse` and reversed the mapping of `translations`. This caused the `onClick` handler's `index` to point to the wrong row (e.g., clicking the newest row at the bottom toggled the oldest row at the top) because the index in the `.map()` was no longer aligned with the `translations` array state.
+3. **Unexpected Transcriptions:** The desync made it appear as if random rows were showing English transcriptions (originals) because users were accidentally toggling the wrong items.
 
 #### Key Fixes:
-1. **Preload Mechanism (Mobile Only):** Added logic to detect mobile browsers and automatically preload the next audio segment while the current one is playing.
-2. **Synchronous Playback:** On mobile browsers, the next segment is now played **synchronously** within the `onended` event handler of the previous segment. This preserves the user gesture chain and satisfies Safari's security policy.
-3. **Detection Guard:** Integrated feature detection (touch support, screen size, and UA) to limit the preloading and synchronous playback behavior to mobile environments, keeping desktop behavior unchanged.
+1. **Chat-Style Anchoring:** Applied `flex-col-reverse` to the history container.
+2. **Index Alignment:** Updated the history mapping logic to calculate an `actualIndex` (`translations.length - 1 - index`) for use in the state-updating `onClick` handler. This ensures that tapping a row always toggles the correct state object.
+3. **Ref Positioning:** Moved the `translationsEndRef` to the visually-correct position to ensure `scrollIntoView` correctly anchors at the bottom of the list.
 
-#### Outcome:
-- ✅ **Continuous Playback:** iPhone Safari users now experience gapless, automatic playback across multiple segments.
-- ✅ **Scoped Impact:** The fix is surgically limited to mobile browsers, ensuring zero regression risk for desktop users.
-- ✅ **Performance:** Preloading reduces inter-segment latency on mobile devices.
+#### Impact:
+- ✅ **Chat-feel UI:** History now populates from the bottom up and stays anchored to the latest message.
+- ✅ **Reliable Interaction:** Tapping any row correctly toggles *only that row's* language view.
+- ✅ **No Ghost Toggles:** Eliminated the "English transcriptions showing up" bug caused by index mismatch.
+
+---
+
+### BUG 25: FIXED — Gemini Voice Speed Defaults Stuck at 1.1x (ID Collision)
+**Status:** ✅ RESOLVED (2026-01-16)
+
+Resolved an issue where Gemini voices stuck to the global 1.1x default instead of their intended 1.45x premium baseline, caused by ID collisions with legacy voice names.
+
+#### Root Cause:
+1.  **ID Collision:** Gemini voices (e.g., "Kore") shared the exact same value/ID as legacy Standard voices in `ttsVoices.json`.
+2.  **Ambiguous Detection:** The `ListenerPage` logic used `voices.find(v => v.value === selectedVoice)` which nondeterministically returned the Standard voice object (tier: 'standard') instead of the Gemini object (tier: 'gemini'), forcing the wrong default speed.
+3.  **First-Load Logic Gap:** The "first load" logic only applied defaults if the current speed was exactly 1.0x. Since the global application default was shifted to 1.1x, this check failed for Gemini voices, leaving them stuck at the lower rate.
+
+#### Key Fixes:
+1.  **Namespaced IDs:** Refactored `ttsVoices.js` to namespace all Gemini voices with a `gemini-` prefix (e.g., `gemini-Kore`), ensuring global uniqueness.
+2.  **Robust Tier Detection:** Updated `ListenerPage.jsx` and `TtsPanel.jsx` to rely on strict tier checking and the new namespace prefix, removing ambiguous name-list checks.
+3.  **Aggressive First-Load Enforcement:** Updated `ListenerPage.jsx` to enforce the tier-specific default (1.45x) on first load if the current setting matches *any* generic default (1.0x or 1.1x).
+
+#### Impact:
+- ✅ **Correct Defaults:** Gemini voices now instantly default to 1.45x as intended.
+- ✅ **Collision Free:** No more ambiguity between Standard "Kore" and Gemini "Kore".
+- ✅ **Reliable UX:** Speed slider behaves consistently when switching tiers.
+- ✅ **Smart Defaulting:** Voice selection now intelligently prioritizes Chirp 3 HD voices (specifically "Kore") over Gemini when initializing or switching languages, ensuring the 1.1x baseline is preferred by default.
+
+---
+
+### BUG 24: FIXED — TTS Payload Missing Configuration (Pitch, Volume, Prompts)
+**Status:** ✅ RESOLVED (2026-01-16)
+
+Resolved critical regressions where listener-side TTS settings (pitch, volume, and custom prompt configurations) were being completely ignored by the backend because they were omitted from the WebSocket payload.
+
+#### Root Cause:
+1.  **Ignored Panel Settings:** `ListenerPage.jsx` used a hardcoded `pitch: '+1st'` and completely omitted `volume`, ignoring user selections from the settings panel.
+2.  **Missing State Initialization:** The initial `ttsSettings` state lacked `pitch` and `volume` fields, causing undefined values until manual user interaction.
+3.  **Tier-Gated Prompts:** Prompt settings (`promptPresetId`, `intensity`) were conditionally excluded for non-'gemini' tiers. However, since 'Kore' (a Gemini voice) is technically routed as `chirp3_hd`, these critical settings were being dropped for the most important voice.
+
+#### Key Fixes:
+1.  **State Initialization:** Added `pitch: '0st'` and `volume: '0dB'` to the default `ttsSettings` state in `ListenerPage.jsx`.
+2.  **Dynamic Payload Construction:** Updated `handleTtsPlay` to use dynamic `ttsSettings.pitch` and `ttsSettings.volume` instead of hardcoded/missing values.
+3.  **Universal Prompt Transmission:** Modified logic to **ALWAYS** include `promptPresetId` and `intensity` in the payload regardless of the detected tier, allowing the backend to decide applicability.
+
+#### Impact:
+- ✅ **Panel Sync:** Pitch and Volume sliders now work correctly for all voices.
+- ✅ **Gemini Presets:** "Preacher" presets now correctly apply to Kore and other Gemini voices even when routed via Chirp 3 HD.
+- ✅ **Full Configuration:** Backend logs confirm receipt of the complete configuration payload.
+
+---
+### BUG 23: FIXED — iOS Safari NotAllowedError & Persistent HTMLAudioElement
+**Status:** ✅ RESOLVED (2026-01-15)
+
+Resolved a persistent issue where iOS Safari would block audio playback with a `NotAllowedError` even after a user gesture.
+
+#### Root Cause:
+1. **HTMLAudioElement Policy:** iOS Safari's media policy requires that the **exact same instance** of an `HTMLAudioElement` that will play audio must be "primed" (touched) by a user gesture.
+2. **Instance Mismatch:** The previous logic created a `new Audio()` for every individual segment. Even though a global WebAudio unlock was performed, it did not grant permission to these new, un-primed audio instances.
+3. **WebAudio vs. MediaElement:** Unlocking WebAudio (`AudioContext.resume()`) does not automatically unlock separate `HTMLAudioElement` objects on iOS.
+
+#### Key Fixes:
+1. **Persistent Element:** Modified `TtsPlayerController.js` to create a single, persistent `this.audioEl` (HTMLAudioElement) in the constructor that is reused for the entire session.
+2. **Gesture-Based Priming:** Implemented `unlockFromUserGesture()` in the controller. This method is called synchronously during the Play button click and plays a tiny silent WAV on the persistent element to "unlock" it.
+3. **Instance Reuse:** Updated `_playAudio` to stop playback on the existing element, update its `src`, call `load()`, and then `play()`, satisfying Safari's requirement for instance-level permissions.
+4. **Outcome:** Audio now plays reliably across all segments on iPhone Safari without any browser blocks.
 
 ---
 
