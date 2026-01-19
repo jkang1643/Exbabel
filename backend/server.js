@@ -525,18 +525,21 @@ console.log("[Backend] =====================================");
 
 // Global error handlers to prevent crashes
 process.on('uncaughtException', (error) => {
-  console.error('[Backend] 🚨 Uncaught Exception:', error);
-  console.error('[Backend] Stack:', error.stack);
-
   // Handle Google Speech gRPC connection errors specifically
   if (error.code === 14 || (error.details && error.details.includes('ECONNRESET'))) {
-    console.error('[Backend] ⚠️ Google Speech connection reset detected - this is usually recoverable');
-    console.error('[Backend]    The stream should auto-restart. If issues persist, check network connectivity.');
+    console.warn('[Backend] ⚠️ Google Speech connection reset detected (recoverable)');
     // Don't exit - let the stream restart mechanism handle it
     return;
   }
 
-  // For other errors, log but don't exit - keep server running
+  if (error.code === 2 || (error.details && (error.details.includes('408') || error.details.includes('Request Timeout')))) {
+    console.warn('[Backend] ⚠️ Google Speech 408 Request Timeout detected (recoverable)');
+    // This is a known Google Speech behavior, handled by stream restarts
+    return;
+  }
+
+  console.error('[Backend] 🚨 Uncaught Exception:', error);
+  console.error('[Backend] Stack:', error.stack);
   console.error('[Backend]    Error type:', error.constructor.name);
   if (error.code) {
     console.error('[Backend]    Error code:', error.code);
@@ -547,14 +550,18 @@ process.on('uncaughtException', (error) => {
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('[Backend] 🚨 Unhandled Rejection at:', promise);
-  console.error('[Backend] Reason:', reason);
-
   // Handle Google Speech gRPC connection errors in promises
   if (reason && (reason.code === 14 || (reason.details && reason.details.includes('ECONNRESET')))) {
-    console.error('[Backend] ⚠️ Google Speech connection reset in promise - this is usually recoverable');
+    console.warn('[Backend] ⚠️ Google Speech connection reset in promise (recoverable)');
     return;
   }
 
+  if (reason && (reason.code === 2 || (reason.details && (reason.details.includes('408') || reason.details.includes('Request Timeout'))))) {
+    console.warn('[Backend] ⚠️ Google Speech 408 Request Timeout in promise (recoverable)');
+    return;
+  }
+
+  console.error('[Backend] 🚨 Unhandled Rejection at:', promise);
+  console.error('[Backend] Reason:', reason);
   // Don't exit - keep server running
 });

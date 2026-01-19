@@ -181,7 +181,14 @@ export class GoogleSpeechStream {
     if (this.recognizeStream) {
       console.log('[GoogleSpeech] Closing existing stream before restart...');
       try {
-        this.recognizeStream.removeAllListeners();
+        // Retire the stream gracefully - don't leave it with unhandled errors
+        this.recognizeStream.on('error', (err) => {
+          if (process.env.DEBUG_GC === 'true') {
+            console.log(`[GoogleSpeech] 💨 Swallowed late error from retired stream: ${err.message}`);
+          }
+        });
+        this.recognizeStream.removeAllListeners('data');
+        this.recognizeStream.removeAllListeners('end');
         this.recognizeStream.end();
       } catch (err) {
         console.warn('[GoogleSpeech] Error closing old stream:', err.message);
@@ -523,8 +530,13 @@ export class GoogleSpeechStream {
     // Clean up old stream first to prevent unhandled errors
     if (this.recognizeStream) {
       try {
-        // Remove all listeners to prevent error propagation
-        this.recognizeStream.removeAllListeners('error');
+        // Retire the stream gracefully - replace active handlers with a dummy error handler
+        // to prevent unhandled exceptions if the stream emits a late error while being destroyed
+        this.recognizeStream.on('error', (err) => {
+          if (process.env.DEBUG_GC === 'true') {
+            console.log(`[GoogleSpeech] 💨 Swallowed late error from retired stream: ${err.message}`);
+          }
+        });
         this.recognizeStream.removeAllListeners('data');
         this.recognizeStream.removeAllListeners('end');
 
