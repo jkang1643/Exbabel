@@ -76,6 +76,7 @@ export function HostPage({ onBackToHome }) {
   const [sourceLang, setSourceLang] = useState('en');
   const [usePremiumTier, setUsePremiumTier] = useState(false); // Tier selection: false = basic, true = premium
   const [showSettings, setShowSettings] = useState(false);
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false); // Dropdown menu for QR downloads
   const [connectionState, setConnectionState] = useState('disconnected');
   const [transcript, setTranscript] = useState([]);
   const transcriptRef = useRef([]); // Ref to access transcript synchronously
@@ -104,6 +105,20 @@ export function HostPage({ onBackToHome }) {
   useEffect(() => {
     transcriptRef.current = transcript;
   }, [transcript]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showDownloadMenu && !event.target.closest('.download-dropdown-container')) {
+        setShowDownloadMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showDownloadMenu]);
 
   // Track corrected text for merging (similar to TranslationInterface.jsx)
   const longestCorrectedTextRef = useRef('');
@@ -1059,6 +1074,142 @@ export function HostPage({ onBackToHome }) {
     }
   };
 
+  // Download QR code as PNG
+  const handleDownloadPNG = () => {
+    if (!qrDataUrl) return;
+
+    const link = document.createElement('a');
+    link.href = qrDataUrl;
+    link.download = `session-${sessionCode}-qr.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Download QR code as SVG
+  const handleDownloadSVG = async () => {
+    if (!sessionCode) return;
+
+    try {
+      const joinUrl = `${APP_URL}?join=${sessionCode}`;
+      const svgString = await QRCode.toString(joinUrl, {
+        type: 'svg',
+        width: 300,
+        margin: 2,
+        color: {
+          dark: '#000000',
+          light: '#ffffff'
+        }
+      });
+
+      const blob = new Blob([svgString], { type: 'image/svg+xml' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `session-${sessionCode}-qr.svg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to generate SVG QR code:', err);
+    }
+  };
+
+  // Download formatted join slide with QR code and session code
+  const handleDownloadJoinSlide = async () => {
+    if (!sessionCode || !qrDataUrl) return;
+
+    try {
+      // Create canvas for the join slide (1920x1080 for presentation format)
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = 1920;
+      canvas.height = 1080;
+
+      // Dark gradient background
+      const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+      gradient.addColorStop(0, '#1e293b'); // slate-800
+      gradient.addColorStop(1, '#0f172a'); // slate-900
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Top: "Live Translation Available" (Primary CTA)
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 96px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Live Translation Available', canvas.width / 2, 120);
+
+      // "📱 Scan QR Code" label - positioned above QR code with more spacing
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 52px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText('📱 Scan QR Code', canvas.width / 2, 230);
+
+      // Center area: QR Code - moved down to create space
+      const qrImg = new Image();
+      await new Promise((resolve, reject) => {
+        qrImg.onload = resolve;
+        qrImg.onerror = reject;
+        qrImg.src = qrDataUrl;
+      });
+
+      const qrSize = 380;
+      const qrX = (canvas.width / 2) - (qrSize / 2);
+      const qrY = 280;
+
+      // White background for QR code
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(qrX - 30, qrY - 30, qrSize + 60, qrSize + 60);
+      ctx.drawImage(qrImg, qrX, qrY, qrSize, qrSize);
+
+      // OR divider - positioned with proper spacing after QR code
+      ctx.fillStyle = '#94a3b8'; // slate-400
+      ctx.font = 'bold 48px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText('OR', canvas.width / 2, qrY + qrSize + 100);
+
+      // Session code label - more spacing from OR
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 52px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText('🔢 Enter Session Code', canvas.width / 2, qrY + qrSize + 180);
+
+      // Session code with spacing (e.g., "482 917") - more spacing from label
+      const formattedCode = sessionCode.match(/.{1,3}/g)?.join(' ') || sessionCode;
+      ctx.fillStyle = '#60a5fa'; // blue-400 (brand accent)
+      ctx.font = 'bold 110px "Courier New", monospace';
+      ctx.fillText(formattedCode, canvas.width / 2, qrY + qrSize + 300);
+
+      // URL instruction - more spacing from session code
+      ctx.fillStyle = '#cbd5e1'; // slate-300
+      ctx.font = '44px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText('app.exbabel.com', canvas.width / 2, qrY + qrSize + 390);
+
+      // Bottom reassurance line
+      ctx.fillStyle = '#94a3b8'; // slate-400
+      ctx.font = '38px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText('🎧 No app download • Works instantly', canvas.width / 2, canvas.height - 60);
+
+      // Small Exbabel branding at top-left
+      ctx.fillStyle = '#60a5fa';
+      ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('Exbabel', 60, 60);
+
+      // Convert canvas to blob and download
+      canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `exbabel-join-slide-${sessionCode}.png`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 'image/png');
+    } catch (err) {
+      console.error('Failed to generate join slide:', err);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <Header />
@@ -1095,6 +1246,68 @@ export function HostPage({ onBackToHome }) {
                 <div className="flex flex-col items-center gap-2">
                   <img src={qrDataUrl} alt="QR Code" className="border-2 sm:border-4 border-gray-200 rounded-lg w-48 h-48 sm:w-auto sm:h-auto" />
                   <p className="text-xs sm:text-sm text-gray-500">Listeners can scan this code to join</p>
+
+
+                  {/* Download Dropdown Menu */}
+                  <div className="relative mt-3 download-dropdown-container">
+                    <button
+                      onClick={() => setShowDownloadMenu(!showDownloadMenu)}
+                      className="px-4 py-2 text-sm sm:text-base bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-lg transition-all shadow-lg flex items-center justify-center gap-2 w-full sm:w-auto"
+                      title="Download QR code"
+                    >
+                      <span>📥</span>
+                      <span>Download QR Code</span>
+                      <span className="text-xs">{showDownloadMenu ? '▲' : '▼'}</span>
+                    </button>
+
+                    {/* Dropdown Menu */}
+                    {showDownloadMenu && (
+                      <div className="absolute top-full left-0 right-0 sm:left-auto sm:right-auto sm:min-w-[280px] mt-2 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden z-10">
+                        <button
+                          onClick={() => {
+                            handleDownloadJoinSlide();
+                            setShowDownloadMenu(false);
+                          }}
+                          className="w-full px-4 py-3 text-left hover:bg-gradient-to-r hover:from-purple-50 hover:to-indigo-50 transition-colors flex items-center gap-3 border-b border-gray-100"
+                        >
+                          <span className="text-xl">⭐</span>
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-900">Join Slide</div>
+                            <div className="text-xs text-gray-500">Formatted presentation slide</div>
+                          </div>
+                          <span className="text-xs font-medium text-purple-600 bg-purple-100 px-2 py-1 rounded">Recommended</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            handleDownloadPNG();
+                            setShowDownloadMenu(false);
+                          }}
+                          className="w-full px-4 py-3 text-left hover:bg-blue-50 transition-colors flex items-center gap-3 border-b border-gray-100"
+                        >
+                          <span className="text-xl">🖼️</span>
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-900">PNG</div>
+                            <div className="text-xs text-gray-500">QR code only</div>
+                          </div>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            handleDownloadSVG();
+                            setShowDownloadMenu(false);
+                          }}
+                          className="w-full px-4 py-3 text-left hover:bg-indigo-50 transition-colors flex items-center gap-3"
+                        >
+                          <span className="text-xl">📐</span>
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-900">SVG</div>
+                            <div className="text-xs text-gray-500">Scalable vector graphic</div>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

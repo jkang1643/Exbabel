@@ -63,6 +63,31 @@ Resolved a critical "White Screen" crash that occurred when activating or closin
 
 ## 1) What we did (feature updates / changes)
 
+### 2026-01-18 — PR 6: Downloadable QR Code & Professional Join Slide
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Added a professional, high-impact "Join Slide" generator and multi-format download options for the Host Page to facilitate easy session joining in public settings (churches, conferences).
+
+**Key Changes:**
+- **Professional Join Slide Generator:**
+    - **High-Resolution Output:** Generates a 1920x1080 (Full HD) PNG slide optimized for projection and presentation displays.
+    - **Intelligent Layout:** Implemented a non-overlapping, balanced design with proper vertical spacing between all elements.
+    - **Dual Joining Methods:** Promisently displays both a large QR code and a high-readability session code with visual spacing (e.g., "482 917").
+    - **Premium Aesthetics:** Uses a deep slate gradient background, brand-accented typography, and clear calls-to-action ("Live Translation Available", "Scan QR Code", "Works instantly").
+- **Universal Download Dropdown:**
+    - Consolidated separate download buttons into a clean, interactive dropdown menu.
+    - **Click-Outside Management:** implemented automatic menu closing when clicking elsewhere on the page.
+    - **Format Options:**
+        - **⭐ Join Slide (Recommended):** The full presentation-ready slide.
+        - **🖼️ PNG:** Standard image for documents.
+        - **📐 SVG:** Scalable vector format for high-quality printing.
+- **Improved Host Workflow:** Replaced static images with versatile sharing tools, empowering hosts to distribute access credentials instantly.
+
+**Where implemented:**
+- **Frontend:** `frontend/src/components/HostPage.jsx`
+
+---
+
 ### 2026-01-15 — PR 1: Join Session Flow Revamp (QR + Manual)
 **Status:** ✅ IMPLEMENTED - Production Ready
 
@@ -179,6 +204,8 @@ Enhanced the "Live Translation" experience by introducing focus-mode defaults, i
 ### ✅ Implemented
 - **QR Scanning:** Robust browser-side QR detection with multi-camera support.
 - **Manual Input:** High-visibility manual code entry with auto-focus and auto-capitalization.
+- **Professional Join Slide:** Automated 1080p slide generation with QR and spaced session code.
+- **QR Download Dropdown:** Multi-format (SVG/PNG/Slide) dropdown with click-outside behavior for Hosts.
 - **Unified Menu Bar:** Single-row header for Listener Page session and TTS management.
 - **Advanced TTS Settings:** Full control over AI personality and delivery style via settings modal.
 - **Dual-Language Live View:** Simultaneous visibility of host original and translation.
