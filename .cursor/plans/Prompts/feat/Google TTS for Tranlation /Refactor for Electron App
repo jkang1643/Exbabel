@@ -1,0 +1,220 @@
+```text
+You are Cursor working across MULTIPLE repos.
+
+Context
+- Current web app repo contains complex caption/transcript stabilization logic inside React components (HostPage.jsx, ListenerPage.jsx).
+- We are creating a NEW separate repo to hold a shared engine so both:
+  1) Web app
+  2) Future Electron desktop app
+  can reuse identical caption behavior.
+
+Verdict
+- NO backend rebuild.
+- SMALL shared-module refactor: extract client-side caption engine out of React.
+- Backend event stream already has enough richness (seqId, isPartial, forceFinal) to drive the client engine.
+
+Goal
+Create a versioned, framework-agnostic TypeScript package repo named:
+  exbabel-caption-engine
+that implements:
+- CaptionClientEngine (shared caption stabilization + event handling)
+- CaptionViewModel output for dumb UIs
+- Golden-run test harness for deterministic regressions
+Then integrate it back into the web repo behind a feature flag to avoid regressions.
+
+Non-goals (DO NOT DO)
+- Do NOT change backend core engine
+- Do NOT change API contract/event payloads
+- Do NOT introduce new heuristics or UX “improvements” during extraction
+- Do NOT rewrite SentenceSegmenter (it’s already shared utility logic; we will reuse it as-is)
+
+===============================================================================
+TARGET END-STATE (API)
+Both Web and Electron will do:
+
+  const engine = new CaptionClientEngine({ segmenter, lang, ... });
+  engine.connect(wsUrl);
+  engine.on("state", (viewModel) => render(viewModel));
+  engine.on("debug", (evt) => console.log(evt));
+
+React becomes “dumb”: no more complex merging logic. It just renders viewModel.
+
+===============================================================================
+OUTPUT STATE SHAPE (stable view model)
+
+Implement:
+
+export type CaptionViewModel = {
+  status: "disconnected" | "connecting" | "connected";
+  lang: string;
+  seq: number;
+
+  liveLine: string;          // currently updating partial
+  committedLines: string[];  // history
+
+  debug?: {
+    lastEventType?: string;
+    droppedDuplicates?: number;
+    outOfOrderCount?: number;
+  };
+};
+
+===============================================================================
+CORE RESPONSIBILITIES TO EXTRACT (MUST MATCH CURRENT BEHAVIOR 1:1)
+
+A) WebSocket event handler
+- Extract the complex React onmessage switch-case into:
+  engine.ingest(rawEvent) or engine.handleEvent(event)
+
+B) State management
+- Engine owns:
+  - currentPartial
+  - committed history array
+  - lastSeq per language
+  - optional per-segment buffers/maps if current React logic uses them
+- Must preserve current dedupe + merge behavior:
+  - partials merged with finals
+  - overlap handling
+  - corrections handling
+  - “out-of-order partials” behavior identical to current app
+
+C) Segmenter integration
+- Engine wraps SentenceSegmenter usage:
+  - commit decisions
+  - forceFinal handling
+  - punctuation/length heuristics currently used
+  - translation lag alignment rules currently used
+
+===============================================================================
+GUARDRAILS (NON-NEGOTIABLE)
+1) Preserve behavior first (lift-and-shift)
+- Phase 1 is extraction only. No new features or heuristics.
+
+2) Golden-run regression tests
+- Add a golden trace test that replays recorded WS events and asserts engine state snapshots match expected.
+- Deterministic and backend-agnostic.
+
+3) Feature flag rollout in web repo
+- Keep old React logic available behind:
+  USE_SHARED_ENGINE=false
+- New path behind:
+  USE_SHARED_ENGINE=true
+- Only delete old logic after golden tests + manual verification.
+
+===============================================================================
+SHARING STRATEGY (SEPARATE REPO)
+We are NOT building the desktop app in the same repo.
+So:
+- Create a dedicated repo: exbabel-caption-engine
+- Make it installable by other repos via one of:
+  - GitHub Packages (preferred)
+  - npm private registry (ok)
+  - git dependency (fast MVP)
+- Version it (semver) so web and desktop can pin versions.
+
+===============================================================================
+PR STAGES (SMALL, SAFE PRS)
+You must implement the work in PR-sized stages. Each PR should be independently shippable, tested, and minimal.
+
+PR1 — NEW REPO: shared engine skeleton + types
+- Create repo structure, TS build, exports.
+- Implement:
+  - types.ts (event types + CaptionViewModel)
+  - CaptionClientEngine.ts (skeleton with emitter + getState)
+  - index.ts (exports)
+- No heavy logic moved yet, just scaffolding and placeholder ingest routing.
+
+PR2 — NEW REPO: lift-and-shift logic into engine
+- Copy exact logic from ListenerPage/HostPage into engine:
+  - event routing (switch-case)
+  - dedupe/out-of-order handling
+  - merge partial/final
+  - transcript history management
+- Integrate SentenceSegmenter in the same way web currently does.
+- Add minimal debug counters: droppedDuplicates, outOfOrderCount.
+- Still no “improvements”. Behavior must match current.
+
+PR3 — NEW REPO: golden-run test harness
+- Add:
+  - tests/fixtures/sample-trace.json (format: array of raw WS events)
+  - tests/golden.test.ts that replays the trace and snapshots state timeline
+  - expected snapshot JSON (or inline snapshot) representing correct behavior
+- Provide helper: replayTrace(engine, events) -> snapshots
+
+PR4 — WEB REPO: integrate behind feature flag (ListenerPage first)
+- Install the new package.
+- Add USE_SHARED_ENGINE flag.
+- When enabled:
+  - ListenerPage uses CaptionClientEngine
+  - ListenerPage renders viewModel only
+- When disabled:
+  - keep existing behavior untouched
+- Add a small integration test or dev harness if feasible.
+
+PR5 — WEB REPO: integrate HostPage similarly
+- Same feature flag path, same engine usage.
+- Remove duplicated code ONLY inside the flag-on path.
+
+PR6 — WEB REPO: cleanup once proven
+- After golden trace + manual verification:
+  - remove old switch-case logic from React
+  - engine becomes single source of truth
+- Keep tests.
+
+===============================================================================
+IMPLEMENTATION DETAILS (NEW REPO FILES YOU MUST OUTPUT)
+
+In exbabel-caption-engine, create:
+
+- package.json (build + test scripts)
+- tsconfig.json
+- src/index.ts
+- src/types.ts
+- src/CaptionClientEngine.ts
+- src/SentenceSegmenter.ts   (ONLY if you choose to move it here; otherwise accept injection)
+- src/utils/emitter.ts (tiny emitter)
+- tests/golden.test.ts
+- tests/fixtures/sample-trace.json
+- README.md
+
+Include README sections:
+- Install
+- Basic usage (web/electron)
+- Event format expectations
+- Golden test usage
+
+Portability constraints:
+- No DOM access
+- No React imports
+- Must work in browser + Electron
+
+===============================================================================
+EVENT HANDLING RULES (DEFAULTS IF AMBIGUOUS)
+If any exact behavior from the original code is unclear, implement minimally-opinionated stability defaults:
+- Duplicate seqId: ignore (no state update), increment droppedDuplicates
+- seqId goes backwards: ignore (do not regress), increment outOfOrderCount
+- If incoming partial text equals current liveLine: ignore update to avoid render storms
+
+===============================================================================
+IMPORTANT: WHAT TO ASK THE USER FOR (ONLY IF REQUIRED)
+Only if you truly cannot map the event types, ask for:
+- Example payloads for each WS event type
+- Or the ListenerPage/HostPage onmessage switch-case snippet
+
+Otherwise proceed with generic types that accept arbitrary payload and route by fields present (type/isPartial/forceFinal/lang/seqId/text).
+
+===============================================================================
+NOW DO THE WORK
+1) Generate the entire exbabel-caption-engine repo contents (files listed above) with full implementations.
+2) Ensure the engine API is stable and minimal: ingest + getState + on('state'|'debug').
+3) Ensure golden tests pass with the included fixture.
+4) Include clear docs and integration snippets for web and Electron.
+
+After completing the new repo, also output a short “Web integration patch plan” describing exactly what changes to make in ListenerPage.jsx and HostPage.jsx (without rewriting their whole code) to:
+- instantiate engine
+- pipe WS messages into engine.ingest()
+- render viewModel
+- wrap with USE_SHARED_ENGINE feature flag
+
+Do not change behavior. This is extraction only.
+```

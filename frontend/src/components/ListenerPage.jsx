@@ -17,6 +17,7 @@ import { TtsSettingsModal } from './TtsSettingsModal';
 import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
 import { TtsMode, TtsPlayerState } from '../tts/types.js';
 import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
+import { CaptionClientEngine } from '@jkang1643/caption-engine';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -53,6 +54,9 @@ const TRACE = import.meta.env.VITE_TRACE_REALTIME === '1';
 // TTS UI feature flag
 const TTS_UI_ENABLED = import.meta.env.VITE_TTS_UI_ENABLED === 'true';
 console.log('[ListenerPage] TTS_UI_ENABLED:', TTS_UI_ENABLED, 'raw env:', import.meta.env.VITE_TTS_UI_ENABLED);
+
+const USE_SHARED_ENGINE = import.meta.env.VITE_USE_SHARED_ENGINE === 'true';
+console.log('[ListenerPage] USE_SHARED_ENGINE:', USE_SHARED_ENGINE);
 
 // Fingerprint helper for debugging ghost sentences
 const fp = (s) => {
@@ -116,6 +120,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [showOriginal, setShowOriginal] = useState(false); // Toggle for showing original text
 
   const wsRef = useRef(null);
+  const engineRef = useRef(null); // Shared engine ref
 
   // DOM refs for imperative partial painting (flicker-free)
   const currentTranslationElRef = useRef(null);
@@ -125,7 +130,112 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const { updateText: updateTranslationText, clearText: clearTranslationText } = useImperativePainter(currentTranslationElRef, { shrinkDelayMs: 200 });
   const { updateText: updateOriginalText, clearText: clearOriginalText } = useImperativePainter(currentOriginalElRef, { shrinkDelayMs: 0 }); // No delay for transcription - show last word immediately
 
+
   const ttsControllerRef = useRef(null); // TTS controller for audio playback
+
+  // SHARED ENGINE INTEGRATION
+  useEffect(() => {
+    if (!USE_SHARED_ENGINE) return;
+
+    // Create independent segmenter for the engine to avoid conflict with legacy path
+    const engineSegmenter = new SentenceSegmenter({
+      maxSentences: 10,
+      maxChars: 2000,
+      maxTimeMs: 15000
+    });
+
+    // Track processed history to avoid re-announcing
+    let lastCommittedLength = 0;
+
+    console.log('[ListenerPage] Initializing Shared Engine');
+    engineRef.current = new CaptionClientEngine({
+      segmenter: engineSegmenter,
+      lang: targetLangRef.current, // Use ref for initial value
+      debug: true
+    });
+
+    // Subscribe to state updates
+    engineRef.current.on('state', (state) => {
+      // 1. Update Live Partial Text immediately via imperative painters
+      if (state.liveLine) {
+        updateTranslationText(state.liveLine);
+        setCurrentTranslation(state.liveLine);
+      } else {
+        // Only clear if explicitly empty string (meaning reset or new sentence started)
+        // Check if we need to clear? The engine state.liveLine should be the truth.
+        clearTranslationText();
+        setCurrentTranslation('');
+      }
+
+      if (state.liveOriginal) {
+        updateOriginalText(state.liveOriginal);
+        setCurrentOriginal(state.liveOriginal);
+      } else {
+        clearOriginalText();
+        setCurrentOriginal('');
+      }
+
+      // 2. Update History (Committed Lines)
+      if (state.committedLines) {
+        // Map engine model to UI model
+        setTranslations(state.committedLines.map(line => ({
+          original: line.original || '',
+          translated: line.text,
+          timestamp: line.timestamp,
+          seqId: line.seqId || -1,
+          isSegmented: true
+        })));
+
+        // Detect new lines for TTS triggering
+        if (state.committedLines.length > lastCommittedLength) {
+          const newLines = state.committedLines.slice(lastCommittedLength);
+          lastCommittedLength = state.committedLines.length;
+
+          // Enqueue new lines for TTS
+          if (ttsControllerRef.current && ttsControllerRef.current.getState().state === 'PLAYING') {
+            newLines.forEach(line => {
+              // Only speak if it matches our language (or is transcription)
+              const isForMyLanguage = true; // Engine already filters by targetLang? 
+              // Actually engine.committedLines are usually in targetLang. 
+              // View model says: "committedLines: Array<{ text: string; ... }>"
+              // Text IS the translated text.
+
+              if (line.text) {
+                ttsControllerRef.current.onFinalSegment({
+                  id: (line.seqId ?? `seg_${Date.now()}_${Math.random()}`).toString(),
+                  text: line.text,
+                  timestamp: line.timestamp
+                });
+              }
+            });
+          }
+        }
+      }
+    });
+
+    // Pass-through TTS events from engine to controller
+    engineRef.current.on('tts', (event) => {
+      if (ttsControllerRef.current) {
+        ttsControllerRef.current.onWsMessage(event);
+      }
+    });
+
+
+    return () => {
+      if (engineRef.current) {
+        // engineRef.current.disconnect(); // If exists
+        engineRef.current = null;
+      }
+    };
+  }, []); // Run once on mount
+
+  // Sync Language with Engine
+  useEffect(() => {
+    if (USE_SHARED_ENGINE && engineRef.current) {
+      engineRef.current.setLang(targetLang);
+    }
+  }, [targetLang]);
+
 
   // TTS UI State (Lifted from TtsPanel)
   const [ttsState, setTtsState] = useState(TtsPlayerState.STOPPED);
@@ -367,9 +477,18 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       ttsControllerRef.current.currentLanguageCode = normalizeLanguageCode(targetLang);
     }
 
-    // Update voice
+    // Update voice AND tier
     if (selectedVoice) {
       ttsControllerRef.current.currentVoiceName = selectedVoice;
+
+      // CRITICAL FIX: Update tier based on selected voice
+      // This ensures cross-tier voice switching works correctly
+      const voices = getVoicesForLanguage(targetLang);
+      const voiceOption = voices.find(v => v.value === selectedVoice);
+      if (voiceOption) {
+        ttsControllerRef.current.tier = voiceOption.tier || 'neural2';
+        console.log(`[ListenerPage] Updated voice and tier: ${selectedVoice} (${voiceOption.tier})`);
+      }
     }
 
     // Update settings (SSML/Prompts) - Syncing minimal defaults
@@ -585,6 +704,12 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
+
+        // FEATURE FLAG: Shared Engine Integration
+        if (USE_SHARED_ENGINE && engineRef.current) {
+          engineRef.current.ingest(message);
+          return;
+        }
 
         // Track last stable key for onFlush correlation
         lastStableKeyRef.current = (message.sourceSeqId ?? message.seqId ?? null);

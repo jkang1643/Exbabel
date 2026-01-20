@@ -1,0 +1,1097 @@
+Exbabel Caption Engine - Implementation Walkthrough
+Summary
+Extracted caption client stabilization logic from
+ListenerPage.jsx
+and
+HostPage.jsx
+ into a framework - agnostic TypeScript package at packages / exbabel - caption - engine /.The package is ready for use by both the web app and future Electron desktop app.
+
+What Was Built
+Package Structure
+packages / exbabel - caption - engine /
+├── package.json
+├── tsconfig.json
+├── vitest.config.ts
+├── README.md
+├── src /
+│   ├── index.ts              # Public exports
+│   ├── types.ts              # Event types, CaptionViewModel
+│   ├── CaptionClientEngine.ts # Main engine class (600 lines)
+│   └── utils /
+│       └── emitter.ts        # Typed event emitter
+├── tests /
+│   ├── golden.test.ts        # Test suite(10 tests)
+│   ├── fixtures /
+│   │   └── sample - trace.ts   # Sample WebSocket events
+│   └── helpers /
+│       └── replayTrace.ts    # Test helpers
+└── dist /                     # Compiled output
+Core Features Extracted
+Feature	Source	Implementation
+Out - of - order partial detection	ListenerPage L674 - 687	handleTranslation()
+Partial / final processing	ListenerPage L694 - 1038	handlePartial(), handleFinal()
+Deduplication	HostPage L633 - 744	addToHistory(), isInHistory()
+Grammar merging	HostPage L131 - 168	mergeTextWithCorrection()
+Throttling	ListenerPage L785 - 802	handlePartial()
+Suspicious content filter	ListenerPage L815 - 838	isSuspiciousContent()
+Test Results
+✓ tests / golden.test.ts(10)
+  ✓ CaptionClientEngine(10)
+    ✓ Golden Run: Sample Trace(5)
+      ✓ processes sample trace and produces expected final state
+      ✓ drops out - of - order partials
+      ✓ drops duplicate finals
+      ✓ ignores translations for other languages
+      ✓ handles transcription mode(same source and target language)
+    ✓ State Management(2)
+      ✓ reset() clears all state
+      ✓ setLang() changes language and resets state
+    ✓ Event Emission(2)
+      ✓ emits state on every significant change
+      ✓ emits TTS events as pass - through
+    ✓ Snapshot Tests(1)
+      ✓ full trace produces expected snapshots
+Test Files  1 passed(1)
+     Tests  10 passed(10)
+  Duration  639ms
+Web Integration Patch Plan
+To integrate the new engine into the web app behind a feature flag:
+
+Step 1: Install Package
+cd frontend
+npm install../ packages / exbabel - caption - engine
+Or add to frontend / package.json:
+
+"dependencies": {
+    "exbabel-caption-engine": "file:../packages/exbabel-caption-engine"
+}
+Step 2: Add Feature Flag
+In
+    .env
+:
+
+VITE_USE_SHARED_ENGINE = false
+Step 3: Modify ListenerPage.jsx
+    + import { CaptionClientEngine } from 'exbabel-caption-engine';
++
+    + const USE_SHARED_ENGINE = import.meta.env.VITE_USE_SHARED_ENGINE === 'true';
+// In component:
++ const engineRef = useRef(null);
++
+    + useEffect(() => {
+        +   if (USE_SHARED_ENGINE && !engineRef.current) {
+            +     engineRef.current = new CaptionClientEngine({
++ segmenter: segmenterRef.current,
+                +       lang: targetLang,
+                +       sourceLang: 'en',
+                +     });
++     engineRef.current.on('state', (vm) => {
+    +       setCurrentTranslation(vm.liveLine);
+    +       setCurrentOriginal(vm.liveOriginal);
+    +       setTranslations(vm.committedLines.map(e => ({
++ original: e.original,
+        +         translated: e.text,
+        +         timestamp: e.timestamp,
+        +         seqId: e.seqId,
+        +       })));
++     });
++   }
++ }, []);
+// In onmessage handler:
+ws.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    +   if (USE_SHARED_ENGINE && engineRef.current) {
+        +     engineRef.current.ingest(message);
+        +     return;
+        +   }
+    // ... existing switch-case logic (when flag is off) ...
+};
+Step 4: Modify HostPage.jsx
+Similar pattern - wrap existing logic with feature flag and delegate to engine when enabled.
+
+    Step 5: Verify & Cleanup
+Test with VITE_USE_SHARED_ENGINE = true
+Compare behavior with flag off vs on
+Once verified, remove old logic(PR6)
+Files Changed
+/**
+ * Caption Client Engine
+ * 
+ * Framework-agnostic caption stabilization engine extracted from
+ * ListenerPage.jsx and HostPage.jsx for reuse in web and Electron apps.
+ * 
+ * Responsibilities:
+ * - WebSocket event handling (ingest)
+ * - Out-of-order partial detection and dropping
+ * - Partial/final processing with deduplication
+ * - State management (liveLine, committedLines)
+ * - Event emission for UI updates
+ */
+import { TypedEmitter } from './utils/emitter.js';
+import type {
+    CaptionEvent,
+    CaptionViewModel,
+    CaptionEngineOptions,
+    CaptionEngineEvents,
+    CommittedEntry,
+    DebugInfo,
+    ConnectionStatus,
+    TranslationEvent,
+    ISentenceSegmenter,
+} from './types.js';
+import { isTranslationEvent, isTtsEvent, isErrorEvent } from './types.js';
+/**
+ * Fingerprint helper for debugging ghost sentences
+ * Creates a short hash for text comparison
+ */
+function fingerprint(s: string): string {
+    if (!s) return '(empty)';
+    const trimmed = s.trim().toLowerCase();
+    const prefix = trimmed.slice(0, 30);
+    const suffix = trimmed.length > 30 ? '...' + trimmed.slice(-10) : '';
+    return `${prefix}${suffix}[${trimmed.length}]`;
+}
+/**
+ * Normalize text for comparison (deduplication)
+ */
+function normalizeText(text: string): string {
+    return text.toLowerCase().replace(/[.,!?;:'\"]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+/**
+ * Caption Client Engine
+ * 
+ * Manages caption state and emits updates for dumb UIs to render.
+ */
+export class CaptionClientEngine extends TypedEmitter<CaptionEngineEvents> {
+    // Configuration
+    private readonly segmenter: ISentenceSegmenter;
+    private readonly maxHistory: number;
+    private readonly debugMode: boolean;
+    private readonly onFlushCallback?: (flushedSentences: string[]) => void;
+    // Language settings
+    private lang: string;
+    private sourceLang: string;
+    // Connection state
+    private status: ConnectionStatus = 'disconnected';
+    private ws: WebSocket | null = null;
+    // Caption state
+    private liveLine = '';
+    private liveOriginal = '';
+    private committedLines: CommittedEntry[] = [];
+    private seq = 0;
+    // Out-of-order detection
+    private lastPartialSeqBySource = new Map < number, number > ();
+    // Deduplication
+    private seenFingerprints = new Set < string > ();
+    private processedSeqIds = new Set < number > ();
+    private originalBySeqId = new Map < number, string > ();
+    private lastNonEmptyOriginal = '';
+    // Grammar correction tracking (from HostPage)
+    private longestCorrectedText = '';
+    private longestCorrectedOriginal = '';
+    // Throttling (for high-frequency partials)
+    private lastRenderTime = 0;
+    private lastTextLength = 0;
+    // Debug counters
+    private debug: DebugInfo = {
+    droppedDuplicates: 0,
+    outOfOrderCount: 0,
+};
+constructor(options: CaptionEngineOptions) {
+    super();
+    this.segmenter = options.segmenter;
+    this.lang = options.lang;
+    this.sourceLang = options.sourceLang || 'en';
+    this.maxHistory = options.maxHistory || 50;
+    this.debugMode = options.debug || false;
+    this.onFlushCallback = options.onFlush;
+}
+// ===========================================================================
+// Public API
+// ===========================================================================
+/**
+ * Connect to a WebSocket URL
+ */
+connect(wsUrl: string): void {
+    if(this.ws) {
+    this.disconnect();
+}
+this.status = 'connecting';
+this.emitState();
+try {
+    this.ws = new WebSocket(wsUrl);
+    this.ws.onopen = () => {
+        this.status = 'connected';
+        this.emitState();
+        this.emitDebug('connected', { url: wsUrl });
+    };
+    this.ws.onclose = () => {
+        this.status = 'disconnected';
+        this.ws = null;
+        this.emitState();
+        this.emitDebug('disconnected', {});
+    };
+    this.ws.onerror = (error) => {
+        this.emit('error', new Error(`WebSocket error: ${error}`));
+    };
+    this.ws.onmessage = (event) => {
+        if (typeof event.data === 'string') {
+            try {
+                const message = JSON.parse(event.data) as CaptionEvent;
+                this.ingest(message);
+            } catch {
+                // Ignore parse errors
+            }
+        }
+    };
+} catch (err) {
+    this.status = 'disconnected';
+    this.emit('error', err instanceof Error ? err : new Error(String(err)));
+}
+    }
+/**
+ * Disconnect from WebSocket
+ */
+disconnect(): void {
+    if(this.ws) {
+    this.ws.close();
+    this.ws = null;
+}
+this.status = 'disconnected';
+this.emitState();
+    }
+/**
+ * Ingest a raw WebSocket event
+ * This is the main entry point for processing events.
+ */
+ingest(event: CaptionEvent): void {
+    this.debug.lastEventType = event.type;
+    // Track fingerprints for dedup debugging
+    if(isTranslationEvent(event)) {
+    if (event.translatedText) {
+        this.seenFingerprints.add(fingerprint(event.translatedText));
+    }
+    if (event.originalText) {
+        this.seenFingerprints.add(fingerprint(event.originalText));
+    }
+}
+// Route by event type
+switch (event.type) {
+    case 'translation':
+        this.handleTranslation(event as TranslationEvent);
+        break;
+    case 'session_joined':
+    case 'session_ready':
+        this.emitDebug('session', event);
+        break;
+    case 'session_ended':
+        this.reset();
+        this.emitState();
+        break;
+    case 'error':
+        if (isErrorEvent(event)) {
+            this.emit('error', new Error(event.message));
+        }
+        break;
+    case 'session_stats':
+        // Ignore stats messages
+        break;
+    default:
+        // Pass through TTS events
+        if (isTtsEvent(event)) {
+            this.emit('tts', event);
+        } else {
+            this.emitDebug('unknown', event);
+        }
+}
+    }
+/**
+ * Get the current state as a view model
+ */
+getState(): CaptionViewModel {
+    return {
+        status: this.status,
+        lang: this.lang,
+        seq: this.seq,
+        liveLine: this.liveLine,
+        liveOriginal: this.liveOriginal,
+        committedLines: [...this.committedLines],
+        maxHistory: this.maxHistory,
+        debug: this.debugMode ? { ...this.debug } : undefined,
+    };
+}
+/**
+ * Update target language
+ */
+setLang(lang: string): void {
+    this.lang = lang;
+    this.reset();
+    this.emitState();
+}
+/**
+ * Reset all caption state (but keep connection)
+ */
+reset(): void {
+    this.liveLine = '';
+    this.liveOriginal = '';
+    this.committedLines = [];
+    this.seq = 0;
+    this.lastPartialSeqBySource.clear();
+    this.processedSeqIds.clear();
+    this.originalBySeqId.clear();
+    this.longestCorrectedText = '';
+    this.longestCorrectedOriginal = '';
+    this.lastRenderTime = 0;
+    this.lastTextLength = 0;
+    this.segmenter.reset();
+}
+    // ===========================================================================
+    // Translation Handling (extracted from ListenerPage/HostPage)
+    // ===========================================================================
+    private handleTranslation(message: TranslationEvent): void {
+    // Out-of-order partial detection
+    if(message.isPartial && message.sourceSeqId != null && message.seqId != null) {
+    const last = this.lastPartialSeqBySource.get(message.sourceSeqId) || 0;
+    if (message.seqId <= last) {
+        this.debug.outOfOrderCount++;
+        this.emitDebug('drop_ooo_partial', {
+            sourceSeqId: message.sourceSeqId,
+            seqId: message.seqId,
+            last,
+        });
+        return;
+    }
+    this.lastPartialSeqBySource.set(message.sourceSeqId, message.seqId);
+}
+if (message.isPartial) {
+    this.handlePartial(message);
+} else {
+    this.handleFinal(message);
+}
+    }
+    private handlePartial(message: TranslationEvent): void {
+    const correctedText = message.correctedText;
+    const originalText = message.originalText || '';
+    const textToDisplay = correctedText?.trim() ? correctedText : originalText;
+    // Cache original text
+    if(textToDisplay) {
+        this.cacheOriginal(textToDisplay, message.sourceSeqId ?? message.seqId);
+    }
+        // Check if this message is for our target language
+        const hasTranslatedText = typeof message.translatedText === 'string' && message.translatedText.trim().length > 0;
+    const hasTranslationFlag = message.hasTranslation === true || hasTranslatedText;
+    const isForMyLanguage = hasTranslationFlag && message.targetLang === this.lang;
+    const isTranscriptionMode = this.lang === this.sourceLang;
+    if(!isForMyLanguage && !isTranscriptionMode) {
+    return;
+}
+// Determine text to display
+let displayText = isTranscriptionMode
+    ? (correctedText?.trim() ? correctedText : originalText)
+    : message.translatedText;
+if (!displayText) {
+    return;
+}
+// Process through segmenter
+const { liveText, flushedSentences } = this.segmenter.processPartial(displayText);
+// Handle auto-flushed sentences
+if (flushedSentences.length > 0 && this.onFlushCallback) {
+    this.onFlushCallback(flushedSentences);
+    this.commitFlushedSentences(flushedSentences);
+}
+// Throttling: limit render frequency
+const THROTTLE_MS = 66; // ~15 fps
+const MIN_CHAR_DELTA = 3;
+const now = Date.now();
+const timeSinceLastRender = now - this.lastRenderTime;
+const charDelta = liveText.length - this.lastTextLength;
+const isFirstAfterReset = this.lastRenderTime === 0;
+const shouldRender =
+    isFirstAfterReset ||
+    charDelta >= MIN_CHAR_DELTA ||
+    timeSinceLastRender >= THROTTLE_MS;
+if (shouldRender) {
+    this.lastRenderTime = now;
+    this.lastTextLength = liveText.length;
+    // Filter suspicious/refusal content
+    if (!this.isSuspiciousContent(message, liveText, displayText, isTranscriptionMode)) {
+        this.liveLine = liveText;
+        this.liveOriginal = textToDisplay;
+        this.emitState();
+    }
+}
+    }
+    private handleFinal(message: TranslationEvent): void {
+    // Lock finals to prevent partial overwrites
+    if(message.sourceSeqId != null && message.seqId != null) {
+    this.lastPartialSeqBySource.set(message.sourceSeqId, Number.MAX_SAFE_INTEGER);
+}
+const finalText = message.correctedText || message.translatedText || message.originalText;
+const finalSeqId = message.seqId;
+const isForcedFinal = message.forceFinal === true;
+// Prevent duplicate processing
+if (finalSeqId !== undefined && finalSeqId !== null) {
+    if (this.processedSeqIds.has(finalSeqId)) {
+        this.debug.droppedDuplicates++;
+        return;
+    }
+    this.processedSeqIds.add(finalSeqId);
+    // Cleanup old seqIds
+    if (this.processedSeqIds.size > 100) {
+        const seqIdsArray = Array.from(this.processedSeqIds).sort((a, b) => a - b);
+        const toRemove = seqIdsArray.slice(0, seqIdsArray.length - 100);
+        toRemove.forEach(id => this.processedSeqIds.delete(id));
+    }
+}
+if (!finalText?.trim()) {
+    return;
+}
+// Check language
+const isForMyLanguage = message.hasTranslation && message.targetLang === this.lang;
+const isTranscriptionMode = this.lang === this.sourceLang;
+if (!isForMyLanguage && !isTranscriptionMode) {
+    return;
+}
+const textToDisplay = isForMyLanguage
+    ? message.translatedText
+    : (message.correctedText || message.originalText);
+if (!textToDisplay?.trim()) {
+    return;
+}
+// Reset correction tracking
+this.longestCorrectedText = '';
+this.longestCorrectedOriginal = '';
+// Process through segmenter for deduplication
+// CRITICAL: Use textToDisplay (the correct text for target language) not finalText
+const { flushedSentences } = this.segmenter.processFinal(textToDisplay.trim(), { isForced: isForcedFinal });
+if (flushedSentences.length > 0) {
+    const joinedText = flushedSentences.join(' ').trim();
+    if (joinedText) {
+        this.addToHistory(joinedText, message, finalSeqId);
+    }
+} else {
+    // Fallback: segmenter deduplicated everything, but still add if substantial
+    if (textToDisplay.trim().length > 10 && !this.isInHistory(textToDisplay.trim())) {
+        this.addToHistory(textToDisplay.trim(), message, finalSeqId);
+    }
+}
+// Clear live displays
+this.liveLine = '';
+this.liveOriginal = '';
+this.segmenter.reset();
+this.lastRenderTime = 0;
+this.lastTextLength = 0;
+// Update sequence
+if (finalSeqId !== undefined) {
+    this.seq = Math.max(this.seq, finalSeqId);
+    this.debug.lastSeqId = finalSeqId;
+}
+this.emitState();
+    }
+    // ===========================================================================
+    // Helper Methods
+    // ===========================================================================
+    private cacheOriginal(text: string, seqId ?: number): void {
+    const trimmed = text.trim();
+    if(!trimmed) return;
+    this.lastNonEmptyOriginal = trimmed;
+    if(seqId !== undefined && seqId !== null && seqId !== -1) {
+    this.originalBySeqId.set(seqId, trimmed);
+}
+    }
+    private commitFlushedSentences(sentences: string[]): void {
+    const joinedText = sentences.join(' ').trim();
+    if(!joinedText) return;
+    const newEntry: CommittedEntry = {
+        text: joinedText,
+        timestamp: Date.now(),
+        seqId: -1, // Auto-segmented
+        isSegmented: true,
+    };
+    this.committedLines = [...this.committedLines, newEntry].slice(-this.maxHistory);
+    this.emitState();
+}
+    private addToHistory(text: string, message: TranslationEvent, seqId ?: number): void {
+    const stableKey = message.sourceSeqId ?? message.seqId;
+    const cachedOriginal = stableKey !== undefined ? this.originalBySeqId.get(stableKey) : undefined;
+    const fallbackOriginal = cachedOriginal || this.lastNonEmptyOriginal || '';
+    const safeOriginal = message.originalText?.trim() || message.correctedText?.trim() || fallbackOriginal;
+    // Remove auto-segmented entries that are contained in this final
+    const textNormalized = normalizeText(text);
+    this.committedLines = this.committedLines.filter(entry => {
+        if (entry.isSegmented) {
+            const entryNormalized = normalizeText(entry.text);
+            if (textNormalized.includes(entryNormalized) && entryNormalized.length > 10) {
+                return false; // Remove
+            }
+        }
+        return true;
+    });
+    // Check for duplicates
+    const isDuplicate = this.committedLines.some(entry => {
+        if (entry.seqId === seqId) return true;
+        const entryNormalized = normalizeText(entry.text);
+        return entryNormalized === textNormalized;
+    });
+    if(isDuplicate) {
+        this.debug.droppedDuplicates++;
+        return;
+    }
+        const newEntry: CommittedEntry = {
+        text,
+        original: safeOriginal,
+        seqId: seqId,
+        sourceSeqId: message.sourceSeqId,
+        timestamp: message.timestamp || Date.now(),
+    };
+    // Insert in order by seqId
+    this.committedLines = [...this.committedLines, newEntry]
+        .sort((a, b) => {
+            if (a.seqId !== undefined && b.seqId !== undefined && a.seqId !== -1 && b.seqId !== -1) {
+                return a.seqId - b.seqId;
+            }
+            return (a.timestamp || 0) - (b.timestamp || 0);
+        })
+        .slice(-this.maxHistory);
+}
+    private isInHistory(text: string): boolean {
+    const normalized = normalizeText(text);
+    return this.committedLines.some(entry => {
+        const entryNormalized = normalizeText(entry.text);
+        return entryNormalized === normalized ||
+            (entryNormalized.length > 10 && normalized.includes(entryNormalized)) ||
+            (normalized.length > 10 && entryNormalized.includes(normalized));
+    });
+}
+    private isSuspiciousContent(
+    message: TranslationEvent,
+    liveText: string,
+    translatedText: string | undefined,
+    isTranscriptionMode: boolean
+): boolean {
+    // Skip if translation is suspiciously similar to original (API misfire)
+    if (!isTranscriptionMode && message.originalText && translatedText) {
+        if (translatedText.toLowerCase().trim() === message.originalText.toLowerCase().trim()) {
+            return true;
+        }
+    }
+    // Skip AI refusal messages
+    const lowerText = (translatedText || liveText || '').toLowerCase();
+    const refusalPhrases = [
+        'sorry', 'lo siento', 'désolé', 'desculpe',
+        "i can't", 'i cannot', 'no puedo', 'je ne peux',
+        'unfortunately', 'lamentablemente'
+    ];
+    return refusalPhrases.some(phrase => lowerText.includes(phrase));
+}
+    // ===========================================================================
+    // Event Emission
+    // ===========================================================================
+    private emitState(): void {
+    this.emit('state', this.getState());
+}
+    private emitDebug(event: string, data: unknown): void {
+    if(this.debugMode) {
+    this.emit('debug', { event, data });
+}
+    }
+/**
+ * Grammar merge helper (from HostPage)
+ * Merges new raw text with existing corrections
+ */
+mergeTextWithCorrection(newRawText: string, correctedOverride: string | null = null): string {
+    const trimmedRaw = (newRawText || '').trim();
+    if (!trimmedRaw) {
+        return '';
+    }
+    if (correctedOverride?.trim()) {
+        this.longestCorrectedText = correctedOverride;
+        this.longestCorrectedOriginal = trimmedRaw;
+        return correctedOverride;
+    }
+    const existingCorrected = this.longestCorrectedText;
+    const existingOriginal = this.longestCorrectedOriginal;
+    if (existingCorrected && existingOriginal) {
+        if (trimmedRaw.startsWith(existingOriginal)) {
+            const extension = trimmedRaw.substring(existingOriginal.length);
+            const merged = existingCorrected + extension;
+            this.longestCorrectedText = merged;
+            this.longestCorrectedOriginal = trimmedRaw;
+            return merged;
+        }
+    }
+    this.longestCorrectedText = trimmedRaw;
+    this.longestCorrectedOriginal = trimmedRaw;
+    return trimmedRaw;
+}
+}
+
+PR1 File Changes Summary
+Complete list of all file changes for package hardening.
+
+Modified Files
+1. package.json
+{
+    -    "name": "exbabel-caption-engine",
+        +    "name": "@exbabel/caption-engine",
+            "version": "0.1.0",
+     ...
+    "keywords": [
+        "caption",
+        "translation",
+        "real-time",
+        "electron",
+        "websocket"
+    ],
+        +    "repository": {
+        +        "type": "git",
+            +        "url": "https://github.com/your-org/exbabel-caption-engine.git"
+                +    },
+    +    "publishConfig": {
+        +        "registry": "https://npm.pkg.github.com"
+            +    },
+    "author": "",
+        "license": "MIT",
+     ...
+}
+2. src / index.ts
+/**
+  * Exbabel Caption Engine
+  * 
+  * Framework-agnostic caption client engine for real-time translation apps.
+  * 
+- * @example
++ * @example Browser usage with auto-connect
+  * ```typescript
+- * import { CaptionClientEngine } from 'exbabel-caption-engine';
++ * import { CaptionClientEngine } from '@exbabel/caption-engine';
+  * 
+  * const engine = new CaptionClientEngine({
+  *   segmenter: new SentenceSegmenter(),
+  *   lang: 'es',
+  * });
+  * 
+  * engine.on('state', (viewModel) => render(viewModel));
+  * engine.connect(wsUrl);
+  * ```
++ * 
++ * @example Manual WebSocket usage (Node.js/Electron main)
++ * ```typescript
++ * import { CaptionClientEngine } from '@exbabel/caption-engine';
++ * import WebSocket from 'ws';
++ * 
++ * const engine = new CaptionClientEngine({ segmenter, lang: 'es' });
++ * const ws = new WebSocket(wsUrl);
++ * 
++ * ws.on('message', (data) => {
++ *   const event = JSON.parse(data.toString());
++ *   engine.ingest(event);
++ * });
++ * 
++ * engine.on('state', (viewModel) => render(viewModel));
++ * ```
+  */
+3. src / CaptionClientEngine.ts
+Added new method
+connectWithWebSocket()
+:
+
+/**
+ * Connect with an existing WebSocket instance
+ * 
+ * Use this method when you need to inject a WebSocket implementation
+ * (e.g., 'ws' package in Node.js or Electron main process).
+ * 
+ * @param ws - WebSocket instance to attach to
+ * 
+ * @example
+ * ```typescript
+ * import WebSocket from 'ws';
+ * const ws = new WebSocket(url);
+ * engine.connectWithWebSocket(ws);
+ * ```
+ */
+connectWithWebSocket(ws: WebSocket): void {
+    if(this.ws) {
+    this.disconnect();
+}
+this.ws = ws;
+this.status = 'connecting';
+this.emitState();
+this.ws.onopen = () => {
+    this.status = 'connected';
+    this.emitState();
+    this.emitDebug('connected', {});
+};
+this.ws.onclose = () => {
+    this.status = 'disconnected';
+    this.ws = null;
+    this.emitState();
+    this.emitDebug('disconnected', {});
+};
+this.ws.onerror = (error) => {
+    this.emit('error', new Error(`WebSocket error: ${error}`));
+};
+this.ws.onmessage = (event) => {
+    if (typeof event.data === 'string') {
+        try {
+            const message = JSON.parse(event.data) as CaptionEvent;
+            this.ingest(message);
+        } catch {
+            // Ignore parse errors
+        }
+    }
+};
+// If already open, emit connected immediately
+if (ws.readyState === WebSocket.OPEN) {
+    this.status = 'connected';
+    this.emitState();
+}
+}
+Refactored
+connect()
+ to use
+connectWithWebSocket()
+:
+
+/**
+- * Connect to a WebSocket URL
++ * Connect to a WebSocket URL (browser/Electron renderer only)
++ * 
++ * This is a convenience method that creates a WebSocket instance internally.
++ * For Node.js or Electron main process, use connectWithWebSocket() or manual ingestion.
++ * 
++ * @param wsUrl - WebSocket URL to connect to
+  */
+connect(wsUrl: string): void {
+    if(this.ws) {
+    this.disconnect();
+}
+this.status = 'connecting';
+this.emitState();
+try {
+    -        this.ws = new WebSocket(wsUrl);
+    -
+        -        this.ws.onopen = () => {
+            -            this.status = 'connected';
+            -            this.emitState();
+            -            this.emitDebug('connected', { url: wsUrl });
+            -        };
+    -
+        -        this.ws.onclose = () => {
+            -            this.status = 'disconnected';
+            -            this.ws = null;
+            -            this.emitState();
+            -            this.emitDebug('disconnected', {});
+            -        };
+    -
+        -        this.ws.onerror = (error) => {
+            -            this.emit('error', new Error(`WebSocket error: ${error}`));
+            -        };
+    -
+        -        this.ws.onmessage = (event) => {
+            -            if (typeof event.data === 'string') {
+                -                try {
+                    -                    const message = JSON.parse(event.data) as CaptionEvent;
+                    -                    this.ingest(message);
+                    -                } catch {
+                        -                    // Ignore parse errors
+                            -                }
+                -            }
+            -        };
+    +        const ws = new WebSocket(wsUrl);
+    +        this.connectWithWebSocket(ws);
+} catch (err) {
+    this.status = 'disconnected';
+    this.emit('error', err instanceof Error ? err : new Error(String(err)));
+}
+ }
+4. README.md
+Major sections updated:
+
+Title and install instructions:
+
+Changed to @exbabel/caption-engine
+Added GitHub Packages install with .npmrc
+New "Portability" section:
+
+Documents browser, Electron, Node.js support
+Clarifies no DOM dependencies
+New "Transport Patterns" section:
+
+Pattern 1: Auto - Connect(Browser / Electron Renderer)
+Pattern 2: WebSocket Injection(Node.js / Electron Main)
+Pattern 3: Manual Ingestion(Full Control)
+API Reference:
+
+Added
+connectWithWebSocket(ws)
+method
+No Changes Required
+✅
+src / types.ts
+    - No changes needed
+✅ src / utils / emitter.ts - No changes needed
+✅
+tsconfig.json
+    - Already correct
+✅
+vitest.config.ts
+    - Already correct
+✅ tests / - No changes needed(all tests passing)
+Build Verification
+npm run build
+# ✓ Successful
+npm test
+# ✓ 10 / 10 tests passing
+Dist output:
+
+✅ index.js +
+    index.d.ts
+✅ CaptionClientEngine.js + CaptionClientEngine.d.ts
+✅ types.js + types.d.ts
+✅ utils / emitter.js + utils / emitter.d.ts
+✅ All source maps generated
+
+PR2: Create New GitHub Repository - Walkthrough
+Successfully created a standalone GitHub repository structure for @exbabel / caption - engine with complete CI / CD workflows and verification.
+
+Repository Location
+Path: /tmp/exbabel - caption - engine
+
+Repository Structure
+exbabel - caption - engine /
+├── .github /
+│   └── workflows /
+│       ├── test.yml          ✅ CI for PRs and main
+│       └── publish.yml       ✅ Publish on version tags
+├── src /
+│   ├── index.ts
+│   ├── types.ts
+│   ├── CaptionClientEngine.ts
+│   └── utils /
+│       └── emitter.ts
+├── tests /
+│   ├── golden.test.ts
+│   ├── fixtures /
+│   │   └── sample - trace.ts
+│   └── helpers /
+│       └── replayTrace.ts
+├── dist /                     ✅ Built successfully
+├── node_modules /             ✅ Dependencies installed
+├── .gitignore                ✅ Configured
+├── .npmrc                    ✅ GitHub Packages registry
+├── LICENSE                   ✅ MIT License
+├── package.json              ✅ @exbabel/caption-engine
+├── package - lock.json         ✅ Generated
+├── tsconfig.json             ✅ TypeScript config
+├── vitest.config.ts          ✅ Test config
+├── README.md                 ✅ Full documentation
+└── setup - repo.sh             ✅ Setup helper script
+Files Created
+CI / CD Workflows
+    .github / workflows / test.yml
+Purpose: Automated testing on every PR and push to main
+
+Features:
+
+Runs on Node.js 18.x and 20.x(matrix)
+Steps: checkout → setup Node → install → build → test
+Triggers: push to main, pull requests
+    .github / workflows / publish.yml
+Purpose: Publish to GitHub Packages on version tags
+
+Features:
+
+Triggers on v *.*.* tags(e.g., v0.1.0)
+Runs full test suite before publishing
+Uses GITHUB_TOKEN for authentication
+Publishes to @exbabel scope on GitHub Packages
+Configuration Files
+    .gitignore
+Excludes:
+
+node_modules /, dist /, coverage /
+    IDE files(.vscode /, .idea /)
+OS files(.DS_Store)
+Logs and environment files
+    .npmrc
+@exbabel: registry = https://npm.pkg.github.com
+Configures scoped package to use GitHub Packages registry.
+
+    LICENSE
+MIT License with 2026 copyright.
+
+Helper Script
+setup - repo.sh
+Purpose: Interactive script to initialize git and push to GitHub
+
+Features:
+
+Prompts for GitHub username / organization
+Updates package.json repository URL automatically
+Initializes git with proper commit message
+Provides step - by - step instructions for GitHub repo creation
+Shows commands for pushing and tagging
+Usage:
+
+    cd / tmp / exbabel - caption - engine
+        ./ setup - repo.sh
+Verification Results
+Package Installation ✅
+npm install
+# ✓ 126 packages installed
+Build ✅
+npm run build
+# ✓ TypeScript compilation successful
+# ✓ dist / directory created with all outputs
+Build outputs:
+
+dist / index.js + index.d.ts
+dist / CaptionClientEngine.js + CaptionClientEngine.d.ts
+dist / types.js + types.d.ts
+dist / utils / emitter.js + emitter.d.ts
+All source maps generated
+Tests ✅
+npm test
+# ✓ 10 / 10 tests passing
+Test results:
+
+✓ CaptionClientEngine(10)
+  ✓ Golden Run: Sample Trace(5)
+    ✓ processes sample trace and produces expected final state
+    ✓ drops out - of - order partials
+    ✓ drops duplicate finals
+    ✓ ignores translations for other languages
+    ✓ handles transcription mode
+  ✓ State Management(2)
+  ✓ Event Emission(2)
+  ✓ Snapshot Tests(1)
+Duration: 1.13s
+
+Next Steps
+1. Create GitHub Repository
+Manual steps:
+
+Go to https://github.com/new
+Repository name: exbabel - caption - engine
+Description: "Framework-agnostic caption client engine for real-time translation apps"
+Visibility: Private(recommended) or Public
+DO NOT initialize with README, .gitignore, or license(we have these)
+2. Push to GitHub
+cd / tmp / exbabel - caption - engine
+# Run setup script(interactive)
+    ./ setup - repo.sh
+# Or manually:
+# Update package.json repository URL first, then:
+git init
+git add.
+git commit - m "Initial commit: @exbabel/caption-engine v0.1.0"
+git remote add origin https://github.com/<YOUR_ORG>/exbabel-caption-engine.git
+git branch - M main
+git push - u origin main
+3. Verify GitHub Actions
+Check that workflows appear in .github / workflows /
+    Verify test workflow runs automatically on push
+Check Actions tab in GitHub repository
+4. Publish v0.1.0(PR3)
+git tag v0.1.0
+git push origin v0.1.0
+This will trigger the publish workflow and push to GitHub Packages.
+
+    Summary
+✅ Repository structure created in /tmp/exbabel - caption - engine
+✅ CI / CD workflows configured(test + publish)
+✅ All configuration files in place
+✅ Package verified in isolation(install, build, test all passing)
+✅ Setup script created for easy GitHub push
+✅ Ready for GitHub - just needs manual repo creation
+
+Package is production - ready and can be published to GitHub Packages once the repository is created.
+
+    PR3 - Publish and Versioning
+Repository pushed to GitHub.PR3 involves tagging v0.1.0 and publishing.Attempted to provide a script but it seems it wasn't successfully created or was canceled. Re-creating now.
+
+Files Edited
+publish - v0.1.0.sh
+Progress Updates
+1
+Re - creating publish script in /tmp directory
+
+I've re-created the publish script. It should now be ready to run.
+
+To publish, run:
+
+bash
+cd / tmp / exbabel - caption - engine
+    ./ publish - v0.1.0.sh
+I've added logic to handle existing tags to make it more robust.
+
+ve updated the package to use the @jkang1643 scope as you suggested.This should fix the 403 Forbidden error.
+
+What I changed:
+
+Renamed package to @jkang1643/caption-engine in package.json.
+Updated publish workflow scope to @jkang1643.
+Updated JSDoc and README with the new name.
+Committed and pushed these changes to main.
+To publish v0.1.1, run:
+
+bash
+cd / tmp / exbabel - caption - engine
+    ./ publish - v0.1.1.sh
+This will trigger the workflow for the new version.You can monitor it here: https://github.com/jkang1643/exbabel-caption-engine/actions
+
+Good
+Bad
+
+
+I have integrated the @exbabel/caption-engine into the web repository behind a feature flag.
+
+Changes made:
+
+Configuration:
+Created frontend /.npmrc pointing @exbabel to GitHub Packages.
+Updated frontend / package.json to depend on @exbabel/caption-engine@^0.1.0.
+Verified frontend /.env contains VITE_USE_SHARED_ENGINE = false.
+ListenerPage Integration:
+Imported CaptionClientEngine.
+Added logic to initialize the engine if VITE_USE_SHARED_ENGINE is true.
+Implemented ws.onmessage interception to divert messages to engine.ingest(message) when the flag is active.
+Added state subscription to update translations(history) and currentTranslation / currentOriginal(live).
+Next Steps for You:
+
+You must run npm install in frontend /. (My attempt failed as expected due to missing read: packages token in the environment).
+Once installed, you can toggle VITE_USE_SHARED_ENGINE = true in .env to test the new engine.
+    ListenerPage.jsx
+
+
+Yes, I added logs that will confirm if the shared engine is active.
+
+1. Initialization Log
+When the page loads, check the browser console for:
+
+    [ListenerPage] USE_SHARED_ENGINE: true
+    [ListenerPage] Initializing Shared Engine
+If you see false or don't see the "Initializing" message, the feature flag is off.
+
+2. Runtime Log(Active Use)
+When messages arrive, the CaptionClientEngine(initialized with debug: true) will emit logs.Also, the old logging path([RAW_IN], [LISTENER_IN]) will be skipped because I added a return statement right after diverting traffic to the engine:
+
+javascript
+if (USE_SHARED_ENGINE && engineRef.current) {
+    engineRef.current.ingest(message);
+    return; // <--- Skips all the old logging below this
+}
+So, if you DO NOT see the usual[RAW_IN] / [LISTENER_IN] logs but you DO see the UI updating, that confirms the new engine is handling the data.The engine itself should log its own internal state changes if you open the console.
+
+ have corrected the package scope to @jkang1643/caption-engine in all files.
+
+Updates:
+
+frontend / package.json: Dependency switched to @jkang1643/caption-engine: ^0.1.1.
+frontend /.npmrc: Registry mapping updated to @jkang1643: registry = https://npm.pkg.github.com with always-auth=true.
+frontend / src / components / ListenerPage.jsx: Import path corrected.
+Action Required: Please try cleaning and installing again:
+
+bash

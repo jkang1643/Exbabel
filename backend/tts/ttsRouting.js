@@ -813,7 +813,6 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
   const fallbackVoicesForLang = FALLBACK_VOICES[normalizedCode];
 
   // If user requested a specific voice, check if it's valid for this tier/language even if discovery is off
-  // If user requested a specific voice, check if it's valid for this tier/language even if discovery is off
   if (requestedVoiceName) {
     if (tier === 'gemini') {
       // Gemini voices (studio personas) are generally English-only at the moment for direct match
@@ -826,7 +825,18 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
         'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar', 'Sulafat',
         'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
       ];
-      if (GEMINI_VOICES.includes(requestedVoiceName)) return requestedVoiceName;
+
+      // Strip 'gemini-' prefix if present to match frontend voice naming convention
+      // Frontend sends voices as 'gemini-Kore', 'gemini-Charon', etc.
+      // but Gemini API expects bare names like 'Kore', 'Charon'
+      const normalizedVoiceName = requestedVoiceName.startsWith('gemini-')
+        ? requestedVoiceName.substring(7)  // Remove 'gemini-' prefix (7 characters)
+        : requestedVoiceName;
+
+      if (GEMINI_VOICES.includes(normalizedVoiceName)) {
+        console.log(`[TTS Routing] Gemini voice resolved: ${requestedVoiceName} -> ${normalizedVoiceName}`);
+        return normalizedVoiceName;  // Return bare name for Gemini API
+      }
     } else {
       // For other tiers, check if it matches any of the expected patterns for that tier
       const TIER_NAME_TAGS = {

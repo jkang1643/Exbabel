@@ -1,4 +1,4 @@
-/**
+npm run/**
  * Verification Test for MICRO-UTTERANCE MODE
  * 
  * Run with: node backend/tests/tts/unit/microUtterance.test.js
