@@ -612,6 +612,13 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             return;
           }
 
+          // RADIO MODE: Refresh lease on active synthesis
+          // This ensures that long-running transcription keeps the lease alive
+          if (clientWs.ttsState.playbackState === 'PLAYING') {
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PLAYING_LEASE_SECONDS * 1000);
+            console.log(`[Listener] ${userName} lease refreshed via synthesis. New expiry: ${new Date(clientWs.ttsState.ttsLeaseExpiresAt).toISOString()}`);
+          }
+
           // Check if streaming mode (not implemented yet)
           if (message.mode === 'streaming') {
             if (clientWs.readyState === WebSocket.OPEN) {

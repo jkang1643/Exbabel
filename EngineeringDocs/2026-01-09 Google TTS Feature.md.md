@@ -8,6 +8,25 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+### BUG 27: FIXED — TTS Playback Lease Expiry (Auto-Renewal)
+**Status:** ✅ RESOLVED (2026-01-20)
+
+Resolved an issue where long-running TTS sessions (Radio Mode) would fail after 5 minutes with a `TTS_LEASE_EXPIRED` error, even during active synthesis.
+
+#### Root Cause:
+1. **Strict Lease Logic:** The backend enforced a 5-minute lease for "PLAYING" state but only refreshed it on explicit `tts/resume` or `tts/start` commands. It didn't consider synthesis activity as a valid heartbeat for the lease.
+2. **Lack of Frontend Resilience:** When the lease expired, the frontend would receive an error and stop, causing the TTS audio to cease mid-session.
+
+#### Key Fixes:
+1. **Activity-Based Refresh:** Updated `backend/websocketHandler.js` to automatically refresh the 5-minute lease during every successful synthesis request while in the `PLAYING` state.
+2. **Frontend Auto-Renewal:** Modified `TtsPlayerController.js` to detect the `TTS_LEASE_EXPIRED` error code. If received while playback is active, the controller now automatically sends a `tts/resume` command to renew the lease and retries the failed synthesis request.
+
+#### Impact:
+- ✅ **Infinite Playback:** Listeners can now listen to long sessions (e.g., full church services) without manual intervention.
+- ✅ **Robust Recovery:** Any transient lease expiries are now handled silently by the frontend auto-retry mechanism.
+
+---
+
 ### BUG 26: FIXED — Bottom-Anchored Scroll & History Interaction Logic
 **Status:** ✅ RESOLVED (2026-01-16)
 

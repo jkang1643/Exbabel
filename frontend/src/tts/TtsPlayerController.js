@@ -685,6 +685,27 @@ export class TtsPlayerController {
             case 'tts/error':
                 console.error('[TtsPlayerController] TTS error:', msg.code, msg.message);
 
+                // AUTO-RENEWAL: If lease expired while playing, attempt to renew and retry
+                if (msg.code === 'TTS_LEASE_EXPIRED' && this.state === TtsPlayerState.PLAYING) {
+                    console.warn('[TtsPlayerController] Lease expired during active playback. Attempting auto-renewal...');
+                    if (this.sendMessage) {
+                        this.sendMessage({ type: 'tts/resume' });
+                        // The next synthesis request will be triggered by _requestNextPending
+                        // once the backend receives the resume and (hopefully) updates the lease.
+                        // We reset the status to pending to allow retry.
+                        if (msg.segmentId) {
+                            const radioQueueItem = this.queue.find(item => item.segmentId === msg.segmentId);
+                            if (radioQueueItem) {
+                                radioQueueItem.status = 'pending';
+                                this.currentRequestCount--;
+                                // Trigger immediate retry of pending items
+                                setTimeout(() => this._requestNextPending(), 100);
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 // Radio mode: Mark queue item as failed and continue
                 if (msg.segmentId) {
                     const radioQueueItem = this.queue.find(item => item.segmentId === msg.segmentId);
