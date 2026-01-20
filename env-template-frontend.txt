@@ -32,3 +32,9 @@ VITE_APP_URL=https://app.exbabel.com
 # Feature flag - hides all TTS UI when false (default: false)
 VITE_TTS_UI_ENABLED=false
 
+# ===================================
+# Engine Configuration
+# ===================================
+# Use the shared @jkang1643/caption-engine (default: false)
+VITE_USE_SHARED_ENGINE=false
+

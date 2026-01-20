@@ -45,6 +45,7 @@ jobs:
           VITE_WS_URL: ${{ secrets.VITE_WS_URL }}
           VITE_APP_URL: ${{ secrets.VITE_APP_URL }}
           VITE_TTS_UI_ENABLED: ${{ secrets.VITE_TTS_UI_ENABLED }}
+          VITE_USE_SHARED_ENGINE: ${{ secrets.VITE_USE_SHARED_ENGINE }}
 
         run: cd frontend && npm run build
       

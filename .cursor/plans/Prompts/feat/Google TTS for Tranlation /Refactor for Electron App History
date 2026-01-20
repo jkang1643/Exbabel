@@ -1095,3 +1095,32 @@ frontend / src / components / ListenerPage.jsx: Import path corrected.
 Action Required: Please try cleaning and installing again:
 
 bash
+
+Walkthrough - SentenceSegmenter Migration
+I have successfully migrated the
+SentenceSegmenter
+ logic from the frontend to the shared @exbabel/caption-engine package.
+
+Changes
+Shared Engine Package
+Created
+src / SentenceSegmenter.ts
+: Ported the logic from
+frontend / src / utils / sentenceSegmenter.js
+ to TypeScript.
+    Updated
+src / index.ts
+: Exported
+SentenceSegmenter
+ so it can be imported by consuming apps(Web, Electron).
+Verification Results
+Build Verification
+Ran npm run build(TypeScript compilation) in packages / exbabel - caption - engine.
+
+    Result: ✅ Success
+
+        > @jkang1643 / caption - engine@0.1.1 build
+            > tsc
+Exit code: 0
+Next Steps
+You can now update your implementation to import SentenceSegmenter from @jkang1643 / caption - engine instead of the local utils file, ensuring both Web and Electron use the exact same logic.

@@ -11,7 +11,7 @@ import { useAudioCapture } from '../hooks/useAudioCapture';
 import { Header } from './Header';
 import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
-import { SentenceSegmenter } from '../utils/sentenceSegmenter';
+import { SentenceSegmenter } from '@jkang1643/caption-engine';
 import { TRANSCRIPTION_LANGUAGES } from '../config/languages.js';
 import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection';
 

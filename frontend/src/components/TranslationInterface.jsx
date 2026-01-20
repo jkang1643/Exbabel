@@ -7,7 +7,7 @@ import { ConnectionStatus } from './ConnectionStatus'
 import { Header } from './Header'
 import { useWebSocket } from '../hooks/useWebSocket'
 import { useAudioCapture } from '../hooks/useAudioCapture'
-import { SentenceSegmenter } from '../utils/sentenceSegmenter'
+import { SentenceSegmenter } from '@jkang1643/caption-engine'
 import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection'
 import { TRANSCRIPTION_LANGUAGES, TRANSLATION_LANGUAGES } from '../config/languages.js'
 
@@ -68,7 +68,7 @@ function TranslationInterface({ onBackToHome }) {
   const segmenterRef = useRef(null)
   const sendMessageRef = useRef(null)
   const handleStopListeningRef = useRef(null)
-  
+
   // Catch-up mode and lag detection refs
   const catchUpModeRef = useRef(false)
   const messageTimestampsRef = useRef([])

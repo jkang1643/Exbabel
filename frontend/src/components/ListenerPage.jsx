@@ -10,14 +10,14 @@ import { ConnectionStatus } from './ConnectionStatus';
 import { LanguageSelector } from './LanguageSelector';
 
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
-import { SentenceSegmenter } from '../utils/sentenceSegmenter';
+
 import { TRANSLATION_LANGUAGES } from '../config/languages.js';
 import { Play, Square, Settings } from 'lucide-react';
 import { TtsSettingsModal } from './TtsSettingsModal';
 import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
 import { TtsMode, TtsPlayerState } from '../tts/types.js';
 import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
-import { CaptionClientEngine } from '@jkang1643/caption-engine';
+import { CaptionClientEngine, SentenceSegmenter } from '@jkang1643/caption-engine';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend

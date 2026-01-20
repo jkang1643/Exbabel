@@ -50,6 +50,10 @@ VITE_WS_URL=ws://${BACKEND_URL}/translate
 # If using HTTPS/WSS, use:
 # VITE_API_URL=https://${BACKEND_URL}
 # VITE_WS_URL=wss://${BACKEND_URL}/translate
+
+# Feature Flags
+VITE_TTS_UI_ENABLED=true
+VITE_USE_SHARED_ENGINE=false
 EOF
 
 echo -e "${GREEN}✅ Environment configuration created${NC}"
