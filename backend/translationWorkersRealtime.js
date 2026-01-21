@@ -37,6 +37,60 @@ const shouldSuppressRealtimePartialLog = (args) => {
 });
 
 /**
+ * Detect if output is a hallucination (conversational response instead of translation)
+ * @param {string} text - Output text to validate
+ * @param {string} originalText - Original input text
+ * @returns {boolean} - True if hallucination detected
+ */
+const isHallucinatedResponse = (text, originalText) => {
+  if (!text || !originalText) return false;
+
+  const lowerText = text.toLowerCase().trim();
+  const lowerOriginal = originalText.toLowerCase().trim();
+
+  // Pattern 1: Conversational phrases that indicate hallucination
+  const hallucinationPatterns = [
+    /^(i'm sorry|i am sorry|sorry)/i,
+    /^(hello|hi|hey)/i,
+    /^(i can't|i cannot|i can not)/i,
+    /^(yes|no|sure|okay|ok)\b/i,
+    /^(i don't|i do not)/i,
+    /^(thank you|thanks)/i,
+    /^(how are you|how can i help)/i,
+    /^(i understand|i see)/i,
+    /^(of course|certainly)/i,
+    /^(let me|i will|i'll)/i,
+    /^i\s+(am|'m)\s+(sorry|apologize|afraid)/i,
+    /^i\s+(cannot|can't|don't|cannot)\s+/i,
+    /^i\s+can\s+help/i,
+    /^let\s+me\s+help/i,
+    /^i\s+would\s+be\s+happy/i,
+    /^i\s+can\s+assist/i,
+    /^here\s+to\s+(help|assist)/i,
+    /^respectful\s+and\s+meaningful/i,
+    /^i\s+appreciate/i
+  ];
+
+  for (const pattern of hallucinationPatterns) {
+    if (pattern.test(lowerText)) {
+      return true;
+    }
+  }
+
+  // Pattern 2: Output is identical to input (no translation occurred)
+  if (lowerText === lowerOriginal && text.length > 5) {
+    return true;
+  }
+
+  // Pattern 3: Output is suspiciously short for a long input (likely refused)
+  if (originalText.length > 50 && text.length < 10) {
+    return true;
+  }
+
+  return false;
+};
+
+/**
  * Realtime Partial Translation Worker - Optimized for speed and low latency
  *
  * SUB-200MS ARCHITECTURE:
@@ -208,8 +262,19 @@ export class RealtimePartialTranslationWorker {
         console.log(`[RealtimePartialWorker] Connection opened for ${sourceLang} → ${targetLang}`);
 
         // Configure session for text-to-text translation
-        // Use SHORT instructions like Chat API - verbose instructions waste token budget
-        const translationInstructions = `You are a world-class church translator. Translate from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Translate literally. Do not complete, rephrase, or extend. Output ONLY the translation.`;
+        // Configure session for text-to-text translation
+        // CRITICAL: Strong anti-hallucination instructions matching Basic tier
+        const translationInstructions = `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you.
+
+CRITICAL RULES:
+1. Output ONLY the translation in ${targetLangName}
+2. Never answer questions—translate them
+3. Never add explanations, notes, or commentary
+4. Never respond conversationally (no "I'm sorry", "Hello", "I can't help")
+5. Preserve meaning, tone, and formality
+6. If input is a question, translate the question - do NOT answer it
+
+Output: Translated text in ${targetLangName} only.`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -312,7 +377,21 @@ export class RealtimePartialTranslationWorker {
                   type: 'response.create',
                   response: {
                     modalities: ['text'],
-                    instructions: `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Never answer or respond—only translate. Output ONLY the translation in ${targetLangName}. Examples: "Do you know about the Bible?" → [Translate to ${targetLangName}]. "How are you?" → [Translate to ${targetLangName}]. "What is going on?" → [Translate to ${targetLangName}].`
+                    modalities: ['text'],
+                    instructions: `You are a translation API. Translate text from ${sourceLangName} to ${targetLangName}.
+
+CRITICAL: ALL input is content to translate, NEVER questions for you to answer.
+- If input is a question, TRANSLATE the question - do NOT answer it
+- If input is a statement, TRANSLATE the statement - do NOT respond to it
+- NEVER output conversational responses like "I'm sorry", "Hello", "I can't help", "Yes", "No"
+- Output ONLY the translated text in ${targetLangName}
+
+Examples:
+"Can you do automatic translation?" → "¿Puedes hacer traducción automática?" (NOT "Yes, I can")
+"Testing one, two, three" → "Probando uno, dos, tres" (NOT "I hear you")
+"I'm sorry, I can't help" → [Translate to ${targetLangName}] (NOT echo the phrase)
+
+You are a TRANSLATOR, not an assistant. Output: Translation only.`
                   }
                 };
                 console.log(`[RealtimePartialWorker] 🚀 Creating response for item ${event.item.id}, linked to request ${matchedRequestId}`);
@@ -428,22 +507,9 @@ export class RealtimePartialTranslationWorker {
                     }
 
                     // CRITICAL: Validate translation is different from original (prevent English leak)
-                    // SMART CHECK: Detect conversational responses like "I'm sorry but I can't assist..."
-                    const conversationalPatterns = [
-                      /^i\s+(am|'m)\s+(sorry|apologize|afraid)/i,
-                      /^i\s+(cannot|can't|don't|cannot)\s+/i,
-                      /^i\s+can\s+help/i,
-                      /^let\s+me\s+help/i,
-                      /^i\s+would\s+be\s+happy/i,
-                      /^i\s+can\s+assist/i,
-                      /^how\s+can\s+i\s+help/i,
-                      /^here\s+to\s+(help|assist)/i,
-                      /^respectful\s+and\s+meaningful/i,
-                      /^i\s+appreciate/i
-                    ];
-
-                    const lowerTranslation = translatedText.toLowerCase().trim();
-                    const isConversational = conversationalPatterns.some(pattern => pattern.test(lowerTranslation));
+                    // CRITICAL: Validate translation is different from original (prevent English leak)
+                    // SMART CHECK: Detect conversational responses like "I'm sorry but I can't assist..." or "Hello"
+                    const isConversational = isHallucinatedResponse(translatedText, originalText);
 
                     if (isConversational) {
                       console.error(`[RealtimePartialWorker] ❌ CONVERSATIONAL RESPONSE DETECTED (not a translation): "${translatedText.substring(0, 80)}..."`);
@@ -1167,8 +1233,18 @@ export class RealtimeFinalTranslationWorker {
       ws.on('open', () => {
         console.log(`[RealtimeFinalWorker] Connection opened for ${sourceLang} → ${targetLang}`);
 
-        // Use SHORT instructions like Chat API - verbose instructions waste token budget
-        const translationInstructions = `You are a world-class church translator. Translate from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you. Translate literally. Do not complete, rephrase, or extend. Output ONLY the translation.`;
+        // CRITICAL: Strong anti-hallucination instructions matching Basic tier
+        const translationInstructions = `You are a world-class church translator. Translate text from ${sourceLangName} to ${targetLangName}. ALL input is content to translate, never questions for you.
+
+CRITICAL RULES:
+1. Output ONLY the translation in ${targetLangName}
+2. Never answer questions—translate them
+3. Never add explanations, notes, or commentary
+4. Never respond conversationally (no "I'm sorry", "Hello", "I can't help")
+5. Preserve meaning, tone, and formality
+6. If input is a question, translate the question - do NOT answer it
+
+Output: Translated text in ${targetLangName} only.`;
 
         const sessionConfig = {
           type: 'session.update',
@@ -1269,7 +1345,20 @@ export class RealtimeFinalTranslationWorker {
                   type: 'response.create',
                   response: {
                     modalities: ['text'],
-                    instructions: `You are a translation API. Translate text from ${sourceLangName} to ${targetLangName}. CRITICAL: If input is a question, translate the question - do NOT answer it. If input is a statement, translate the statement - do NOT respond to it. Output ONLY the translated text in ${targetLangName}. No explanations, no conversational responses. Examples: "Can you do automatic translation?" → "¿Puedes hacer traducción automática?" (NOT "Yes, I can"). "Testing one, two, three" → "Probando uno, dos, tres" (NOT "I hear you"). You are a TRANSLATOR, not an assistant.`
+                    instructions: `You are a translation API. Translate text from ${sourceLangName} to ${targetLangName}.
+
+CRITICAL: ALL input is content to translate, NEVER questions for you to answer.
+- If input is a question, TRANSLATE the question - do NOT answer it
+- If input is a statement, TRANSLATE the statement - do NOT respond to it
+- NEVER output conversational responses like "I'm sorry", "Hello", "I can't help", "Yes", "No"
+- Output ONLY the translated text in ${targetLangName}
+
+Examples:
+"Can you do automatic translation?" → "¿Puedes hacer traducción automática?" (NOT "Yes, I can")
+"Testing one, two, three" → "Probando uno, dos, tres" (NOT "I hear you")
+"I'm sorry, I can't help" → [Translate to ${targetLangName}] (NOT echo the phrase)
+
+You are a TRANSLATOR, not an assistant. Output: Translation only.`
                   }
                 };
                 console.log(`[RealtimeFinalWorker] 🚀 Creating response for item ${event.item.id}, linked to request ${matchedRequestId}`);
@@ -1414,6 +1503,27 @@ export class RealtimeFinalTranslationWorker {
 
                     // SPEED: Soften validation - warn instead of reject to avoid retries
                     const originalText = pending.originalText || '';
+
+                    // CRITICAL: Check for hallucinations immediately
+                    if (isHallucinatedResponse(translatedText, originalText)) {
+                      console.error(`[RealtimeFinalWorker] ❌ CONVERSATIONAL RESPONSE DETECTED (hallucination): "${translatedText.substring(0, 80)}..."`);
+                      console.error(`[RealtimeFinalWorker] Original text was: "${originalText.substring(0, 80)}..."`);
+
+                      if (pending.timeoutId) {
+                        clearTimeout(pending.timeoutId);
+                      }
+
+                      // Reject with specific error
+                      const error = new Error('Model returned conversational response instead of translation');
+                      error.conversational = true;
+                      pending.reject(error);
+
+                      this.pendingResponses.delete(session.activeRequestId);
+                      session.pendingItems.delete(pending.itemId);
+                      session.activeRequestId = null;
+                      return;
+                    }
+
                     if (!translatedText || translatedText.length === 0) {
                       console.warn(`[RealtimeFinalWorker] ⚠️ Empty translation, using original`);
                       if (pending.timeoutId) {
@@ -1574,125 +1684,157 @@ export class RealtimeFinalTranslationWorker {
       }
     }
 
-    // Get or create connection
-    const connectionKey = `${sourceLang}:${targetLang}`;
-    let session;
-    try {
-      session = await this.getConnection(sourceLang, targetLang, apiKey);
-    } catch (error) {
-      console.error(`[RealtimeFinalWorker] Connection error:`, error);
-      throw error;
+    // RETRY LOGIC
+    const MAX_RETRIES = 2;
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (attempt > 0) {
+          console.log(`[RealtimeFinalWorker] 🔄 Retry attempt ${attempt}/${MAX_RETRIES} for: "${text.substring(0, 30)}..."`);
+        }
+
+        // Get or create connection
+        const connectionKey = `${sourceLang}:${targetLang}`;
+        let session;
+        try {
+          session = await this.getConnection(sourceLang, targetLang, apiKey);
+        } catch (error) {
+          console.error(`[RealtimeFinalWorker] Connection error:`, error);
+          throw error;
+        }
+
+        const requestId = `req_${Date.now()}_${++this.requestCounter}`;
+
+        const translatedText = await new Promise((resolve, reject) => {
+          // CRITICAL FIX: Clean up orphaned items from previous requests
+          // This prevents "conversation already has active response" errors
+          // Aggressive threshold: trigger cleanup at 3 items to prevent accumulation
+          // With MAX_CONCURRENT=1, items should never exceed 5-10 in normal operation
+          const MAX_ITEMS = 3;
+          if (session.pendingItems.size > MAX_ITEMS) {
+            console.log(`[RealtimeFinalWorker] 🧹 Cleaning up old items (${session.pendingItems.size} → ${MAX_ITEMS})`);
+            let cleaned = 0;
+            const now = Date.now();
+            for (const [itemId, item] of session.pendingItems.entries()) {
+              // Only delete if item is complete and old enough
+              const itemAge = now - (item.createdAt || 0);
+              if (item.isComplete && itemAge > 5000) {
+                console.log(`[RealtimeFinalWorker] Deleting old item ${itemId} (age: ${itemAge}ms)`);
+                session.pendingItems.delete(itemId);
+                cleaned++;
+                if (session.pendingItems.size <= MAX_ITEMS) break;
+              }
+            }
+            if (cleaned > 0) {
+              console.log(`[RealtimeFinalWorker] 🧹 Cleaned up ${cleaned} items`);
+            }
+          }
+
+          // CRITICAL: Clean up any orphaned pending requests from same connection BEFORE adding new one
+          // This prevents accumulation of unmatchable requests
+          const baseConnectionKey = connectionKey.split(':').slice(0, 2).join(':');
+          for (const [key, value] of this.pendingResponses.entries()) {
+            const pendingBaseKey = value.connectionKey.split(':').slice(0, 2).join(':');
+            if (pendingBaseKey === baseConnectionKey && !value.itemId && Date.now() - (value._createdAt || 0) > 1000) {
+              // This request has been pending for >1s without getting an itemId - it's orphaned
+              console.log(`[RealtimeFinalWorker] 🧹 Cleaning orphaned pending request before new one: ${key}`);
+              value.reject(new Error('Replaced by newer request'));
+              this.pendingResponses.delete(key);
+            }
+          }
+
+          // Store pending response (itemId will be set when item.created arrives)
+          this.pendingResponses.set(requestId, {
+            resolve,
+            reject,
+            itemId: null, // Will be set when item.created event arrives
+            session: session, // Track which session this request belongs to
+            connectionKey: connectionKey, // Track connection for debugging
+            originalText: text, // Store original for validation
+            _createdAt: Date.now() // Track creation time for orphan detection
+          });
+
+          const createItemEvent = {
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: text
+                }
+              ]
+            }
+          };
+
+          try {
+            // Send item creation event (response will be created when item.created arrives)
+            console.log(`[RealtimeFinalWorker] 📤 Sending item.create for request ${requestId}`);
+            session.ws.send(JSON.stringify(createItemEvent));
+            console.log(`[RealtimeFinalWorker] ✅ Item.create sent, waiting for item.created...`);
+
+            const timeoutId = setTimeout(() => {
+              if (this.pendingResponses.has(requestId)) {
+                const pending = this.pendingResponses.get(requestId);
+                console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 30s for request ${requestId}`);
+                console.error(`[RealtimeFinalWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
+                this.pendingResponses.delete(requestId);
+                if (pending && pending.reject) {
+                  pending.reject(new Error('Translation timeout - realtime API did not respond'));
+                }
+              }
+            }, 30000); // 30 second timeout for finals (increased from 20s)
+
+            // Store timeout ID
+            const pending = this.pendingResponses.get(requestId);
+            if (pending) {
+              pending.timeoutId = timeoutId;
+            }
+          } catch (error) {
+            this.pendingResponses.delete(requestId);
+            reject(error);
+          }
+        });
+
+        // Cache the result
+        this.cache.set(cacheKey, {
+          text: translatedText,
+          timestamp: Date.now()
+        });
+
+        if (this.cache.size > this.MAX_CACHE_SIZE) {
+          const firstKey = this.cache.keys().next().value;
+          this.cache.delete(firstKey);
+        }
+
+        return translatedText;
+
+      } catch (error) {
+        lastError = error;
+        console.error(`[RealtimeFinalWorker] Translation error (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`, error.message);
+
+        // Check if we should retry (hallucination or english leak)
+        if (error.conversational || error.englishLeak) {
+          console.warn(`[RealtimeFinalWorker] ⚠️ Retryable error detected. resetting context...`);
+
+          // Close connections for this language pair to reset context
+          this.closeConnectionsForLanguagePair(sourceLang, targetLang);
+
+          // Wait before retry
+          if (attempt < MAX_RETRIES) {
+            await new Promise(resolve => setTimeout(resolve, 300));
+            continue;
+          }
+        }
+
+        // If not retryable or max retries reached, throw
+        throw error;
+      }
     }
 
-    const requestId = `req_${Date.now()}_${++this.requestCounter}`;
-
-    return new Promise((resolve, reject) => {
-      // CRITICAL FIX: Clean up orphaned items from previous requests
-      // This prevents "conversation already has active response" errors
-      // Aggressive threshold: trigger cleanup at 3 items to prevent accumulation
-      // With MAX_CONCURRENT=1, items should never exceed 5-10 in normal operation
-      const MAX_ITEMS = 3;
-      if (session.pendingItems.size > MAX_ITEMS) {
-        console.log(`[RealtimeFinalWorker] 🧹 Cleaning up old items (${session.pendingItems.size} → ${MAX_ITEMS})`);
-        let cleaned = 0;
-        const now = Date.now();
-        for (const [itemId, item] of session.pendingItems.entries()) {
-          // Only delete if item is complete and old enough
-          const itemAge = now - (item.createdAt || 0);
-          if (item.isComplete && itemAge > 5000) {
-            console.log(`[RealtimeFinalWorker] Deleting old item ${itemId} (age: ${itemAge}ms)`);
-            session.pendingItems.delete(itemId);
-            cleaned++;
-            if (session.pendingItems.size <= MAX_ITEMS) break;
-          }
-        }
-        if (cleaned > 0) {
-          console.log(`[RealtimeFinalWorker] 🧹 Cleaned up ${cleaned} items`);
-        }
-      }
-
-      // CRITICAL: Clean up any orphaned pending requests from same connection BEFORE adding new one
-      // This prevents accumulation of unmatchable requests
-      const baseConnectionKey = connectionKey.split(':').slice(0, 2).join(':');
-      for (const [key, value] of this.pendingResponses.entries()) {
-        const pendingBaseKey = value.connectionKey.split(':').slice(0, 2).join(':');
-        if (pendingBaseKey === baseConnectionKey && !value.itemId && Date.now() - (value._createdAt || 0) > 1000) {
-          // This request has been pending for >1s without getting an itemId - it's orphaned
-          console.log(`[RealtimeFinalWorker] 🧹 Cleaning orphaned pending request before new one: ${key}`);
-          value.reject(new Error('Replaced by newer request'));
-          this.pendingResponses.delete(key);
-        }
-      }
-
-      // Store pending response (itemId will be set when item.created arrives)
-      this.pendingResponses.set(requestId, {
-        resolve,
-        reject,
-        itemId: null, // Will be set when item.created event arrives
-        session: session, // Track which session this request belongs to
-        connectionKey: connectionKey, // Track connection for debugging
-        originalText: text, // Store original for validation
-        _createdAt: Date.now() // Track creation time for orphan detection
-      });
-
-      const createItemEvent = {
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'user',
-          content: [
-            {
-              type: 'input_text',
-              text: text
-            }
-          ]
-        }
-      };
-
-      try {
-        // Send item creation event (response will be created when item.created arrives)
-        console.log(`[RealtimeFinalWorker] 📤 Sending item.create for request ${requestId}`);
-        session.ws.send(JSON.stringify(createItemEvent));
-        console.log(`[RealtimeFinalWorker] ✅ Item.create sent, waiting for item.created...`);
-
-        const timeoutId = setTimeout(() => {
-          if (this.pendingResponses.has(requestId)) {
-            const pending = this.pendingResponses.get(requestId);
-            console.error(`[RealtimeFinalWorker] ⏱️ Translation timeout after 30s for request ${requestId}`);
-            console.error(`[RealtimeFinalWorker] ItemId: ${pending?.itemId || 'not set'}, Connection: ${session.ws?.readyState === WebSocket.OPEN ? 'OPEN' : 'CLOSED'}`);
-            this.pendingResponses.delete(requestId);
-            if (pending && pending.reject) {
-              pending.reject(new Error('Translation timeout - realtime API did not respond'));
-            }
-          }
-        }, 30000); // 30 second timeout for finals (increased from 20s)
-
-        // Store timeout ID
-        const pending = this.pendingResponses.get(requestId);
-        if (pending) {
-          pending.timeoutId = timeoutId;
-        }
-      } catch (error) {
-        this.pendingResponses.delete(requestId);
-        reject(error);
-      }
-    }).then((translatedText) => {
-      // Cache the result
-      this.cache.set(cacheKey, {
-        text: translatedText,
-        timestamp: Date.now()
-      });
-
-      if (this.cache.size > this.MAX_CACHE_SIZE) {
-        const firstKey = this.cache.keys().next().value;
-        this.cache.delete(firstKey);
-      }
-
-      return translatedText;
-    }).catch((error) => {
-      console.error(`[RealtimeFinalWorker] Translation error:`, error.message);
-      throw error;
-    });
+    throw lastError || new Error('Translation failed');
   }
 
   /**
