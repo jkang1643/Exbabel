@@ -98,6 +98,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // Out-of-order partial prevention: track last seqId per sourceSeqId
   const lastPartialSeqBySourceRef = useRef(new Map());
 
+  // Track which committed lines have been sent to TTS (prevents duplicates)
+  const sentToTtsRef = useRef(new Set());
+
   const [sessionCode, setSessionCode] = useState(sessionCodeProp || '');
   const [isJoined, setIsJoined] = useState(false);
   const [showLiveOriginal, setShowLiveOriginal] = useState(false);
@@ -156,7 +159,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     });
 
     // Subscribe to state updates
-    engineRef.current.on('state', (state) => {
+    const handleState = (state) => {
       // 1. Update Live Partial Text immediately via imperative painters
       if (state.liveLine) {
         updateTranslationText(state.liveLine);
@@ -195,36 +198,61 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           // Enqueue new lines for TTS
           if (ttsControllerRef.current && ttsControllerRef.current.getState().state === 'PLAYING') {
             newLines.forEach(line => {
-              // Only speak if it matches our language (or is transcription)
-              const isForMyLanguage = true; // Engine already filters by targetLang? 
-              // Actually engine.committedLines are usually in targetLang. 
-              // View model says: "committedLines: Array<{ text: string; ... }>"
-              // Text IS the translated text.
+              if (!line.text) return;
 
-              if (line.text) {
-                ttsControllerRef.current.onFinalSegment({
-                  id: (line.seqId ?? `seg_${Date.now()}_${Math.random()}`).toString(),
-                  text: line.text,
-                  timestamp: line.timestamp
+              // Create content hash to prevent duplicate TTS requests
+              // 1. Primary Check: seqId (most stable)
+              // 2. Secondary Check: text (fallback) - unstable timestamps are ignored
+              const seqIdHash = line.seqId ? `seq_${line.seqId}` : null;
+              const textHash = `txt_${line.text.trim().toLowerCase()}`;
+
+              const isDuplicate = (seqIdHash && sentToTtsRef.current.has(seqIdHash)) ||
+                sentToTtsRef.current.has(textHash);
+
+              // Skip if already sent to TTS
+              if (isDuplicate) {
+                console.log('[ListenerPage] Skipping duplicate TTS request (dedupe):', {
+                  seqId: line.seqId,
+                  text: line.text.substring(0, 50)
                 });
+                return;
               }
+
+              // Mark as sent
+              if (seqIdHash) sentToTtsRef.current.add(seqIdHash);
+              sentToTtsRef.current.add(textHash);
+
+              // Use stable seqId from engine if available, otherwise generate one
+              const segmentId = line.seqId
+                ? line.seqId.toString()
+                : `seg_${line.timestamp || Date.now()}`;
+
+              ttsControllerRef.current.onFinalSegment({
+                id: segmentId,
+                text: line.text,
+                timestamp: line.timestamp
+              });
             });
           }
         }
       }
-    });
+    };
 
     // Pass-through TTS events from engine to controller
-    engineRef.current.on('tts', (event) => {
+    const handleTts = (event) => {
       if (ttsControllerRef.current) {
         ttsControllerRef.current.onWsMessage(event);
       }
-    });
+    };
 
+    engineRef.current.on('state', handleState);
+    engineRef.current.on('tts', handleTts);
 
     return () => {
       if (engineRef.current) {
-        // engineRef.current.disconnect(); // If exists
+        console.log('[ListenerPage] Cleaning up Shared Engine listeners');
+        engineRef.current.off('state', handleState);
+        engineRef.current.off('tts', handleTts);
         engineRef.current = null;
       }
     };
@@ -1123,8 +1151,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 });
 
                 // Radio Mode: Auto-enqueue finalized segment for TTS
+                // GATED: Only run this legacy path if NOT using the shared engine (which handles its own TTS triggers)
                 try {
-                  if (ttsControllerRef.current &&
+                  if (!USE_SHARED_ENGINE &&
+                    ttsControllerRef.current &&
                     ttsControllerRef.current.getState().state === 'PLAYING' &&
                     (isForMyLanguage || isTranscriptionMode) &&
                     textToDisplay) {

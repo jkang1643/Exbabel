@@ -41,13 +41,48 @@ export const GEMINI_VOICE_OPTIONS = [
     { value: 'gemini-Zubenelgenubi', label: 'Zubenelgenubi (Gemini, Male)', tier: 'gemini' }
 ];
 
+// ElevenLabs voices (all tiers: v3, turbo, flash, multilingual)
+// Custom voice ID for Pastor John Brown
+const CUSTOM_VOICE_ID = 'DfCUQ0uJkSQyc3SLt6SR';
+
+export const ELEVENLABS_VOICE_OPTIONS = [
+    // Eleven v3 (alpha) - Most expressive, 70+ languages
+    { value: 'elevenlabs-JBFqnCBsd6RMkjVDRZzb__elevenlabs_v3', label: 'George (ElevenLabs v3, Male)', tier: 'elevenlabs_v3' },
+    { value: 'elevenlabs-21m00Tcm4TlvDq8ikWAM__elevenlabs_v3', label: 'Rachel (ElevenLabs v3, Female)', tier: 'elevenlabs_v3' },
+    { value: 'elevenlabs-EXAVITQu4vr4xnSDxMaL__elevenlabs_v3', label: 'Sarah (ElevenLabs v3, Female)', tier: 'elevenlabs_v3' },
+    { value: 'elevenlabs-D38z5RcWu1voky8WS1ja__elevenlabs_v3', label: 'Fin (ElevenLabs v3, Male)', tier: 'elevenlabs_v3' },
+    { value: 'elevenlabs-pNInz6obpgDQGcFmaJgB__elevenlabs_v3', label: 'Adam (ElevenLabs v3, Male)', tier: 'elevenlabs_v3' },
+    { value: 'elevenlabs-ODq5zmih8GrVes37Dizd__elevenlabs_v3', label: 'Patrick (ElevenLabs v3, Male)', tier: 'elevenlabs_v3' },
+    { value: `elevenlabs-${CUSTOM_VOICE_ID}__elevenlabs_v3`, label: 'Pastor John Brown (Eleven v3 alpha)', tier: 'elevenlabs_v3' },
+
+    // Eleven Turbo v2.5 - Balanced quality/speed, 32 languages
+    { value: 'elevenlabs-JBFqnCBsd6RMkjVDRZzb__elevenlabs_turbo', label: 'George (ElevenLabs Turbo, Male)', tier: 'elevenlabs_turbo' },
+    { value: 'elevenlabs-21m00Tcm4TlvDq8ikWAM__elevenlabs_turbo', label: 'Rachel (ElevenLabs Turbo, Female)', tier: 'elevenlabs_turbo' },
+    { value: 'elevenlabs-EXAVITQu4vr4xnSDxMaL__elevenlabs_turbo', label: 'Sarah (ElevenLabs Turbo, Female)', tier: 'elevenlabs_turbo' },
+    { value: `elevenlabs-${CUSTOM_VOICE_ID}__elevenlabs_turbo`, label: 'Pastor John Brown (Turbo v2.5)', tier: 'elevenlabs_turbo' },
+
+    // Eleven Flash v2.5 - Ultra low latency, 32 languages
+    { value: 'elevenlabs-JBFqnCBsd6RMkjVDRZzb__elevenlabs_flash', label: 'George (ElevenLabs Flash, Male)', tier: 'elevenlabs_flash' },
+    { value: 'elevenlabs-21m00Tcm4TlvDq8ikWAM__elevenlabs_flash', label: 'Rachel (ElevenLabs Flash, Female)', tier: 'elevenlabs_flash' },
+    { value: `elevenlabs-${CUSTOM_VOICE_ID}__elevenlabs_flash`, label: 'Pastor John Brown (Flash v2.5)', tier: 'elevenlabs_flash' },
+
+    // Eleven Multilingual v2 - Stable, 29 languages
+    { value: 'elevenlabs-JBFqnCBsd6RMkjVDRZzb__elevenlabs', label: 'George (ElevenLabs, Male)', tier: 'elevenlabs' },
+    { value: 'elevenlabs-21m00Tcm4TlvDq8ikWAM__elevenlabs', label: 'Rachel (ElevenLabs, Female)', tier: 'elevenlabs' },
+    { value: 'elevenlabs-EXAVITQu4vr4xnSDxMaL__elevenlabs', label: 'Sarah (ElevenLabs, Female)', tier: 'elevenlabs' },
+    { value: 'elevenlabs-D38z5RcWu1voky8WS1ja__elevenlabs', label: 'Fin (ElevenLabs, Male)', tier: 'elevenlabs' },
+    { value: 'elevenlabs-pNInz6obpgDQGcFmaJgB__elevenlabs', label: 'Adam (ElevenLabs, Male)', tier: 'elevenlabs' },
+    { value: 'elevenlabs-ODq5zmih8GrVes37Dizd__elevenlabs', label: 'Patrick (ElevenLabs, Male)', tier: 'elevenlabs' },
+    { value: `elevenlabs-${CUSTOM_VOICE_ID}__elevenlabs`, label: 'Pastor John Brown (Multilingual)', tier: 'elevenlabs' }
+];
+
 /**
  * Mapping of language codes to their available voices.
- * Combines auto-generated voices with language-agnostic Gemini voices.
+ * Combines auto-generated voices with language-agnostic Gemini and ElevenLabs voices.
  */
 export const VOICE_OPTIONS_BY_LANG = Object.keys(ttsVoicesJson).reduce((acc, langCode) => {
-    // Start with Gemini voices
-    acc[langCode] = [...GEMINI_VOICE_OPTIONS, ...ttsVoicesJson[langCode]];
+    // Start with premium voices (Gemini and ElevenLabs), then language-specific voices
+    acc[langCode] = [...GEMINI_VOICE_OPTIONS, ...ELEVENLABS_VOICE_OPTIONS, ...ttsVoicesJson[langCode]];
     return acc;
 }, {});
 
@@ -94,6 +129,7 @@ export const getVoicesForLanguage = (languageCode) => {
     // Fallback if the specific locale or normalization didn't find voices
     return [
         ...GEMINI_VOICE_OPTIONS,
+        ...ELEVENLABS_VOICE_OPTIONS,
         { value: `${normalizedCode}-Standard-A`, label: 'Standard-A (Fallback)', tier: 'standard' }
     ];
 };

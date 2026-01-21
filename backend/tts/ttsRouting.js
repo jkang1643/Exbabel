@@ -354,6 +354,38 @@ const TIER_CONFIG = {
     supportsAllLanguages: false, // Limited language support
     fallbackTier: 'neural2'
   },
+  elevenlabs: {
+    provider: 'elevenlabs',
+    tier: 'elevenlabs',
+    engine: null, // Not a Google engine
+    model: 'eleven_multilingual_v2',
+    supportsAllLanguages: true, // Multilingual v2 supports 29 languages
+    fallbackTier: 'neural2'
+  },
+  elevenlabs_v3: {
+    provider: 'elevenlabs',
+    tier: 'elevenlabs_v3',
+    engine: null,
+    model: 'eleven_v3',
+    supportsAllLanguages: true, // v3 supports 70+ languages
+    fallbackTier: 'elevenlabs'
+  },
+  elevenlabs_turbo: {
+    provider: 'elevenlabs',
+    tier: 'elevenlabs_turbo',
+    engine: null,
+    model: 'eleven_turbo_v2_5',
+    supportsAllLanguages: true, // Turbo v2.5 supports 32 languages
+    fallbackTier: 'elevenlabs'
+  },
+  elevenlabs_flash: {
+    provider: 'elevenlabs',
+    tier: 'elevenlabs_flash',
+    engine: null,
+    model: 'eleven_flash_v2_5',
+    supportsAllLanguages: true, // Flash v2.5 supports 32 languages
+    fallbackTier: 'elevenlabs'
+  },
   neural2: {
     provider: 'google',
     tier: 'neural2',
@@ -373,6 +405,87 @@ const TIER_CONFIG = {
 };
 
 /**
+ * ElevenLabs model capabilities (source of truth for voice_settings support)
+ * Defines which voice settings each tier supports and their valid ranges
+ */
+const ELEVENLABS_MODEL_CAPABILITIES = {
+  elevenlabs_v3: {
+    modelId: 'eleven_v3',
+    supports: {
+      stability: true,
+      similarity_boost: true,
+      style: true,              // V3 supports style
+      use_speaker_boost: true,  // V3 supports speaker boost
+      speed: true
+    },
+    ranges: {
+      stability: [0, 1],
+      similarity_boost: [0, 1],
+      style: [0, 1],
+      speed: [0.7, 1.2]
+    }
+  },
+  elevenlabs_turbo: {
+    modelId: 'eleven_turbo_v2_5',
+    supports: {
+      stability: true,
+      similarity_boost: true,
+      style: true,              // V2+ models support style
+      use_speaker_boost: true,  // V2+ models support speaker boost
+      speed: true
+    },
+    ranges: {
+      stability: [0, 1],
+      similarity_boost: [0, 1],
+      style: [0, 1],
+      speed: [0.7, 1.2]
+    }
+  },
+  elevenlabs_flash: {
+    modelId: 'eleven_flash_v2_5',
+    supports: {
+      stability: true,
+      similarity_boost: true,
+      style: true,              // V2+ models support style
+      use_speaker_boost: true,  // V2+ models support speaker boost
+      speed: true
+    },
+    ranges: {
+      stability: [0, 1],
+      similarity_boost: [0, 1],
+      style: [0, 1],
+      speed: [0.7, 1.2]
+    }
+  },
+  elevenlabs: {
+    modelId: 'eleven_multilingual_v2',
+    supports: {
+      stability: true,
+      similarity_boost: true,
+      style: true,              // V2 supports style
+      use_speaker_boost: true,  // V2 supports speaker boost
+      speed: true
+    },
+    ranges: {
+      stability: [0, 1],
+      similarity_boost: [0, 1],
+      style: [0, 1],
+      speed: [0.7, 1.2]
+    }
+  }
+};
+
+/**
+ * Get ElevenLabs model capabilities for a given tier
+ * @param {string} tier - ElevenLabs tier (elevenlabs_v3, elevenlabs_turbo, etc.)
+ * @returns {object|null} Capability object or null if not an ElevenLabs tier
+ */
+export function getElevenLabsModelCapabilities(tier) {
+  return ELEVENLABS_MODEL_CAPABILITIES[tier] || null;
+}
+
+/**
+
  * Language-specific tier availability
  *
  * Which tiers are available for which languages.
@@ -739,6 +852,13 @@ function _getAvailableTiersForLanguage(languageCode) {
  * @private
  */
 function _isTierAvailableForLanguage(tier, languageCode) {
+  // First check if tier has supportsAllLanguages flag
+  const tierConfig = TIER_CONFIG[tier];
+  if (tierConfig && tierConfig.supportsAllLanguages) {
+    return true;
+  }
+
+  // Otherwise check the per-language availability map
   const availableTiers = _getAvailableTiersForLanguage(languageCode);
   return availableTiers.includes(tier);
 }
@@ -814,6 +934,26 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
 
   // If user requested a specific voice, check if it's valid for this tier/language even if discovery is off
   if (requestedVoiceName) {
+    // ElevenLabs voices: Strip prefix and pass through voice ID
+    // Support all ElevenLabs tiers: elevenlabs, elevenlabs_v3, elevenlabs_turbo, elevenlabs_flash
+    if (tier === 'elevenlabs' || tier === 'elevenlabs_v3' || tier === 'elevenlabs_turbo' || tier === 'elevenlabs_flash') {
+      // ElevenLabs voices are prefixed with 'elevenlabs-' in the frontend
+      // Strip the prefix to get the raw voice ID
+      if (requestedVoiceName.startsWith('elevenlabs-')) {
+        let voiceId = requestedVoiceName.substring(11);
+
+        // Strip backend suffix if present (e.g. __elevenlabs_v3) which is used for frontend uniqueness
+        if (voiceId.includes('__')) {
+          voiceId = voiceId.split('__')[0];
+        }
+
+
+        return voiceId;
+      }
+      // Already a raw voice ID
+      return requestedVoiceName;
+    }
+
     if (tier === 'gemini') {
       // Gemini voices (studio personas) are generally English-only at the moment for direct match
       // but we allow common names to pass through to the Gemini engine
@@ -868,6 +1008,13 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
   // 3. Special handling for Gemini if no specific mapping found in FALLBACK_VOICES
   if (tier === 'gemini') {
     return 'Kore';
+  }
+
+  // 4. Special handling for all ElevenLabs tiers - use default voice from env
+  if (tier === 'elevenlabs' || tier === 'elevenlabs_v3' || tier === 'elevenlabs_turbo' || tier === 'elevenlabs_flash') {
+    const defaultVoiceId = process.env.ELEVENLABS_DEFAULT_VOICE_ID || 'JBFqnCBsd6RMkjVDRZzb';
+    console.log(`[TTS Routing] ElevenLabs (${tier}) using default voice: ${defaultVoiceId}`);
+    return defaultVoiceId;
   }
 
   // 4. Last resort: generic patterns based on tier

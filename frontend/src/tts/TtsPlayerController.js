@@ -435,17 +435,21 @@ export class TtsPlayerController {
             return;
         }
 
-        // Check if segment is after "start marker" (skip old history)
-        if (this.lastSeenSegmentId && segment.timestamp && segment.timestamp < this.lastSeenSegmentId) {
-            console.log('[TtsPlayerController] Skipping old segment', segment.id);
+        if (!segment.text || segment.text.trim().length === 0) {
             return;
         }
 
-        // Dedupe check using content hash (not dynamic ID)
-        // This prevents duplicates even when segment.id is dynamically generated (e.g., seg_${Date.now()})
-        const contentHash = `${segment.text.trim()}_${segment.timestamp || 0}`;
-        if (this.dedupeSet.has(contentHash)) {
-            console.log('[TtsPlayerController] Skipping duplicate segment (content hash)', contentHash);
+        // STABILIZATION: Dedupe by text only (ignoring timestamps) for the last 5 seconds.
+        // This blocks duplicates arriving with different IDs/timestamps (e.g., both EN and ES versions).
+        const textKey = segment.text.trim().toLowerCase();
+        const idMatch = this.queue.find(item => item.segmentId === segment.id);
+
+        if (idMatch || this.dedupeSet.has(textKey)) {
+            console.log('[TtsPlayerController] Skipping duplicate segment (ID or text match)', {
+                id: segment.id,
+                isIdMatch: !!idMatch,
+                isTextMatch: this.dedupeSet.has(textKey)
+            });
             return;
         }
 
@@ -457,7 +461,11 @@ export class TtsPlayerController {
             timestamp: segment.timestamp || Date.now()
         });
 
-        this.dedupeSet.add(contentHash);
+        // Add to dedupe set and clear after 5 seconds to allow reuse
+        this.dedupeSet.add(textKey);
+        setTimeout(() => {
+            this.dedupeSet.delete(textKey);
+        }, 5000);
 
         // Enforce queue limit (drop oldest pending/done)
         if (this.queue.length > this.queueLimit) {
