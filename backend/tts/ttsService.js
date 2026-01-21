@@ -12,111 +12,10 @@
 import { TtsErrorCode, TtsMode, TtsEngine, TtsEncoding, validateTtsProfile } from './tts.types.js';
 import { resolveTtsRoute, validateResolvedRoute } from './ttsRouting.js';
 import { generateTtsInput, supportsSSML } from './ssmlBuilder.js';
+import { ElevenLabsTtsService } from './elevenlabsTtsService.js';
+import { TtsService } from './baseTtsService.js';
 
-/**
- * TTS Service Class
- * 
- * Handles text-to-speech synthesis with support for both unary and streaming modes.
- */
-export class TtsService {
-    constructor(config = {}) {
-        this.config = {
-            provider: config.provider || process.env.TTS_PROVIDER || 'google',
-            playingLeaseSeconds: parseInt(config.playingLeaseSeconds || process.env.TTS_PLAYING_LEASE_SECONDS || '30', 10)
-        };
-    }
-
-    /**
-     * Synthesize speech in unary mode (batch)
-     * Returns one complete audio file for the entire text.
-     *
-     * @param {TtsRequest} request - TTS request
-     * @returns {Promise<TtsUnaryResponseWithRoute>}
-     * @throws {Error} If synthesis fails or is not implemented
-     */
-    async synthesizeUnary(request) {
-        // Validate request
-        this._validateRequest(request);
-        validateTtsProfile(request.profile);
-
-        console.log(`[TtsService] Synthesizing unary: ${request.text.length} chars, engine: ${request.profile.engine}, lang: ${request.profile.languageCode}`);
-
-        // This is the base class - should be overridden by GoogleTtsService
-        throw new Error(JSON.stringify({
-            code: TtsErrorCode.NOT_IMPLEMENTED,
-            message: 'TTS unary synthesis not implemented in base class',
-            details: {
-                request: {
-                    sessionId: request.sessionId,
-                    engine: request.profile.engine,
-                    languageCode: request.profile.languageCode,
-                    voiceName: request.profile.voiceName,
-                    textLength: request.text?.length || 0
-                }
-            }
-        }));
-    }
-
-    /**
-     * Synthesize speech in streaming mode
-     * Calls onChunk callback for each audio chunk as it becomes available.
-     * 
-     * @param {TtsRequest} request - TTS request
-     * @param {Function} onChunk - Callback function(chunk: TtsStreamChunk)
-     * @returns {Promise<void>}
-     * @throws {Error} If synthesis fails or is not implemented
-     */
-    async synthesizeStream(request, onChunk) {
-        // Validate request
-        this._validateRequest(request);
-        validateTtsProfile(request.profile);
-
-        // PR1: Stub implementation
-        throw new Error(JSON.stringify({
-            code: TtsErrorCode.NOT_IMPLEMENTED,
-            message: 'TTS streaming synthesis not implemented yet (PR2)',
-            details: {
-                request: {
-                    sessionId: request.sessionId,
-                    engine: request.profile.engine,
-                    languageCode: request.profile.languageCode,
-                    voiceName: request.profile.voiceName,
-                    textLength: request.text?.length || 0
-                }
-            }
-        }));
-    }
-
-    /**
-     * Validate basic request fields
-     * @private
-     */
-    _validateRequest(request) {
-        if (!request.text || request.text.length === 0) {
-            throw new Error(JSON.stringify({
-                code: TtsErrorCode.INVALID_REQUEST,
-                message: 'Text is required and must not be empty',
-                details: { request }
-            }));
-        }
-    }
-
-    /**
-     * Get MIME type for audio format
-     * @protected
-     */
-    _getMimeType(encoding) {
-        const mimeTypes = {
-            [TtsEncoding.MP3]: 'audio/mpeg',
-            [TtsEncoding.OGG_OPUS]: 'audio/ogg',
-            [TtsEncoding.LINEAR16]: 'audio/wav',
-            [TtsEncoding.ALAW]: 'audio/alaw',
-            [TtsEncoding.MULAW]: 'audio/mulaw',
-            [TtsEncoding.PCM]: 'audio/pcm'
-        };
-        return mimeTypes[encoding] || 'application/octet-stream';
-    }
-}
+export { TtsService };
 
 /**
  * Google TTS Service (extends TtsService)
@@ -778,4 +677,27 @@ export class GoogleTtsService extends TtsService {
     }
 
     // Streaming implementation will be added in PR3
+}
+
+/**
+ * Get TTS service instance for a specific provider
+ * 
+ * Factory function that returns the appropriate TTS service based on provider.
+ * 
+ * @param {string} provider - Provider name ('google' | 'elevenlabs')
+ * @returns {TtsService} TTS service instance
+ */
+export function getTtsServiceForProvider(provider = 'google') {
+    if (provider === 'elevenlabs') {
+        return new ElevenLabsTtsService({
+            apiKey: process.env.ELEVENLABS_API_KEY,
+            defaultVoiceId: process.env.ELEVENLABS_DEFAULT_VOICE_ID,
+            modelId: process.env.ELEVENLABS_MODEL_ID,
+            outputFormat: process.env.ELEVENLABS_OUTPUT_FORMAT,
+            baseUrl: process.env.ELEVENLABS_BASE_URL
+        });
+    }
+
+    // Default to Google TTS
+    return new GoogleTtsService();
 }

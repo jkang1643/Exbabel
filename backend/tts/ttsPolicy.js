@@ -19,13 +19,14 @@ import { TtsEngine, TtsErrorCode } from './tts.types.js';
  */
 export function resolveEnginesForUser(orgConfig = {}, userSubscription = {}) {
     // PR1: Stub implementation - allow all engines
-    return [TtsEngine.GEMINI_TTS, TtsEngine.CHIRP3_HD];
+    // Note: null is allowed for non-Google providers (e.g., ElevenLabs)
+    return [TtsEngine.GEMINI_TTS, TtsEngine.CHIRP3_HD, null];
 }
 
 /**
  * Check if a voice is allowed for the given engine and language
  * 
- * @param {string} engine - TTS engine
+ * @param {string|null} engine - TTS engine (can be null for non-Google providers)
  * @param {string} languageCode - BCP-47 language code
  * @param {string} voiceName - Voice name
  * @returns {boolean} True if voice is allowed
@@ -34,7 +35,8 @@ export function isVoiceAllowed(engine, languageCode, voiceName) {
     // PR1: Stub implementation - allow all voices
 
     // Basic validation: ensure parameters are provided
-    if (!engine || !languageCode || !voiceName) {
+    // Note: engine can be null for non-Google providers (e.g., ElevenLabs)
+    if (!languageCode || !voiceName) {
         return false;
     }
 

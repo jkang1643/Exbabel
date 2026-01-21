@@ -116,6 +116,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [isTranslationStalled, setIsTranslationStalled] = useState(false); // Track if translation is stalled
   const [sessionInfo, setSessionInfo] = useState(null);
   const [error, setError] = useState('');
+  const [routingDebug, setRoutingDebug] = useState(null);
   const [isJoining, setIsJoining] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false); // Toggle for showing original text
 
@@ -456,6 +457,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       };
       ttsControllerRef.current.onError = (err) => {
         console.error('[ListenerPage] TTS Error:', err);
+      };
+      ttsControllerRef.current.onRouteResolved = (route) => {
+        console.log('[ListenerPage] TTS Route resolved:', route);
+        setRoutingDebug(route);
       };
     }
 
@@ -1528,9 +1533,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     getVoicesForLanguage(targetLang).reduce((acc, voice) => {
                       const tier = voice.tier || 'standard';
                       let group = 'Standard';
-                      if (tier === 'gemini') group = 'Gemini';
-                      else if (tier === 'chirp3_hd') group = 'Chirp3';
+                      if (tier === 'gemini') group = 'Gemini & Studio';
+                      else if (tier === 'elevenlabs_v3') group = 'Eleven v3 alpha';
+                      else if (tier === 'elevenlabs_turbo') group = 'Eleven Turbo v2.5';
+                      else if (tier === 'elevenlabs_flash') group = 'Eleven Flash 2.5';
+                      else if (tier === 'elevenlabs') group = 'Eleven Multilingual';
+                      else if (tier === 'chirp3_hd') group = 'Chirp 3 HD';
                       else if (tier === 'neural2') group = 'Neural2';
+
                       if (!acc[group]) acc[group] = [];
                       acc[group].push(voice);
                       return acc;
@@ -1626,6 +1636,29 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       {error && (
         <div className="fixed bottom-20 left-4 right-4 z-[60] p-4 bg-red-100 border border-red-400 text-red-700 rounded shadow-lg animate-in slide-in-from-bottom duration-300">
           {error}
+        </div>
+      )}
+      {/* TTS Routing Debug Overlay */}
+      {routingDebug && (
+        <div className="fixed bottom-20 left-4 z-50 bg-black/80 text-white text-[10px] p-2 rounded-md border border-gray-600 font-mono pointer-events-none max-w-xs shadow-xl backdrop-blur-sm">
+          <div className="flex justify-between items-center mb-1 pb-1 border-b border-gray-700">
+            <span className="font-bold text-blue-400">TTS ROUTING DEBUG</span>
+            <span className="opacity-50">{new Date().toLocaleTimeString()}</span>
+          </div>
+          <div className="space-y-0.5">
+            <div className="flex justify-between gap-4"><span className="text-gray-400">Tier:</span> <span className="font-bold text-yellow-400">{routingDebug.tier}</span></div>
+            <div className="flex justify-between gap-4"><span className="text-gray-400">Model:</span> <span>{routingDebug.model || 'N/A'}</span></div>
+            <div className="flex justify-between gap-4"><span className="text-gray-400">Voice:</span> <span className="text-green-400 truncate max-w-[120px]" title={routingDebug.voiceName}>{routingDebug.voiceName}</span></div>
+            <div className="flex justify-between gap-4"><span className="text-gray-400">Lang:</span> <span>{routingDebug.languageCode}</span></div>
+            <div className="mt-1 pt-1 border-t border-gray-700 text-blue-300 italic">
+              {routingDebug.reason}
+            </div>
+            {routingDebug.fallbackFrom && (
+              <div className="mt-1 text-orange-400 text-[9px] border-t border-gray-700 pt-1">
+                FALLBACK FROM: {routingDebug.fallbackFrom.tier}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
