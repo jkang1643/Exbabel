@@ -17,6 +17,7 @@
 import fetch from 'node-fetch';
 import { fetchWithRateLimit, isCurrentlyRateLimited } from './openaiRateLimiter.js';
 import { getLanguageName } from './languageConfig.js';
+import { normalizePunctuation } from './transcriptionCleanup.js';
 
 /**
  * Partial Translation Worker - Optimized for speed and low latency
@@ -27,7 +28,7 @@ export class PartialTranslationWorker {
     this.pendingRequests = new Map(); // Track pending requests for cancellation
     this.MAX_CACHE_SIZE = 200; // Larger cache for partials
     this.CACHE_TTL = 120000; // 2 minutes cache for partials (longer since partials repeat)
-    
+
     // Throttling configuration for partial translations
     this.THROTTLE_MS = 2000; // Throttle to ~1 request every 2 seconds (was 800ms)
     this.GROWTH_THRESHOLD = 25; // Wait until text grows by 25 chars or punctuation appears (was 15)
@@ -115,7 +116,7 @@ PARTIAL TEXT RULES:
 
           buffer += chunk.toString();
           const lines = buffer.split('\n');
-          
+
           // Keep the last incomplete line in buffer
           buffer = lines.pop() || '';
 
@@ -132,7 +133,7 @@ PARTIAL TEXT RULES:
               try {
                 const parsed = JSON.parse(data);
                 const delta = parsed.choices?.[0]?.delta?.content;
-                
+
                 if (delta) {
                   fullTranslation += delta;
                   // Call callback with incremental update
@@ -157,7 +158,7 @@ PARTIAL TEXT RULES:
                 try {
                   const parsed = JSON.parse(data);
                   const delta = parsed.choices?.[0]?.delta?.content;
-                  
+
                   if (delta) {
                     fullTranslation += delta;
                     if (onChunk) {
@@ -173,10 +174,10 @@ PARTIAL TEXT RULES:
 
           // Send final complete translation
           if (onChunk && fullTranslation) {
-            onChunk(fullTranslation.trim(), true);
+            onChunk(normalizePunctuation(fullTranslation.trim()), true);
           }
 
-          resolve(fullTranslation.trim() || text);
+          resolve(normalizePunctuation(fullTranslation.trim()) || text);
         });
 
         response.body.on('error', (error) => {
@@ -221,7 +222,7 @@ PARTIAL TEXT RULES:
     this.rateLimitDetected = true;
     this.rateLimitCooldownUntil = Date.now() + 60000; // Cooldown for 1 minute
     console.warn('[PartialWorker] 🚨 Rate limit detected - entering cooldown mode (reduced concurrency)');
-    
+
     // Auto-reset after cooldown
     setTimeout(() => {
       this.rateLimitDetected = false;
@@ -266,20 +267,20 @@ PARTIAL TEXT RULES:
       // For short text, use simple prefix-based key
       cacheKey = `partial:${sourceLang}:${targetLang}:${text.substring(0, 150)}`;
     }
-    
+
     // Check cache
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey);
       // CRITICAL: Also check if cached text length matches current text length
       // If text has extended, cache hit is invalid - need new translation
       // ALSO validate that cached text is different from original (prevents English leak)
-      const isCachedSameAsOriginal = cached.text === text || 
-                                      cached.text.trim() === text.trim() ||
-                                      cached.text.toLowerCase() === text.toLowerCase();
-      
-      if (Date.now() - cached.timestamp < this.CACHE_TTL && 
-          cached.text.length >= text.length * 0.9 && 
-          !isCachedSameAsOriginal) {
+      const isCachedSameAsOriginal = cached.text === text ||
+        cached.text.trim() === text.trim() ||
+        cached.text.toLowerCase() === text.toLowerCase();
+
+      if (Date.now() - cached.timestamp < this.CACHE_TTL &&
+        cached.text.length >= text.length * 0.9 &&
+        !isCachedSameAsOriginal) {
         console.log(`[PartialWorker] ✅ Cache hit for partial`);
         return cached.text;
       } else if (cached.text.length < text.length * 0.9 || isCachedSameAsOriginal) {
@@ -305,7 +306,7 @@ PARTIAL TEXT RULES:
     // For extending text, allow concurrent translations to create smooth word-by-word effect
     // This prevents rapid cancellation that blocks all translations from completing
     const cancelKey = `${sourceLang}:${targetLang}`;
-    
+
     // Find any existing pending request for this language pair
     let existingRequest = null;
     let concurrentCount = 0;
@@ -315,12 +316,12 @@ PARTIAL TEXT RULES:
         concurrentCount++;
       }
     }
-    
+
     // MULTI-SESSION OPTIMIZATION: Increased concurrency for better multi-session support
     // Conservative increase: 2->5 normal, 1->2 rate-limited (preserves single-session performance)
     // This allows multiple sessions to process translations in parallel
     const MAX_CONCURRENT = this.rateLimitDetected ? 2 : 5; // Increased from 1/2 to 2/5 for multi-session
-    
+
     // Smart cancellation: Only cancel on true resets, not on extensions
     // With MAX_CONCURRENT = 5, we can allow more parallel requests for real-time updates
     let isReset = false;
@@ -328,13 +329,13 @@ PARTIAL TEXT RULES:
       const previousText = existingRequest.text;
       // More lenient reset detection - only cancel if text shrunk significantly (>40% reduction)
       // or completely different start (not just extending)
-      isReset = text.length < previousText.length * 0.6 || 
-                !text.startsWith(previousText.substring(0, Math.min(previousText.length, 50)));
+      isReset = text.length < previousText.length * 0.6 ||
+        !text.startsWith(previousText.substring(0, Math.min(previousText.length, 50)));
     }
-    
+
     if (existingRequest) {
       const { abortController, text: previousText } = existingRequest;
-      
+
       // Only cancel on resets OR if we're way over the concurrent limit (safety check)
       // With MAX_CONCURRENT = 5, we rarely hit this, allowing smooth 1-2 char updates
       if (isReset || concurrentCount > MAX_CONCURRENT + 2) {
@@ -351,8 +352,8 @@ PARTIAL TEXT RULES:
 
     // Create abort controller for this request
     // Use timestamp in key for extending text to allow concurrent translations
-    const uniqueKey = existingRequest && !isReset && concurrentCount < MAX_CONCURRENT 
-      ? `${cancelKey}_${Date.now()}` 
+    const uniqueKey = existingRequest && !isReset && concurrentCount < MAX_CONCURRENT
+      ? `${cancelKey}_${Date.now()}`
       : cancelKey;
     const abortController = new AbortController();
     this.pendingRequests.set(uniqueKey, { abortController, text });
@@ -404,31 +405,31 @@ PARTIAL TEXT RULES:
       }
 
       const result = await response.json();
-      
+
       if (!result.choices || result.choices.length === 0) {
         throw new Error('No translation result from OpenAI');
       }
 
       const rawTranslatedText = result.choices[0].message.content.trim();
-      
+
       // CRITICAL: Never fallback to English - if API returns empty, throw error instead
       if (!rawTranslatedText || rawTranslatedText.length === 0) {
         throw new Error('Translation API returned empty result');
       }
-      
+
       // CRITICAL: Validate that translation is actually different from original (prevents English leak)
-      const translatedText = rawTranslatedText;
-      const isSameAsOriginal = translatedText === text || 
-                               translatedText.trim() === text.trim() ||
-                               translatedText.toLowerCase() === text.toLowerCase();
-      
+      const translatedText = normalizePunctuation(rawTranslatedText);
+      const isSameAsOriginal = translatedText === text ||
+        translatedText.trim() === text.trim() ||
+        translatedText.toLowerCase() === text.toLowerCase();
+
       if (isSameAsOriginal) {
         console.warn(`[PartialWorker] ⚠️ Translation matches original (likely English leak): "${translatedText.substring(0, 60)}..."`);
         throw new Error('Translation returned same as original (likely English)');
       }
-      
+
       console.log(`[PartialWorker] ✅ FULL TRANSLATION OUTPUT FROM API (${translatedText.length} chars): "${translatedText}"`);
-      
+
       // CRITICAL: Check if response was truncated
       const finishReason = result.choices[0].finish_reason;
       if (finishReason === 'length') {
@@ -508,20 +509,20 @@ PARTIAL TEXT RULES:
 
     const now = Date.now();
     const timeSinceLastRequest = now - this.lastPartialRequestTime;
-    const textGrowth = this.pendingPartialBuffer 
-      ? text.length - this.pendingPartialBuffer.length 
+    const textGrowth = this.pendingPartialBuffer
+      ? text.length - this.pendingPartialBuffer.length
       : text.length;
-    
+
     // OPTIMIZATION: First sentence gets instant translation (no throttling)
     // This ensures the first words appear immediately, keeping translation in sync with transcription
     const isFirstSentence = this.isFirstTranslation;
-    
+
     // OPTIMIZATION: For short text (< 50 chars), use instant translation with minimal throttling
     // This keeps translation in sync with fast transcription for short phrases
     const isShortText = text.length < 50;
     const SHORT_TEXT_THROTTLE_MS = 100; // Very short throttle for short text (100ms)
     const SHORT_TEXT_GROWTH_THRESHOLD = 5; // Small growth threshold for short text (5 chars)
-    
+
     // Check if we should send immediately:
     // FIRST SENTENCE: Always instant (no throttling) - critical for UX
     // For short text: Use much lower thresholds for instant feel
@@ -529,12 +530,12 @@ PARTIAL TEXT RULES:
     const hasPunctuation = this.hasSentencePunctuation(text);
     const throttleMs = isFirstSentence ? 0 : (isShortText ? SHORT_TEXT_THROTTLE_MS : this.THROTTLE_MS);
     const growthThreshold = isFirstSentence ? 1 : (isShortText ? SHORT_TEXT_GROWTH_THRESHOLD : this.GROWTH_THRESHOLD);
-    
+
     const shouldSendImmediately = isFirstSentence || // FIRST SENTENCE: Always instant
-                                   timeSinceLastRequest >= throttleMs ||
-                                   textGrowth >= growthThreshold ||
-                                   hasPunctuation ||
-                                   this.rateLimitDetected; // Skip throttling if rate limited (circuit breaker active)
+      timeSinceLastRequest >= throttleMs ||
+      textGrowth >= growthThreshold ||
+      hasPunctuation ||
+      this.rateLimitDetected; // Skip throttling if rate limited (circuit breaker active)
 
     if (shouldSendImmediately) {
       // Clear any pending timeout
@@ -551,7 +552,7 @@ PARTIAL TEXT RULES:
       // Update buffer and send request
       this.pendingPartialBuffer = text;
       this.lastPartialRequestTime = now;
-      
+
       // Mark that first translation is complete (after we start processing)
       if (this.isFirstTranslation) {
         this.isFirstTranslation = false;
@@ -564,7 +565,7 @@ PARTIAL TEXT RULES:
       const bufferedText = text;
       const bufferedIsShortText = isShortText; // Capture for closure
       const bufferedSessionId = sessionId; // Capture sessionId for closure
-      
+
       // Clear previous timeout if exists
       if (this.pendingPartialTimeout) {
         clearTimeout(this.pendingPartialTimeout);
@@ -582,12 +583,12 @@ PARTIAL TEXT RULES:
         // Use shorter throttle for short text, and instant (0ms) for first sentence
         const isFirstSentenceBuffered = this.isFirstTranslation;
         const throttleDelay = isFirstSentenceBuffered ? 0 : (bufferedIsShortText ? SHORT_TEXT_THROTTLE_MS : this.THROTTLE_MS);
-        
+
         // Mark first translation as complete when we schedule it
         if (isFirstSentenceBuffered) {
           this.isFirstTranslation = false;
         }
-        
+
         this.pendingPartialTimeout = setTimeout(async () => {
           const textToProcess = this.pendingPartialBuffer;
           this.pendingPartialBuffer = null;
@@ -596,7 +597,7 @@ PARTIAL TEXT RULES:
 
           try {
             const translated = await this._processPartialTranslation(textToProcess, sourceLang, targetLang, apiKey, bufferedSessionId);
-            
+
             // Resolve all pending promises with the translated text
             for (const { resolve } of this.pendingPartialResolvers.values()) {
               resolve(translated);
@@ -649,7 +650,7 @@ PARTIAL TEXT RULES:
     });
 
     const results = await Promise.all(translationPromises);
-    
+
     // Only include successful translations (not null) - prevents English leak
     results.forEach(({ lang, text }) => {
       if (text !== null) {
@@ -695,7 +696,7 @@ export class FinalTranslationWorker {
     }
 
     const cacheKey = `final:${sourceLang}:${targetLang}:${text.substring(0, 200)}`;
-    
+
     // Check cache
     if (this.cache.has(cacheKey)) {
       const cached = this.cache.get(cacheKey);
@@ -757,13 +758,13 @@ Output: Translated text in ${targetLangName} only.`
       });
 
       const result = await response.json();
-      
+
       if (!result.choices || result.choices.length === 0) {
         throw new Error('No translation result from OpenAI');
       }
 
-      const translatedText = result.choices[0].message.content.trim() || text;
-      
+      const translatedText = normalizePunctuation(result.choices[0].message.content.trim() || text);
+
       // CRITICAL: Check if response was truncated
       const finishReason = result.choices[0].finish_reason;
       if (finishReason === 'length') {
@@ -839,7 +840,7 @@ Output: Translated text in ${targetLangName} only.`
     });
 
     const results = await Promise.all(translationPromises);
-    
+
     results.forEach(({ lang, text }) => {
       translations[lang] = text;
     });

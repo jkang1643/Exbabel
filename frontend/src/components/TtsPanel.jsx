@@ -64,7 +64,11 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
     const groupedVoices = useMemo(() => {
         const groups = {
             gemini: { label: 'Gemini & Studio (Ultra HD)', voices: [] },
+            elevenlabs_v3: { label: 'Eleven v3 alpha (Expressive)', voices: [] },
+            elevenlabs_turbo: { label: 'Eleven Turbo v2.5 (Balanced)', voices: [] },
+            elevenlabs_flash: { label: 'Eleven Flash 2.5 (Low Latency)', voices: [] },
             chirp3_hd: { label: 'Chirp 3 HD (Premium)', voices: [] },
+            elevenlabs: { label: 'Eleven Multilingual (Stable)', voices: [] },
             neural2: { label: 'Neural2 (High-Definition)', voices: [] },
             standard: { label: 'Standard (Legacy)', voices: [] }
         };
@@ -77,6 +81,14 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
             // Grouping logic: Studio voices go to Gemini group for better UX visibility
             if (tier === 'gemini' || label.includes('Studio') || value.includes('Studio')) {
                 groups.gemini.voices.push(voice);
+            } else if (tier === 'elevenlabs_v3') {
+                groups.elevenlabs_v3.voices.push(voice);
+            } else if (tier === 'elevenlabs_turbo') {
+                groups.elevenlabs_turbo.voices.push(voice);
+            } else if (tier === 'elevenlabs_flash') {
+                groups.elevenlabs_flash.voices.push(voice);
+            } else if (tier === 'elevenlabs' || value.startsWith('elevenlabs-')) {
+                groups.elevenlabs.voices.push(voice);
             } else if (tier === 'chirp3_hd') {
                 groups.chirp3_hd.voices.push(voice);
             } else if (tier === 'neural2') {

@@ -113,3 +113,27 @@ TTS_AUDIO_FORMAT_STREAMING=PCM
 # Default: 30 seconds
 TTS_PLAYING_LEASE_SECONDS=30
 
+# ===================================
+# ElevenLabs TTS Configuration (Optional)
+# ===================================
+
+# ElevenLabs API Key
+# Get from: https://elevenlabs.io/app/settings/api-keys
+ELEVENLABS_API_KEY=
+
+# Default voice ID (used when no specific voice requested)
+# Popular multilingual voices:
+# - JBFqnCBsd6RMkjVDRZzb (George - Male)
+# - 21m00Tcm4TlvDq8ikWAM (Rachel - Female)
+# - EXAVITQu4vr4xnSDxMaL (Sarah - Female)
+ELEVENLABS_DEFAULT_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
+
+# Model for synthesis (eleven_multilingual_v2 supports 29 languages)
+ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+
+# Output format (must match frontend audio expectations)
+# Options: mp3_44100_128, mp3_44100_64, mp3_22050_32, pcm_16000, etc.
+ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
+
+# API Base URL (for enterprise/custom deployments)
+ELEVENLABS_BASE_URL=https://api.elevenlabs.io

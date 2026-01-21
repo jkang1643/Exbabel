@@ -14,6 +14,7 @@ import { resolveTtsRoute, validateResolvedRoute } from './ttsRouting.js';
 import { generateTtsInput, supportsSSML } from './ssmlBuilder.js';
 import { ElevenLabsTtsService } from './elevenlabsTtsService.js';
 import { TtsService } from './baseTtsService.js';
+import { normalizePunctuation } from '../transcriptionCleanup.js';
 
 export { TtsService };
 
@@ -199,7 +200,10 @@ export class GoogleTtsService extends TtsService {
      * @private
      */
     async _buildGoogleRequestFromRoute(request, route) {
-        const { text, ssmlOptions, ttsPrompt, promptPresetId, intensity } = request;
+        let { text, ssmlOptions, ttsPrompt, promptPresetId, intensity } = request;
+
+        // Normalize punctuation before building request
+        text = normalizePunctuation(text);
 
         // Import prompt resolver (dynamic to avoid circular deps)
         const { resolvePrompt } = await import('./promptResolver.js');

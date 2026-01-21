@@ -8,6 +8,7 @@
  * - Final results translated and broadcast to each language group
  */
 
+import { normalizePunctuation } from './transcriptionCleanup.js';
 import { GoogleSpeechStream } from './googleSpeechStream.js';
 import WebSocket from 'ws';
 import sessionStore from './sessionStore.js';
@@ -961,7 +962,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                         // Only include translatedText if we have a valid translation
                         if (hasTranslationForLang) {
-                          messageToSend.translatedText = translatedText;
+                          messageToSend.translatedText = normalizePunctuation(translatedText);
                         }
                         // Explicitly set to undefined if we have an error message (so frontend knows translation failed)
                         else if (isErrorMessage) {

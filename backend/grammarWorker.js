@@ -11,6 +11,7 @@
 
 import fetch from 'node-fetch';
 import { fetchWithRateLimit, isCurrentlyRateLimited } from './openaiRateLimiter.js';
+import { normalizePunctuation } from './transcriptionCleanup.js';
 
 const GRAMMAR_SYSTEM_PROMPT = `SYSTEM PROMPT — Grammar + Homophone + Sermon Speech Fixer
 
@@ -248,6 +249,9 @@ export class GrammarWorker {
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
 
+      // Normalize punctuation (e.g. Chinese full-stop to half-width period)
+      corrected = normalizePunctuation(corrected);
+
       if (corrected !== text) {
         // Show full diff for better visibility
         console.log(`[GrammarWorker] ✨ CORRECTED (PARTIAL, ${text.length} → ${corrected.length} chars):`);
@@ -479,6 +483,9 @@ export class GrammarWorker {
 
       // Validate that response is actually a correction, not an error message
       corrected = validateCorrectionResponse(corrected, text);
+
+      // Normalize punctuation (e.g. Chinese full-stop to half-width period)
+      corrected = normalizePunctuation(corrected);
 
       if (corrected !== text) {
         // Show full diff for better visibility

@@ -13,7 +13,7 @@ import WebSocket from 'ws';
 import translationManager from './translationManager.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
-import { grammarWorker } from './grammarWorker.js';
+import { normalizePunctuation } from './transcriptionCleanup.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';

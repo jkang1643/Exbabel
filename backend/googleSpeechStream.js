@@ -21,6 +21,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { TRANSCRIPTION_LANGUAGES, getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
 import AudioBufferManager from './audioBufferManager.js';
+import { normalizePunctuation } from './transcriptionCleanup.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

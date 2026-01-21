@@ -2,8 +2,9 @@
 import React, { useMemo } from 'react';
 import { Settings, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
-import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js'; // Ensure promptConfig exports getVoicesForLanguage or import it from ttsVoices.js
-import { getVoicesForLanguage as getVoices } from '../config/ttsVoices.js'; // Import correctly
+import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js';
+import { getVoicesForLanguage as getVoices } from '../config/ttsVoices.js';
+import { getElevenLabsCapabilities, isElevenLabsTier } from '../config/elevenLabsConfig.js';
 
 export function TtsSettingsModal({
     isOpen,
@@ -15,11 +16,13 @@ export function TtsSettingsModal({
 }) {
     if (!isOpen) return null;
 
-    // Determine standard vs Gemini
+    // Determine tier and provider
     const voices = getVoices(targetLang);
     const voiceOption = voices.find(v => v.value === selectedVoice);
     const tier = voiceOption?.tier || 'neural2';
     const isGemini = tier === 'gemini';
+    const isElevenLabs = isElevenLabsTier(tier);
+    const elevenCaps = isElevenLabs ? getElevenLabsCapabilities(tier) : null;
     const deliveryStyles = getAllDeliveryStyles();
 
     // Handlers
@@ -155,6 +158,110 @@ export function TtsSettingsModal({
                                 </div>
                             </div>
                         </div>
+                    ) : isElevenLabs && elevenCaps ? (
+                        // ElevenLabs Voice Settings
+                        <div className="space-y-4">
+                            <div className="bg-purple-50 border border-purple-100 rounded-lg p-3">
+                                <p className="text-sm text-purple-800 font-medium mb-1">🎛️ ElevenLabs Voice Settings</p>
+                                <p className="text-xs text-purple-600">Customize voice characteristics for {elevenCaps.label}</p>
+                            </div>
+
+                            {/* Stability */}
+                            {elevenCaps.supports.stability && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Stability: {(settings.elevenLabsStability ?? 0.5).toFixed(2)}
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={settings.elevenLabsStability ?? 0.5}
+                                        onChange={(e) => handleSettingChange('elevenLabsStability', parseFloat(e.target.value))}
+                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">Higher = more consistent, Lower = more variable</p>
+                                </div>
+                            )}
+
+                            {/* Similarity Boost */}
+                            {elevenCaps.supports.similarity_boost && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Similarity Boost: {(settings.elevenLabsSimilarityBoost ?? 0.75).toFixed(2)}
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={settings.elevenLabsSimilarityBoost ?? 0.75}
+                                        onChange={(e) => handleSettingChange('elevenLabsSimilarityBoost', parseFloat(e.target.value))}
+                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">Enhances similarity to the original speaker</p>
+                                </div>
+                            )}
+
+                            {/* Style */}
+                            {elevenCaps.supports.style && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Style: {(settings.elevenLabsStyle ?? 0).toFixed(2)}
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="1"
+                                        step="0.05"
+                                        value={settings.elevenLabsStyle ?? 0}
+                                        onChange={(e) => handleSettingChange('elevenLabsStyle', parseFloat(e.target.value))}
+                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                    />
+                                    <p className="text-xs text-gray-500 mt-1">Style exaggeration (0 = neutral)</p>
+                                </div>
+                            )}
+
+                            {/* Speaker Boost */}
+                            {elevenCaps.supports.use_speaker_boost && (
+                                <div>
+                                    <label className="flex items-center space-x-2">
+                                        <input
+                                            type="checkbox"
+                                            checked={settings.elevenLabsUseSpeakerBoost ?? true}
+                                            onChange={(e) => handleSettingChange('elevenLabsUseSpeakerBoost', e.target.checked)}
+                                            className="rounded text-purple-600 focus:ring-purple-500"
+                                        />
+                                        <span className="text-sm font-medium text-gray-700">Use Speaker Boost</span>
+                                    </label>
+                                    <p className="text-xs text-gray-500 mt-1">Enhances speaker similarity (recommended)</p>
+                                </div>
+                            )}
+
+                            {/* Speed */}
+                            {elevenCaps.supports.speed && (
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                        Speed: {(settings.elevenLabsSpeed ?? 1.0).toFixed(2)}x
+                                    </label>
+                                    <input
+                                        type="range"
+                                        min="0.7"
+                                        max="1.2"
+                                        step="0.05"
+                                        value={settings.elevenLabsSpeed ?? 1.0}
+                                        onChange={(e) => handleSettingChange('elevenLabsSpeed', parseFloat(e.target.value))}
+                                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+                                    />
+                                    <div className="flex justify-between text-xs text-gray-400 mt-1">
+                                        <span>Slower (0.7x)</span>
+                                        <span>Normal (1.0x)</span>
+                                        <span>Faster (1.2x)</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     ) : (
                         // Standard/Chirp Controls
                         <div className="space-y-4">
@@ -167,7 +274,6 @@ export function TtsSettingsModal({
                                     onChange={(e) => {
                                         const newStyle = e.target.value;
                                         handleSettingChange('deliveryStyle', newStyle);
-                                        // Auto-update pitch/rate defaults for style if needed (can be handled in parent or here)
                                     }}
                                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-sm bg-white"
                                 >
@@ -180,7 +286,6 @@ export function TtsSettingsModal({
                                 <p className="text-xs text-gray-500 mt-1">Select a predefined preaching cadence.</p>
                             </div>
 
-                            {/* Advanced Prosody Toggle could go here if needed */}
                             <div className="bg-gray-50 p-3 rounded text-center">
                                 <p className="text-xs text-gray-500">
                                     {voiceSupportsSSML(selectedVoice, tier)

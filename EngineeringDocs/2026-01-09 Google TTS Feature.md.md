@@ -8,6 +8,123 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+
+### BUG 33: FIXED — ElevenLabs Language Code Routing & Model Tiers
+**Status:** ✅ RESOLVED (2026-01-21)
+
+Resolved an issue where specific languages (like Slovak `sk` or Chinese `zh`) failed or used incorrect models in ElevenLabs due to missing BCP-47 to ISO 639-1 mappings and rigid tier-matching logic that prevented custom voices from working across all model tiers.
+
+#### Root Cause:
+1. **Locale Mismatch:** ElevenLabs requires specific ISO 639-1 or 3-letter codes, while the application uses BCP-47. Missing mappings for Chinese variants and other languages caused API rejections.
+2. **Strict Tier Check:** Custom voice ID resolution (`elevenlabs-` prefix stripping) was only active for the base `elevenlabs` tier, breaking custom voices in `elevenlabs_v3` or `elevenlabs_turbo`.
+
+#### Key Fixes:
+1. **Intelligent BCP-47 Mapping:** Implemented `_mapLanguageCode` in `elevenlabsTtsService.js` to normalize Chinese (`zh-cn`, `cmn`, `yue`), Filipino (`fil`), and other locales to ElevenLabs-compatible formats.
+2. **Universal Prefix Stripping:** Updated `ttsRouting.js` to apply voice ID resolution to all ElevenLabs-related tiers.
+3. **Model Capabilities Map:** Defined `ELEVENLABS_MODEL_CAPABILITIES` to gate voice settings (stability, style, speed) based on the selected model tier.
+
+#### Impact:
+- ✅ **Global Language Support:** ElevenLabs now correctly handles diverse language codes.
+- ✅ **Cross-Tier Reliability:** Custom voices like "Pastor John Brown" now work flawlessly in Turbo and Flash tiers.
+
+---
+
+### BUG 32: FIXED — Global Chinese Punctuation & Quotation Normalization
+**Status:** ✅ RESOLVED (2026-01-21)
+
+Resolved an issue where translation services (OpenAI) re-introduced full-width Chinese punctuation (periods `。`, quotes `“` `”`, and colons `：`) despite pre-translation cleanup, causing formatting issues and inconsistent TTS delivery.
+
+#### Root Cause:
+1. **Model Reinjection:** Transliteration/translation models often default to full-width punctuation when generating Chinese text.
+2. **Missing Quotes/Colons:** Initial normalization only focused on periods, leaving quotation marks and colons in non-standard formats.
+
+#### Key Fixes:
+1. **Unified Mapping Matrix:** Added `punctuationNormalization` to `cleanupRules.js` for periods, quotes, and colons.
+2. **Multi-Layered Enforcement:** Integrated `normalizePunctuation` into the transcription pipeline, translation workers (Chat and Realtime), and final TTS synthesis checks in `ttsService.js` and `elevenlabsTtsService.js`.
+3. **Spacing Refinement:** Enhanced `normalizePunctuation` to ensure proper spacing (e.g., `. `, `: `) after replacement while collapsing redundant whitespace.
+
+#### Impact:
+- ✅ **Consistent Formatting:** All Chinese text now uses standard punctuation, improving readability for listeners.
+- ✅ **Reliable TTS:** Standard punctuation ensures smoother synthesis across different TTS providers.
+
+---
+
+### BUG 31: FIXED — Duplicate TTS Playback (Hardened Deduplication)
+**Status:** ✅ RESOLVED (2026-01-21)
+
+Resolved a prevalent issue across all voice tiers where audio segments would playback multiple times, particularly common with Gemini-TTS due to engine state stabilization gaps.
+
+#### Root Cause:
+1. **Unstable Segment IDs:** New random segment IDs were being generated on every engine state update, bypassing cache.
+2. **Lifecycle Leaks:** Engine event listeners were not being cleared on React unmount/re-mount, leading to multiple "ghost" listeners triggering redundant synthesis requests.
+3. **Queue Redundancy:** The `TtsPlayerController` lacked ID-based deduplication for synthesis requests.
+
+#### Key Fixes:
+1. **Hardened Deduplication**: Implemented a two-layer text-based guard:
+   - **Layer 1 (Frontend)**: Tracks `seqId` and `text` directly in `sentToTtsRef` to block redundant triggers from the engine.
+   - **Layer 2 (Controller)**: Blocks synthesis if the text has been synthesized within the last 5 seconds (recent memory guard).
+2. **Legacy Path Gating**: Disabled redundant TTS triggers in `ListenerPage.jsx` when the shared engine is active.
+3. **Gemini-TTS Stability**: Restored stable `<say>` templates to prevent instruction-reading hallucinations.
+
+#### Impact:
+- ✅ **Deterministic Playback:** Every translated segment is now synthesized and played exactly once, regardless of engine state fluctuations or React lifecycle events.
+- ✅ **Improved Performance:** Reduced redundant synthesis costs by blocking "ghost" requests before they reach the backend.
+
+---
+
+### BUG 30: FIXED — Listener Mode Voice Dropdown Grouping
+**Status:** ✅ RESOLVED (2026-01-21)
+
+Resolved an issue where all ElevenLabs voices in the Listener Page dropdown were incorrectly grouped under the "Standard" label, regardless of their actual model tier.
+
+#### Root Cause:
+1. **Hardcoded UI Grouping:** The `reduce` function in `ListenerPage.jsx` was hardcoded to categorize voices by a limited set of tiers and defaulted to "Standard", failing to recognize ElevenLabs-specific sub-tiers (`elevenlabs_v3`, `elevenlabs_turbo`, etc.).
+
+#### Key Fixes:
+1. **Tier-Aware Grouping:** Updated the grouping logic in `ListenerPage.jsx` to explicitly handle all ElevenLabs tiers and provide descriptive group labels (e.g., "Eleven v3 alpha", "Eleven Turbo v2.5").
+
+#### Impact:
+- ✅ **UI Clarity:** Users can now clearly see which ElevenLabs model they are selecting in the listener view.
+
+---
+
+### BUG 29: FIXED — Missing Model-Specific Voice Settings Capabilities
+**Status:** ✅ RESOLVED (2026-01-21)
+
+Resolved an issue where TwelveLabs voice settings (stability, speed, etc.) were treated as universal, potentially leading to API rejections or silent failures on models that don't support specific parameters.
+
+#### Root Cause:
+1. **Universal Treatment:** The initial implementation sent all five ElevenLabs settings for every model.
+2. **Missing UI Gating:** The settings modal showed all sliders even for tiers that didn't support them.
+
+#### Key Fixes:
+1. **Backend Capability Map:** Implemented `ELEVENLABS_MODEL_CAPABILITIES` in `ttsRouting.js` to define supported settings and valid ranges per tier.
+2. **Server-Side Sanitization:** Added `buildVoiceSettings()` to `elevenlabsTtsService.js` to strip unsupported parameters and clamp values before calling the API.
+3. **Frontend UI Gating:** Updated `TtsSettingsModal.jsx` to conditionally show/enable controls based on the selected tier's capabilities.
+
+#### Impact:
+- ✅ **API Reliability:** Requests are now guaranteed to be within model limits.
+- ✅ **Accurate UI:** Users only see controls that actually affect the selected voice.
+
+---
+
+### BUG 28: FIXED — ElevenLabs Voice Resolution for Sub-Tiers
+**Status:** ✅ RESOLVED (2026-01-21)
+
+Resolved an issue where custom ElevenLabs voices (like "Pastor John Brown") failed to synthesize when selected in v3, Turbo, or Flash tiers because the backend didn't recognize the `elevenlabs-` prefix for these sub-tiers.
+
+#### Root Cause:
+1. **Strict Tier Check:** The `_resolveVoice` function in `ttsRouting.js` only checked the base `elevenlabs` tier for prefix-stripping logic. When sub-tiers like `elevenlabs_v3` were used, the logic bypassed the prefix removal, sending the raw `elevenlabs-ID` string to the API, which rejected it.
+
+#### Key Fixes:
+1. **Expanded Tier Matching:** Updated `ttsRouting.js` to apply the prefix-stripping logic to all ElevenLabs-related tiers (`elevenlabs`, `elevenlabs_v3`, `elevenlabs_turbo`, `elevenlabs_flash`).
+
+#### Impact:
+- ✅ **Cross-Tier Support:** Custom voices now work reliably across all model tiers.
+- ✅ **Consistent Resolution:** The backend properly extracts the raw voice ID regardless of the selected ElevenLabs model.
+
+---
+
 ### BUG 27: FIXED — TTS Playback Lease Expiry (Auto-Renewal)
 **Status:** ✅ RESOLVED (2026-01-20)
 
@@ -568,6 +685,25 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 ---
 
 ## 1) What we did (feature updates / changes)
+
+### 2026-01-21 — PR 8: ElevenLabs Premium Tier & Voice Settings Integration
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Enhanced the ElevenLabs integration by introducing distinct model tiers, model-specific voice settings capabilities, and support for cross-tier custom voices.
+
+**Key Changes:**
+- **Tier-Specific Models:** Introduced 4 distinct ElevenLabs tiers (`elevenlabs_v3`, `elevenlabs_turbo`, `elevenlabs_flash`, `elevenlabs`) mapped to specific model IDs (`eleven_v3`, `eleven_turbo_v2_5`, `eleven_flash_v2_5`, `eleven_multilingual_v2`).
+- **Voice Settings Capabilities Map:** Created a backend source of truth in `ttsRouting.js` that defines which voice settings (stability, similarity_boost, style, etc.) are supported by each ElevenLabs model.
+- **Backend Sanitization:** Implemented `buildVoiceSettings` in `elevenlabsTtsService.js` to automatically sanitize and clamp voice settings based on the selected model's capabilities.
+- **Tier-Aware UI Controls:** Updated `TtsSettingsModal.jsx` to dynamically show/hide settings sliders based on the capabilities of the selected ElevenLabs tier.
+- **Improved UI Categorization:** Refined the voice selection dropdowns in `TtsPanel.jsx` and `ListenerPage.jsx` to correctly group voices by their specific ElevenLabs tier with descriptive labels.
+- **Cross-Tier Custom Voice:** Added support for "Pastor John Brown" (`DfCUQ0uJkSQyc3SLt6SR`) across all ElevenLabs tiers, allowing the same voice to benefit from different model characteristics (Expressive vs. Low Latency).
+
+**Where implemented:**
+- **Backend:** `backend/tts/ttsRouting.js`, `backend/tts/elevenlabsTtsService.js`
+- **Frontend:** `frontend/src/config/ttsVoices.js`, `frontend/src/config/elevenLabsConfig.js` [NEW], `frontend/src/components/TtsSettingsModal.jsx`, `frontend/src/components/ListenerPage.jsx`, `frontend/src/components/TtsPanel.jsx`
+
+---
 
 ### 2026-01-14 — PR 6: Radio Mode Streaming-Compatible Architecture
 **Status:** ✅ IMPLEMENTED - Production Ready

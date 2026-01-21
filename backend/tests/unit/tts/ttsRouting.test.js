@@ -171,6 +171,37 @@ const route17 = await resolveTtsRoute({
 assertEquals(route17.voiceName, 'Aoede', 'Chinese Gemini voice should route correctly');
 assertEquals(route17.languageCode, 'cmn-CN', 'Language code should be normalized to cmn-CN');
 
+// Test 6: ElevenLabs tier routing
+console.log('\\n=== Test 6: ElevenLabs tier routing ===');
+
+const route18 = await resolveTtsRoute({
+    requestedTier: 'elevenlabs',
+    requestedVoice: 'elevenlabs-JBFqnCBsd6RMkjVDRZzb',
+    languageCode: 'en-US'
+});
+assertEquals(route18.provider, 'elevenlabs', 'Provider should be elevenlabs');
+assertEquals(route18.tier, 'elevenlabs', 'Tier should be elevenlabs');
+assertEquals(route18.voiceName, 'JBFqnCBsd6RMkjVDRZzb', 'Voice ID should have elevenlabs- prefix stripped');
+
+const route19 = await resolveTtsRoute({
+    requestedTier: 'elevenlabs',
+    requestedVoice: 'elevenlabs-21m00Tcm4TlvDq8ikWAM',
+    languageCode: 'es-ES'
+});
+assertEquals(route19.provider, 'elevenlabs', 'Spanish ElevenLabs should use elevenlabs provider');
+assertEquals(route19.voiceName, '21m00Tcm4TlvDq8ikWAM', 'Spanish voice ID should have prefix stripped');
+
+// Test 7: ElevenLabs default voice fallback
+console.log('\\n=== Test 7: ElevenLabs default voice fallback ===');
+
+const route20 = await resolveTtsRoute({
+    requestedTier: 'elevenlabs',
+    requestedVoice: null,
+    languageCode: 'fr-FR'
+});
+assertEquals(route20.provider, 'elevenlabs', 'Default ElevenLabs should use elevenlabs provider');
+assert(route20.voiceName !== null, 'Default ElevenLabs voice should not be null');
+
 // Summary
 console.log('\n=== Test Summary ===');
 console.log(`Passed: ${passed}`);

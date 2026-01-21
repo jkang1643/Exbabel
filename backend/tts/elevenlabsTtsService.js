@@ -8,6 +8,7 @@
 import { TtsService } from './baseTtsService.js';
 import { TtsErrorCode, TtsEncoding, getMimeType } from './tts.types.js';
 import { getElevenLabsModelCapabilities } from './ttsRouting.js';
+import { normalizePunctuation } from '../transcriptionCleanup.js';
 
 /**
  * Build voice_settings object based on model capabilities
@@ -99,7 +100,9 @@ export class ElevenLabsTtsService extends TtsService {
                 }));
             }
 
-            const text = (request.text || '').trim();
+            let text = (request.text || '').trim();
+            // Normalize punctuation before synthesis
+            text = normalizePunctuation(text);
             if (!text) {
                 throw new Error(JSON.stringify({
                     code: TtsErrorCode.INVALID_REQUEST,
@@ -143,15 +146,13 @@ export class ElevenLabsTtsService extends TtsService {
 
             // Optional: Add language code hint if available
             if (request.profile && request.profile.languageCode) {
-                // ElevenLabs uses ISO 639-1 two-letter codes
-                const langCode = request.profile.languageCode.slice(0, 2);
-                body.language_code = langCode;
+                body.language_code = this._mapLanguageCode(request.profile.languageCode);
             }
 
             // Add voice settings based on tier capabilities
             // Only includes supported parameters for this model tier
             const voiceSettings = buildVoiceSettings(
-                preResolvedRoute.tier,
+                preResolvedRoute?.tier || 'elevenlabs',
                 request.elevenLabsSettings
             );
 
@@ -244,9 +245,10 @@ export class ElevenLabsTtsService extends TtsService {
                     sampleRateHz: this._getSampleRateFromFormat(this.outputFormat)
                 },
                 mode: 'unary',
-                route: preResolvedRoute || {
+                route: {
                     provider: 'elevenlabs',
-                    tier: 'elevenlabs',
+                    ...(preResolvedRoute || {}),
+                    tier: preResolvedRoute?.tier || 'elevenlabs',
                     voiceName: voiceId,
                     languageCode: request.profile?.languageCode || 'en-US'
                 },
@@ -258,7 +260,15 @@ export class ElevenLabsTtsService extends TtsService {
             };
 
         } catch (error) {
-            console.error('[ElevenLabs TTS] Synthesis failed:', error.message);
+            let message = error.message;
+            try {
+                // Try to parse if it's already a JSON string from our own checks
+                const parsed = JSON.parse(message);
+                message = parsed.message || message;
+            } catch (e) {
+                // Not JSON, use as is
+            }
+            console.error('[ElevenLabs TTS] Synthesis failed:', message);
             throw error;
         }
     }
@@ -277,6 +287,45 @@ export class ElevenLabsTtsService extends TtsService {
 
         // Otherwise use as-is (could be a raw voice ID)
         return voiceName;
+    }
+
+    /**
+     * Map BCP-47 language code to ElevenLabs supported format
+     * @private
+     */
+    _mapLanguageCode(languageCode) {
+        if (!languageCode) return 'en';
+
+        // Normalize to lowercase for mapping
+        const code = languageCode.toLowerCase();
+
+        // Specific mappings for known problematic codes
+        const manualMap = {
+            'cmn-cn': 'zh',
+            'zh-cn': 'zh',
+            'cmn-tw': 'zh',
+            'zh-tw': 'zh',
+            'cmn': 'zh',
+            'yue-hk': 'zh',
+            'yue': 'zh',
+            'fil-ph': 'fil',
+            'fil': 'fil'
+        };
+
+        if (manualMap[code]) {
+            return manualMap[code];
+        }
+
+        // ElevenLabs generally prefers ISO 639-1 (2-letter) codes
+        // But some models like v3 support 3-letter codes
+        // For most languages, taking the first 2 letters works (en-US -> en)
+        // but we must be careful not to truncate 3-letter codes that are already correct
+        if (code.length === 3) {
+            return code;
+        }
+
+        // Default: strip region and take first 2 letters
+        return code.split('-')[0].substring(0, 2);
     }
 
     /**

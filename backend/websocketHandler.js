@@ -5,6 +5,7 @@
 import WebSocket from 'ws';
 import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
+import { normalizePunctuation } from './transcriptionCleanup.js';
 
 /**
  * Handle host connection
@@ -142,7 +143,8 @@ export async function handleHostConnection(clientWs, sessionId) {
           if (serverContent.modelTurn && serverContent.modelTurn.parts) {
             for (const part of serverContent.modelTurn.parts) {
               if (part.text) {
-                const transcript = part.text.trim();
+                let transcript = part.text.trim();
+                transcript = normalizePunctuation(transcript);
 
                 // Send transcript to host
                 if (clientWs.readyState === WebSocket.OPEN) {
@@ -635,7 +637,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           }
 
           // Import TTS modules
-          const { GoogleTtsService } = await import('./tts/ttsService.js');
+          const { getTtsServiceForProvider } = await import('./tts/ttsService.js');
           const { validateTtsRequest } = await import('./tts/ttsPolicy.js');
           const { canSynthesize } = await import('./tts/ttsQuota.js');
           const { recordUsage } = await import('./tts/ttsUsage.js');
@@ -771,8 +773,8 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               return;
             }
 
-            // 5. Synthesize audio using the resolved route
-            const ttsService = new GoogleTtsService();
+            // 5. Synthesize audio using the resolved route (provider-based)
+            const ttsService = getTtsServiceForProvider(route.provider);
             const response = await ttsService.synthesizeUnary(ttsRequest, route);
 
             // Send audio response with resolved routing info (streaming-compatible structure)

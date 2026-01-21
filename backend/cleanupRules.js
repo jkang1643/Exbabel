@@ -76,29 +76,29 @@ export const homophones = {
   their: { alternatives: ['there', "they're"], contextCheck: 'pronoun' },
   there: { alternatives: ['their', "they're"], contextCheck: 'location' },
   "they're": { alternatives: ['their', 'there'], contextCheck: 'contraction' },
-  
+
   // to/too/two
   to: { alternatives: ['too', 'two'], contextCheck: 'preposition' },
   too: { alternatives: ['to', 'two'], contextCheck: 'adverb' },
   two: { alternatives: ['to', 'too'], contextCheck: 'number' },
-  
+
   // your/you're
   your: { alternatives: ["you're"], contextCheck: 'possessive' },
   "you're": { alternatives: ['your'], contextCheck: 'contraction' },
-  
+
   // its/it's
   its: { alternatives: ["it's"], contextCheck: 'possessive' },
   "it's": { alternatives: ['its'], contextCheck: 'contraction' },
-  
+
   // peace/piece
   peace: { alternatives: ['piece'], contextCheck: 'noun' },
   piece: { alternatives: ['peace'], contextCheck: 'noun' },
-  
+
   // by/buy/bye
   by: { alternatives: ['buy', 'bye'], contextCheck: 'preposition' },
   buy: { alternatives: ['by', 'bye'], contextCheck: 'verb' },
   bye: { alternatives: ['by', 'buy'], contextCheck: 'interjection' },
-  
+
   // right/write/rite
   right: { alternatives: ['write', 'rite'], contextCheck: 'adjective' },
   write: { alternatives: ['right', 'rite'], contextCheck: 'verb' },
@@ -110,14 +110,14 @@ export const properNouns = [
   // People
   'Jesus', 'Christ', 'God', 'Lord', 'Holy Spirit',
   'Paul', 'Peter', 'Mary', 'Moses', 'David', 'John', 'Matthew', 'Mark', 'Luke',
-  
+
   // Places
   'United States', 'USA', 'UK', 'Europe', 'Asia', 'Africa', 'America',
-  
+
   // Organizations
   'Google', 'Apple', 'Microsoft', 'Amazon', 'Facebook', 'Twitter', 'Instagram',
   'NASA', 'FBI', 'CIA',
-  
+
   // Religious terms
   'Bible', 'Scripture', 'Gospel', 'Church', 'Amen', 'Hallelujah'
 ];
@@ -189,10 +189,10 @@ export const liturgicalTerms = {
 export const protectedWords = [
   // Technical terms
   'API', 'REST', 'GraphQL', 'JSON', 'XML', 'HTTP', 'HTTPS',
-  
+
   // Domain-specific
   'Mephibosheth', 'Ziba', 'Habakkuk', 'Nahum',
-  
+
   // Proper nouns that might be incorrectly changed
   'Exbabel'
 ];
@@ -319,7 +319,7 @@ export const bibleBooks = {
   'haggai': 'Haggai', 'hag i': 'Haggai',
   'zechariah': 'Zechariah',
   'malachi': 'Malachi', 'malachai': 'Malachi',
-  
+
   // New Testament
   'matthew': 'Matthew',
   'mark': 'Mark', 'march': 'Mark',
@@ -519,5 +519,13 @@ export const versePatterns = {
   'through': '–',
   'to': '–',
   'and': '–'
+};
+
+// Z. Punctuation Normalization - Map full-width characters to half-width equivalents
+export const punctuationNormalization = {
+  '。': '.',
+  '“': '"',
+  '”': '"',
+  '：': ':'
 };
 

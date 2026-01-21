@@ -1,0 +1,3033 @@
+Eleven Labs API Guide Reference: 
+
+---
+title: Introduction
+subtitle: >-
+  Explore the ElevenLabs API reference with comprehensive guides, code examples,
+  and endpoint documentation
+hide-feedback: true
+---
+
+## Installation
+
+You can interact with the API through HTTP or Websocket requests from any language, via our official Python bindings or our official Node.js libraries.
+
+To install the official Python bindings, run the following command:
+
+```bash
+pip install elevenlabs
+```
+
+To install the official Node.js library, run the following command in your Node.js project directory:
+
+```bash
+npm install @elevenlabs/elevenlabs-js
+```
+
+## Tracking generation costs
+
+Access response headers to retrieve generation metadata including character costs.
+
+<CodeBlocks>
+  <CodeBlock title="Python">
+    ```python
+    from elevenlabs.client import ElevenLabs
+
+    client = ElevenLabs(api_key="your_api_key")
+
+    # Get raw response with headers
+    response = client.text_to_speech.with_raw_response.convert(
+        text="Hello, world!",
+        voice_id="voice_id"
+    )
+
+    # Access character cost from headers
+    char_cost = response.headers.get("x-character-count")
+    request_id = response.headers.get("request-id")
+    audio_data = response.data
+    ```
+
+  </CodeBlock>
+
+  <CodeBlock title="JavaScript">
+    ```typescript
+    import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+
+    const client = new ElevenLabsClient({ apiKey: 'your_api_key' });
+
+    // Get raw response with headers
+    const { data, rawResponse } = await client.textToSpeech
+      .convert('voice_id', {
+        text: 'Hello, world!',
+        modelId: 'eleven_multilingual_v2',
+      })
+      .withRawResponse();
+
+    // Access character cost from headers
+    const charCost = rawResponse.headers.get('x-character-count');
+    const requestId = rawResponse.headers.get('request-id');
+    const audioData = data;
+    ```
+
+  </CodeBlock>
+</CodeBlocks>
+
+The raw response provides access to:
+
+- Response data - The actual API response content
+- HTTP headers - Metadata including character costs and request IDs
+
+<div id="overview-wave">
+  <ElevenLabsWaveform color="gray" className="h-[500px]" />
+</div>
+
+---
+title: API Authentication
+subtitle: Learn how to authenticate your ElevenLabs API requests
+hide-feedback: true
+---
+
+## API Keys
+
+The ElevenLabs API uses API keys for authentication. Every request to the API must include your API key, used to authenticate your requests and track usage quota.
+
+Each API key can be scoped to one of the following:
+
+1. **Scope restriction:** Set access restrictions by limiting which API endpoints the key can access.
+2. **Credit quota:** Define custom credit limits to control usage.
+
+**Remember that your API key is a secret.** Do not share it with others or expose it in any client-side code (browsers, apps).
+
+All API requests should include your API key in an `xi-api-key` HTTP header as follows:
+
+```bash
+xi-api-key: ELEVENLABS_API_KEY
+```
+
+### Making requests
+
+You can paste the command below into your terminal to run your first API request. Make sure to replace `$ELEVENLABS_API_KEY` with your secret API key.
+
+```bash
+curl 'https://api.elevenlabs.io/v1/models' \
+  -H 'Content-Type: application/json' \
+  -H 'xi-api-key: $ELEVENLABS_API_KEY'
+```
+
+Example with the `elevenlabs` Python package:
+
+```python
+from elevenlabs.client import ElevenLabs
+
+elevenlabs = ElevenLabs(
+  api_key='YOUR_API_KEY',
+)
+```
+
+Example with the `elevenlabs` Node.js package:
+
+```javascript
+import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+
+const elevenlabs = new ElevenLabsClient({
+  apiKey: 'YOUR_API_KEY',
+});
+```
+
+### Single use tokens
+
+For certain endpoints, you can use single use tokens to authenticate your requests. These tokens are valid for a limited time and can be used to connect to the API without exposing your API key, for example from the client side.
+
+See the [Single use tokens](/docs/api-reference/tokens/create) documentation for more information.
+
+---
+title: Streaming
+subtitle: >-
+  Learn how to stream real-time audio from the ElevenLabs API using chunked
+  transfer encoding
+---
+
+The ElevenLabs API supports real-time audio streaming for select endpoints, returning raw audio bytes (e.g., MP3 data) directly over HTTP using chunked transfer encoding. This allows clients to process or play audio incrementally as it is generated.
+
+Our official [Node](https://github.com/elevenlabs/elevenlabs-js) and [Python](https://github.com/elevenlabs/elevenlabs-python) libraries include utilities to simplify handling this continuous audio stream.
+
+Streaming is supported for the [Text to Speech API](/docs/api-reference/text-to-speech/stream), [Voice Changer API](/docs/api-reference/speech-to-speech/stream) & [Audio Isolation API](/docs/api-reference/audio-isolation/stream). This section focuses on how streaming works for requests made to the Text to Speech API.
+
+In Python, a streaming request looks like:
+
+```python
+from elevenlabs import stream
+from elevenlabs.client import ElevenLabs
+
+elevenlabs = ElevenLabs()
+
+audio_stream = elevenlabs.text_to_speech.stream(
+    text="This is a test",
+    voice_id="JBFqnCBsd6RMkjVDRZzb",
+    model_id="eleven_multilingual_v2"
+)
+
+# option 1: play the streamed audio locally
+stream(audio_stream)
+
+# option 2: process the audio bytes manually
+for chunk in audio_stream:
+    if isinstance(chunk, bytes):
+        print(chunk)
+```
+
+In Node / Typescript, a streaming request looks like:
+
+```javascript maxLines=0
+import { ElevenLabsClient, stream } from '@elevenlabs/elevenlabs-js';
+import { Readable } from 'stream';
+
+const elevenlabs = new ElevenLabsClient();
+
+async function main() {
+  const audioStream = await elevenlabs.textToSpeech.stream('JBFqnCBsd6RMkjVDRZzb', {
+    text: 'This is a test',
+    modelId: 'eleven_multilingual_v2',
+  });
+
+  // option 1: play the streamed audio locally
+  await stream(Readable.from(audioStream));
+
+  // option 2: process the audio manually
+  for await (const chunk of audioStream) {
+    console.log(chunk);
+  }
+}
+
+main();
+```
+
+
+
+link: https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input
+
+# WebSocket
+
+GET /v1/text-to-speech/{voice_id}/stream-input
+
+The Text-to-Speech WebSockets API is designed to generate audio from partial text input
+while ensuring consistency throughout the generated audio. Although highly flexible,
+the WebSockets API isn't a one-size-fits-all solution. It's well-suited for scenarios where:
+  * The input text is being streamed or generated in chunks.
+  * Word-to-audio alignment information is required.
+
+However, it may not be the best choice when:
+  * The entire input text is available upfront. Given that the generations are partial,
+    some buffering is involved, which could potentially result in slightly higher latency compared
+    to a standard HTTP request.
+  * You want to quickly experiment or prototype. Working with WebSockets can be harder and more
+    complex than using a standard HTTP API, which might slow down rapid development and testing.
+
+
+Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input
+
+## AsyncAPI Specification
+
+```yaml
+asyncapi: 2.6.0
+info:
+  title: V 1 Text To Speech Voice Id Stream Input
+  version: subpackage_v1TextToSpeechVoiceIdStreamInput.v1TextToSpeechVoiceIdStreamInput
+  description: >
+    The Text-to-Speech WebSockets API is designed to generate audio from partial
+    text input
+
+    while ensuring consistency throughout the generated audio. Although highly
+    flexible,
+
+    the WebSockets API isn't a one-size-fits-all solution. It's well-suited for
+    scenarios where:
+      * The input text is being streamed or generated in chunks.
+      * Word-to-audio alignment information is required.
+
+    However, it may not be the best choice when:
+      * The entire input text is available upfront. Given that the generations are partial,
+        some buffering is involved, which could potentially result in slightly higher latency compared
+        to a standard HTTP request.
+      * You want to quickly experiment or prototype. Working with WebSockets can be harder and more
+        complex than using a standard HTTP API, which might slow down rapid development and testing.
+channels:
+  /v1/text-to-speech/{voice_id}/stream-input:
+    description: >
+      The Text-to-Speech WebSockets API is designed to generate audio from
+      partial text input
+
+      while ensuring consistency throughout the generated audio. Although highly
+      flexible,
+
+      the WebSockets API isn't a one-size-fits-all solution. It's well-suited
+      for scenarios where:
+        * The input text is being streamed or generated in chunks.
+        * Word-to-audio alignment information is required.
+
+      However, it may not be the best choice when:
+        * The entire input text is available upfront. Given that the generations are partial,
+          some buffering is involved, which could potentially result in slightly higher latency compared
+          to a standard HTTP request.
+        * You want to quickly experiment or prototype. Working with WebSockets can be harder and more
+          complex than using a standard HTTP API, which might slow down rapid development and testing.
+    parameters:
+      voice_id:
+        description: The unique identifier for the voice to use in the TTS process.
+        schema:
+          type: string
+    bindings:
+      ws:
+        query:
+          type: object
+          properties:
+            authorization:
+              type: string
+            single_use_token:
+              type: string
+            model_id:
+              type: string
+            language_code:
+              type: string
+            enable_logging:
+              type: boolean
+              default: true
+            enable_ssml_parsing:
+              type: boolean
+              default: false
+            output_format:
+              $ref: '#/components/schemas/output_format'
+            inactivity_timeout:
+              type: integer
+              default: 20
+            sync_alignment:
+              type: boolean
+              default: false
+            auto_mode:
+              type: boolean
+              default: false
+            apply_text_normalization:
+              $ref: '#/components/schemas/apply_text_normalization'
+            seed:
+              type: integer
+        headers:
+          type: object
+          properties:
+            xi-api-key:
+              type: string
+    publish:
+      operationId: v-1-text-to-speech-voice-id-stream-input-publish
+      summary: subscribe
+      description: Receive messages from the WebSocket
+      message:
+        name: subscribe
+        title: subscribe
+        description: Receive messages from the WebSocket
+        payload:
+          $ref: '#/components/schemas/V1TextToSpeechVoiceIdStreamInputSubscribe'
+    subscribe:
+      operationId: v-1-text-to-speech-voice-id-stream-input-subscribe
+      summary: publish
+      description: Send messages to the WebSocket
+      message:
+        name: publish
+        title: publish
+        description: Send messages to the WebSocket
+        payload:
+          $ref: '#/components/schemas/V1TextToSpeechVoiceIdStreamInputPublish'
+servers:
+  Production:
+    url: wss://api.elevenlabs.io/
+    protocol: wss
+    x-default: true
+  Production US:
+    url: wss://api.us.elevenlabs.io/
+    protocol: wss
+  Production EU:
+    url: wss://api.eu.residency.elevenlabs.io/
+    protocol: wss
+  Production India:
+    url: wss://api.in.residency.elevenlabs.io/
+    protocol: wss
+components:
+  schemas:
+    output_format:
+      type: string
+      enum:
+        - value: mp3_22050_32
+        - value: mp3_44100_32
+        - value: mp3_44100_64
+        - value: mp3_44100_96
+        - value: mp3_44100_128
+        - value: mp3_44100_192
+        - value: pcm_8000
+        - value: pcm_16000
+        - value: pcm_22050
+        - value: pcm_24000
+        - value: pcm_44100
+        - value: ulaw_8000
+        - value: alaw_8000
+        - value: opus_48000_32
+        - value: opus_48000_64
+        - value: opus_48000_96
+        - value: opus_48000_128
+        - value: opus_48000_192
+    apply_text_normalization:
+      type: string
+      enum:
+        - value: auto
+        - value: 'on'
+        - value: 'off'
+      default: auto
+    NormalizedAlignment:
+      type: object
+      properties:
+        charStartTimesMs:
+          type: array
+          items:
+            type: integer
+          description: >
+            A list of starting times (in milliseconds) for each character in the
+            normalized text as it
+
+            corresponds to the audio. For instance, the character 'H' starts at
+            time 0 ms in the audio.
+
+            Note these times are relative to the returned chunk from the model,
+            and not the
+
+            full audio response.
+        charDurationsMs:
+          type: array
+          items:
+            type: integer
+          description: >
+            A list of durations (in milliseconds) for each character in the
+            normalized text as it
+
+            corresponds to the audio. For instance, the character 'H' lasts for
+            3 ms in the audio.
+
+            Note these times are relative to the returned chunk from the model,
+            and not the
+
+            full audio response.
+        chars:
+          type: array
+          items:
+            type: string
+          description: >
+            A list of characters in the normalized text sequence. For instance,
+            the first character is 'H'.
+
+            Note that this list may contain spaces, punctuation, and other
+            special characters.
+
+            The length of this list should be the same as the lengths of
+            `charStartTimesMs` and `charDurationsMs`.
+    Alignment:
+      type: object
+      properties:
+        charStartTimesMs:
+          type: array
+          items:
+            type: integer
+          description: >
+            A list of starting times (in milliseconds) for each character in the
+            text as it
+
+            corresponds to the audio. For instance, the character 'H' starts at
+            time 0 ms in the audio.
+
+            Note these times are relative to the returned chunk from the model,
+            and not the
+
+            full audio response.
+        charDurationsMs:
+          type: array
+          items:
+            type: integer
+          description: >
+            A list of durations (in milliseconds) for each character in the text
+            as it
+
+            corresponds to the audio. For instance, the character 'H' lasts for
+            3 ms in the audio.
+
+            Note these times are relative to the returned chunk from the model,
+            and not the
+
+            full audio response.
+        chars:
+          type: array
+          items:
+            type: string
+          description: >
+            A list of characters in the text sequence. For instance, the first
+            character is 'H'.
+
+            Note that this list may contain spaces, punctuation, and other
+            special characters.
+
+            The length of this list should be the same as the lengths of
+            `charStartTimesMs` and `charDurationsMs`.
+    AudioOutput:
+      type: object
+      properties:
+        audio:
+          type: string
+          description: >
+            A generated partial audio chunk, encoded using the selected
+            output_format, by default this
+
+            is MP3 encoded as a base64 string.
+        normalizedAlignment:
+          $ref: '#/components/schemas/NormalizedAlignment'
+        alignment:
+          $ref: '#/components/schemas/Alignment'
+      required:
+        - audio
+    FinalOutput:
+      type: object
+      properties:
+        isFinal:
+          type: string
+          enum:
+            - type: booleanLiteral
+              value: true
+          description: >
+            Indicates if the generation is complete. If set to `True`, `audio`
+            will be null.
+    V1TextToSpeechVoiceIdStreamInputSubscribe:
+      oneOf:
+        - $ref: '#/components/schemas/AudioOutput'
+        - $ref: '#/components/schemas/FinalOutput'
+    RealtimeVoiceSettings:
+      type: object
+      properties:
+        stability:
+          type: number
+          format: double
+          default: 0.5
+          description: Defines the stability for voice settings.
+        similarity_boost:
+          type: number
+          format: double
+          default: 0.75
+          description: Defines the similarity boost for voice settings.
+        style:
+          type: number
+          format: double
+          default: 0
+          description: >-
+            Defines the style for voice settings. This parameter is available on
+            V2+ models.
+        use_speaker_boost:
+          type: boolean
+          default: true
+          description: >-
+            Defines the use speaker boost for voice settings. This parameter is
+            available on V2+ models.
+        speed:
+          type: number
+          format: double
+          default: 1
+          description: >-
+            Controls the speed of the generated speech. Values range from 0.7 to
+            1.2, with 1.0 being the default speed.
+    GenerationConfig:
+      type: object
+      properties:
+        chunk_length_schedule:
+          type: array
+          items:
+            type: number
+            format: double
+          description: >
+            This is an advanced setting that most users shouldn't need to use.
+            It relates to our
+
+            generation schedule.
+
+
+            Our WebSocket service incorporates a buffer system designed to
+            optimize the Time To First Byte (TTFB) while maintaining
+            high-quality streaming.
+
+
+            All text sent to the WebSocket endpoint is added to this buffer and
+            only when that buffer reaches a certain size is an audio generation
+            attempted. This is because our model provides higher quality audio
+            when the model has longer inputs, and can deduce more context about
+            how the text should be delivered.
+
+
+            The buffer ensures smooth audio data delivery and is automatically
+            emptied with a final audio generation either when the stream is
+            closed, or upon sending a `flush` command. We have advanced settings
+            for changing the chunk schedule, which can improve latency at the
+            cost of quality by generating audio more frequently with smaller
+            text inputs.
+
+
+            The `chunk_length_schedule` determines the minimum amount of text
+            that needs to be sent and present in our
+
+            buffer before audio starts being generated. This is to maximise the
+            amount of context available to
+
+            the model to improve audio quality, whilst balancing latency of the
+            returned audio chunks.
+
+
+            The default value for `chunk_length_schedule` is: [120, 160, 250,
+            290].
+
+
+            This means that the first chunk of audio will not be generated until
+            you send text that
+
+            totals at least 120 characters long. The next chunk of audio will
+            only be generated once a
+
+            further 160 characters have been sent. The third audio chunk will be
+            generated after the
+
+            next 250 characters. Then the fourth, and beyond, will be generated
+            in sets of at least 290 characters.
+
+
+            Customize this array to suit your needs. If you want to generate
+            audio more frequently
+
+            to optimise latency, you can reduce the values in the array. Note
+            that setting the values
+
+            too low may result in lower quality audio. Please test and adjust as
+            needed.
+
+
+            Each item should be in the range 50-500.
+    PronunciationDictionaryLocator:
+      type: object
+      properties:
+        pronunciation_dictionary_id:
+          type: string
+          description: The unique identifier of the pronunciation dictionary
+        version_id:
+          type: string
+          description: The version identifier of the pronunciation dictionary
+      required:
+        - pronunciation_dictionary_id
+        - version_id
+    InitializeConnection:
+      type: object
+      properties:
+        text:
+          type: string
+          enum:
+            - type: stringLiteral
+              value: ' '
+          description: The initial text that must be sent is a blank space.
+        voice_settings:
+          $ref: '#/components/schemas/RealtimeVoiceSettings'
+        generation_config:
+          $ref: '#/components/schemas/GenerationConfig'
+        pronunciation_dictionary_locators:
+          type: array
+          items:
+            $ref: '#/components/schemas/PronunciationDictionaryLocator'
+          description: >
+            Optional list of pronunciation dictionary locators. If provided,
+            these dictionaries will be used to
+
+            modify pronunciation of matching text. Must only be provided in the
+            first message.
+
+
+            Note: Pronunciation dictionary matches will only be respected within
+            a provided chunk.
+        xi-api-key:
+          type: string
+          description: >
+            Your ElevenLabs API key. This can only be included in the first
+            message and is not needed if present in the header.
+        authorization:
+          type: string
+          description: >
+            Your authorization bearer token. This can only be included in the
+            first message and is not needed if present in the header.
+      required:
+        - text
+    SendText:
+      type: object
+      properties:
+        text:
+          type: string
+          description: >-
+            The text to be sent to the API for audio generation. Should always
+            end with a single space string.
+        try_trigger_generation:
+          type: boolean
+          default: false
+          description: >
+            This is an advanced setting that most users shouldn't need to use.
+            It relates to our generation schedule.
+
+
+            Use this to attempt to immediately trigger the generation of audio,
+            overriding the `chunk_length_schedule`.
+
+            Unlike flush, `try_trigger_generation` will only generate audio if
+            our
+
+            buffer contains more than a minimum
+
+            threshold of characters, this is to ensure a higher quality response
+            from our model.
+
+
+            Note that overriding the chunk schedule to generate small amounts of
+
+            text may result in lower quality audio, therefore, only use this
+            parameter if you
+
+            really need text to be processed immediately. We generally recommend
+            keeping the default value of
+
+            `false` and adjusting the `chunk_length_schedule` in the
+            `generation_config` instead.
+        voice_settings:
+          $ref: '#/components/schemas/RealtimeVoiceSettings'
+          description: >-
+            The voice settings field can be provided in the first
+            `InitializeConnection` message and then must either be not provided
+            or not changed.
+        generator_config:
+          $ref: '#/components/schemas/GenerationConfig'
+          description: >-
+            The generator config field can be provided in the first
+            `InitializeConnection` message and then must either be not provided
+            or not changed.
+        flush:
+          type: boolean
+          default: false
+          description: >
+            Flush forces the generation of audio. Set this value to true when
+            you have finished sending text, but want to keep the websocket
+            connection open.
+
+
+            This is useful when you want to ensure that the last chunk of audio
+            is generated even when the length of text sent is smaller than the
+            value set in chunk_length_schedule (e.g. 120 or 50).
+      required:
+        - text
+    CloseConnection:
+      type: object
+      properties:
+        text:
+          type: string
+          enum:
+            - type: stringLiteral
+              value: ''
+          description: End the stream with an empty string
+      required:
+        - text
+    V1TextToSpeechVoiceIdStreamInputPublish:
+      oneOf:
+        - $ref: '#/components/schemas/InitializeConnection'
+        - $ref: '#/components/schemas/SendText'
+        - $ref: '#/components/schemas/CloseConnection'
+
+```
+# Create speech
+
+POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}
+Content-Type: application/json
+
+Converts text into speech using a voice of your choice and returns audio.
+
+Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.1.1
+info:
+  title: Create speech
+  version: endpoint_textToSpeech.convert
+paths:
+  /v1/text-to-speech/{voice_id}:
+    post:
+      operationId: convert
+      summary: Create speech
+      description: >-
+        Converts text into speech using a voice of your choice and returns
+        audio.
+      tags:
+        - - subpackage_textToSpeech
+      parameters:
+        - name: voice_id
+          in: path
+          description: >-
+            ID of the voice to be used. Use the [Get
+            voices](/docs/api-reference/voices/search) endpoint list all the
+            available voices.
+          required: true
+          schema:
+            type: string
+        - name: enable_logging
+          in: query
+          description: >-
+            When enable_logging is set to false zero retention mode will be used
+            for the request. This will mean history features are unavailable for
+            this request, including request stitching. Zero retention mode may
+            only be used by enterprise customers.
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: optimize_streaming_latency
+          in: query
+          description: >
+            You can turn on latency optimizations at some cost of quality. The
+            best possible final latency varies by model. Possible values:
+
+            0 - default mode (no latency optimizations)
+
+            1 - normal latency optimizations (about 50% of possible latency
+            improvement of option 3)
+
+            2 - strong latency optimizations (about 75% of possible latency
+            improvement of option 3)
+
+            3 - max latency optimizations
+
+            4 - max latency optimizations, but also with text normalizer turned
+            off for even more latency savings (best latency, but can
+            mispronounce eg numbers and dates).
+
+
+            Defaults to None.
+          required: false
+          schema:
+            type:
+              - integer
+              - 'null'
+        - name: output_format
+          in: query
+          description: >-
+            Output format of the generated audio. Formatted as
+            codec_sample_rate_bitrate. So an mp3 with 22.05kHz sample rate at
+            32kbs is represented as mp3_22050_32. MP3 with 192kbps bitrate
+            requires you to be subscribed to Creator tier or above. PCM and WAV
+            formats with 44.1kHz sample rate requires you to be subscribed to
+            Pro tier or above. Note that the μ-law format (sometimes written
+            mu-law, often approximated as u-law) is commonly used for Twilio
+            audio inputs.
+          required: false
+          schema:
+            $ref: >-
+              #/components/schemas/V1TextToSpeechVoiceIdPostParametersOutputFormat
+        - name: xi-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The generated audio file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '422':
+          description: Validation Error
+          content: {}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Body_text_to_speech_full'
+components:
+  schemas:
+    V1TextToSpeechVoiceIdPostParametersOutputFormat:
+      type: string
+      enum:
+        - value: alaw_8000
+        - value: mp3_22050_32
+        - value: mp3_24000_48
+        - value: mp3_44100_128
+        - value: mp3_44100_192
+        - value: mp3_44100_32
+        - value: mp3_44100_64
+        - value: mp3_44100_96
+        - value: opus_48000_128
+        - value: opus_48000_192
+        - value: opus_48000_32
+        - value: opus_48000_64
+        - value: opus_48000_96
+        - value: pcm_16000
+        - value: pcm_22050
+        - value: pcm_24000
+        - value: pcm_32000
+        - value: pcm_44100
+        - value: pcm_48000
+        - value: pcm_8000
+        - value: ulaw_8000
+        - value: wav_16000
+        - value: wav_22050
+        - value: wav_24000
+        - value: wav_32000
+        - value: wav_44100
+        - value: wav_48000
+        - value: wav_8000
+      default: mp3_44100_128
+    VoiceSettingsResponseModel:
+      type: object
+      properties:
+        stability:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.5
+          description: >-
+            Determines how stable the voice is and the randomness between each
+            generation. Lower values introduce broader emotional range for the
+            voice. Higher values can result in a monotonous voice with limited
+            emotion.
+        use_speaker_boost:
+          type:
+            - boolean
+            - 'null'
+          default: true
+          description: >-
+            This setting boosts the similarity to the original speaker. Using
+            this setting requires a slightly higher computational load, which in
+            turn increases latency.
+        similarity_boost:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.75
+          description: >-
+            Determines how closely the AI should adhere to the original voice
+            when attempting to replicate it.
+        style:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0
+          description: >-
+            Determines the style exaggeration of the voice. This setting
+            attempts to amplify the style of the original speaker. It does
+            consume additional computational resources and might increase
+            latency if set to anything other than 0.
+        speed:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 1
+          description: >-
+            Adjusts the speed of the voice. A value of 1.0 is the default speed,
+            while values less than 1.0 slow down the speech, and values greater
+            than 1.0 speed it up.
+    PronunciationDictionaryVersionLocatorRequestModel:
+      type: object
+      properties:
+        pronunciation_dictionary_id:
+          type: string
+          description: The ID of the pronunciation dictionary.
+        version_id:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The ID of the version of the pronunciation dictionary. If not
+            provided, the latest version will be used.
+      required:
+        - pronunciation_dictionary_id
+    BodyTextToSpeechFullApplyTextNormalization:
+      type: string
+      enum:
+        - value: auto
+        - value: 'on'
+        - value: 'off'
+      default: auto
+    Body_text_to_speech_full:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text that will get converted into speech.
+        model_id:
+          type: string
+          default: eleven_multilingual_v2
+          description: >-
+            Identifier of the model that will be used, you can query them using
+            GET /v1/models. The model needs to have support for text to speech,
+            you can check this using the can_do_text_to_speech property.
+        language_code:
+          type:
+            - string
+            - 'null'
+          description: >-
+            Language code (ISO 639-1) used to enforce a language for the model
+            and text normalization. If the model does not support provided
+            language code, an error will be returned.
+        voice_settings:
+          oneOf:
+            - $ref: '#/components/schemas/VoiceSettingsResponseModel'
+            - type: 'null'
+          description: >-
+            Voice settings overriding stored settings for the given voice. They
+            are applied only on the given request.
+        pronunciation_dictionary_locators:
+          type:
+            - array
+            - 'null'
+          items:
+            $ref: >-
+              #/components/schemas/PronunciationDictionaryVersionLocatorRequestModel
+          description: >-
+            A list of pronunciation dictionary locators (id, version_id) to be
+            applied to the text. They will be applied in order. You may have up
+            to 3 locators per request
+        seed:
+          type:
+            - integer
+            - 'null'
+          description: >-
+            If specified, our system will make a best effort to sample
+            deterministically, such that repeated requests with the same seed
+            and parameters should return the same result. Determinism is not
+            guaranteed. Must be integer between 0 and 4294967295.
+        previous_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that came before the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        next_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that comes after the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        previous_request_ids:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that were generated before this
+            generation. Can be used to improve the speech's continuity when
+            splitting up a large task into multiple requests. The results will
+            be best when the same model is used across the generations. In case
+            both previous_text and previous_request_ids is send, previous_text
+            will be ignored. A maximum of 3 request_ids can be send.
+        next_request_ids:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that come after this generation.
+            next_request_ids is especially useful for maintaining the speech's
+            continuity when regenerating a sample that has had some audio
+            quality issues. For example, if you have generated 3 speech clips,
+            and you want to improve clip 2, passing the request id of clip 3 as
+            a next_request_id (and that of clip 1 as a previous_request_id) will
+            help maintain natural flow in the combined speech. The results will
+            be best when the same model is used across the generations. In case
+            both next_text and next_request_ids is send, next_text will be
+            ignored. A maximum of 3 request_ids can be send.
+        use_pvc_as_ivc:
+          type: boolean
+          default: false
+          description: >-
+            If true, we won't use PVC version of the voice for the generation
+            but the IVC version. This is a temporary workaround for higher
+            latency in PVC versions.
+        apply_text_normalization:
+          $ref: '#/components/schemas/BodyTextToSpeechFullApplyTextNormalization'
+          description: >-
+            This parameter controls text normalization with three modes: 'auto',
+            'on', and 'off'. When set to 'auto', the system will automatically
+            decide whether to apply text normalization (e.g., spelling out
+            numbers). With 'on', text normalization will always be applied,
+            while with 'off', it will be skipped.
+        apply_language_text_normalization:
+          type: boolean
+          default: false
+          description: >-
+            This parameter controls language text normalization. This helps with
+            proper pronunciation of text in some supported languages. WARNING:
+            This parameter can heavily increase the latency of the request.
+            Currently only supported for Japanese.
+      required:
+        - text
+
+```
+
+## SDK Code Examples
+
+```typescript
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+
+async function main() {
+    const client = new ElevenLabsClient({
+        environment: "https://api.elevenlabs.io",
+    });
+    await client.textToSpeech.convert("JBFqnCBsd6RMkjVDRZzb", {
+        outputFormat: "mp3_44100_128",
+        text: "The first move is what sets everything in motion.",
+        modelId: "eleven_multilingual_v2",
+    });
+}
+main();
+
+```
+
+```python
+from elevenlabs import ElevenLabs
+
+client = ElevenLabs(
+    base_url="https://api.elevenlabs.io"
+)
+
+client.text_to_speech.convert(
+    voice_id="JBFqnCBsd6RMkjVDRZzb",
+    output_format="mp3_44100_128",
+    text="The first move is what sets everything in motion.",
+    model_id="eleven_multilingual_v2"
+)
+
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"strings"
+	"net/http"
+	"io"
+)
+
+func main() {
+
+	url := "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb?output_format=mp3_44100_128"
+
+	payload := strings.NewReader("{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}")
+
+	req, _ := http.NewRequest("POST", url, payload)
+
+	req.Header.Add("xi-api-key", "xi-api-key")
+	req.Header.Add("Content-Type", "application/json")
+
+	res, _ := http.DefaultClient.Do(req)
+
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	fmt.Println(res)
+	fmt.Println(string(body))
+
+}
+```
+
+```ruby
+require 'uri'
+require 'net/http'
+
+url = URI("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb?output_format=mp3_44100_128")
+
+http = Net::HTTP.new(url.host, url.port)
+http.use_ssl = true
+
+request = Net::HTTP::Post.new(url)
+request["xi-api-key"] = 'xi-api-key'
+request["Content-Type"] = 'application/json'
+request.body = "{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}"
+
+response = http.request(request)
+puts response.read_body
+```
+
+```java
+HttpResponse<String> response = Unirest.post("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb?output_format=mp3_44100_128")
+  .header("xi-api-key", "xi-api-key")
+  .header("Content-Type", "application/json")
+  .body("{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}")
+  .asString();
+```
+
+```php
+<?php
+
+$client = new \GuzzleHttp\Client();
+
+$response = $client->request('POST', 'https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb?output_format=mp3_44100_128', [
+  'body' => '{
+  "text": "The first move is what sets everything in motion.",
+  "model_id": "eleven_multilingual_v2"
+}',
+  'headers' => [
+    'Content-Type' => 'application/json',
+    'xi-api-key' => 'xi-api-key',
+  ],
+]);
+
+echo $response->getBody();
+```
+
+```csharp
+var client = new RestClient("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb?output_format=mp3_44100_128");
+var request = new RestRequest(Method.POST);
+request.AddHeader("xi-api-key", "xi-api-key");
+request.AddHeader("Content-Type", "application/json");
+request.AddParameter("application/json", "{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}", ParameterType.RequestBody);
+IRestResponse response = client.Execute(request);
+```
+
+```swift
+import Foundation
+
+let headers = [
+  "xi-api-key": "xi-api-key",
+  "Content-Type": "application/json"
+]
+let parameters = [
+  "text": "The first move is what sets everything in motion.",
+  "model_id": "eleven_multilingual_v2"
+] as [String : Any]
+
+let postData = JSONSerialization.data(withJSONObject: parameters, options: [])
+
+let request = NSMutableURLRequest(url: NSURL(string: "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb?output_format=mp3_44100_128")! as URL,
+                                        cachePolicy: .useProtocolCachePolicy,
+                                    timeoutInterval: 10.0)
+request.httpMethod = "POST"
+request.allHTTPHeaderFields = headers
+request.httpBody = postData as Data
+
+let session = URLSession.shared
+let dataTask = session.dataTask(with: request as URLRequest, completionHandler: { (data, response, error) -> Void in
+  if (error != nil) {
+    print(error as Any)
+  } else {
+    let httpResponse = response as? HTTPURLResponse
+    print(httpResponse)
+  }
+})
+
+dataTask.resume()
+```
+# Create speech with timing
+
+POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps
+Content-Type: application/json
+
+Generate speech from text with precise character-level timing information for audio-text synchronization.
+
+Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.1.1
+info:
+  title: Create speech with timing
+  version: endpoint_textToSpeech.convert_with_timestamps
+paths:
+  /v1/text-to-speech/{voice_id}/with-timestamps:
+    post:
+      operationId: convert-with-timestamps
+      summary: Create speech with timing
+      description: >-
+        Generate speech from text with precise character-level timing
+        information for audio-text synchronization.
+      tags:
+        - - subpackage_textToSpeech
+      parameters:
+        - name: voice_id
+          in: path
+          description: >-
+            Voice ID to be used, you can use https://api.elevenlabs.io/v1/voices
+            to list all the available voices.
+          required: true
+          schema:
+            type: string
+        - name: enable_logging
+          in: query
+          description: >-
+            When enable_logging is set to false zero retention mode will be used
+            for the request. This will mean history features are unavailable for
+            this request, including request stitching. Zero retention mode may
+            only be used by enterprise customers.
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: optimize_streaming_latency
+          in: query
+          description: >
+            You can turn on latency optimizations at some cost of quality. The
+            best possible final latency varies by model. Possible values:
+
+            0 - default mode (no latency optimizations)
+
+            1 - normal latency optimizations (about 50% of possible latency
+            improvement of option 3)
+
+            2 - strong latency optimizations (about 75% of possible latency
+            improvement of option 3)
+
+            3 - max latency optimizations
+
+            4 - max latency optimizations, but also with text normalizer turned
+            off for even more latency savings (best latency, but can
+            mispronounce eg numbers and dates).
+
+
+            Defaults to None.
+          required: false
+          schema:
+            type:
+              - integer
+              - 'null'
+        - name: output_format
+          in: query
+          description: >-
+            Output format of the generated audio. Formatted as
+            codec_sample_rate_bitrate. So an mp3 with 22.05kHz sample rate at
+            32kbs is represented as mp3_22050_32. MP3 with 192kbps bitrate
+            requires you to be subscribed to Creator tier or above. PCM and WAV
+            formats with 44.1kHz sample rate requires you to be subscribed to
+            Pro tier or above. Note that the μ-law format (sometimes written
+            mu-law, often approximated as u-law) is commonly used for Twilio
+            audio inputs.
+          required: false
+          schema:
+            $ref: >-
+              #/components/schemas/V1TextToSpeechVoiceIdWithTimestampsPostParametersOutputFormat
+        - name: xi-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioWithTimestampsResponseModel'
+        '422':
+          description: Validation Error
+          content: {}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Body_text_to_speech_full_with_timestamps'
+components:
+  schemas:
+    V1TextToSpeechVoiceIdWithTimestampsPostParametersOutputFormat:
+      type: string
+      enum:
+        - value: alaw_8000
+        - value: mp3_22050_32
+        - value: mp3_24000_48
+        - value: mp3_44100_128
+        - value: mp3_44100_192
+        - value: mp3_44100_32
+        - value: mp3_44100_64
+        - value: mp3_44100_96
+        - value: opus_48000_128
+        - value: opus_48000_192
+        - value: opus_48000_32
+        - value: opus_48000_64
+        - value: opus_48000_96
+        - value: pcm_16000
+        - value: pcm_22050
+        - value: pcm_24000
+        - value: pcm_32000
+        - value: pcm_44100
+        - value: pcm_48000
+        - value: pcm_8000
+        - value: ulaw_8000
+        - value: wav_16000
+        - value: wav_22050
+        - value: wav_24000
+        - value: wav_32000
+        - value: wav_44100
+        - value: wav_48000
+        - value: wav_8000
+      default: mp3_44100_128
+    VoiceSettingsResponseModel:
+      type: object
+      properties:
+        stability:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.5
+          description: >-
+            Determines how stable the voice is and the randomness between each
+            generation. Lower values introduce broader emotional range for the
+            voice. Higher values can result in a monotonous voice with limited
+            emotion.
+        use_speaker_boost:
+          type:
+            - boolean
+            - 'null'
+          default: true
+          description: >-
+            This setting boosts the similarity to the original speaker. Using
+            this setting requires a slightly higher computational load, which in
+            turn increases latency.
+        similarity_boost:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.75
+          description: >-
+            Determines how closely the AI should adhere to the original voice
+            when attempting to replicate it.
+        style:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0
+          description: >-
+            Determines the style exaggeration of the voice. This setting
+            attempts to amplify the style of the original speaker. It does
+            consume additional computational resources and might increase
+            latency if set to anything other than 0.
+        speed:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 1
+          description: >-
+            Adjusts the speed of the voice. A value of 1.0 is the default speed,
+            while values less than 1.0 slow down the speech, and values greater
+            than 1.0 speed it up.
+    PronunciationDictionaryVersionLocatorRequestModel:
+      type: object
+      properties:
+        pronunciation_dictionary_id:
+          type: string
+          description: The ID of the pronunciation dictionary.
+        version_id:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The ID of the version of the pronunciation dictionary. If not
+            provided, the latest version will be used.
+      required:
+        - pronunciation_dictionary_id
+    BodyTextToSpeechFullWithTimestampsApplyTextNormalization:
+      type: string
+      enum:
+        - value: auto
+        - value: 'on'
+        - value: 'off'
+      default: auto
+    Body_text_to_speech_full_with_timestamps:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text that will get converted into speech.
+        model_id:
+          type: string
+          default: eleven_multilingual_v2
+          description: >-
+            Identifier of the model that will be used, you can query them using
+            GET /v1/models. The model needs to have support for text to speech,
+            you can check this using the can_do_text_to_speech property.
+        language_code:
+          type:
+            - string
+            - 'null'
+          description: >-
+            Language code (ISO 639-1) used to enforce a language for the model
+            and text normalization. If the model does not support provided
+            language code, an error will be returned.
+        voice_settings:
+          oneOf:
+            - $ref: '#/components/schemas/VoiceSettingsResponseModel'
+            - type: 'null'
+          description: >-
+            Voice settings overriding stored settings for the given voice. They
+            are applied only on the given request.
+        pronunciation_dictionary_locators:
+          type: array
+          items:
+            $ref: >-
+              #/components/schemas/PronunciationDictionaryVersionLocatorRequestModel
+          description: >-
+            A list of pronunciation dictionary locators (id, version_id) to be
+            applied to the text. They will be applied in order. You may have up
+            to 3 locators per request
+        seed:
+          type:
+            - integer
+            - 'null'
+          description: >-
+            If specified, our system will make a best effort to sample
+            deterministically, such that repeated requests with the same seed
+            and parameters should return the same result. Determinism is not
+            guaranteed. Must be integer between 0 and 4294967295.
+        previous_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that came before the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        next_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that comes after the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        previous_request_ids:
+          type: array
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that were generated before this
+            generation. Can be used to improve the speech's continuity when
+            splitting up a large task into multiple requests. The results will
+            be best when the same model is used across the generations. In case
+            both previous_text and previous_request_ids is send, previous_text
+            will be ignored. A maximum of 3 request_ids can be send.
+        next_request_ids:
+          type: array
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that come after this generation.
+            next_request_ids is especially useful for maintaining the speech's
+            continuity when regenerating a sample that has had some audio
+            quality issues. For example, if you have generated 3 speech clips,
+            and you want to improve clip 2, passing the request id of clip 3 as
+            a next_request_id (and that of clip 1 as a previous_request_id) will
+            help maintain natural flow in the combined speech. The results will
+            be best when the same model is used across the generations. In case
+            both next_text and next_request_ids is send, next_text will be
+            ignored. A maximum of 3 request_ids can be send.
+        use_pvc_as_ivc:
+          type: boolean
+          default: false
+          description: >-
+            If true, we won't use PVC version of the voice for the generation
+            but the IVC version. This is a temporary workaround for higher
+            latency in PVC versions.
+        apply_text_normalization:
+          $ref: >-
+            #/components/schemas/BodyTextToSpeechFullWithTimestampsApplyTextNormalization
+          description: >-
+            This parameter controls text normalization with three modes: 'auto',
+            'on', and 'off'. When set to 'auto', the system will automatically
+            decide whether to apply text normalization (e.g., spelling out
+            numbers). With 'on', text normalization will always be applied,
+            while with 'off', it will be skipped.
+        apply_language_text_normalization:
+          type: boolean
+          default: false
+          description: >-
+            This parameter controls language text normalization. This helps with
+            proper pronunciation of text in some supported languages. WARNING:
+            This parameter can heavily increase the latency of the request.
+            Currently only supported for Japanese.
+      required:
+        - text
+    CharacterAlignmentResponseModel:
+      type: object
+      properties:
+        characters:
+          type: array
+          items:
+            type: string
+        character_start_times_seconds:
+          type: array
+          items:
+            type: number
+            format: double
+        character_end_times_seconds:
+          type: array
+          items:
+            type: number
+            format: double
+      required:
+        - characters
+        - character_start_times_seconds
+        - character_end_times_seconds
+    AudioWithTimestampsResponseModel:
+      type: object
+      properties:
+        audio_base64:
+          type: string
+          description: Base64 encoded audio data
+        alignment:
+          oneOf:
+            - $ref: '#/components/schemas/CharacterAlignmentResponseModel'
+            - type: 'null'
+          description: Timestamp information for each character in the original text
+        normalized_alignment:
+          oneOf:
+            - $ref: '#/components/schemas/CharacterAlignmentResponseModel'
+            - type: 'null'
+          description: Timestamp information for each character in the normalized text
+      required:
+        - audio_base64
+
+```
+
+## SDK Code Examples
+
+```typescript
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+
+async function main() {
+    const client = new ElevenLabsClient({
+        environment: "https://api.elevenlabs.io",
+    });
+    await client.textToSpeech.convertWithTimestamps("voice_id", {
+        text: "This is a test for the API of ElevenLabs.",
+    });
+}
+main();
+
+```
+
+```python
+from elevenlabs import ElevenLabs
+
+client = ElevenLabs(
+    base_url="https://api.elevenlabs.io"
+)
+
+client.text_to_speech.convert_with_timestamps(
+    voice_id="voice_id",
+    text="This is a test for the API of ElevenLabs."
+)
+
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"strings"
+	"net/http"
+	"io"
+)
+
+func main() {
+
+	url := "https://api.elevenlabs.io/v1/text-to-speech/voice_id/with-timestamps"
+
+	payload := strings.NewReader("{\n  \"text\": \"This is a test for the API of ElevenLabs.\"\n}")
+
+	req, _ := http.NewRequest("POST", url, payload)
+
+	req.Header.Add("xi-api-key", "xi-api-key")
+	req.Header.Add("Content-Type", "application/json")
+
+	res, _ := http.DefaultClient.Do(req)
+
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	fmt.Println(res)
+	fmt.Println(string(body))
+
+}
+```
+
+```ruby
+require 'uri'
+require 'net/http'
+
+url = URI("https://api.elevenlabs.io/v1/text-to-speech/voice_id/with-timestamps")
+
+http = Net::HTTP.new(url.host, url.port)
+http.use_ssl = true
+
+request = Net::HTTP::Post.new(url)
+request["xi-api-key"] = 'xi-api-key'
+request["Content-Type"] = 'application/json'
+request.body = "{\n  \"text\": \"This is a test for the API of ElevenLabs.\"\n}"
+
+response = http.request(request)
+puts response.read_body
+```
+
+```java
+HttpResponse<String> response = Unirest.post("https://api.elevenlabs.io/v1/text-to-speech/voice_id/with-timestamps")
+  .header("xi-api-key", "xi-api-key")
+  .header("Content-Type", "application/json")
+  .body("{\n  \"text\": \"This is a test for the API of ElevenLabs.\"\n}")
+  .asString();
+```
+
+```php
+<?php
+
+$client = new \GuzzleHttp\Client();
+
+$response = $client->request('POST', 'https://api.elevenlabs.io/v1/text-to-speech/voice_id/with-timestamps', [
+  'body' => '{
+  "text": "This is a test for the API of ElevenLabs."
+}',
+  'headers' => [
+    'Content-Type' => 'application/json',
+    'xi-api-key' => 'xi-api-key',
+  ],
+]);
+
+echo $response->getBody();
+```
+
+```csharp
+var client = new RestClient("https://api.elevenlabs.io/v1/text-to-speech/voice_id/with-timestamps");
+var request = new RestRequest(Method.POST);
+request.AddHeader("xi-api-key", "xi-api-key");
+request.AddHeader("Content-Type", "application/json");
+request.AddParameter("application/json", "{\n  \"text\": \"This is a test for the API of ElevenLabs.\"\n}", ParameterType.RequestBody);
+IRestResponse response = client.Execute(request);
+```
+
+```swift
+import Foundation
+
+let headers = [
+  "xi-api-key": "xi-api-key",
+  "Content-Type": "application/json"
+]
+let parameters = ["text": "This is a test for the API of ElevenLabs."] as [String : Any]
+
+let postData = JSONSerialization.data(withJSONObject: parameters, options: [])
+
+let request = NSMutableURLRequest(url: NSURL(string: "https://api.elevenlabs.io/v1/text-to-speech/voice_id/with-timestamps")! as URL,
+                                        cachePolicy: .useProtocolCachePolicy,
+                                    timeoutInterval: 10.0)
+request.httpMethod = "POST"
+request.allHTTPHeaderFields = headers
+request.httpBody = postData as Data
+
+let session = URLSession.shared
+let dataTask = session.dataTask(with: request as URLRequest, completionHandler: { (data, response, error) -> Void in
+  if (error != nil) {
+    print(error as Any)
+  } else {
+    let httpResponse = response as? HTTPURLResponse
+    print(httpResponse)
+  }
+})
+
+dataTask.resume()
+```
+
+# Stream speech
+
+POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream
+Content-Type: application/json
+
+Converts text into speech using a voice of your choice and returns audio as an audio stream.
+
+Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/stream
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.1.1
+info:
+  title: Stream speech
+  version: endpoint_textToSpeech.stream
+paths:
+  /v1/text-to-speech/{voice_id}/stream:
+    post:
+      operationId: stream
+      summary: Stream speech
+      description: >-
+        Converts text into speech using a voice of your choice and returns audio
+        as an audio stream.
+      tags:
+        - - subpackage_textToSpeech
+      parameters:
+        - name: voice_id
+          in: path
+          description: >-
+            ID of the voice to be used. Use the [Get
+            voices](/docs/api-reference/voices/search) endpoint list all the
+            available voices.
+          required: true
+          schema:
+            type: string
+        - name: enable_logging
+          in: query
+          description: >-
+            When enable_logging is set to false zero retention mode will be used
+            for the request. This will mean history features are unavailable for
+            this request, including request stitching. Zero retention mode may
+            only be used by enterprise customers.
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: optimize_streaming_latency
+          in: query
+          description: >
+            You can turn on latency optimizations at some cost of quality. The
+            best possible final latency varies by model. Possible values:
+
+            0 - default mode (no latency optimizations)
+
+            1 - normal latency optimizations (about 50% of possible latency
+            improvement of option 3)
+
+            2 - strong latency optimizations (about 75% of possible latency
+            improvement of option 3)
+
+            3 - max latency optimizations
+
+            4 - max latency optimizations, but also with text normalizer turned
+            off for even more latency savings (best latency, but can
+            mispronounce eg numbers and dates).
+
+
+            Defaults to None.
+          required: false
+          schema:
+            type:
+              - integer
+              - 'null'
+        - name: output_format
+          in: query
+          description: >-
+            Output format of the generated audio. Formatted as
+            codec_sample_rate_bitrate. So an mp3 with 22.05kHz sample rate at
+            32kbs is represented as mp3_22050_32. MP3 with 192kbps bitrate
+            requires you to be subscribed to Creator tier or above. PCM with
+            44.1kHz sample rate requires you to be subscribed to Pro tier or
+            above. Note that the μ-law format (sometimes written mu-law, often
+            approximated as u-law) is commonly used for Twilio audio inputs.
+          required: false
+          schema:
+            $ref: >-
+              #/components/schemas/V1TextToSpeechVoiceIdStreamPostParametersOutputFormat
+        - name: xi-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Streaming audio data
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                format: binary
+        '422':
+          description: Validation Error
+          content: {}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Body_text_to_speech_stream'
+components:
+  schemas:
+    V1TextToSpeechVoiceIdStreamPostParametersOutputFormat:
+      type: string
+      enum:
+        - value: mp3_22050_32
+        - value: mp3_24000_48
+        - value: mp3_44100_32
+        - value: mp3_44100_64
+        - value: mp3_44100_96
+        - value: mp3_44100_128
+        - value: mp3_44100_192
+        - value: pcm_8000
+        - value: pcm_16000
+        - value: pcm_22050
+        - value: pcm_24000
+        - value: pcm_32000
+        - value: pcm_44100
+        - value: pcm_48000
+        - value: ulaw_8000
+        - value: alaw_8000
+        - value: opus_48000_32
+        - value: opus_48000_64
+        - value: opus_48000_96
+        - value: opus_48000_128
+        - value: opus_48000_192
+      default: mp3_44100_128
+    VoiceSettingsResponseModel:
+      type: object
+      properties:
+        stability:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.5
+          description: >-
+            Determines how stable the voice is and the randomness between each
+            generation. Lower values introduce broader emotional range for the
+            voice. Higher values can result in a monotonous voice with limited
+            emotion.
+        use_speaker_boost:
+          type:
+            - boolean
+            - 'null'
+          default: true
+          description: >-
+            This setting boosts the similarity to the original speaker. Using
+            this setting requires a slightly higher computational load, which in
+            turn increases latency.
+        similarity_boost:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.75
+          description: >-
+            Determines how closely the AI should adhere to the original voice
+            when attempting to replicate it.
+        style:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0
+          description: >-
+            Determines the style exaggeration of the voice. This setting
+            attempts to amplify the style of the original speaker. It does
+            consume additional computational resources and might increase
+            latency if set to anything other than 0.
+        speed:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 1
+          description: >-
+            Adjusts the speed of the voice. A value of 1.0 is the default speed,
+            while values less than 1.0 slow down the speech, and values greater
+            than 1.0 speed it up.
+    PronunciationDictionaryVersionLocatorRequestModel:
+      type: object
+      properties:
+        pronunciation_dictionary_id:
+          type: string
+          description: The ID of the pronunciation dictionary.
+        version_id:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The ID of the version of the pronunciation dictionary. If not
+            provided, the latest version will be used.
+      required:
+        - pronunciation_dictionary_id
+    BodyTextToSpeechStreamApplyTextNormalization:
+      type: string
+      enum:
+        - value: auto
+        - value: 'on'
+        - value: 'off'
+      default: auto
+    Body_text_to_speech_stream:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text that will get converted into speech.
+        model_id:
+          type: string
+          default: eleven_multilingual_v2
+          description: >-
+            Identifier of the model that will be used, you can query them using
+            GET /v1/models. The model needs to have support for text to speech,
+            you can check this using the can_do_text_to_speech property.
+        language_code:
+          type:
+            - string
+            - 'null'
+          description: >-
+            Language code (ISO 639-1) used to enforce a language for the model
+            and text normalization. If the model does not support provided
+            language code, an error will be returned.
+        voice_settings:
+          oneOf:
+            - $ref: '#/components/schemas/VoiceSettingsResponseModel'
+            - type: 'null'
+          description: >-
+            Voice settings overriding stored settings for the given voice. They
+            are applied only on the given request.
+        pronunciation_dictionary_locators:
+          type:
+            - array
+            - 'null'
+          items:
+            $ref: >-
+              #/components/schemas/PronunciationDictionaryVersionLocatorRequestModel
+          description: >-
+            A list of pronunciation dictionary locators (id, version_id) to be
+            applied to the text. They will be applied in order. You may have up
+            to 3 locators per request
+        seed:
+          type:
+            - integer
+            - 'null'
+          description: >-
+            If specified, our system will make a best effort to sample
+            deterministically, such that repeated requests with the same seed
+            and parameters should return the same result. Determinism is not
+            guaranteed. Must be integer between 0 and 4294967295.
+        previous_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that came before the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        next_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that comes after the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        previous_request_ids:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that were generated before this
+            generation. Can be used to improve the speech's continuity when
+            splitting up a large task into multiple requests. The results will
+            be best when the same model is used across the generations. In case
+            both previous_text and previous_request_ids is send, previous_text
+            will be ignored. A maximum of 3 request_ids can be send.
+        next_request_ids:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that come after this generation.
+            next_request_ids is especially useful for maintaining the speech's
+            continuity when regenerating a sample that has had some audio
+            quality issues. For example, if you have generated 3 speech clips,
+            and you want to improve clip 2, passing the request id of clip 3 as
+            a next_request_id (and that of clip 1 as a previous_request_id) will
+            help maintain natural flow in the combined speech. The results will
+            be best when the same model is used across the generations. In case
+            both next_text and next_request_ids is send, next_text will be
+            ignored. A maximum of 3 request_ids can be send.
+        use_pvc_as_ivc:
+          type: boolean
+          default: false
+          description: >-
+            If true, we won't use PVC version of the voice for the generation
+            but the IVC version. This is a temporary workaround for higher
+            latency in PVC versions.
+        apply_text_normalization:
+          $ref: '#/components/schemas/BodyTextToSpeechStreamApplyTextNormalization'
+          description: >-
+            This parameter controls text normalization with three modes: 'auto',
+            'on', and 'off'. When set to 'auto', the system will automatically
+            decide whether to apply text normalization (e.g., spelling out
+            numbers). With 'on', text normalization will always be applied,
+            while with 'off', it will be skipped.
+        apply_language_text_normalization:
+          type: boolean
+          default: false
+          description: >-
+            This parameter controls language text normalization. This helps with
+            proper pronunciation of text in some supported languages. WARNING:
+            This parameter can heavily increase the latency of the request.
+            Currently only supported for Japanese.
+      required:
+        - text
+
+```
+
+## SDK Code Examples
+
+```typescript
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+
+async function main() {
+    const client = new ElevenLabsClient({
+        environment: "https://api.elevenlabs.io",
+    });
+    await client.textToSpeech.stream("JBFqnCBsd6RMkjVDRZzb", {
+        outputFormat: "mp3_44100_128",
+        text: "The first move is what sets everything in motion.",
+        modelId: "eleven_multilingual_v2",
+    });
+}
+main();
+
+```
+
+```python
+from elevenlabs import ElevenLabs
+
+client = ElevenLabs(
+    base_url="https://api.elevenlabs.io"
+)
+
+client.text_to_speech.stream(
+    voice_id="JBFqnCBsd6RMkjVDRZzb",
+    output_format="mp3_44100_128",
+    text="The first move is what sets everything in motion.",
+    model_id="eleven_multilingual_v2"
+)
+
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"strings"
+	"net/http"
+	"io"
+)
+
+func main() {
+
+	url := "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128"
+
+	payload := strings.NewReader("{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}")
+
+	req, _ := http.NewRequest("POST", url, payload)
+
+	req.Header.Add("xi-api-key", "xi-api-key")
+	req.Header.Add("Content-Type", "application/json")
+
+	res, _ := http.DefaultClient.Do(req)
+
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	fmt.Println(res)
+	fmt.Println(string(body))
+
+}
+```
+
+```ruby
+require 'uri'
+require 'net/http'
+
+url = URI("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128")
+
+http = Net::HTTP.new(url.host, url.port)
+http.use_ssl = true
+
+request = Net::HTTP::Post.new(url)
+request["xi-api-key"] = 'xi-api-key'
+request["Content-Type"] = 'application/json'
+request.body = "{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}"
+
+response = http.request(request)
+puts response.read_body
+```
+
+```java
+HttpResponse<String> response = Unirest.post("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128")
+  .header("xi-api-key", "xi-api-key")
+  .header("Content-Type", "application/json")
+  .body("{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}")
+  .asString();
+```
+
+```php
+<?php
+
+$client = new \GuzzleHttp\Client();
+
+$response = $client->request('POST', 'https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128', [
+  'body' => '{
+  "text": "The first move is what sets everything in motion.",
+  "model_id": "eleven_multilingual_v2"
+}',
+  'headers' => [
+    'Content-Type' => 'application/json',
+    'xi-api-key' => 'xi-api-key',
+  ],
+]);
+
+echo $response->getBody();
+```
+
+```csharp
+var client = new RestClient("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128");
+var request = new RestRequest(Method.POST);
+request.AddHeader("xi-api-key", "xi-api-key");
+request.AddHeader("Content-Type", "application/json");
+request.AddParameter("application/json", "{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}", ParameterType.RequestBody);
+IRestResponse response = client.Execute(request);
+```
+
+```swift
+import Foundation
+
+let headers = [
+  "xi-api-key": "xi-api-key",
+  "Content-Type": "application/json"
+]
+let parameters = [
+  "text": "The first move is what sets everything in motion.",
+  "model_id": "eleven_multilingual_v2"
+] as [String : Any]
+
+let postData = JSONSerialization.data(withJSONObject: parameters, options: [])
+
+let request = NSMutableURLRequest(url: NSURL(string: "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream?output_format=mp3_44100_128")! as URL,
+                                        cachePolicy: .useProtocolCachePolicy,
+                                    timeoutInterval: 10.0)
+request.httpMethod = "POST"
+request.allHTTPHeaderFields = headers
+request.httpBody = postData as Data
+
+let session = URLSession.shared
+let dataTask = session.dataTask(with: request as URLRequest, completionHandler: { (data, response, error) -> Void in
+  if (error != nil) {
+    print(error as Any)
+  } else {
+    let httpResponse = response as? HTTPURLResponse
+    print(httpResponse)
+  }
+})
+
+dataTask.resume()
+```
+
+# Stream speech with timing
+
+POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream/with-timestamps
+Content-Type: application/json
+
+Converts text into speech using a voice of your choice and returns a stream of JSONs containing audio as a base64 encoded string together with information on when which character was spoken.
+
+Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/stream-with-timestamps
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.1.1
+info:
+  title: Stream speech with timing
+  version: endpoint_textToSpeech.stream_with_timestamps
+paths:
+  /v1/text-to-speech/{voice_id}/stream/with-timestamps:
+    post:
+      operationId: stream-with-timestamps
+      summary: Stream speech with timing
+      description: >-
+        Converts text into speech using a voice of your choice and returns a
+        stream of JSONs containing audio as a base64 encoded string together
+        with information on when which character was spoken.
+      tags:
+        - - subpackage_textToSpeech
+      parameters:
+        - name: voice_id
+          in: path
+          description: >-
+            ID of the voice to be used. Use the [Get
+            voices](/docs/api-reference/voices/search) endpoint list all the
+            available voices.
+          required: true
+          schema:
+            type: string
+        - name: enable_logging
+          in: query
+          description: >-
+            When enable_logging is set to false zero retention mode will be used
+            for the request. This will mean history features are unavailable for
+            this request, including request stitching. Zero retention mode may
+            only be used by enterprise customers.
+          required: false
+          schema:
+            type: boolean
+            default: true
+        - name: optimize_streaming_latency
+          in: query
+          description: >
+            You can turn on latency optimizations at some cost of quality. The
+            best possible final latency varies by model. Possible values:
+
+            0 - default mode (no latency optimizations)
+
+            1 - normal latency optimizations (about 50% of possible latency
+            improvement of option 3)
+
+            2 - strong latency optimizations (about 75% of possible latency
+            improvement of option 3)
+
+            3 - max latency optimizations
+
+            4 - max latency optimizations, but also with text normalizer turned
+            off for even more latency savings (best latency, but can
+            mispronounce eg numbers and dates).
+
+
+            Defaults to None.
+          required: false
+          schema:
+            type:
+              - integer
+              - 'null'
+        - name: output_format
+          in: query
+          description: >-
+            Output format of the generated audio. Formatted as
+            codec_sample_rate_bitrate. So an mp3 with 22.05kHz sample rate at
+            32kbs is represented as mp3_22050_32. MP3 with 192kbps bitrate
+            requires you to be subscribed to Creator tier or above. PCM with
+            44.1kHz sample rate requires you to be subscribed to Pro tier or
+            above. Note that the μ-law format (sometimes written mu-law, often
+            approximated as u-law) is commonly used for Twilio audio inputs.
+          required: false
+          schema:
+            $ref: >-
+              #/components/schemas/V1TextToSpeechVoiceIdStreamWithTimestampsPostParametersOutputFormat
+        - name: xi-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Stream of transcription chunks
+          content:
+            text/event-stream:
+              schema:
+                $ref: >-
+                  #/components/schemas/StreamingAudioChunkWithTimestampsResponseModel
+        '422':
+          description: Validation Error
+          content: {}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Body_text_to_speech_stream_with_timestamps'
+components:
+  schemas:
+    V1TextToSpeechVoiceIdStreamWithTimestampsPostParametersOutputFormat:
+      type: string
+      enum:
+        - value: mp3_22050_32
+        - value: mp3_24000_48
+        - value: mp3_44100_32
+        - value: mp3_44100_64
+        - value: mp3_44100_96
+        - value: mp3_44100_128
+        - value: mp3_44100_192
+        - value: pcm_8000
+        - value: pcm_16000
+        - value: pcm_22050
+        - value: pcm_24000
+        - value: pcm_32000
+        - value: pcm_44100
+        - value: pcm_48000
+        - value: ulaw_8000
+        - value: alaw_8000
+        - value: opus_48000_32
+        - value: opus_48000_64
+        - value: opus_48000_96
+        - value: opus_48000_128
+        - value: opus_48000_192
+      default: mp3_44100_128
+    VoiceSettingsResponseModel:
+      type: object
+      properties:
+        stability:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.5
+          description: >-
+            Determines how stable the voice is and the randomness between each
+            generation. Lower values introduce broader emotional range for the
+            voice. Higher values can result in a monotonous voice with limited
+            emotion.
+        use_speaker_boost:
+          type:
+            - boolean
+            - 'null'
+          default: true
+          description: >-
+            This setting boosts the similarity to the original speaker. Using
+            this setting requires a slightly higher computational load, which in
+            turn increases latency.
+        similarity_boost:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0.75
+          description: >-
+            Determines how closely the AI should adhere to the original voice
+            when attempting to replicate it.
+        style:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 0
+          description: >-
+            Determines the style exaggeration of the voice. This setting
+            attempts to amplify the style of the original speaker. It does
+            consume additional computational resources and might increase
+            latency if set to anything other than 0.
+        speed:
+          type:
+            - number
+            - 'null'
+          format: double
+          default: 1
+          description: >-
+            Adjusts the speed of the voice. A value of 1.0 is the default speed,
+            while values less than 1.0 slow down the speech, and values greater
+            than 1.0 speed it up.
+    PronunciationDictionaryVersionLocatorRequestModel:
+      type: object
+      properties:
+        pronunciation_dictionary_id:
+          type: string
+          description: The ID of the pronunciation dictionary.
+        version_id:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The ID of the version of the pronunciation dictionary. If not
+            provided, the latest version will be used.
+      required:
+        - pronunciation_dictionary_id
+    BodyTextToSpeechStreamWithTimestampsApplyTextNormalization:
+      type: string
+      enum:
+        - value: auto
+        - value: 'on'
+        - value: 'off'
+      default: auto
+    Body_text_to_speech_stream_with_timestamps:
+      type: object
+      properties:
+        text:
+          type: string
+          description: The text that will get converted into speech.
+        model_id:
+          type: string
+          default: eleven_multilingual_v2
+          description: >-
+            Identifier of the model that will be used, you can query them using
+            GET /v1/models. The model needs to have support for text to speech,
+            you can check this using the can_do_text_to_speech property.
+        language_code:
+          type:
+            - string
+            - 'null'
+          description: >-
+            Language code (ISO 639-1) used to enforce a language for the model
+            and text normalization. If the model does not support provided
+            language code, an error will be returned.
+        voice_settings:
+          oneOf:
+            - $ref: '#/components/schemas/VoiceSettingsResponseModel'
+            - type: 'null'
+          description: >-
+            Voice settings overriding stored settings for the given voice. They
+            are applied only on the given request.
+        pronunciation_dictionary_locators:
+          type:
+            - array
+            - 'null'
+          items:
+            $ref: >-
+              #/components/schemas/PronunciationDictionaryVersionLocatorRequestModel
+          description: >-
+            A list of pronunciation dictionary locators (id, version_id) to be
+            applied to the text. They will be applied in order. You may have up
+            to 3 locators per request
+        seed:
+          type:
+            - integer
+            - 'null'
+          description: >-
+            If specified, our system will make a best effort to sample
+            deterministically, such that repeated requests with the same seed
+            and parameters should return the same result. Determinism is not
+            guaranteed. Must be integer between 0 and 4294967295.
+        previous_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that came before the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        next_text:
+          type:
+            - string
+            - 'null'
+          description: >-
+            The text that comes after the text of the current request. Can be
+            used to improve the speech's continuity when concatenating together
+            multiple generations or to influence the speech's continuity in the
+            current generation.
+        previous_request_ids:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that were generated before this
+            generation. Can be used to improve the speech's continuity when
+            splitting up a large task into multiple requests. The results will
+            be best when the same model is used across the generations. In case
+            both previous_text and previous_request_ids is send, previous_text
+            will be ignored. A maximum of 3 request_ids can be send.
+        next_request_ids:
+          type:
+            - array
+            - 'null'
+          items:
+            type: string
+          description: >-
+            A list of request_id of the samples that come after this generation.
+            next_request_ids is especially useful for maintaining the speech's
+            continuity when regenerating a sample that has had some audio
+            quality issues. For example, if you have generated 3 speech clips,
+            and you want to improve clip 2, passing the request id of clip 3 as
+            a next_request_id (and that of clip 1 as a previous_request_id) will
+            help maintain natural flow in the combined speech. The results will
+            be best when the same model is used across the generations. In case
+            both next_text and next_request_ids is send, next_text will be
+            ignored. A maximum of 3 request_ids can be send.
+        use_pvc_as_ivc:
+          type: boolean
+          default: false
+          description: >-
+            If true, we won't use PVC version of the voice for the generation
+            but the IVC version. This is a temporary workaround for higher
+            latency in PVC versions.
+        apply_text_normalization:
+          $ref: >-
+            #/components/schemas/BodyTextToSpeechStreamWithTimestampsApplyTextNormalization
+          description: >-
+            This parameter controls text normalization with three modes: 'auto',
+            'on', and 'off'. When set to 'auto', the system will automatically
+            decide whether to apply text normalization (e.g., spelling out
+            numbers). With 'on', text normalization will always be applied,
+            while with 'off', it will be skipped.
+        apply_language_text_normalization:
+          type: boolean
+          default: false
+          description: >-
+            This parameter controls language text normalization. This helps with
+            proper pronunciation of text in some supported languages. WARNING:
+            This parameter can heavily increase the latency of the request.
+            Currently only supported for Japanese.
+      required:
+        - text
+    CharacterAlignmentResponseModel:
+      type: object
+      properties:
+        characters:
+          type: array
+          items:
+            type: string
+        character_start_times_seconds:
+          type: array
+          items:
+            type: number
+            format: double
+        character_end_times_seconds:
+          type: array
+          items:
+            type: number
+            format: double
+      required:
+        - characters
+        - character_start_times_seconds
+        - character_end_times_seconds
+    StreamingAudioChunkWithTimestampsResponseModel:
+      type: object
+      properties:
+        audio_base64:
+          type: string
+          description: Base64 encoded audio data
+        alignment:
+          oneOf:
+            - $ref: '#/components/schemas/CharacterAlignmentResponseModel'
+            - type: 'null'
+          description: Timestamp information for each character in the original text
+        normalized_alignment:
+          oneOf:
+            - $ref: '#/components/schemas/CharacterAlignmentResponseModel'
+            - type: 'null'
+          description: Timestamp information for each character in the normalized text
+      required:
+        - audio_base64
+
+```
+
+## SDK Code Examples
+
+```typescript
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+
+async function main() {
+    const client = new ElevenLabsClient({
+        environment: "https://api.elevenlabs.io",
+    });
+    await client.textToSpeech.streamWithTimestamps("JBFqnCBsd6RMkjVDRZzb", {
+        outputFormat: "mp3_44100_128",
+        text: "The first move is what sets everything in motion.",
+        modelId: "eleven_multilingual_v2",
+    });
+}
+main();
+
+```
+
+```python
+from elevenlabs import ElevenLabs
+
+client = ElevenLabs(
+    base_url="https://api.elevenlabs.io"
+)
+
+client.text_to_speech.stream_with_timestamps(
+    voice_id="JBFqnCBsd6RMkjVDRZzb",
+    output_format="mp3_44100_128",
+    text="The first move is what sets everything in motion.",
+    model_id="eleven_multilingual_v2"
+)
+
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"strings"
+	"net/http"
+	"io"
+)
+
+func main() {
+
+	url := "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream/with-timestamps?output_format=mp3_44100_128"
+
+	payload := strings.NewReader("{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}")
+
+	req, _ := http.NewRequest("POST", url, payload)
+
+	req.Header.Add("xi-api-key", "xi-api-key")
+	req.Header.Add("Content-Type", "application/json")
+
+	res, _ := http.DefaultClient.Do(req)
+
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	fmt.Println(res)
+	fmt.Println(string(body))
+
+}
+```
+
+```ruby
+require 'uri'
+require 'net/http'
+
+url = URI("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream/with-timestamps?output_format=mp3_44100_128")
+
+http = Net::HTTP.new(url.host, url.port)
+http.use_ssl = true
+
+request = Net::HTTP::Post.new(url)
+request["xi-api-key"] = 'xi-api-key'
+request["Content-Type"] = 'application/json'
+request.body = "{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}"
+
+response = http.request(request)
+puts response.read_body
+```
+
+```java
+HttpResponse<String> response = Unirest.post("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream/with-timestamps?output_format=mp3_44100_128")
+  .header("xi-api-key", "xi-api-key")
+  .header("Content-Type", "application/json")
+  .body("{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}")
+  .asString();
+```
+
+```php
+<?php
+
+$client = new \GuzzleHttp\Client();
+
+$response = $client->request('POST', 'https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream/with-timestamps?output_format=mp3_44100_128', [
+  'body' => '{
+  "text": "The first move is what sets everything in motion.",
+  "model_id": "eleven_multilingual_v2"
+}',
+  'headers' => [
+    'Content-Type' => 'application/json',
+    'xi-api-key' => 'xi-api-key',
+  ],
+]);
+
+echo $response->getBody();
+```
+
+```csharp
+var client = new RestClient("https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream/with-timestamps?output_format=mp3_44100_128");
+var request = new RestRequest(Method.POST);
+request.AddHeader("xi-api-key", "xi-api-key");
+request.AddHeader("Content-Type", "application/json");
+request.AddParameter("application/json", "{\n  \"text\": \"The first move is what sets everything in motion.\",\n  \"model_id\": \"eleven_multilingual_v2\"\n}", ParameterType.RequestBody);
+IRestResponse response = client.Execute(request);
+```
+
+```swift
+import Foundation
+
+let headers = [
+  "xi-api-key": "xi-api-key",
+  "Content-Type": "application/json"
+]
+let parameters = [
+  "text": "The first move is what sets everything in motion.",
+  "model_id": "eleven_multilingual_v2"
+] as [String : Any]
+
+let postData = JSONSerialization.data(withJSONObject: parameters, options: [])
+
+let request = NSMutableURLRequest(url: NSURL(string: "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/stream/with-timestamps?output_format=mp3_44100_128")! as URL,
+                                        cachePolicy: .useProtocolCachePolicy,
+                                    timeoutInterval: 10.0)
+request.httpMethod = "POST"
+request.allHTTPHeaderFields = headers
+request.httpBody = postData as Data
+
+let session = URLSession.shared
+let dataTask = session.dataTask(with: request as URLRequest, completionHandler: { (data, response, error) -> Void in
+  if (error != nil) {
+    print(error as Any)
+  } else {
+    let httpResponse = response as? HTTPURLResponse
+    print(httpResponse)
+  }
+})
+
+dataTask.resume()
+```
+
+# List models
+
+GET https://api.elevenlabs.io/v1/models
+
+Gets a list of available models.
+
+Reference: https://elevenlabs.io/docs/api-reference/models/list
+
+## OpenAPI Specification
+
+```yaml
+openapi: 3.1.1
+info:
+  title: List models
+  version: endpoint_models.list
+paths:
+  /v1/models:
+    get:
+      operationId: list
+      summary: List models
+      description: Gets a list of available models.
+      tags:
+        - - subpackage_models
+      parameters:
+        - name: xi-api-key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModelResponseModel'
+        '422':
+          description: Validation Error
+          content: {}
+components:
+  schemas:
+    LanguageResponseModel:
+      type: object
+      properties:
+        language_id:
+          type: string
+          description: The unique identifier of the language.
+        name:
+          type: string
+          description: The name of the language.
+      required:
+        - language_id
+        - name
+    ModelRatesResponseModel:
+      type: object
+      properties:
+        character_cost_multiplier:
+          type: number
+          format: double
+          description: The cost multiplier for characters.
+      required:
+        - character_cost_multiplier
+    ModelResponseModel:
+      type: object
+      properties:
+        model_id:
+          type: string
+          description: The unique identifier of the model.
+        name:
+          type: string
+          description: The name of the model.
+        can_be_finetuned:
+          type: boolean
+          description: Whether the model can be finetuned.
+        can_do_text_to_speech:
+          type: boolean
+          description: Whether the model can do text-to-speech.
+        can_do_voice_conversion:
+          type: boolean
+          description: Whether the model can do voice conversion.
+        can_use_style:
+          type: boolean
+          description: Whether the model can use style.
+        can_use_speaker_boost:
+          type: boolean
+          description: Whether the model can use speaker boost.
+        serves_pro_voices:
+          type: boolean
+          description: Whether the model serves pro voices.
+        token_cost_factor:
+          type: number
+          format: double
+          description: The cost factor for the model.
+        description:
+          type: string
+          description: The description of the model.
+        requires_alpha_access:
+          type: boolean
+          description: Whether the model requires alpha access.
+        max_characters_request_free_user:
+          type: integer
+          description: >-
+            The maximum number of characters that can be requested by a free
+            user.
+        max_characters_request_subscribed_user:
+          type: integer
+          description: >-
+            The maximum number of characters that can be requested by a
+            subscribed user.
+        maximum_text_length_per_request:
+          type: integer
+          description: The maximum length of text that can be requested for this model.
+        languages:
+          type: array
+          items:
+            $ref: '#/components/schemas/LanguageResponseModel'
+          description: The languages supported by the model.
+        model_rates:
+          $ref: '#/components/schemas/ModelRatesResponseModel'
+          description: The rates for the model.
+        concurrency_group:
+          type: string
+          description: The concurrency group for the model.
+      required:
+        - model_id
+
+```
+
+## SDK Code Examples
+
+```typescript
+import { ElevenLabsClient } from "@elevenlabs/elevenlabs-js";
+
+async function main() {
+    const client = new ElevenLabsClient({
+        environment: "https://api.elevenlabs.io",
+    });
+    await client.models.list();
+}
+main();
+
+```
+
+```python
+from elevenlabs import ElevenLabs
+
+client = ElevenLabs(
+    base_url="https://api.elevenlabs.io"
+)
+
+client.models.list()
+
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	"net/http"
+	"io"
+)
+
+func main() {
+
+	url := "https://api.elevenlabs.io/v1/models"
+
+	req, _ := http.NewRequest("GET", url, nil)
+
+	req.Header.Add("xi-api-key", "xi-api-key")
+
+	res, _ := http.DefaultClient.Do(req)
+
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	fmt.Println(res)
+	fmt.Println(string(body))
+
+}
+```
+
+```ruby
+require 'uri'
+require 'net/http'
+
+url = URI("https://api.elevenlabs.io/v1/models")
+
+http = Net::HTTP.new(url.host, url.port)
+http.use_ssl = true
+
+request = Net::HTTP::Get.new(url)
+request["xi-api-key"] = 'xi-api-key'
+
+response = http.request(request)
+puts response.read_body
+```
+
+```java
+HttpResponse<String> response = Unirest.get("https://api.elevenlabs.io/v1/models")
+  .header("xi-api-key", "xi-api-key")
+  .asString();
+```
+
+```php
+<?php
+
+$client = new \GuzzleHttp\Client();
+
+$response = $client->request('GET', 'https://api.elevenlabs.io/v1/models', [
+  'headers' => [
+    'xi-api-key' => 'xi-api-key',
+  ],
+]);
+
+echo $response->getBody();
+```
+
+```csharp
+var client = new RestClient("https://api.elevenlabs.io/v1/models");
+var request = new RestRequest(Method.GET);
+request.AddHeader("xi-api-key", "xi-api-key");
+IRestResponse response = client.Execute(request);
+```
+
+```swift
+import Foundation
+
+let headers = ["xi-api-key": "xi-api-key"]
+
+let request = NSMutableURLRequest(url: NSURL(string: "https://api.elevenlabs.io/v1/models")! as URL,
+                                        cachePolicy: .useProtocolCachePolicy,
+                                    timeoutInterval: 10.0)
+request.httpMethod = "GET"
+request.allHTTPHeaderFields = headers
+
+let session = URLSession.shared
+let dataTask = session.dataTask(with: request as URLRequest, completionHandler: { (data, response, error) -> Void in
+  if (error != nil) {
+    print(error as Any)
+  } else {
+    let httpResponse = response as? HTTPURLResponse
+    print(httpResponse)
+  }
+})
+
+dataTask.resume()
+```

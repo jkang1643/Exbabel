@@ -1,0 +1,417 @@
+Awesome — you can add ElevenLabs as a **drop-in unary TTS provider** without touching your current “radio mode” / queue / playback architecture.
+
+Your current system already expects **one base64 MP3 blob per finalized segment** over `tts/audio`, and the frontend plays it via `HTMLAudioElement`. So the cleanest integration is: **implement a new `ElevenLabsTtsService.synthesizeUnary()`** and wire it behind `TTS_PROVIDER=elevenlabs`, keeping everything else the same. 
+
+Below is a “PR-ready” plan + code skeleton that matches how your Google unary path works today, and uses ElevenLabs’ **Create speech** endpoint (`POST /v1/text-to-speech/{voice_id}` returning raw audio bytes). 
+
+---
+
+## What stays unchanged (important)
+
+* **No streaming**: you keep your unary pipeline (segment finalized → `tts/synthesize` → backend returns base64 MP3 → frontend plays).
+* **No UI changes required** (unless you want ElevenLabs voice selection UX later).
+* **No audio queue changes** (radio mode + concurrency limit + lease enforcement stays exactly as implemented). 
+
+---
+
+## PR plan (minimal risk)
+
+Got it — here’s a revised PR breakdown that matches **your real Exbabel TTS architecture** (TtsPanel → TtsPlayerController → websocketHandler → ttsRouting → ttsService) *and* includes an **immediate frontend voice hookup PR** so you can select ElevenLabs voices right away without changing the radio-mode/unary audio flow.
+
+## PR1 — Backend: Add ElevenLabs provider service (unary) + service registry
+
+**Goal:** Add ElevenLabs as a new `TtsService` implementation that returns **base64 MP3/PCM bytes** the same way Google does today, so the rest of the pipeline stays unchanged.
+
+### Changes
+
+* **Define provider types**
+
+  * `backend/tts/tts.types.js`
+
+    * Add `provider: 'elevenlabs'` to enums/types
+    * Add any provider-specific metadata fields you want to log (request-id, character count)
+* **New service**
+
+  * `backend/tts/ElevenLabsTtsService.js`
+
+    * `class ElevenLabsTtsService extends TtsService`
+    * implement `synthesizeUnary({ text, voice, format, ... })`
+    * returns `{ audioBase64, mimeType, providerMeta }`
+* **Registry / factory**
+
+  * `backend/tts/ttsService.js` (or wherever you currently instantiate Google)
+
+    * Introduce a lightweight `getTtsServiceForProvider(provider)` factory
+    * Keep Google paths intact; add ElevenLabs to switch
+* **Env**
+
+  * `ELEVENLABS_API_KEY`
+  * `ELEVENLABS_DEFAULT_MODEL_ID`
+  * `ELEVENLABS_DEFAULT_OUTPUT_FORMAT` (mp3 recommended if your client already expects it)
+  * Optional: `ELEVENLABS_BASE_URL`
+
+### Acceptance
+
+* Existing Google voices still work.
+* With `provider=elevenlabs`, a direct synth request returns `tts/audio` with valid base64 audio and correct `mimeType`.
+
+---
+
+## PR2 — Backend: Wire ElevenLabs into `ttsRouting.js` resolution (tier/engine mapping)
+
+**Goal:** Make routing able to resolve a high-level request like **“Spanish Ultra HD”** into **ElevenLabs** voice/engine when chosen, while preserving fallback behavior.
+
+### Changes
+
+* **Routing additions**
+
+  * `backend/tts/ttsRouting.js`
+
+    * Add recognition for `provider: 'elevenlabs'`
+    * Add mapping logic: `(tier, language) -> elevenlabs voiceId/name`
+    * Implement fallback rules consistent with existing behavior:
+
+      * If requested ElevenLabs voice not available for language → fall back to a default ElevenLabs voice (or fall back to Google tier, based on your policy choice)
+* **Policy / quota untouched**
+
+  * Keep `ttsQuota` / `ttsPolicy` identical (just ensure they accept provider=elevenlabs)
+
+### Acceptance
+
+* Backend can resolve:
+
+  * `{ language: 'es', tier: 'UltraHD', provider: 'elevenlabs' }`
+  * into a concrete voice target (voiceId) and provider selection.
+* `tts/synthesize` works end-to-end through routing.
+
+---
+
+## PR3 — Frontend: Add ElevenLabs voices to `ttsVoices.js` + expose in `TtsPanel.jsx`
+
+**Goal:** You can **select ElevenLabs voices in the UI immediately**, grouped into tiers alongside Gemini/Chirp/Neural2/Standard, using your existing voice discovery path:
+`getVoicesForLanguage()` → `TtsPanel.jsx`
+
+### Changes
+
+* **Types**
+
+  * `frontend/src/tts/types.js`
+
+    * Add `provider: 'elevenlabs'` to relevant union types
+    * Add `ElevenLabsVoice` shape if you keep provider-specific fields
+* **Voice config**
+
+  * `frontend/src/config/ttsVoices.js`
+
+    * Add ElevenLabs voices list:
+
+      * include `voiceId`, display name, supported languages (or language-agnostic if you want)
+      * map them into your existing **4-tier** grouping
+    * Update `getVoicesForLanguage(language)` to include ElevenLabs voices in the returned array
+* **UI**
+
+  * `frontend/src/components/TtsPanel.jsx`
+
+    * Ensure provider is visible / selectable (if you already show provider/tier)
+    * Show ElevenLabs voices under tiers like:
+
+      * Ultra HD / Premium / HD / Standard (whatever you decide)
+    * Make sure selection produces a voice payload that includes provider + voiceId
+
+### Acceptance
+
+* TtsPanel lists ElevenLabs voices grouped into tiers.
+* Selecting an ElevenLabs voice updates the chosen voice state (same way Google does).
+* Manual test buttons (`VITE_TTS_UI_ENABLED=true`) can run `speakTextNow` using ElevenLabs selection.
+
+---
+
+## PR4 — Frontend → Backend wiring: `tts/start` + `tts/synthesize` must carry provider + voiceId cleanly
+
+**Goal:** When a user chooses an ElevenLabs voice, the *existing* flow works:
+TtsPlayerController → websocket messages → backend routes → ElevenLabs synth → `tts/audio` → playback.
+
+### Changes
+
+* **Frontend controller payload**
+
+  * `frontend/src/tts/TtsPlayerController.js`
+
+    * Ensure `tts/start` sends enough info for backend lease + routing:
+
+      * `language`, `tier`, and **provider + voiceId** (or a `voiceKey`)
+    * Ensure `tts/synthesize` includes the resolved voice choice (or references the session-selected voice)
+* **Backend handler expects it**
+
+  * `backend/websocketHandler.js`
+
+    * Accept `provider` and `voiceId` fields
+    * Continue to enforce character lease the same
+    * Call `ttsRouting.resolveTtsRequest()` using provider + tier + language + voice selection
+* **Routing clarity**
+
+  * Decide one consistent model:
+
+    * Option A: Frontend sends explicit `voiceId` and provider; routing just validates/fallbacks
+    * Option B: Frontend sends only `{language, tier, provider}`, backend chooses voiceId
+  * (My recommendation for speed: **Option A** so UI selection is deterministic.)
+
+### Acceptance
+
+* Select ElevenLabs voice → press “Test” → audio plays.
+* Radio Mode still works (segments enqueue, dedupe still works, Audio element is reused).
+
+---
+
+## PR5 — Tests + “golden-ish” integration coverage for provider switching
+
+**Goal:** Avoid regressions as you add more providers later.
+
+### Changes
+
+* **Unit tests**
+
+  * `backend/tests/unit/tts/ElevenLabsTtsService.test.js`
+
+    * mocks binary response
+    * asserts base64 output + metadata capture
+* **Routing tests**
+
+  * `backend/tests/unit/tts/ttsRouting.test.js`
+
+    * asserts correct resolution for ElevenLabs requests
+    * asserts fallback behavior
+* **E2E smoke**
+
+  * If you have websocket E2E harness:
+
+    * add a minimal test that starts TTS session with provider=elevenlabs and synthesizes one short phrase (mocked in CI, real only locally)
+
+### Acceptance
+
+* CI green for unit + routing tests.
+* Local manual test passes with real ElevenLabs key.
+
+---
+
+# Notes on the “no architecture change” constraint
+
+This PR sequence keeps your architecture exactly as written:
+
+* Frontend: `TtsPanel.jsx` + `getVoicesForLanguage()` + `TtsPlayerController` radio mode
+* Backend: `websocketHandler.js` routes → `ttsRouting.js` resolve → `ttsService` provider synth (unary)
+* Delivery: `tts/audio` base64 audio → Audio element playback
+
+No streaming, no queue rewrite, no new audio transport.
+
+---
+
+
+## Backend code skeleton (Node, unary only)
+
+### 1) env-template-backend additions
+
+```bash
+# TTS provider
+TTS_PROVIDER=elevenlabs
+
+# ElevenLabs
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+ELEVENLABS_MODEL_ID=eleven_multilingual_v2
+ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
+ELEVENLABS_BASE_URL=https://api.elevenlabs.io
+```
+
+(Endpoint + header + model defaults are straight from their API reference.) 
+
+---
+
+### 2) `backend/tts/ttsService.js` — add an ElevenLabs provider class
+
+This assumes your `GoogleTtsService` already returns base64 and mime type.
+
+```js
+// backend/tts/ttsService.js
+import { TtsService } from './ttsServiceBase.js'; // if you have one; otherwise keep your structure
+import { TtsErrorCode, getMimeType } from './tts.types.js';
+
+export class ElevenLabsTtsService extends TtsService {
+  constructor({ apiKey, voiceId, modelId, outputFormat, baseUrl }) {
+    super();
+    this.apiKey = apiKey;
+    this.voiceId = voiceId;
+    this.modelId = modelId || 'eleven_multilingual_v2';
+    this.outputFormat = outputFormat || 'mp3_44100_128';
+    this.baseUrl = baseUrl || 'https://api.elevenlabs.io';
+  }
+
+  async synthesizeUnary(req) {
+    try {
+      const text = (req.text || '').trim();
+      if (!text) {
+        return {
+          ok: false,
+          error: { code: TtsErrorCode.TTS_INVALID_REQUEST, message: 'Empty text' }
+        };
+      }
+
+      if (!this.apiKey) {
+        return {
+          ok: false,
+          error: { code: TtsErrorCode.TTS_CONFIG_ERROR, message: 'Missing ELEVENLABS_API_KEY' }
+        };
+      }
+      if (!this.voiceId) {
+        return {
+          ok: false,
+          error: { code: TtsErrorCode.TTS_CONFIG_ERROR, message: 'Missing ELEVENLABS_VOICE_ID' }
+        };
+      }
+
+      const url =
+        `${this.baseUrl}/v1/text-to-speech/${encodeURIComponent(this.voiceId)}` +
+        `?output_format=${encodeURIComponent(this.outputFormat)}`;
+
+      const body = {
+        text,
+        model_id: this.modelId,
+        // Optional:
+        // language_code: req.languageCode?.slice(0, 2), // Eleven uses ISO 639-1 in docs for language_code
+        // voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0, use_speaker_boost: true, speed: 1.0 }
+      };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': this.apiKey,
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const errText = await safeReadText(res);
+        return {
+          ok: false,
+          error: {
+            code: TtsErrorCode.TTS_PROVIDER_ERROR,
+            message: `ElevenLabs error ${res.status}: ${errText || res.statusText}`,
+          },
+        };
+      }
+
+      const arrayBuf = await res.arrayBuffer();
+      const audioBase64 = Buffer.from(arrayBuf).toString('base64');
+
+      // Useful metadata headers Eleven exposes:
+      const requestId = res.headers.get('request-id');
+      const charCost = res.headers.get('x-character-count');
+
+      // For mp3_* output formats, treat as audio/mpeg
+      const mimeType = 'audio/mpeg';
+
+      return {
+        ok: true,
+        audioBase64,
+        mimeType,
+        providerMeta: { requestId, charCost },
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        error: {
+          code: TtsErrorCode.TTS_PROVIDER_ERROR,
+          message: e?.message || 'ElevenLabs synthesizeUnary failed',
+        },
+      };
+    }
+  }
+}
+
+async function safeReadText(res) {
+  try { return await res.text(); } catch { return ''; }
+}
+```
+
+Notes tied directly to ElevenLabs docs:
+
+* Auth header must be `xi-api-key`. 
+* Unary endpoint returns `application/octet-stream` audio bytes. 
+* You can track cost via headers like `x-character-count` and `request-id`. 
+
+---
+
+### 3) `backend/tts/index.js` (factory): select provider
+
+```js
+// backend/tts/index.js
+import { GoogleTtsService } from './ttsService.js';
+import { ElevenLabsTtsService } from './ttsService.js';
+
+export function getTtsService() {
+  const provider = (process.env.TTS_PROVIDER || 'google').toLowerCase();
+
+  if (provider === 'elevenlabs') {
+    return new ElevenLabsTtsService({
+      apiKey: process.env.ELEVENLABS_API_KEY,
+      voiceId: process.env.ELEVENLABS_VOICE_ID,
+      modelId: process.env.ELEVENLABS_MODEL_ID,
+      outputFormat: process.env.ELEVENLABS_OUTPUT_FORMAT,
+      baseUrl: process.env.ELEVENLABS_BASE_URL,
+    });
+  }
+
+  return new GoogleTtsService(/* existing config */);
+}
+```
+
+---
+
+### 4) WebSocket handler stays basically the same
+
+Your existing `tts/synthesize` path already:
+
+* validates
+* checks lease
+* checks quota
+* calls `getTtsService().synthesizeUnary()`
+* emits `tts/audio` with base64
+
+So you should not need to change the overall handler flow, just ensure it uses the service factory. 
+
+---
+
+## Recommended defaults (to match your current MP3 playback)
+
+* `ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128` (their default is also MP3 44.1k 128kbps in many examples) 
+* `mimeType = audio/mpeg` so your existing `_base64ToBlob()` → `Audio()` continues to work.
+
+---
+
+## Tests you should add (fast + valuable)
+
+1. **Unit test** `ElevenLabsTtsService.synthesizeUnary()`:
+
+   * mock 200 response with a small binary payload
+   * assert `ok: true`, base64 decodes to original bytes
+   * assert `providerMeta.requestId` and `providerMeta.charCost` captured when present 
+2. **WebSocket test**:
+
+   * stub the service factory to ElevenLabs service
+   * send `tts/synthesize`
+   * assert `tts/audio` is emitted
+3. **Quota test**: reuse your existing quota enforcement tests (unchanged). 
+
+---
+
+## Optional (later): continuity between segments
+
+ElevenLabs supports `previous_text` / `previous_request_ids` to help multi-clip continuity. 
+You *don’t* need this to ship, but if you later hear “choppy between segments”, you can:
+
+* store last N request IDs per listener connection (e.g., last 3),
+* pass `previous_request_ids` on subsequent segments.
+
+No architecture change required—just minor state in websocket connection metadata.
+
