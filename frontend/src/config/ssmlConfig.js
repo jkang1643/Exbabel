@@ -106,9 +106,10 @@ export function voiceSupportsSSML(voiceName, tier) {
 
     // Check voice name patterns
     if (voiceName) {
-        return voiceName.includes('Chirp3') ||
-            voiceName.includes('Chirp_3') ||
-            voiceName.includes('Chirp-3');
+        const lowerName = voiceName.toLowerCase();
+        return lowerName.includes('chirp3') ||
+            lowerName.includes('chirp_3') ||
+            lowerName.includes('chirp-3');
     }
 
     return false;

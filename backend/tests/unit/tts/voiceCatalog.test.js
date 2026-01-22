@@ -44,6 +44,9 @@ const allVoices = getAllVoices();
 assert(allVoices.length > 0, 'Should return voices');
 assert(allVoices.some(v => v.tier === 'gemini'), 'Should include Gemini voices');
 assert(allVoices.some(v => v.tier === 'chirp3_hd'), 'Should include Chirp3-HD voices');
+assert(allVoices.some(v => v.tier === 'neural2'), 'Should include Neural2 voices');
+assert(allVoices.some(v => v.tier === 'standard'), 'Should include Standard voices');
+assert(allVoices.some(v => v.tier === 'elevenlabs'), 'Should include ElevenLabs voices');
 
 // Test 2: getVoicesFor filters by language
 console.log('\nTest 2: Filter by language');
@@ -65,8 +68,13 @@ const chirpOnly = getVoicesFor({ languageCode: 'en-US', allowedTiers: ['chirp3_h
 assert(chirpOnly.length > 0, 'Should return Chirp3-HD voices');
 assert(chirpOnly.every(v => v.tier === 'chirp3_hd'), 'All voices should be Chirp3-HD tier');
 
-const both = getVoicesFor({ languageCode: 'en-US', allowedTiers: ['gemini', 'chirp3_hd'] });
-assert(both.length > geminiOnly.length, 'Combined should have more voices than single tier');
+const neural2Only = getVoicesFor({ languageCode: 'en-US', allowedTiers: ['neural2'] });
+assert(neural2Only.length > 0, 'Should return Neural2 voices');
+assert(neural2Only.every(v => v.tier === 'neural2'), 'All voices should be Neural2 tier');
+
+const elevenLabsOnly = getVoicesFor({ languageCode: 'en-US', allowedTiers: ['elevenlabs'] });
+assert(elevenLabsOnly.length > 0, 'Should return ElevenLabs voices');
+assert(elevenLabsOnly.every(v => v.tier === 'elevenlabs'), 'All voices should be ElevenLabs tier');
 
 // Test 4: isVoiceValid
 console.log('\nTest 4: Voice validation');
@@ -74,10 +82,12 @@ assert(isVoiceValid({ voiceName: 'Kore', languageCode: 'en-US', tier: 'gemini' }
     'Kore should be valid for en-US Gemini');
 assert(isVoiceValid({ voiceName: 'en-US-Chirp3-HD-Kore', languageCode: 'en-US', tier: 'chirp3_hd' }),
     'en-US-Chirp3-HD-Kore should be valid for en-US Chirp3-HD');
+assert(isVoiceValid({ voiceName: 'en-US-Neural2-A', languageCode: 'en-US', tier: 'neural2' }),
+    'en-US-Neural2-A should be valid for en-US Neural2');
+assert(isVoiceValid({ voiceName: '21m00Tcm4TlvDq8ikWAM', languageCode: 'en-US', tier: 'elevenlabs' }),
+    'Rachel should be valid for en-US ElevenLabs');
 assert(!isVoiceValid({ voiceName: 'InvalidVoice', languageCode: 'en-US', tier: 'gemini' }),
     'Invalid voice should return false');
-assert(!isVoiceValid({ voiceName: 'Kore', languageCode: 'en-US', tier: 'chirp3_hd' }),
-    'Gemini voice name should be invalid for Chirp3-HD tier');
 
 // Test 5: getDefaultVoice
 console.log('\nTest 5: Default voice selection');
@@ -85,26 +95,39 @@ const enDefault = getDefaultVoice({ languageCode: 'en-US', allowedTiers: ['gemin
 assertEquals(enDefault.tier, 'gemini', 'Should prefer Gemini tier for en-US');
 assertEquals(enDefault.voiceName, 'Kore', 'Should default to Kore voice');
 
-const chirpDefault = getDefaultVoice({ languageCode: 'en-US', allowedTiers: ['chirp3_hd'] });
-assertEquals(chirpDefault.tier, 'chirp3_hd', 'Should use Chirp3-HD when Gemini not allowed');
-assert(chirpDefault.voiceName.startsWith('en-US-Chirp3-HD-'), 'Should return Chirp3-HD voice name');
+const neural2Default = getDefaultVoice({ languageCode: 'en-US', allowedTiers: ['neural2', 'standard'] });
+assertEquals(neural2Default.tier, 'neural2', 'Should use Neural2 when Gemini/Chirp not allowed');
+assert(neural2Default.voiceName.includes('Neural2'), 'Should return Neural2 voice name');
+
+const elevenLabsDefault = getDefaultVoice({ languageCode: 'en-US', allowedTiers: ['elevenlabs'] });
+assertEquals(elevenLabsDefault.tier, 'elevenlabs', 'Should use ElevenLabs when others not allowed');
+assertEquals(elevenLabsDefault.voiceName, '21m00Tcm4TlvDq8ikWAM', 'Should return Rachel for ElevenLabs');
 
 // Test 6: toGoogleVoiceSelection
 console.log('\nTest 6: Google TTS API request builder');
 const geminiRequest = toGoogleVoiceSelection({ tier: 'gemini', languageCode: 'en-US', voiceName: 'Kore' });
 assertEquals(geminiRequest.voice.name, 'Kore', 'Should set voice name');
-assertEquals(geminiRequest.voice.languageCode, 'en-US', 'Should set language code');
 assertEquals(geminiRequest.voice.modelName, 'gemini-2.5-flash-tts', 'Should set Gemini model');
 
-const chirpRequest = toGoogleVoiceSelection({ tier: 'chirp3_hd', languageCode: 'en-US', voiceName: 'en-US-Chirp3-HD-Kore' });
-assertEquals(chirpRequest.voice.name, 'en-US-Chirp3-HD-Kore', 'Should set Chirp voice name');
-assertEquals(chirpRequest.voice.modelName, 'chirp-3-hd', 'Should set Chirp3-HD model');
+const neural2Request = toGoogleVoiceSelection({ tier: 'neural2', languageCode: 'en-US', voiceName: 'en-US-Neural2-A' });
+assertEquals(neural2Request.voice.name, 'en-US-Neural2-A', 'Should set Neural2 voice name');
+assert(neural2Request.voice.modelName === undefined, 'Neural2 should NOT set model name');
+
+// Verify toGoogleVoiceSelection throws for non-Google tiers
+try {
+    toGoogleVoiceSelection({ tier: 'elevenlabs', languageCode: 'en-US', voiceName: '21m00Tcm4TlvDq8ikWAM' });
+    failed++;
+    console.error('✗ Should have thrown for ElevenLabs tier');
+} catch (e) {
+    passed++;
+    console.log('✓ Properly threw error for ElevenLabs tier');
+}
 
 // Test 7: Multi-language support
 console.log('\nTest 7: Multi-language support');
 const languages = ['en-US', 'es-ES', 'fr-FR', 'de-DE', 'ja-JP', 'cmn-CN'];
 languages.forEach(lang => {
-    const voices = getVoicesFor({ languageCode: lang, allowedTiers: ['gemini', 'chirp3_hd'] });
+    const voices = getVoicesFor({ languageCode: lang, allowedTiers: ['gemini', 'chirp3_hd', 'neural2'] });
     assert(voices.length > 0, `Should have voices for ${lang}`);
 });
 

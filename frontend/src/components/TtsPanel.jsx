@@ -13,7 +13,7 @@ import { Volume2, VolumeX, Play, Square, ChevronDown, ChevronUp } from 'lucide-r
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 import { TtsPlayerState, TtsTier, TtsMode } from '../tts/types.js';
 
-import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
+
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
 import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js';
 
@@ -25,7 +25,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     const [playerState, setPlayerState] = useState(TtsPlayerState.STOPPED);
     const [enabled, setEnabled] = useState(false);
-    const [selectedVoice, setSelectedVoice] = useState(null);
+    const [selectedVoice, setSelectedVoice] = useState('');
     const [selectedMode, setSelectedMode] = useState(TtsMode.UNARY);
     const [resolvedRoute, setResolvedRoute] = useState(null);
 
@@ -44,15 +44,14 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
     const [promptBytes, setPromptBytes] = useState(0);
     const [textBytes, setTextBytes] = useState(0);
 
-    // Radio mode queue status
     const [queueStatus, setQueueStatus] = useState(null);
 
-    // Get available voices for current language
-    const availableVoices = getVoicesForLanguage(targetLang);
+    // Dynamic voices from controller (requested on lang change)
+    const [availableVoices, setAvailableVoices] = useState([]);
 
     // Helper: Check if current voice is Gemini
     const isGeminiVoice = useMemo(() => {
-        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+        const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
         const tier = voiceOption?.tier || 'neural2';
         if (tier === 'gemini') return true;
 
@@ -118,9 +117,9 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
             setResolvedRoute(route);
         };
 
-        controller.onRouteResolved = (route) => {
-            console.log('[TtsPanel] Route resolved:', route);
-            setResolvedRoute(route);
+        controller.onVoicesUpdate = (voices) => {
+            console.log('[TtsPanel] Received dynamic voices update:', voices.length);
+            setAvailableVoices(voices);
         };
 
         return () => {
@@ -129,47 +128,50 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
             controller.onStateChange = null;
             controller.onError = null;
             controller.onRouteResolved = null;
+            controller.onVoicesUpdate = null;
         };
     }, [controller]);
 
     // Update controller language when targetLang changes
     useEffect(() => {
         if (controller && targetLang) {
-            const normalizedLang = normalizeLanguageCode(targetLang);
-            console.log('[TtsPanel] Updating controller language:', { from: targetLang, to: normalizedLang });
-            controller.currentLanguageCode = normalizedLang;
+            console.log('[TtsPanel] Updating controller language:', targetLang);
+            controller.currentLanguageCode = targetLang;
+
+            // Fetch dynamic voices for this language
+            controller.fetchVoices(targetLang);
         }
-    }, [controller, targetLang]);
+    }, [controller, targetLang, isConnected]);
 
     // Update selected voice when language changes
     useEffect(() => {
         if (targetLang && availableVoices.length > 0) {
             // If current selected voice is not available for new language, switch to smart default
-            const isCurrentVoiceAvailable = availableVoices.some(voice => voice.value === selectedVoice);
+            const isCurrentVoiceAvailable = availableVoices.some(voice => voice.voiceId === selectedVoice);
             if (!isCurrentVoiceAvailable) {
                 // Priority 1: Chirp 3 HD "Kore"
-                const chirpKore = availableVoices.find(v => v.value.includes('Chirp3-HD-Kore'));
+                const chirpKore = availableVoices.find(v => v.voiceId.includes('chirp3_hd') && v.voiceName.includes('Kore'));
                 if (chirpKore) {
-                    setSelectedVoice(chirpKore.value);
+                    setSelectedVoice(chirpKore.voiceId);
                     return;
                 }
 
                 // Priority 2: Any Chirp 3 HD voice
                 const anyChirp = availableVoices.find(v => v.tier === 'chirp3_hd');
                 if (anyChirp) {
-                    setSelectedVoice(anyChirp.value);
+                    setSelectedVoice(anyChirp.voiceId);
                     return;
                 }
 
                 // Priority 3: Any Standard/Neural2 voice
                 const anyStandard = availableVoices.find(v => v.tier === 'standard' || v.tier === 'neural2');
                 if (anyStandard) {
-                    setSelectedVoice(anyStandard.value);
+                    setSelectedVoice(anyStandard.voiceId);
                     return;
                 }
 
                 // Fallback: Just take the first one (likely Gemini)
-                setSelectedVoice(availableVoices[0].value);
+                setSelectedVoice(availableVoices[0].voiceId);
             }
         }
     }, [targetLang, availableVoices, selectedVoice]);
@@ -184,7 +186,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     // Build SSML options object
     const currentSsmlOptions = useMemo(() => {
-        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+        const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
         const tier = voiceOption?.tier || 'neural2';
 
         // We now always send at least the rate if SSML is enabled or if using standard voices
@@ -271,14 +273,16 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
             return;
         }
 
-        // Find selected voice object to get its tier
-        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+        // Find selected voice object to get its parameters
+        const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
         const tier = voiceOption?.tier || 'neural2';
+        const voiceName = voiceOption?.voiceName || selectedVoice;
 
         // Build request with prompt data for Gemini voices
         const requestData = {
             languageCode: targetLang,
-            voiceName: selectedVoice,
+            voiceName: voiceName,
+            voiceId: selectedVoice,
             tier: tier,
             mode: selectedMode,
             ssmlOptions: currentSsmlOptions,
@@ -344,14 +348,14 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                         <select
                             value={selectedVoice}
                             onChange={(e) => {
-                                const newVoice = e.target.value;
-                                setSelectedVoice(newVoice);
+                                const newVoiceId = e.target.value;
+                                setSelectedVoice(newVoiceId);
 
                                 // Nudge speed for Gemini/Chirp3 if currently at default 1.0x
-                                const voiceOption = availableVoices.find(v => v.value === newVoice);
+                                const voiceOption = availableVoices.find(v => v.voiceId === newVoiceId);
                                 if (voiceOption) {
                                     const tier = voiceOption.tier || 'standard';
-                                    const isGemini = tier === 'gemini' || voiceOption.label?.includes('Studio');
+                                    const isGemini = tier === 'gemini' || voiceOption.displayName?.includes('Studio');
                                     const isChirp3 = tier === 'chirp3_hd';
 
                                     if (isGemini && speakingRate === 1.0) {
@@ -371,8 +375,8 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                 group.voices.length > 0 && (
                                     <optgroup key={tier} label={group.label}>
                                         {group.voices.map((voice) => (
-                                            <option key={voice.value} value={voice.value}>
-                                                {voice.label}
+                                            <option key={voice.voiceId} value={voice.voiceId}>
+                                                {voice.displayName}
                                             </option>
                                         ))}
                                     </optgroup>
@@ -382,7 +386,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
                         {/* SSML Availability Hint */}
                         {(() => {
-                            const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+                            const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
                             const tier = voiceOption?.tier || 'neural2';
                             const supportsSSML = voiceSupportsSSML(selectedVoice, tier);
 
@@ -408,7 +412,7 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
                     {/* Delivery Style / Prompt Controls (Chirp 3 HD SSML or Gemini Prompts) */}
                     {(() => {
-                        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+                        const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
                         const tier = voiceOption?.tier || 'neural2';
                         const supportsSSML = voiceSupportsSSML(selectedVoice, tier);
                         const supportsPrompts = isGeminiVoice;
@@ -791,10 +795,15 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                     const testText = "Hello, this is a test of the text to speech system.";
                                     const testSegmentId = `test-${Date.now()}`;
 
-                                    const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+                                    const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
                                     const tier = voiceOption?.tier || 'neural2';
+                                    const voiceName = voiceOption?.voiceName || selectedVoice;
 
-                                    controller.speakTextNow(testText, testSegmentId, { tier });
+                                    controller.speakTextNow(testText, testSegmentId, {
+                                        tier,
+                                        voiceName,
+                                        voiceId: selectedVoice
+                                    });
                                 }}
                                 disabled={!isConnected}
                                 className="w-full px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -835,21 +844,26 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                     if (lastSegment) {
                                         // Prioritize translated text over original text
                                         const segmentText = lastSegment.translated || lastSegment.translatedText || lastSegment.original || lastSegment.text;
-                                        const segmentId = `final-${Date.now()}`;
-
-                                        const voiceOption = availableVoices.find(v => v.value === selectedVoice);
+                                        const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
                                         const tier = voiceOption?.tier || 'neural2';
+                                        const voiceName = voiceOption?.voiceName || selectedVoice;
 
                                         console.log('[TtsPanel] Speaking last final segment:', {
                                             text: segmentText.substring(0, 50) + '...',
                                             segmentId,
+                                            voiceName,
+                                            voiceId: selectedVoice,
                                             tier,
                                             controller: !!controller
                                         });
 
                                         if (controller && segmentText && segmentText.trim()) {
                                             console.log('[TtsPanel] Calling controller.speakTextNow with:', segmentText, segmentId, tier);
-                                            controller.speakTextNow(segmentText, segmentId, { tier });
+                                            controller.speakTextNow(segmentText, segmentId, {
+                                                tier,
+                                                voiceName,
+                                                voiceId: selectedVoice
+                                            });
                                             // Removed alert(...) to prevent breaking user gesture chain and timing issues
                                         } else {
                                             console.error('[TtsPanel] Cannot speak - controller:', !!controller, 'text:', !!segmentText);

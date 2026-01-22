@@ -1,0 +1,17 @@
+{
+  "providerKey": "gemini",
+  "fetchedAt": "2026-01-22T16:58:33.417Z",
+  "byFamily": {
+    "gemini_tts": {
+      "totalVoices": 30,
+      "totalLanguages": "*",
+      "multilingual": true,
+      "voicesByLanguage": {}
+    }
+  },
+  "summary": {
+    "totalVoices": 30,
+    "totalLanguages": 0,
+    "totalFamilies": 1
+  }
+}

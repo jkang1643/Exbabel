@@ -3,7 +3,6 @@ import React, { useMemo } from 'react';
 import { Settings, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { getAllDeliveryStyles, voiceSupportsSSML, getDeliveryStyle } from '../config/ssmlConfig.js';
 import { PROMPT_PRESETS, PROMPT_CATEGORIES, utf8ByteLength, BYTE_LIMITS, getByteStatus } from '../config/promptConfig.js';
-import { getVoicesForLanguage as getVoices } from '../config/ttsVoices.js';
 import { getElevenLabsCapabilities, isElevenLabsTier } from '../config/elevenLabsConfig.js';
 
 export function TtsSettingsModal({
@@ -12,13 +11,13 @@ export function TtsSettingsModal({
     settings,
     onSettingsChange,
     selectedVoice,
-    targetLang
+    targetLang,
+    voices = []
 }) {
     if (!isOpen) return null;
 
     // Determine tier and provider
-    const voices = getVoices(targetLang);
-    const voiceOption = voices.find(v => v.value === selectedVoice);
+    const voiceOption = voices.find(v => v.voiceId === selectedVoice);
     const tier = voiceOption?.tier || 'neural2';
     const isGemini = tier === 'gemini';
     const isElevenLabs = isElevenLabsTier(tier);

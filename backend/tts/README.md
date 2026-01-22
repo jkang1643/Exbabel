@@ -9,43 +9,71 @@ This module provides a unified interface for TTS synthesis with Google Cloud Tex
 - **Unary synthesis**: Returns one complete audio file per segment (MP3, OGG_OPUS, LINEAR16, etc.)
 - **Streaming synthesis**: Returns audio chunks in real-time for low latency (PCM, OGG_OPUS, ALAW, MULAW)
 
+## Operations Guide
+
+A comprehensive guide for managing voices, inventories, and catalogs is available in [MANUAL.md](./MANUAL.md).
+
+### Quick Command Reference
+
+```bash
+# Fetch latest inventory
+node tts/inventory/cli.js pull --provider=all
+
+# Compare snapshots
+node tts/inventory/cli.js diff --provider=google_cloud_tts --from=prev --to=latest
+
+# Generate coverage report
+node tts/inventory/cli.js report --provider=all
+
+# Validate catalog against inventory
+node tts/inventory/cli.js validate --provider=google_cloud_tts
+```
+
+## Voice ID Format (PR4.1)
+
+Stable identifier: `${provider}:${family}:${localeOrDash}:${baseOrId}`
+
+**Examples:**
+- `google_cloud_tts:chirp3_hd:en-US:Kore`
+- `gemini:gemini_tts:-:Kore`
+- `elevenlabs:eleven_all:-:21m00Tcm4TlvDq8ikWAM`
+
+**Why:**
+- Globally unique across all providers
+- Survives provider API changes
+- Enables safe defaults migration
+
 ## Voice Naming Conventions
 
-### Gemini Voices (tier: `gemini`)
-Prebuilt voice IDs without locale prefix: `Kore`, `Puck`, `Charon`, `Leda`, `Aoede`, `Fenrir`
+### Gemini (tier: `gemini`)
+- Format: `Kore`, `Puck`, `Charon`, etc.
+- Multilingual (supports all languages)
+- Model: `gemini-2.5-flash-tts`
+- Voice ID: `gemini:gemini_tts:-:Kore`
 
-Example request:
-```javascript
-{
-  voice: { 
-    name: 'Kore',
-    modelName: 'gemini-2.5-flash-tts'
-  }
-}
-```
+### Chirp3-HD (tier: `chirp3_hd`)
+- Format: `{locale}-Chirp3-HD-{voice}`
+- Example: `en-US-Chirp3-HD-Kore`
+- Locale-specific
+- Voice ID: `google_cloud_tts:chirp3_hd:en-US:Kore`
 
-These voices work across all supported languages (multi-language capability).
+### Neural2 (tier: `neural2`)
+- Format: `{locale}-Neural2-{variant}`
+- Example: `en-US-Neural2-A`
+- Locale-specific
+- Voice ID: `google_cloud_tts:neural2:en-US:A`
 
-### Chirp3-HD Voices (tier: `chirp3_hd`)
-Pattern: `{locale}-Chirp3-HD-{voiceName}`
+### Standard (tier: `standard`)
+- Format: `{locale}-Standard-{variant}`
+- Example: `en-US-Standard-A`
+- Locale-specific
+- Voice ID: `google_cloud_tts:standard:en-US:A`
 
-Examples:
-- `en-US-Chirp3-HD-Kore`
-- `es-ES-Chirp3-HD-Leda`
-- `fr-FR-Chirp3-HD-Puck`
-
-Example request:
-```javascript
-{
-  voice: { 
-    name: 'en-US-Chirp3-HD-Kore',
-    languageCode: 'en-US',
-    modelName: 'chirp-3-hd'
-  }
-}
-```
-
-These voices are locale-specific and must match the language code.
+### ElevenLabs (tiers: `elevenlabs`, `elevenlabs_v3`, `elevenlabs_turbo`, `elevenlabs_flash`)
+- Format: Voice ID string (e.g., `21m00Tcm4TlvDq8ikWAM`)
+- Multilingual (supports all languages)
+- Same voice works across multiple tiers (different models)
+- Voice ID: `elevenlabs:eleven_all:-:21m00Tcm4TlvDq8ikWAM`
 
 ## Important: Streaming Format Constraints
 
@@ -79,13 +107,36 @@ backend/tts/
 ├── ttsService.js             # Service abstraction (unary + streaming)
 ├── ttsUsage.js               # Usage tracking for billing/compliance
 ├── ttsRouting.js             # Provider/tier/voice routing logic
-├── voiceCatalog.js           # PR4: Server-authoritative voice catalog
+├── voiceCatalog.js           # PR4: Legacy wrapper (re-exports from voiceCatalog/)
+├── voiceCatalog/             # PR4.1: Modular catalog system
+│   ├── index.js              # Main catalog API
+│   ├── catalogLoader.js      # JSON catalog loader
+│   ├── catalogSchema.js      # Schema validation
+│   ├── catalogValidate.js    # Catalog-to-inventory validation
+│   └── catalogs/             # Curated voice catalogs
+│       ├── gemini_tts.json
+│       ├── google_chirp3_hd.json
+│       ├── google_neural2.json
+│       ├── google_standard.json
+│       └── elevenlabs.json
 ├── voiceResolver.js          # PR4: Voice selection precedence
 ├── ttsTierHelper.js          # PR4: Tier gating helper (stub)
 ├── ttsMetering.js            # PR4: Metering event builder (stub)
+├── inventory/                # PR4.1: Provider inventory tracking
+│   ├── cli.js                # CLI tool (pull, diff, report)
+│   ├── diff.js               # Snapshot diff engine
+│   ├── report.js             # Coverage report generator
+│   ├── snapshotStoreFs.js    # Filesystem snapshot storage
+│   ├── providers/            # Inventory collectors
+│   │   ├── googleCloudTts.js
+│   │   ├── elevenLabs.js
+│   │   └── geminiDocs.js
+│   ├── snapshots/            # Stored inventory snapshots
+│   └── sources/              # Static source files (Gemini)
+│       └── gemini_voices.json
 ├── defaults/
 │   ├── defaultsStore.js      # PR4: Interface selector
-│   └── defaultsStoreJson.js  # PR4: JSON file storage
+│   └── defaultsStoreJson.js  # PR4: JSON file storage (supports voiceId)
 ├── index.js                  # Factory and exports
 └── README.md                 # This file
 ```
@@ -162,7 +213,7 @@ await ttsService.synthesizeStream(
 - ✅ Queue management and sequential playback
 
 ### PR4: Voice Defaults + Voice List
-- ✅ Server-authoritative voice catalog (Gemini + Chirp3-HD)
+- ✅ Server-authoritative voice catalog (Gemini + Chirp3-HD + Neural2 + Standard + ElevenLabs)
 - ✅ Voice filtering by language and tier
 - ✅ Voice resolution with precedence (user → org → catalog → fallback)
 - ✅ Org defaults storage (JSON file, atomic operations)
@@ -170,6 +221,18 @@ await ttsService.synthesizeStream(
 - ✅ Server-side voice resolution in `tts/synthesize`
 - ✅ Metering stub (debug logging only)
 - ✅ Unit tests (voice catalog + resolver)
+
+### PR4.1: Voice Inventory + Catalog Refactor
+- ✅ Provider inventory system (Google Cloud TTS, ElevenLabs, Gemini)
+- ✅ Snapshot storage with atomic writes
+- ✅ Inventory CLI (pull, diff, report commands)
+- ✅ Diff engine for snapshot comparison
+- ✅ Coverage report generator
+- ✅ Catalog refactor to JSON-based loading
+- ✅ Stable voiceId format (`provider:family:locale:base`)
+- ✅ Locale fallback matching (exact → base → multilingual → English)
+- ✅ Catalog validation against inventory snapshots
+- ✅ Backward-compatible defaults store (supports voiceId + voiceName)
 
 ### PR5: Usage Logging
 - ⏳ Database integration for usage events
@@ -192,3 +255,7 @@ Required environment variables:
 PR4 feature flags:
 - `TTS_VOICE_CATALOG_ENABLED`: Enable voice catalog features (default: false)
 - `TTS_METERING_DEBUG`: Enable metering debug logging (default: false)
+
+PR4.1 feature flags:
+- `TTS_VOICE_INVENTORY_TOOLS_ENABLED`: Enable inventory CLI tools (default: false)
+- `TTS_VOICE_INVENTORY_ADMIN_ENABLED`: Enable admin WS commands (default: false)

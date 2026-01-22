@@ -4,13 +4,15 @@
  * Stores org voice defaults in a JSON file with atomic read/write operations.
  * File: backend/config/ttsDefaults.json
  * 
- * Structure:
+ * Structure (backward compatible):
  * {
  *   "org123": {
- *     "en-US": { "tier": "gemini", "voiceName": "Kore" },
- *     "es-ES": { "tier": "chirp3_hd", "voiceName": "es-ES-Chirp3-HD-Leda" }
+ *     "en-US": { "tier": "gemini", "voiceName": "Kore", "voiceId": "gemini:gemini_tts:-:Kore" },
+ *     "es-ES": { "tier": "chirp3_hd", "voiceName": "es-ES-Chirp3-HD-Leda" }  // Old format still works
  *   }
  * }
+ * 
+ * Both voiceId and voiceName are supported. voiceId is preferred when present.
  */
 
 import fs from 'fs/promises';
@@ -79,12 +81,13 @@ export async function getOrgVoiceDefaults(orgId) {
  * @param {string} languageCode - BCP-47 language code
  * @param {string} tier - Tier name
  * @param {string} voiceName - Voice name
+ * @param {string} [voiceId] - Optional stable voice ID (recommended)
  * @throws {Error} If voice is invalid
  */
-export async function setOrgVoiceDefault(orgId, languageCode, tier, voiceName) {
+export async function setOrgVoiceDefault(orgId, languageCode, tier, voiceName, voiceId = null) {
     // Validate voice before saving
-    if (!isVoiceValid({ voiceName, languageCode, tier })) {
-        throw new Error(`Invalid voice: ${voiceName} for ${languageCode}:${tier}`);
+    if (!await isVoiceValid({ voiceId, voiceName, languageCode, tier })) {
+        throw new Error(`Invalid voice: ${voiceId || voiceName} for ${languageCode}:${tier}`);
     }
 
     // Read current defaults
@@ -95,11 +98,14 @@ export async function setOrgVoiceDefault(orgId, languageCode, tier, voiceName) {
         defaults[orgId] = {};
     }
 
-    // Set the default
+    // Set the default (include both voiceId and voiceName for compatibility)
     defaults[orgId][languageCode] = { tier, voiceName };
+    if (voiceId) {
+        defaults[orgId][languageCode].voiceId = voiceId;
+    }
 
     // Write back atomically
     await writeDefaults(defaults);
 
-    console.log(`[DefaultsStoreJson] Set default for ${orgId}/${languageCode}: ${tier}/${voiceName}`);
+    console.log(`[DefaultsStoreJson] Set default for ${orgId}/${languageCode}: ${tier}/${voiceId || voiceName}`);
 }

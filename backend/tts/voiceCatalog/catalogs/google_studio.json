@@ -1,0 +1,103 @@
+{
+    "provider": "google_cloud_tts",
+    "family": "studio",
+    "tier": "studio",
+    "voices": [
+        {
+            "voiceId": "google_cloud_tts:studio:en-US:en-US-Studio-O",
+            "voiceName": "en-US-Studio-O",
+            "displayName": "O (Studio)",
+            "languageCodes": [
+                "en-US"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:en-US:en-US-Studio-Q",
+            "voiceName": "en-US-Studio-Q",
+            "displayName": "Q (Studio)",
+            "languageCodes": [
+                "en-US"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:en-GB:en-GB-Studio-B",
+            "voiceName": "en-GB-Studio-B",
+            "displayName": "B (Studio GB)",
+            "languageCodes": [
+                "en-GB"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:en-GB:en-GB-Studio-C",
+            "voiceName": "en-GB-Studio-C",
+            "displayName": "C (Studio GB)",
+            "languageCodes": [
+                "en-GB"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:es-ES:es-ES-Studio-C",
+            "voiceName": "es-ES-Studio-C",
+            "displayName": "C (Studio ES)",
+            "languageCodes": [
+                "es-ES"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:es-ES:es-ES-Studio-F",
+            "voiceName": "es-ES-Studio-F",
+            "displayName": "F (Studio ES)",
+            "languageCodes": [
+                "es-ES"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:es-US:es-US-Studio-B",
+            "voiceName": "es-US-Studio-B",
+            "displayName": "B (Studio US)",
+            "languageCodes": [
+                "es-US"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:de-DE:de-DE-Studio-B",
+            "voiceName": "de-DE-Studio-B",
+            "displayName": "B (Studio DE)",
+            "languageCodes": [
+                "de-DE"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:de-DE:de-DE-Studio-C",
+            "voiceName": "de-DE-Studio-C",
+            "displayName": "C (Studio DE)",
+            "languageCodes": [
+                "de-DE"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:fr-FR:fr-FR-Studio-A",
+            "voiceName": "fr-FR-Studio-A",
+            "displayName": "A (Studio FR)",
+            "languageCodes": [
+                "fr-FR"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:fr-FR:fr-FR-Studio-A",
+            "voiceName": "fr-FR-Studio-A",
+            "displayName": "A (Studio FR)",
+            "languageCodes": [
+                "fr-FR"
+            ]
+        },
+        {
+            "voiceId": "google_cloud_tts:studio:fr-FR:fr-FR-Studio-D",
+            "voiceName": "fr-FR-Studio-D",
+            "displayName": "D (Studio FR)",
+            "languageCodes": [
+                "fr-FR"
+            ]
+        }
+    ]
+}

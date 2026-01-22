@@ -1,0 +1,39 @@
+{
+    "provider": "elevenlabs",
+    "family": "elevenlabs",
+    "tier": "elevenlabs",
+    "voices": [
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:pNInz6obpgDQGcFmaJgB",
+            "voiceName": "pNInz6obpgDQGcFmaJgB",
+            "displayName": "Adam (Legacy)",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:EXAVITQu4vr4xnSDxMaL",
+            "voiceName": "EXAVITQu4vr4xnSDxMaL",
+            "displayName": "Sarah (Legacy)",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:CwhRBWXzGAHq8TQ4Fs17",
+            "voiceName": "CwhRBWXzGAHq8TQ4Fs17",
+            "displayName": "Roger (Legacy)",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:IKne3meq5aSn9XLyUdCD",
+            "voiceName": "IKne3meq5aSn9XLyUdCD",
+            "displayName": "Charlie (Legacy)",
+            "languageCodes": [
+                "en"
+            ]
+        }
+    ]
+}

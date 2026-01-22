@@ -34,12 +34,15 @@ export class TtsPlayerController {
         this.state = TtsPlayerState.STOPPED;
         this.currentLanguageCode = null;
         this.currentVoiceName = null;
+        this.currentVoiceId = null;
         this.tier = TtsTier.GEMINI;
         this.mode = TtsMode.UNARY;
         this.ssmlOptions = null; // SSML configuration (Chirp 3 HD only)
         this.promptPresetId = null; // Gemini-TTS prompt preset ID
         this.ttsPrompt = null; // Gemini-TTS custom prompt
         this.intensity = null; // Gemini-TTS intensity level (1-5)
+        this.voices = []; // Dynamic voice catalog from backend
+        this.defaults = {}; // Dynamic voice defaults from backend
 
         // Resolved routing info (from last synthesis)
         this.lastResolvedRoute = null;
@@ -62,6 +65,8 @@ export class TtsPlayerController {
         this.onStateChange = null;
         this.onError = null;
         this.onRouteResolved = null; // New callback for routing updates
+        this.onVoicesUpdate = null; // Callback for voice catalog updates
+        this.onDefaultsUpdate = null; // Callback for voice defaults updates
 
         this.lastRequestId = 0; // Track latest request ID to prevent out-of-order playback
 
@@ -218,7 +223,8 @@ export class TtsPlayerController {
      * 
      * @param {Object} config - Playback configuration
      * @param {string} config.languageCode - BCP-47 language code
-     * @param {string} config.voiceName - Voice name
+     * @param {string} [config.voiceName] - Provider voice name
+     * @param {string} [config.voiceId] - Stable voice ID
      * @param {string} [config.tier='gemini'] - TTS tier
      * @param {string} [config.mode='unary'] - Synthesis mode
      * @param {Object} [config.ssmlOptions] - SSML configuration (Chirp 3 HD only)
@@ -227,12 +233,13 @@ export class TtsPlayerController {
      * @param {number} [config.intensity] - Intensity level 1-5 (Gemini-TTS only)
      * @param {number} [config.startFromSegmentId] - Start from this segment ID (radio mode)
      */
-    start({ languageCode, voiceName, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null, promptPresetId = null, ttsPrompt = null, intensity = null, startFromSegmentId = null }) {
+    start({ languageCode, voiceName, voiceId, tier = TtsTier.GEMINI, mode = TtsMode.UNARY, ssmlOptions = null, promptPresetId = null, ttsPrompt = null, intensity = null, startFromSegmentId = null }) {
 
-        console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, tier, mode, ssmlOptions, startFromSegmentId });
+        console.log('[TtsPlayerController] Starting playback', { languageCode, voiceName, voiceId, tier, mode, ssmlOptions, startFromSegmentId });
 
         this.currentLanguageCode = languageCode;
         this.currentVoiceName = voiceName;
+        this.currentVoiceId = voiceId;
         this.tier = tier;
         this.mode = mode;
         this.ssmlOptions = ssmlOptions;
@@ -260,6 +267,7 @@ export class TtsPlayerController {
                 type: 'tts/start',
                 languageCode,
                 voiceName,
+                voiceId,
                 tier,
                 mode,
                 ssmlOptions,
@@ -384,10 +392,11 @@ export class TtsPlayerController {
      * Stops current audio, clears queue, and restarts with new language
      * 
      * @param {string} newLanguageCode - New language code
-     * @param {string} newVoiceName - New voice name
+     * @param {string} [newVoiceName] - New voice name
+     * @param {string} [newVoiceId] - New voice ID
      */
-    switchLanguage(newLanguageCode, newVoiceName) {
-        console.log('[TtsPlayerController] Switching language', { newLanguageCode, newVoiceName });
+    switchLanguage(newLanguageCode, newVoiceName, newVoiceId) {
+        console.log('[TtsPlayerController] Switching language', { newLanguageCode, newVoiceName, newVoiceId });
 
         // Stop current audio immediately
         if (this.currentAudio) {
@@ -411,6 +420,7 @@ export class TtsPlayerController {
         this.start({
             languageCode: newLanguageCode,
             voiceName: newVoiceName,
+            voiceId: newVoiceId,
             tier: this.tier,
             mode: this.mode,
             ssmlOptions: this.ssmlOptions,
@@ -418,6 +428,34 @@ export class TtsPlayerController {
             ttsPrompt: this.ttsPrompt,
             intensity: this.intensity
         });
+    }
+
+    /**
+     * Fetch voice catalog for a language from backend
+     * @param {string} languageCode - BCP-47 language code
+     */
+    fetchVoices(languageCode) {
+        if (!languageCode) return;
+        const normalized = languageCode.includes('-') ? languageCode : `${languageCode}-${languageCode.toUpperCase()}`;
+        console.log(`[TtsPlayerController] Requesting voice list for ${normalized}`);
+        if (this.sendMessage) {
+            this.sendMessage({
+                type: 'tts/list_voices',
+                languageCode: normalized
+            });
+        }
+    }
+
+    /**
+     * Fetch voice defaults from backend
+     */
+    fetchDefaults() {
+        console.log('[TtsPlayerController] Requesting voice defaults');
+        if (this.sendMessage) {
+            this.sendMessage({
+                type: 'tts/get_defaults'
+            });
+        }
     }
 
     /**
@@ -539,6 +577,7 @@ export class TtsPlayerController {
                 text: nextPending.text,
                 languageCode: this.currentLanguageCode,
                 voiceName: this.currentVoiceName,
+                voiceId: this.currentVoiceId,
                 tier: this.tier,
                 mode: this.mode,
                 ssmlOptions: this.ssmlOptions,
@@ -561,6 +600,28 @@ export class TtsPlayerController {
         switch (msg.type) {
             case 'tts/ack':
                 console.log('[TtsPlayerController] Received ack:', msg.action);
+                break;
+
+            case 'tts/voices':
+                console.log(`[TtsPlayerController] Received ${msg.voices?.length} voices for ${msg.languageCode}`);
+                this.voices = msg.voices.map(v => ({
+                    value: v.voiceId,
+                    label: v.displayName,
+                    tier: v.tier,
+                    voiceId: v.voiceId,
+                    voiceName: v.voiceName
+                }));
+                if (this.onVoicesUpdate) {
+                    this.onVoicesUpdate(this.voices);
+                }
+                break;
+
+            case 'tts/defaults':
+                console.log(`[TtsPlayerController] Received defaults for ${Object.keys(msg.defaultsByLanguage || {}).length} languages`);
+                this.defaults = msg.defaultsByLanguage || {};
+                if (this.onDefaultsUpdate) {
+                    this.onDefaultsUpdate(this.defaults);
+                }
                 break;
 
             case 'tts/audio': {
@@ -777,6 +838,8 @@ export class TtsPlayerController {
         }
 
         const resolvedTier = options.tier || this.tier;
+        const resolvedVoiceName = options.voiceName || this.currentVoiceName;
+        const resolvedVoiceId = options.voiceId || this.currentVoiceId;
         const resolvedSsmlOptions = options.ssmlOptions || this.ssmlOptions;
         const resolvedPromptPresetId = options.promptPresetId || this.promptPresetId;
         const resolvedTtsPrompt = options.ttsPrompt || this.ttsPrompt;
@@ -790,7 +853,8 @@ export class TtsPlayerController {
         console.log('[TtsPlayerController] Requesting immediate synthesis:', {
             text: text.substring(0, 50) + '...',
             segmentId: trackedSegmentId,
-            voiceName: this.currentVoiceName,
+            voiceName: resolvedVoiceName,
+            voiceId: resolvedVoiceId,
             languageCode: this.currentLanguageCode,
             tier: resolvedTier,
             ssmlOptions: resolvedSsmlOptions
@@ -803,7 +867,8 @@ export class TtsPlayerController {
                 segmentId: trackedSegmentId,
                 text,
                 languageCode: this.currentLanguageCode,
-                voiceName: this.currentVoiceName,
+                voiceName: resolvedVoiceName,
+                voiceId: resolvedVoiceId,
                 tier: resolvedTier,
                 mode: this.mode,
                 ssmlOptions: resolvedSsmlOptions,

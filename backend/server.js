@@ -27,6 +27,7 @@ import dotenv from "dotenv";
 import sessionStore from "./sessionStore.js";
 import translationManager from "./translationManager.js";
 import { fetchWithRateLimit } from "./openaiRateLimiter.js";
+import { loadAllCatalogs } from './tts/voiceCatalog/catalogLoader.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,10 +123,20 @@ const LANGUAGE_NAMES = {
 const wss = new WebSocketServer({ noServer: true });
 
 // Create HTTP server
-const server = app.listen(port, '0.0.0.0', () => {
+const server = app.listen(port, '0.0.0.0', async () => {
   console.log(`[Backend] Server running on port ${port}`);
   console.log(`[Backend] Local: http://localhost:${port}`);
   console.log(`[Backend] WebSocket: ws://localhost:${port}/translate`);
+
+  // Initialize Voice Catalog on startup
+  try {
+    const catalogs = await loadAllCatalogs();
+    const totalVoices = Object.values(catalogs).reduce((acc, cat) => acc + cat.voices.length, 0);
+    console.log(`[Backend] ✓ Voice Catalog initialized (${Object.keys(catalogs).length} tiers, ${totalVoices} voices)`);
+  } catch (error) {
+    console.error(`[Backend] ❌ Failed to initialize Voice Catalog:`, error.message);
+  }
+
   const apiPort = process.env.WS_API_PORT || 5000;
   if (apiPort !== port) {
     console.log(`[Backend] API WebSocket: ws://localhost:${apiPort}/api/translate`);
@@ -499,9 +510,15 @@ console.log("[Backend] ===== TRANSLATION SERVICE =====");
 console.log("[Backend] Provider: OpenAI");
 console.log("[Backend] Model: gpt-4o-mini");
 console.log("[Backend] ===== TEXT TO SPEECH SERVICE =====");
-console.log("[Backend] Provider: Google Cloud Text-to-Speech");
-console.log("[Backend] Model: Studio (Multi-Speaker)");
-console.log("[Backend] Features: High-quality unary synthesis");
+console.log("[Backend] Tier Architecture: ACTIVE ✓");
+const VOICE_CATALOG_ENABLED = process.env.TTS_VOICE_CATALOG_ENABLED === 'true';
+console.log(`[Backend] Catalog Mode: ${VOICE_CATALOG_ENABLED ? 'ENABLED ✓' : 'DISABLED ✗'}`);
+if (VOICE_CATALOG_ENABLED) {
+  console.log("[Backend] Active Tiers: Gemini, Chirp3-HD, Studio, Neural2, ElevenLabs (v3/Turbo/Flash), Standard");
+} else {
+  console.log("[Backend] Model: Studio (Multi-Speaker)");
+  console.log("[Backend] Features: High-quality unary synthesis (Legacy Mode)");
+}
 console.log("[Backend] ===== API KEYS =====");
 console.log("[Backend] OpenAI API Key:", process.env.OPENAI_API_KEY ? 'Yes ✓' : 'No ✗ (WARNING: Translation disabled)');
 

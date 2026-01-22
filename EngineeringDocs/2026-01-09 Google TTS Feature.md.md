@@ -1,5 +1,5 @@
 # Exbabel — Feat/Google TTS Integration
-**Last updated:** 2026-01-15 (America/Chicago) - Global 1.45x Gemini Speed Alignment
+**Last updated:** 2026-01-22 (America/Chicago) - Dynamic Voice Catalog Synchronization (PR4/4.1)
 
 This is a running "what is done" document capturing what we changed, why, and where we are now regarding the Google Text-to-Speech integration.
 **Newest items are at the top.**
@@ -8,6 +8,43 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
+
+### BUG 35: FIXED — Frontend/Backend Voice Catalog Desync
+**Status:** ✅ RESOLVED (2026-01-22)
+
+Resolved a critical desync where the frontend used a static, hardcoded voice list while the backend dynamically loaded an exhaustive 159-voice catalog. This caused newly enabled voices and tiers to be invisible to users.
+
+#### Root Cause:
+1. **Static Configuration**: `frontend/src/config/ttsVoices.js` was used as the primary source of truth, requiring manual updates for every backend change.
+2. **Missing Sync Hook**: `TtsPlayerController` lacked the mechanism to pull voice metadata from the backend on-demand.
+
+#### Key Fixes:
+1. **WebSocket Synchronization**: Implemented `tts/list_voices` and `tts/get_defaults` message handling in `TtsPlayerController.js`.
+2. **Reactive UI State**: Updated `ListenerPage.jsx` and `TtsPanel.jsx` to maintain `availableVoices` in local state, refreshing whenever the target language or session state changes.
+3. **Graceful Fallback**: Maintained the static list as an initial state to prevent empty dropdowns during the WebSocket handshake.
+
+#### Impact:
+- ✅ **Dynamic Updates**: Changes to `voiceCatalog.js` on the server are now instantly reflected in the client without a frontend rebuild.
+- ✅ **Exhaustive Access**: Users can now access all 159+ voices across all 9 tiers (Google, ElevenLabs, etc.).
+
+### BUG 34: FIXED — Restricted Voice Catalog (Multi-Tier Expansion)
+**Status:** ✅ RESOLVED (2026-01-22)
+
+Resolved an issue where the initial voice catalog implementation only supported Gemini and Chirp2-HD, missing critical tiers like Neural2, Standard, and ElevenLabs.
+
+#### Root Cause:
+1. **Initial Scope Limitation:** The initial implementation focused only on the newest generative tiers (Gemini/Chirp), leaving larger legacy and third-party catalogs (ElevenLabs) outside the authoritative resolution system.
+
+#### Key Fixes:
+1. **Full Tier Integration:** Expanded the catalog in `voiceCatalog.js` to include exhaustive lists for Neural2, Standard, and ElevenLabs (v3, Turbo, and Flash).
+2. **Multilingual Mapping:** Correctly mapped Gemini and ElevenLabs voices as multilingual, making them available across all supported locale codes.
+3. **Enhanced Fallbacks:** Improved `voiceResolver.js` to navigate down tiers (Gemini → Chirp → Neural2 → Standard) if a preferred tier is missing for a specific language.
+
+#### Impact:
+- ✅ **Complete Coverage:** All 60+ supported languages now have valid defaults across all available tiers.
+- ✅ **Third-Party Support:** ElevenLabs voices are now fully integrated into the server-side resolution and defaults system.
+
+---
 
 ### BUG 33: FIXED — ElevenLabs Language Code Routing & Model Tiers
 **Status:** ✅ RESOLVED (2026-01-21)
@@ -685,6 +722,75 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 ---
 
 ## 1) What we did (feature updates / changes)
+
+### 2026-01-22 — PR 4.2: Voice Catalog Sync & Frontend Hardening
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Synchronized the dynamic voice catalog between backend and frontend, replacing static lists with a server-authoritative system via WebSocket.
+
+**Key Changes:**
+- **Dynamic Fetching**: Implemented `fetchVoices` and `fetchDefaults` in `TtsPlayerController` using WebSocket commands.
+- **Reactive UI**: Updated `ListenerPage`, `TtsPanel`, and `TtsSettingsModal` to subscribe to dynamic catalog updates.
+- **Reliable Fallbacks**: Maintained static voice lists as robust fallbacks for offline or pending states.
+
+**Resolved Bugs:**
+- **Bug 37: TypeError: voices.map is not a function**
+    - **Issue**: Backend crashed when listing voices because `getVoicesFor` (async) was called without `await`.
+    - **Fix**: Added `await` to the call in `websocketHandler.js`.
+    - **Status**: ✅ Fixed
+
+- **Bug 38: Incomplete Voice Validation**
+    - **Issue**: `isVoiceValid` (async) was called without `await` in the synthesize handler, causing fallback logic to be skipped.
+    - **Fix**: Added `await` to the call in `websocketHandler.js`.
+    - **Status**: ✅ Fixed
+
+---
+
+### 2026-01-22 — PR 4.1: Synchronized Search & Catalog UI
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Fine-tuned the voice discovery process to ensure smooth UI transitions and correct tier grouping even when the backend returns unexpected or highly diverse voice metadata.
+
+**Key Changes:**
+- **Tier-Resilient Grouping**: Updated categorization logic in both `TtsPanel` and `ListenerPage` to handle dynamic tier labels from the server catalog.
+- **Props-Driven Modals**: Refactored `TtsSettingsModal` to accept external voice lists, ensuring the settings UI is always in sync with the main panel.
+- **Normalized Fetching**: Implemented automatic language normalization (e.g., `es` -> `es-ES`) inside the controller before requesting the backend catalog.
+
+---
+
+### 2026-01-22 — PR 4: Dynamic Backend Voice Fetching & Synchronization
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Replaced the rigid static voice lists in the frontend with a dynamic, server-authoritative fetching system.
+
+**Key Changes:**
+- **On-Demand Discovery**: Clients now explicitly request the allowed voice list for their target language via the `tts/list_voices` WebSocket command.
+- **Controller State Management**: `TtsPlayerController` now manages the authoritative state of `availableVoices`, exposing callbacks (`onVoicesUpdate`) for UI components.
+- **Default Resolution**: Implemented `fetchDefaults` to pull server-side voice preferences during session initialization.
+
+---
+
+### 2026-01-22 — PR 9: Voice Identity & Org-Level Defaults
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Implemented a server-authoritative voice catalog and organization-level voice defaults to provide consistent audio delivery across all listeners and ensure reliable fallbacks.
+
+**Key Changes:**
+- **Server-Authoritative Catalog:** Centralized all voice definitions (Gemini, Chirp3-HD, Neural2, Standard, ElevenLabs) in the backend to ensure clients only use valid, supported voices.
+- **Org-Level Defaults:** Implemented JSON-based storage (`ttsDefaults.json`) for persisting voice preferences per language at the organization level.
+- **Intelligent Voice Resolution:** Created a resolution engine (`voiceResolver.js`) that handles precedence: User Preference → Org Default → Catalog Default → Fallback (English/Gemini).
+- **Zero-Config Frontend:** Synthesis requests can now omit voice/tier details; the server automatically resolves the correct voice based on org settings.
+- **WebSocket Voice Discovery:** Added `tts/list_voices` and `tts/get_defaults` commands for real-time voice list fetching and preference synchronization.
+- **Tier-Gated Filtering:** Backend now filters available voices based on the organization's allowed tiers using a new `ttsTierHelper.js`.
+- **Atomic Storage:** Ensured defaults are saved with atomic file operations (temp file + rename) to prevent corruption.
+- **Metering Stub:** Integrated `ttsMetering.js` to build usage events after successful synthesis, logged under `TTS_METERING_DEBUG=true`.
+
+**Where implemented:**
+- **Backend:** `backend/tts/voiceCatalog.js`, `backend/tts/voiceResolver.js`, `backend/tts/defaults/`, `backend/tts/ttsTierHelper.js`, `backend/tts/ttsMetering.js`
+- **Configuration:** `backend/config/ttsDefaults.json`
+- **WebSocket:** `backend/websocketHandler.js` (commands: `tts/list_voices`, `tts/get_defaults`, `tts/set_default`)
+
+---
 
 ### 2026-01-21 — PR 8: ElevenLabs Premium Tier & Voice Settings Integration
 **Status:** ✅ IMPLEMENTED - Production Ready

@@ -22,18 +22,25 @@ import { getOrgVoiceDefaults } from './defaults/defaultsStore.js';
  */
 export async function resolveVoice({ orgId, userPref, languageCode, allowedTiers }) {
     // 1. User preference (if provided and allowed)
-    if (userPref?.tier && userPref?.voiceName) {
+    if (userPref?.tier && (userPref?.voiceId || userPref?.voiceName)) {
         // Check if tier is allowed
         if (allowedTiers.includes(userPref.tier)) {
-            // Validate voice is valid for language/tier
-            if (isVoiceValid({ voiceName: userPref.voiceName, languageCode, tier: userPref.tier })) {
+            // Validate voice is valid for language/tier (accepts voiceId or voiceName)
+            if (await isVoiceValid({
+                voiceId: userPref.voiceId,
+                voiceName: userPref.voiceName,
+                languageCode,
+                tier: userPref.tier
+            })) {
                 return {
                     tier: userPref.tier,
+                    voiceId: userPref.voiceId,
                     voiceName: userPref.voiceName,
                     reason: 'user_preference'
                 };
             } else {
-                console.warn(`[VoiceResolver] User preference invalid: ${userPref.voiceName} for ${languageCode}:${userPref.tier}`);
+                const identifier = userPref.voiceId || userPref.voiceName;
+                console.warn(`[VoiceResolver] User preference invalid: ${identifier} for ${languageCode}:${userPref.tier}`);
             }
         } else {
             console.warn(`[VoiceResolver] User preference tier not allowed: ${userPref.tier} (allowed: ${allowedTiers.join(', ')})`);
@@ -45,18 +52,25 @@ export async function resolveVoice({ orgId, userPref, languageCode, allowedTiers
         const orgDefaults = await getOrgVoiceDefaults(orgId);
         const orgDefault = orgDefaults[languageCode];
 
-        if (orgDefault?.tier && orgDefault?.voiceName) {
+        if (orgDefault?.tier && (orgDefault?.voiceId || orgDefault?.voiceName)) {
             // Check if tier is allowed
             if (allowedTiers.includes(orgDefault.tier)) {
                 // Validate voice is valid
-                if (isVoiceValid({ voiceName: orgDefault.voiceName, languageCode, tier: orgDefault.tier })) {
+                if (await isVoiceValid({
+                    voiceId: orgDefault.voiceId,
+                    voiceName: orgDefault.voiceName,
+                    languageCode,
+                    tier: orgDefault.tier
+                })) {
                     return {
                         tier: orgDefault.tier,
+                        voiceId: orgDefault.voiceId,
                         voiceName: orgDefault.voiceName,
                         reason: 'org_default'
                     };
                 } else {
-                    console.warn(`[VoiceResolver] Org default invalid: ${orgDefault.voiceName} for ${languageCode}:${orgDefault.tier}`);
+                    const identifier = orgDefault.voiceId || orgDefault.voiceName;
+                    console.warn(`[VoiceResolver] Org default invalid: ${identifier} for ${languageCode}:${orgDefault.tier}`);
                 }
             } else {
                 console.warn(`[VoiceResolver] Org default tier not allowed: ${orgDefault.tier} (allowed: ${allowedTiers.join(', ')})`);
@@ -67,10 +81,11 @@ export async function resolveVoice({ orgId, userPref, languageCode, allowedTiers
     }
 
     // 3. Catalog default for language
-    const catalogDefault = getDefaultVoice({ languageCode, allowedTiers });
+    const catalogDefault = await getDefaultVoice({ languageCode, allowedTiers });
     if (catalogDefault) {
         return {
             tier: catalogDefault.tier,
+            voiceId: catalogDefault.voiceId,
             voiceName: catalogDefault.voiceName,
             reason: 'catalog_default'
         };
@@ -84,10 +99,11 @@ export async function resolveVoice({ orgId, userPref, languageCode, allowedTiers
     for (const tier of ['gemini', 'chirp3_hd', 'neural2', 'standard']) {
         if (!allowedTiers.includes(tier)) continue;
 
-        const voices = getVoicesFor({ languageCode, allowedTiers: [tier] });
+        const voices = await getVoicesFor({ languageCode, allowedTiers: [tier] });
         if (voices.length > 0) {
             return {
                 tier: tier,
+                voiceId: voices[0].voiceId,
                 voiceName: voices[0].voiceName,
                 reason: 'fallback_first_available'
             };
@@ -98,6 +114,7 @@ export async function resolveVoice({ orgId, userPref, languageCode, allowedTiers
     console.error(`[VoiceResolver] No voices found for ${languageCode}. Falling back to en-US with Gemini.`);
     return {
         tier: 'gemini',
+        voiceId: 'gemini:gemini_tts:-:Kore',
         voiceName: 'Kore',
         reason: 'fallback_english'
     };

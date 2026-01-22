@@ -1,0 +1,247 @@
+{
+  "provider": "google_cloud_tts",
+  "family": "neural2",
+  "tier": "neural2",
+  "voices": [
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:A",
+      "voiceName": "en-US-Neural2-A",
+      "displayName": "en-US-Neural2-A",
+      "languageCodes": [
+        "en-US"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:C",
+      "voiceName": "en-US-Neural2-C",
+      "displayName": "en-US-Neural2-C",
+      "languageCodes": [
+        "en-US"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:D",
+      "voiceName": "en-US-Neural2-D",
+      "displayName": "en-US-Neural2-D",
+      "languageCodes": [
+        "en-US"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:F",
+      "voiceName": "en-US-Neural2-F",
+      "displayName": "en-US-Neural2-F",
+      "languageCodes": [
+        "en-US"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:A",
+      "voiceName": "en-GB-Neural2-A",
+      "displayName": "en-GB-Neural2-A",
+      "languageCodes": [
+        "en-GB"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:B",
+      "voiceName": "en-GB-Neural2-B",
+      "displayName": "en-GB-Neural2-B",
+      "languageCodes": [
+        "en-GB"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:C",
+      "voiceName": "en-GB-Neural2-C",
+      "displayName": "en-GB-Neural2-C",
+      "languageCodes": [
+        "en-GB"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:D",
+      "voiceName": "en-GB-Neural2-D",
+      "displayName": "en-GB-Neural2-D",
+      "languageCodes": [
+        "en-GB"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:A",
+      "voiceName": "es-ES-Neural2-A",
+      "displayName": "es-ES-Neural2-A",
+      "languageCodes": [
+        "es-ES"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:B",
+      "voiceName": "es-ES-Neural2-B",
+      "displayName": "es-ES-Neural2-B",
+      "languageCodes": [
+        "es-ES"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:C",
+      "voiceName": "es-ES-Neural2-C",
+      "displayName": "es-ES-Neural2-C",
+      "languageCodes": [
+        "es-ES"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-FR:A",
+      "voiceName": "fr-FR-Neural2-A",
+      "displayName": "fr-FR-Neural2-A",
+      "languageCodes": [
+        "fr-FR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-FR:B",
+      "voiceName": "fr-FR-Neural2-B",
+      "displayName": "fr-FR-Neural2-B",
+      "languageCodes": [
+        "fr-FR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-FR:C",
+      "voiceName": "fr-FR-Neural2-C",
+      "displayName": "fr-FR-Neural2-C",
+      "languageCodes": [
+        "fr-FR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:A",
+      "voiceName": "de-DE-Neural2-A",
+      "displayName": "de-DE-Neural2-A",
+      "languageCodes": [
+        "de-DE"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:B",
+      "voiceName": "de-DE-Neural2-B",
+      "displayName": "de-DE-Neural2-B",
+      "languageCodes": [
+        "de-DE"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:C",
+      "voiceName": "de-DE-Neural2-C",
+      "displayName": "de-DE-Neural2-C",
+      "languageCodes": [
+        "de-DE"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:B",
+      "voiceName": "ja-JP-Neural2-B",
+      "displayName": "ja-JP-Neural2-B",
+      "languageCodes": [
+        "ja-JP"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:C",
+      "voiceName": "ja-JP-Neural2-C",
+      "displayName": "ja-JP-Neural2-C",
+      "languageCodes": [
+        "ja-JP"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:D",
+      "voiceName": "ja-JP-Neural2-D",
+      "displayName": "ja-JP-Neural2-D",
+      "languageCodes": [
+        "ja-JP"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:A",
+      "voiceName": "ko-KR-Neural2-A",
+      "displayName": "ko-KR-Neural2-A",
+      "languageCodes": [
+        "ko-KR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:B",
+      "voiceName": "ko-KR-Neural2-B",
+      "displayName": "ko-KR-Neural2-B",
+      "languageCodes": [
+        "ko-KR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:C",
+      "voiceName": "ko-KR-Neural2-C",
+      "displayName": "ko-KR-Neural2-C",
+      "languageCodes": [
+        "ko-KR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:A",
+      "voiceName": "pt-BR-Neural2-A",
+      "displayName": "pt-BR-Neural2-A",
+      "languageCodes": [
+        "pt-BR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:B",
+      "voiceName": "pt-BR-Neural2-B",
+      "displayName": "pt-BR-Neural2-B",
+      "languageCodes": [
+        "pt-BR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:C",
+      "voiceName": "pt-BR-Neural2-C",
+      "displayName": "pt-BR-Neural2-C",
+      "languageCodes": [
+        "pt-BR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:it-IT:A",
+      "voiceName": "it-IT-Neural2-A",
+      "displayName": "it-IT-Neural2-A",
+      "languageCodes": [
+        "it-IT"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:it-IT:C",
+      "voiceName": "it-IT-Neural2-C",
+      "displayName": "it-IT-Neural2-C",
+      "languageCodes": [
+        "it-IT"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-CN:A",
+      "voiceName": "cmn-CN-Neural2-A",
+      "displayName": "cmn-CN-Neural2-A",
+      "languageCodes": [
+        "cmn-CN"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-CN:C",
+      "voiceName": "cmn-CN-Neural2-C",
+      "displayName": "cmn-CN-Neural2-C",
+      "languageCodes": [
+        "cmn-CN"
+      ]
+    }
+  ]
+}

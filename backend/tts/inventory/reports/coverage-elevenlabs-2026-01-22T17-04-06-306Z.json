@@ -1,0 +1,17 @@
+{
+  "providerKey": "elevenlabs",
+  "fetchedAt": "2026-01-22T16:58:33.412Z",
+  "byFamily": {
+    "eleven_all": {
+      "totalVoices": 36,
+      "totalLanguages": "*",
+      "multilingual": true,
+      "voicesByLanguage": {}
+    }
+  },
+  "summary": {
+    "totalVoices": 36,
+    "totalLanguages": 0,
+    "totalFamilies": 1
+  }
+}

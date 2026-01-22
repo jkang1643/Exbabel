@@ -1,0 +1,1379 @@
+{
+  "providerKey": "elevenlabs",
+  "fetchedAt": "2026-01-22T17:09:13.740Z",
+  "byFamily": {
+    "elevenlabs_v3": {
+      "totalVoices": 36,
+      "totalLanguages": 75,
+      "multilingual": false,
+      "voicesByLanguage": {
+        "bg": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "cs": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "da": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "de": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "el": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "en": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "es": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hu": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "id": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "it": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ja": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ko": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ms": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "nl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "no": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "pl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "pt": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ro": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ru": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sk": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sv": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "th": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "tr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "uk": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "vi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "zh": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "af": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sq": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "am": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ar": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hy": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "az": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "eu": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "be": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "bn": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "my": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ca": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ceb": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "et": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fil": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "gl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ka": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "gu": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ht": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "he": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "is": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "jv": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "kn": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "kok": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "lo": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "la": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "lv": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "lt": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "lb": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "mk": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "mai": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "mg": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ml": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "mn": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ne": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "nn": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "or": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ps": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fa": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "pa": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sd": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "si": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sw": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ur": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        }
+      }
+    },
+    "elevenlabs_turbo": {
+      "totalVoices": 36,
+      "totalLanguages": 29,
+      "multilingual": false,
+      "voicesByLanguage": {
+        "bg": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "cs": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "da": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "de": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "el": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "en": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "es": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hu": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "id": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "it": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ja": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ko": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ms": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "nl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "no": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "pl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "pt": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ro": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ru": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sk": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sv": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "th": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "tr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "uk": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "vi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "zh": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        }
+      }
+    },
+    "elevenlabs_flash": {
+      "totalVoices": 36,
+      "totalLanguages": 29,
+      "multilingual": false,
+      "voicesByLanguage": {
+        "bg": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "cs": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "da": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "de": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "el": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "en": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "es": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "fr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "hu": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "id": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "it": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ja": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ko": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ms": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "nl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "no": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "pl": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "pt": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ro": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "ru": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sk": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "sv": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "th": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "tr": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "uk": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "vi": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        },
+        "zh": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        }
+      }
+    },
+    "elevenlabs": {
+      "totalVoices": 36,
+      "totalLanguages": 1,
+      "multilingual": false,
+      "voicesByLanguage": {
+        "en": {
+          "count": 36,
+          "samples": [
+            "Roger - Laid-Back, Casual, Resonant",
+            "Sarah - Mature, Reassuring, Confident",
+            "Laura - Enthusiast, Quirky Attitude",
+            "Charlie - Deep, Confident, Energetic",
+            "George - Warm, Captivating Storyteller"
+          ]
+        }
+      }
+    }
+  },
+  "summary": {
+    "totalVoices": 144,
+    "totalLanguages": 75,
+    "totalFamilies": 4
+  }
+}

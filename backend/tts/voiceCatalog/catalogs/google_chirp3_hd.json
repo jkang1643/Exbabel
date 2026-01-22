@@ -1,0 +1,547 @@
+{
+  "provider": "google_cloud_tts",
+  "family": "chirp3_hd",
+  "tier": "chirp3_hd",
+  "voices": [
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-US:Kore",
+      "voiceName": "en-US-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD en-US)",
+      "languageCodes": [
+        "en-US"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-US:Puck",
+      "voiceName": "en-US-Chirp3-HD-Puck",
+      "displayName": "Puck (Chirp3-HD en-US)",
+      "languageCodes": [
+        "en-US"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-US:Charon",
+      "voiceName": "en-US-Chirp3-HD-Charon",
+      "displayName": "Charon (Chirp3-HD en-US)",
+      "languageCodes": [
+        "en-US"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-US:Leda",
+      "voiceName": "en-US-Chirp3-HD-Leda",
+      "displayName": "Leda (Chirp3-HD en-US)",
+      "languageCodes": [
+        "en-US"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-GB:Kore",
+      "voiceName": "en-GB-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD en-GB)",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-GB:Puck",
+      "voiceName": "en-GB-Chirp3-HD-Puck",
+      "displayName": "Puck (Chirp3-HD en-GB)",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-AU:Kore",
+      "voiceName": "en-AU-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD en-AU)",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:en-IN:Kore",
+      "voiceName": "en-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD en-IN)",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:es-ES:Kore",
+      "voiceName": "es-ES-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD es-ES)",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:es-ES:Leda",
+      "voiceName": "es-ES-Chirp3-HD-Leda",
+      "displayName": "Leda (Chirp3-HD es-ES)",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:es-US:Kore",
+      "voiceName": "es-US-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD es-US)",
+      "languageCodes": [
+        "es-US"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:fr-FR:Kore",
+      "voiceName": "fr-FR-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD fr-FR)",
+      "languageCodes": [
+        "fr-FR"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:fr-FR:Puck",
+      "voiceName": "fr-FR-Chirp3-HD-Puck",
+      "displayName": "Puck (Chirp3-HD fr-FR)",
+      "languageCodes": [
+        "fr-FR"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:fr-CA:Kore",
+      "voiceName": "fr-CA-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD fr-CA)",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:de-DE:Kore",
+      "voiceName": "de-DE-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD de-DE)",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:de-DE:Puck",
+      "voiceName": "de-DE-Chirp3-HD-Puck",
+      "displayName": "Puck (Chirp3-HD de-DE)",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:it-IT:Kore",
+      "voiceName": "it-IT-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD it-IT)",
+      "languageCodes": [
+        "it-IT"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:pt-BR:Kore",
+      "voiceName": "pt-BR-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD pt-BR)",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ja-JP:Kore",
+      "voiceName": "ja-JP-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ja-JP)",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ko-KR:Kore",
+      "voiceName": "ko-KR-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ko-KR)",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:cmn-CN:Kore",
+      "voiceName": "cmn-CN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD cmn-CN)",
+      "languageCodes": [
+        "cmn-CN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:zh-CN:Kore",
+      "voiceName": "zh-CN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD zh-CN)",
+      "languageCodes": [
+        "zh-CN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:hi-IN:Kore",
+      "voiceName": "hi-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD hi-IN)",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:id-ID:Kore",
+      "voiceName": "id-ID-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD id-ID)",
+      "languageCodes": [
+        "id-ID"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:nl-NL:Kore",
+      "voiceName": "nl-NL-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD nl-NL)",
+      "languageCodes": [
+        "nl-NL"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:pl-PL:Kore",
+      "voiceName": "pl-PL-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD pl-PL)",
+      "languageCodes": [
+        "pl-PL"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:pt-PT:Kore",
+      "voiceName": "pt-PT-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD pt-PT)",
+      "languageCodes": [
+        "pt-PT"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ru-RU:Kore",
+      "voiceName": "ru-RU-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ru-RU)",
+      "languageCodes": [
+        "ru-RU"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:th-TH:Kore",
+      "voiceName": "th-TH-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD th-TH)",
+      "languageCodes": [
+        "th-TH"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:tr-TR:Kore",
+      "voiceName": "tr-TR-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD tr-TR)",
+      "languageCodes": [
+        "tr-TR"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:vi-VN:Kore",
+      "voiceName": "vi-VN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD vi-VN)",
+      "languageCodes": [
+        "vi-VN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ar-XA:Kore",
+      "voiceName": "ar-XA-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ar-XA)",
+      "languageCodes": [
+        "ar-XA"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:bg-BG:Kore",
+      "voiceName": "bg-BG-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD bg-BG)",
+      "languageCodes": [
+        "bg-BG"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:bn-IN:Kore",
+      "voiceName": "bn-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD bn-IN)",
+      "languageCodes": [
+        "bn-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:cs-CZ:Kore",
+      "voiceName": "cs-CZ-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD cs-CZ)",
+      "languageCodes": [
+        "cs-CZ"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:da-DK:Kore",
+      "voiceName": "da-DK-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD da-DK)",
+      "languageCodes": [
+        "da-DK"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:el-GR:Kore",
+      "voiceName": "el-GR-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD el-GR)",
+      "languageCodes": [
+        "el-GR"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:fi-FI:Kore",
+      "voiceName": "fi-FI-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD fi-FI)",
+      "languageCodes": [
+        "fi-FI"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:gu-IN:Kore",
+      "voiceName": "gu-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD gu-IN)",
+      "languageCodes": [
+        "gu-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:he-IL:Kore",
+      "voiceName": "he-IL-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD he-IL)",
+      "languageCodes": [
+        "he-IL"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:hr-HR:Kore",
+      "voiceName": "hr-HR-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD hr-HR)",
+      "languageCodes": [
+        "hr-HR"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:hu-HU:Kore",
+      "voiceName": "hu-HU-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD hu-HU)",
+      "languageCodes": [
+        "hu-HU"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:kn-IN:Kore",
+      "voiceName": "kn-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD kn-IN)",
+      "languageCodes": [
+        "kn-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:lt-LT:Kore",
+      "voiceName": "lt-LT-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD lt-LT)",
+      "languageCodes": [
+        "lt-LT"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:lv-LV:Kore",
+      "voiceName": "lv-LV-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD lv-LV)",
+      "languageCodes": [
+        "lv-LV"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ml-IN:Kore",
+      "voiceName": "ml-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ml-IN)",
+      "languageCodes": [
+        "ml-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:mr-IN:Kore",
+      "voiceName": "mr-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD mr-IN)",
+      "languageCodes": [
+        "mr-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:nb-NO:Kore",
+      "voiceName": "nb-NO-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD nb-NO)",
+      "languageCodes": [
+        "nb-NO"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:nl-BE:Kore",
+      "voiceName": "nl-BE-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD nl-BE)",
+      "languageCodes": [
+        "nl-BE"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:pa-IN:Kore",
+      "voiceName": "pa-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD pa-IN)",
+      "languageCodes": [
+        "pa-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ro-RO:Kore",
+      "voiceName": "ro-RO-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ro-RO)",
+      "languageCodes": [
+        "ro-RO"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:sk-SK:Kore",
+      "voiceName": "sk-SK-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD sk-SK)",
+      "languageCodes": [
+        "sk-SK"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:sl-SI:Kore",
+      "voiceName": "sl-SI-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD sl-SI)",
+      "languageCodes": [
+        "sl-SI"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:sr-RS:Kore",
+      "voiceName": "sr-RS-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD sr-RS)",
+      "languageCodes": [
+        "sr-RS"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:sv-SE:Kore",
+      "voiceName": "sv-SE-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD sv-SE)",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ta-IN:Kore",
+      "voiceName": "ta-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ta-IN)",
+      "languageCodes": [
+        "ta-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:te-IN:Kore",
+      "voiceName": "te-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD te-IN)",
+      "languageCodes": [
+        "te-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:uk-UA:Kore",
+      "voiceName": "uk-UA-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD uk-UA)",
+      "languageCodes": [
+        "uk-UA"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:ur-IN:Kore",
+      "voiceName": "ur-IN-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD ur-IN)",
+      "languageCodes": [
+        "ur-IN"
+      ],
+      "model": "chirp-3-hd"
+    },
+    {
+      "voiceId": "google_cloud_tts:chirp3_hd:yue-HK:Kore",
+      "voiceName": "yue-HK-Chirp3-HD-Kore",
+      "displayName": "Kore (Chirp3-HD yue-HK)",
+      "languageCodes": [
+        "yue-HK"
+      ],
+      "model": "chirp-3-hd"
+    }
+  ]
+}

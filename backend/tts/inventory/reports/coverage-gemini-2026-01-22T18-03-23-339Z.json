@@ -1,0 +1,888 @@
+{
+  "providerKey": "gemini",
+  "fetchedAt": "2026-01-22T18:03:03.022Z",
+  "byFamily": {
+    "gemini_tts": {
+      "totalVoices": 30,
+      "totalLanguages": 87,
+      "multilingual": false,
+      "voicesByLanguage": {
+        "af-ZA": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "sq-AL": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "am-ET": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ar-001": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ar-EG": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "hy-AM": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "az-AZ": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "eu-ES": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "be-BY": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "bg-BG": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "bn-BD": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "my-MM": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ca-ES": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ceb-PH": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "cmn-CN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "cmn-TW": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "hr-HR": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "cs-CZ": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "da-DK": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "nl-NL": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "en-AU": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "en-GB": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "en-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "en-US": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "et-EE": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "fil-PH": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "fi-FI": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "fr-CA": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "fr-FR": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "gl-ES": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ka-GE": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "de-DE": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "el-GR": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "gu-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ht-HT": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "he-IL": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "hi-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "hu-HU": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "is-IS": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "id-ID": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "it-IT": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ja-JP": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "jv-JV": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "kn-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ko-KR": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "kok-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "lo-LA": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "la-VA": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "lv-LV": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "lt-LT": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "lb-LU": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "mk-MK": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "mai-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "mg-MG": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ms-MY": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ml-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "mn-MN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "mr-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ne-NP": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "nb-NO": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "nn-NO": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "or-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ps-AF": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "fa-IR": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "pl-PL": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "pt-BR": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "pt-PT": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "pa-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ro-RO": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ru-RU": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "sr-RS": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "sd-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "si-LK": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "sk-SK": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "sl-SI": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "es-419": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "es-ES": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "es-MX": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "sw-KE": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "sv-SE": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ta-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "te-IN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "th-TH": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "tr-TR": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "uk-UA": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "ur-PK": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        },
+        "vi-VN": {
+          "count": 30,
+          "samples": [
+            "Achernar (Gemini)",
+            "Achird (Gemini)",
+            "Algenib (Gemini)",
+            "Algieba (Gemini)",
+            "Alnilam (Gemini)"
+          ]
+        }
+      }
+    }
+  },
+  "summary": {
+    "totalVoices": 30,
+    "totalLanguages": 87,
+    "totalFamilies": 1
+  }
+}

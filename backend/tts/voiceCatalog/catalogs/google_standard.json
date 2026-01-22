@@ -1,0 +1,95 @@
+{
+  "provider": "google_cloud_tts",
+  "family": "standard",
+  "tier": "standard",
+  "voices": [
+    {
+      "voiceId": "google_cloud_tts:standard:en-US:A",
+      "voiceName": "en-US-Standard-A",
+      "displayName": "en-US-Standard-A",
+      "languageCodes": [
+        "en-US"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:en-US:B",
+      "voiceName": "en-US-Standard-B",
+      "displayName": "en-US-Standard-B",
+      "languageCodes": [
+        "en-US"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:en-US:C",
+      "voiceName": "en-US-Standard-C",
+      "displayName": "en-US-Standard-C",
+      "languageCodes": [
+        "en-US"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:en-GB:A",
+      "voiceName": "en-GB-Standard-A",
+      "displayName": "en-GB-Standard-A",
+      "languageCodes": [
+        "en-GB"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:en-GB:B",
+      "voiceName": "en-GB-Standard-B",
+      "displayName": "en-GB-Standard-B",
+      "languageCodes": [
+        "en-GB"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:es-ES:A",
+      "voiceName": "es-ES-Standard-A",
+      "displayName": "es-ES-Standard-A",
+      "languageCodes": [
+        "es-ES"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:es-ES:B",
+      "voiceName": "es-ES-Standard-B",
+      "displayName": "es-ES-Standard-B",
+      "languageCodes": [
+        "es-ES"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:fr-FR:A",
+      "voiceName": "fr-FR-Standard-A",
+      "displayName": "fr-FR-Standard-A",
+      "languageCodes": [
+        "fr-FR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:fr-FR:B",
+      "voiceName": "fr-FR-Standard-B",
+      "displayName": "fr-FR-Standard-B",
+      "languageCodes": [
+        "fr-FR"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:de-DE:A",
+      "voiceName": "de-DE-Standard-A",
+      "displayName": "de-DE-Standard-A",
+      "languageCodes": [
+        "de-DE"
+      ]
+    },
+    {
+      "voiceId": "google_cloud_tts:standard:de-DE:B",
+      "voiceName": "de-DE-Standard-B",
+      "displayName": "de-DE-Standard-B",
+      "languageCodes": [
+        "de-DE"
+      ]
+    }
+  ]
+}

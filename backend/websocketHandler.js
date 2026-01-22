@@ -482,7 +482,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               const allowedTiers = getAllowedTiers(orgId);
 
               // Get voices filtered by language and allowed tiers
-              const voices = getVoicesFor({
+              const voices = await getVoicesFor({
                 languageCode: message.languageCode,
                 allowedTiers
               });
@@ -490,6 +490,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               // Transform to client format (hide tier info for disallowed voices)
               const clientVoices = voices.map(v => ({
                 tier: v.tier,
+                voiceId: v.voiceId,
                 voiceName: v.voiceName,
                 displayName: v.displayName
               }));
@@ -810,8 +811,10 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             let resolvedVoice = null;
 
             if (VOICE_CATALOG_ENABLED) {
-              // Check if voice resolution is needed
-              const needsResolution = !message.tier || !message.voiceName;
+              // Check if voice resolution is needed (missing either voiceId OR tier/voiceName)
+              const hasVoiceId = !!message.voiceId;
+              const hasTierAndName = !!(message.tier && message.voiceName);
+              const needsResolution = !hasVoiceId && !hasTierAndName;
 
               if (needsResolution) {
                 console.log(`[Listener] Missing voice selection, resolving server-side`);
@@ -825,14 +828,19 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
 
                   resolvedVoice = await resolveVoice({
                     orgId,
-                    userPref: message.tier && message.voiceName ? { tier: message.tier, voiceName: message.voiceName } : null,
+                    userPref: hasVoiceId || hasTierAndName ? {
+                      voiceId: message.voiceId,
+                      tier: message.tier,
+                      voiceName: message.voiceName
+                    } : null,
                     languageCode: message.languageCode,
                     allowedTiers
                   });
 
-                  console.log(`[Listener] Resolved voice: ${resolvedVoice.tier}/${resolvedVoice.voiceName} (reason: ${resolvedVoice.reason})`);
+                  console.log(`[Listener] Resolved voice: ${resolvedVoice.tier}/${resolvedVoice.voiceName} (voiceId: ${resolvedVoice.voiceId}, reason: ${resolvedVoice.reason})`);
 
                   // Override message with resolved voice
+                  message.voiceId = resolvedVoice.voiceId;
                   message.tier = resolvedVoice.tier;
                   message.voiceName = resolvedVoice.voiceName;
                 } catch (error) {
@@ -848,7 +856,8 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                   const orgId = 'default';
                   const allowedTiers = getAllowedTiers(orgId);
 
-                  const valid = isVoiceValid({
+                  const valid = await isVoiceValid({
+                    voiceId: message.voiceId,
                     voiceName: message.voiceName,
                     languageCode: message.languageCode,
                     tier: message.tier

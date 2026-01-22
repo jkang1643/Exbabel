@@ -12,9 +12,9 @@ import { LanguageSelector } from './LanguageSelector';
 import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 
 import { TRANSLATION_LANGUAGES } from '../config/languages.js';
+
 import { Play, Square, Settings } from 'lucide-react';
 import { TtsSettingsModal } from './TtsSettingsModal';
-import { getVoicesForLanguage, normalizeLanguageCode } from '../config/ttsVoices.js';
 import { TtsMode, TtsPlayerState } from '../tts/types.js';
 import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
 import { CaptionClientEngine, SentenceSegmenter } from '@jkang1643/caption-engine';
@@ -269,7 +269,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // TTS UI State (Lifted from TtsPanel)
   const [ttsState, setTtsState] = useState(TtsPlayerState.STOPPED);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState(null);
+  const [selectedVoice, setSelectedVoice] = useState('');
   // Default settings for hidden controls (Kore is Chirp3, so default to 1.1x)
   const [ttsSettings, setTtsSettings] = useState({
     speakingRate: 1.1,
@@ -280,6 +280,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     pitch: '0st',
     volume: '0dB'
   });
+  const [availableVoices, setAvailableVoices] = useState([]);
+  const [ttsDefaults, setTtsDefaults] = useState({});
 
   // Commit counter for tracing leaked rows
   const commitCounterRef = useRef(0);
@@ -490,6 +492,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         console.log('[ListenerPage] TTS Route resolved:', route);
         setRoutingDebug(route);
       };
+      ttsControllerRef.current.onVoicesUpdate = (voices) => {
+        console.log('[ListenerPage] Received dynamic voices update:', voices.length);
+        setAvailableVoices(voices);
+      };
+      ttsControllerRef.current.onDefaultsUpdate = (defaults) => {
+        console.log('[ListenerPage] Received dynamic defaults update:', Object.keys(defaults).length);
+        setTtsDefaults(defaults);
+      };
     }
 
     return () => {
@@ -507,18 +517,17 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
     // Update language
     if (targetLang) {
-      ttsControllerRef.current.currentLanguageCode = normalizeLanguageCode(targetLang);
+      ttsControllerRef.current.currentLanguageCode = targetLang;
     }
 
     // Update voice AND tier
     if (selectedVoice) {
-      ttsControllerRef.current.currentVoiceName = selectedVoice;
+      ttsControllerRef.current.currentVoiceId = selectedVoice;
 
-      // CRITICAL FIX: Update tier based on selected voice
-      // This ensures cross-tier voice switching works correctly
-      const voices = getVoicesForLanguage(targetLang);
-      const voiceOption = voices.find(v => v.value === selectedVoice);
+      // Update tier based on selected voice
+      const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
       if (voiceOption) {
+        ttsControllerRef.current.currentVoiceName = voiceOption.voiceName;
         ttsControllerRef.current.tier = voiceOption.tier || 'neural2';
         console.log(`[ListenerPage] Updated voice and tier: ${selectedVoice} (${voiceOption.tier})`);
       }
@@ -543,46 +552,47 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     ttsControllerRef.current.promptPresetId = ttsSettings.promptPresetId;
     ttsControllerRef.current.intensity = ttsSettings.intensity;
 
-  }, [targetLang, selectedVoice, ttsSettings]);
+    // Trigger voice fetch if changed
+    ttsControllerRef.current.fetchVoices(targetLang);
+
+  }, [targetLang, selectedVoice, ttsSettings, connectionState]);
 
   // Ensure selected voice is valid for current language, with smart defaulting
   useEffect(() => {
-    const voices = getVoicesForLanguage(targetLang);
-    if (voices.length > 0 && !voices.some(v => v.value === selectedVoice)) {
-      // Priority 1: Chirp 3 HD "Kore" (User preference)
-      const chirpKore = voices.find(v => v.value.includes('Chirp3-HD-Kore'));
+    if (availableVoices.length > 0 && !availableVoices.some(v => v.voiceId === selectedVoice)) {
+      // Priority 1: Chirp 3 HD "Kore"
+      const chirpKore = availableVoices.find(v => v.voiceId.includes('chirp3_hd') && v.voiceName.includes('Kore'));
       if (chirpKore) {
-        setSelectedVoice(chirpKore.value);
+        setSelectedVoice(chirpKore.voiceId);
         return;
       }
 
       // Priority 2: Any Chirp 3 HD voice
-      const anyChirp = voices.find(v => v.tier === 'chirp3_hd');
+      const anyChirp = availableVoices.find(v => v.tier === 'chirp3_hd');
       if (anyChirp) {
-        setSelectedVoice(anyChirp.value);
+        setSelectedVoice(anyChirp.voiceId);
         return;
       }
 
-      // Priority 3: Any Standard/Neural2 voice (avoiding Gemini default if possible)
-      const anyStandard = voices.find(v => v.tier === 'standard' || v.tier === 'neural2');
+      // Priority 3: Any Standard/Neural2 voice
+      const anyStandard = availableVoices.find(v => v.tier === 'standard' || v.tier === 'neural2');
       if (anyStandard) {
-        setSelectedVoice(anyStandard.value);
+        setSelectedVoice(anyStandard.voiceId);
         return;
       }
 
       // Fallback: Just take the first one (likely Gemini)
-      setSelectedVoice(voices[0].value);
+      setSelectedVoice(availableVoices[0].voiceId);
     }
-  }, [targetLang, selectedVoice]);
+  }, [availableVoices, selectedVoice]);
 
   // Track previous tier to detect tier changes and reset speed accordingly
   const prevTierRef = useRef(null);
 
   // Reset speed to tier-specific default when tier changes
   useEffect(() => {
-    if (!selectedVoice) return;
-    const voices = getVoicesForLanguage(targetLang);
-    const voiceOption = voices.find(v => v.value === selectedVoice);
+    if (!selectedVoice || availableVoices.length === 0) return;
+    const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
     if (voiceOption) {
       const tier = voiceOption.tier || 'standard';
 
@@ -625,8 +635,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       return;
     }
 
-    const voices = getVoicesForLanguage(targetLang);
-    const voiceOption = voices.find(v => v.value === selectedVoice);
+    const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
     const tier = voiceOption?.tier || 'neural2';
     // Strictly rely on tier - 'Gemini' voices are explicitly marked as tier: 'gemini'
     // Chirp 3 HD voices with the same name (e.g. Kore) will have tier: 'chirp3_hd'
@@ -634,7 +643,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
     const requestData = {
       languageCode: targetLang,
-      voiceName: selectedVoice,
+      voiceName: voiceOption?.voiceName || selectedVoice,
+      voiceId: selectedVoice,
       tier: tier,
       mode: TtsMode.UNARY, // Forced UNARY as requested ("only working mode")
       startFromSegmentId: Date.now(),
@@ -737,6 +747,20 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
+
+        // Forward TTS-related control messages to the controller
+        // (voices, defaults, audio, etc.) regardless of engine mode
+        if (message.type && message.type.startsWith('tts/')) {
+          if (ttsControllerRef.current) {
+            ttsControllerRef.current.onWsMessage(message);
+          }
+          // Some TTS messages are pure control/data (voices, defaults) 
+          // while others are audio chunks that the engine might also care about.
+          // For voices/defaults/errors, we can consume them here.
+          if (['tts/voices', 'tts/defaults', 'tts/error'].includes(message.type)) {
+            return;
+          }
+        }
 
         // FEATURE FLAG: Shared Engine Integration
         if (USE_SHARED_ENGINE && engineRef.current) {
@@ -1560,7 +1584,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   className="w-full px-1 py-1 border border-gray-200 rounded text-[10px] sm:text-sm focus:ring-2 focus:ring-emerald-500 outline-none truncate"
                 >
                   {Object.entries(
-                    getVoicesForLanguage(targetLang).reduce((acc, voice) => {
+                    availableVoices.reduce((acc, voice) => {
                       const tier = voice.tier || 'standard';
                       let group = 'Standard';
                       if (tier === 'gemini') group = 'Gemini & Studio';
@@ -1661,6 +1685,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         onSettingsChange={setTtsSettings}
         selectedVoice={selectedVoice}
         targetLang={targetLang}
+        voices={availableVoices}
       />
 
       {error && (
