@@ -455,6 +455,162 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       try {
         const message = JSON.parse(msg.toString());
 
+        // Voice Catalog Commands (PR4) - Feature-flagged
+        const VOICE_CATALOG_ENABLED = process.env.TTS_VOICE_CATALOG_ENABLED === 'true';
+
+        if (VOICE_CATALOG_ENABLED) {
+          // tts/list_voices: Get available voices for a language
+          if (message.type === 'tts/list_voices') {
+            console.log(`[Listener] ${userName} requesting voice list for ${message.languageCode}`);
+
+            if (!message.languageCode) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: 'INVALID_REQUEST',
+                  message: 'Missing required field: languageCode'
+                }));
+              }
+              return;
+            }
+
+            try {
+              const { getVoicesFor } = await import('./tts/voiceCatalog.js');
+              const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
+
+              const orgId = 'default'; // TODO: Get from session/auth
+              const allowedTiers = getAllowedTiers(orgId);
+
+              // Get voices filtered by language and allowed tiers
+              const voices = getVoicesFor({
+                languageCode: message.languageCode,
+                allowedTiers
+              });
+
+              // Transform to client format (hide tier info for disallowed voices)
+              const clientVoices = voices.map(v => ({
+                tier: v.tier,
+                voiceName: v.voiceName,
+                displayName: v.displayName
+              }));
+
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/voices',
+                  languageCode: message.languageCode,
+                  voices: clientVoices
+                }));
+              }
+
+              console.log(`[Listener] Sent ${clientVoices.length} voices for ${message.languageCode}`);
+            } catch (error) {
+              console.error('[Listener] Failed to list voices:', error);
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: 'VOICE_LIST_FAILED',
+                  message: `Failed to list voices: ${error.message}`
+                }));
+              }
+            }
+            return;
+          }
+
+          // tts/get_defaults: Get org voice defaults
+          if (message.type === 'tts/get_defaults') {
+            console.log(`[Listener] ${userName} requesting voice defaults`);
+
+            try {
+              const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
+
+              const orgId = 'default'; // TODO: Get from session/auth
+              const defaults = await getOrgVoiceDefaults(orgId);
+
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/defaults',
+                  defaultsByLanguage: defaults
+                }));
+              }
+
+              console.log(`[Listener] Sent voice defaults for ${Object.keys(defaults).length} languages`);
+            } catch (error) {
+              console.error('[Listener] Failed to get defaults:', error);
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: 'GET_DEFAULTS_FAILED',
+                  message: `Failed to get defaults: ${error.message}`
+                }));
+              }
+            }
+            return;
+          }
+
+          // tts/set_default: Set org voice default (admin only)
+          if (message.type === 'tts/set_default') {
+            console.log(`[Listener] ${userName} setting voice default`);
+
+            // Validate required fields
+            if (!message.languageCode || !message.tier || !message.voiceName) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: 'INVALID_REQUEST',
+                  message: 'Missing required fields: languageCode, tier, voiceName'
+                }));
+              }
+              return;
+            }
+
+            try {
+              const { isOrgAdmin } = await import('./tts/ttsTierHelper.js');
+              const { setOrgVoiceDefault } = await import('./tts/defaults/defaultsStore.js');
+
+              const orgId = 'default'; // TODO: Get from session/auth
+              const userId = userName || 'anonymous';
+
+              // Check admin permissions
+              if (!isOrgAdmin(orgId, userId)) {
+                if (clientWs.readyState === WebSocket.OPEN) {
+                  clientWs.send(JSON.stringify({
+                    type: 'tts/error',
+                    code: 'NOT_AUTHORIZED',
+                    message: 'Admin permissions required to set voice defaults'
+                  }));
+                }
+                return;
+              }
+
+              // Set the default (validation happens inside setOrgVoiceDefault)
+              await setOrgVoiceDefault(orgId, message.languageCode, message.tier, message.voiceName);
+
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/ack',
+                  action: 'set_default',
+                  success: true
+                }));
+              }
+
+              console.log(`[Listener] Set voice default for ${message.languageCode}: ${message.tier}/${message.voiceName}`);
+            } catch (error) {
+              console.error('[Listener] Failed to set default:', error);
+
+              const errorCode = error.message.includes('Invalid voice') ? 'INVALID_VOICE' : 'SET_DEFAULT_FAILED';
+
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: errorCode,
+                  message: error.message
+                }));
+              }
+            }
+            return;
+          }
+        }
+
         // TTS command handlers
         if (message.type === 'tts/start') {
           console.log(`[Listener] ${userName} starting TTS playback`);
@@ -649,6 +805,81 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               message.tier = 'chirp3_hd';
             }
 
+            // PR4: Server-side voice resolution (feature-flagged)
+            const VOICE_CATALOG_ENABLED = process.env.TTS_VOICE_CATALOG_ENABLED === 'true';
+            let resolvedVoice = null;
+
+            if (VOICE_CATALOG_ENABLED) {
+              // Check if voice resolution is needed
+              const needsResolution = !message.tier || !message.voiceName;
+
+              if (needsResolution) {
+                console.log(`[Listener] Missing voice selection, resolving server-side`);
+
+                try {
+                  const { resolveVoice } = await import('./tts/voiceResolver.js');
+                  const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
+
+                  const orgId = 'default'; // TODO: Get from session/auth
+                  const allowedTiers = getAllowedTiers(orgId);
+
+                  resolvedVoice = await resolveVoice({
+                    orgId,
+                    userPref: message.tier && message.voiceName ? { tier: message.tier, voiceName: message.voiceName } : null,
+                    languageCode: message.languageCode,
+                    allowedTiers
+                  });
+
+                  console.log(`[Listener] Resolved voice: ${resolvedVoice.tier}/${resolvedVoice.voiceName} (reason: ${resolvedVoice.reason})`);
+
+                  // Override message with resolved voice
+                  message.tier = resolvedVoice.tier;
+                  message.voiceName = resolvedVoice.voiceName;
+                } catch (error) {
+                  console.error('[Listener] Voice resolution failed:', error);
+                  // Continue with existing routing fallback
+                }
+              } else {
+                // Validate provided voice
+                try {
+                  const { isVoiceValid } = await import('./tts/voiceCatalog.js');
+                  const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
+
+                  const orgId = 'default';
+                  const allowedTiers = getAllowedTiers(orgId);
+
+                  const valid = isVoiceValid({
+                    voiceName: message.voiceName,
+                    languageCode: message.languageCode,
+                    tier: message.tier
+                  });
+
+                  const tierAllowed = allowedTiers.includes(message.tier);
+
+                  if (!valid || !tierAllowed) {
+                    console.warn(`[Listener] Invalid or disallowed voice: ${message.tier}/${message.voiceName}, resolving fallback`);
+
+                    const { resolveVoice } = await import('./tts/voiceResolver.js');
+
+                    resolvedVoice = await resolveVoice({
+                      orgId,
+                      userPref: null, // Don't use invalid preference
+                      languageCode: message.languageCode,
+                      allowedTiers
+                    });
+
+                    console.log(`[Listener] Fallback to: ${resolvedVoice.tier}/${resolvedVoice.voiceName} (reason: ${resolvedVoice.reason})`);
+
+                    message.tier = resolvedVoice.tier;
+                    message.voiceName = resolvedVoice.voiceName;
+                  }
+                } catch (error) {
+                  console.error('[Listener] Voice validation failed:', error);
+                  // Continue with existing routing fallback
+                }
+              }
+            }
+
             // 1. Resolve TTS routing (single source of truth)
             const { resolveTtsRoute } = await import('./tts/ttsRouting.js');
             const route = await resolveTtsRoute({
@@ -776,6 +1007,28 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             // 5. Synthesize audio using the resolved route (provider-based)
             const ttsService = getTtsServiceForProvider(route.provider);
             const response = await ttsService.synthesizeUnary(ttsRequest, route);
+
+            // PR4: Record metering event (feature-flagged)
+            if (process.env.TTS_METERING_DEBUG === 'true') {
+              try {
+                const { recordMeteringEvent } = await import('./tts/ttsMetering.js');
+                recordMeteringEvent({
+                  orgId: ttsRequest.orgId,
+                  userId: ttsRequest.userId,
+                  sessionId: ttsRequest.sessionId,
+                  segmentId: response.segmentId,
+                  tier: route.tier,
+                  voiceName: route.voiceName,
+                  languageCode: route.languageCode,
+                  mode: response.mode,
+                  durationMs: response.audio.durationMs,
+                  characters: ttsRequest.text.length
+                });
+              } catch (error) {
+                console.error('[Listener] Metering failed:', error);
+                // Non-fatal - continue with response
+              }
+            }
 
             // Send audio response with resolved routing info (streaming-compatible structure)
             if (clientWs.readyState === WebSocket.OPEN) {
