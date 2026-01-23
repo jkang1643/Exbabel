@@ -215,6 +215,46 @@ export class GoogleSpeechStream {
       alternativeLanguageCodes: [],
     };
 
+    // ========== FEATURE FLAG: Multi-Language Auto-Detect ==========
+    // Options priority: 1) this.initOptions (dynamic), 2) .env (global)
+    const isMultiLangEnabled = this.initOptions?.enableMultiLanguage === true || process.env.STT_MULTI_LANG_ENABLED === 'true';
+    const multiLangCodes = this.initOptions?.alternativeLanguageCodes || (process.env.STT_MULTI_LANG_CODES ? process.env.STT_MULTI_LANG_CODES.split(',') : []);
+
+    if (isMultiLangEnabled && multiLangCodes.length > 0) {
+      const altCodes = multiLangCodes
+        .map(code => code.trim())
+        .filter(code => code.length > 0 && code !== this.languageCode) // Exclude primary language
+        .slice(0, 3); // Google allows max 3 alternative languages
+
+      if (altCodes.length > 0) {
+        requestConfig.alternativeLanguageCodes = altCodes;
+        console.log(`[GoogleSpeech] 🌍 MULTI-LANG ENABLED: Primary=${this.languageCode}, Alternatives=${altCodes.join(', ')}`);
+      } else {
+        console.log(`[GoogleSpeech] ⚠️ Multi-lang enabled but no valid alternative codes provided`);
+      }
+    }
+
+    // ========== FEATURE FLAG: Speaker Diarization ==========
+    // Options priority: 1) this.initOptions (dynamic), 2) .env (global)
+    const isDiarizationEnabled = this.initOptions?.enableSpeakerDiarization === true || process.env.STT_DIARIZATION_ENABLED === 'true';
+
+    if (isDiarizationEnabled) {
+      const minSpeakers = this.initOptions?.minSpeakers || parseInt(process.env.STT_DIARIZATION_MIN_SPEAKERS, 10) || 2;
+      const maxSpeakers = this.initOptions?.maxSpeakers || parseInt(process.env.STT_DIARIZATION_MAX_SPEAKERS, 10) || 6;
+
+      requestConfig.diarizationConfig = {
+        enableSpeakerDiarization: true,
+        minSpeakerCount: minSpeakers,
+        maxSpeakerCount: maxSpeakers,
+      };
+      console.log(`[GoogleSpeech] 👥 DIARIZATION ENABLED: minSpeakers=${minSpeakers}, maxSpeakers=${maxSpeakers}`);
+
+      // Store flag for use in handleStreamingResponse
+      this.diarizationEnabled = true;
+    } else {
+      this.diarizationEnabled = false;
+    }
+
     // Log if punctuation is disabled (for recovery streams)
     if (this.initOptions?.disablePunctuation) {
       console.log('[GoogleSpeech] ⚠️ Automatic punctuation DISABLED for recovery stream');
@@ -639,6 +679,28 @@ export class GoogleSpeechStream {
     const isFinal = hasFinal;
     const stability = data.results[0].stability || 0;
 
+    // ========== FEATURE FLAG: Extract Speaker Tag if Diarization is enabled ==========
+    let speakerTag = null;
+    let detectedLanguage = null;
+    if (this.diarizationEnabled && data.results[0]?.alternatives?.[0]?.words) {
+      // Get the last word's speaker tag (most recent speaker)
+      const words = data.results[0].alternatives[0].words;
+      if (words.length > 0) {
+        speakerTag = words[words.length - 1].speakerTag || null;
+        if (speakerTag && isFinal) {
+          console.log(`[GoogleSpeech] 👥 Speaker ${speakerTag}: "${combinedTranscript}"`);
+        }
+      }
+    }
+
+    // Extract detected language code if available (for multi-lang mode)
+    if (data.results[0]?.languageCode) {
+      detectedLanguage = data.results[0].languageCode;
+      if (detectedLanguage !== this.languageCode && isFinal) {
+        console.log(`[GoogleSpeech] 🌍 Language detected: ${detectedLanguage} (primary: ${this.languageCode})`);
+      }
+    }
+
     // Check if recognized text matches PhraseSet entries (for verification)
     // Log when PhraseSet terms are recognized to confirm it's working
     if (combinedTranscript && process.env.GOOGLE_PHRASE_SET_ID) {
@@ -724,7 +786,11 @@ export class GoogleSpeechStream {
         if (this.initOptions?.disablePunctuation) {
           console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with FINAL: "${combinedTranscript}"`);
         }
-        this.resultCallback(combinedTranscript, false, { pipeline: this.pipeline }); // isPartial = false, pass pipeline in meta
+        // Pass speaker tag and detected language in metadata if available
+        const meta = { pipeline: this.pipeline };
+        if (speakerTag !== null) meta.speakerTag = speakerTag;
+        if (detectedLanguage) meta.detectedLanguage = detectedLanguage;
+        this.resultCallback(combinedTranscript, false, meta); // isPartial = false
       }
 
       // Clear cached partial since we emitted a real final
@@ -737,7 +803,11 @@ export class GoogleSpeechStream {
         if (this.initOptions?.disablePunctuation) {
           console.log(`[GoogleSpeech-RECOVERY ${this.streamId}] 🔔 Calling resultCallback with PARTIAL: "${combinedTranscript}"`);
         }
-        this.resultCallback(combinedTranscript, true, { pipeline: this.pipeline }); // isPartial = true, pass pipeline in meta
+        // Pass speaker tag and detected language in metadata if available
+        const meta = { pipeline: this.pipeline };
+        if (speakerTag !== null) meta.speakerTag = speakerTag;
+        if (detectedLanguage) meta.detectedLanguage = detectedLanguage;
+        this.resultCallback(combinedTranscript, true, meta); // isPartial = true
       }
 
       // Cache the latest partial so we can force-commit if the stream restarts

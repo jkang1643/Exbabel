@@ -247,6 +247,25 @@ X-API-Key: your-api-key-here
   - **131+ languages supported** (OpenAI GPT-4o-mini translation languages)
   - Can be any language that GPT-4o-mini can translate to
 - `tier` (optional): "basic" or "premium" (default: "basic")
+- `enableMultiLanguage` (optional): `true` to enable automatic language detection/switching
+- `alternativeLanguageCodes` (optional): Array of BCP-47 codes (e.g., `["es-ES", "fr-FR"]`, max 3)
+- `enableSpeakerDiarization` (optional): `true` to enable speaker identification
+- `minSpeakers` (optional): Minimum expected speakers for diarization (default: 2)
+- `maxSpeakers` (optional): Maximum expected speakers for diarization (default: 6)
+
+**Example with STT Enhancements:**
+```json
+{
+  "type": "init",
+  "sourceLang": "en-US",
+  "targetLang": "es-ES",
+  "enableMultiLanguage": true,
+  "alternativeLanguageCodes": ["es-ES", "fr-FR"],
+  "enableSpeakerDiarization": true,
+  "minSpeakers": 2,
+  "maxSpeakers": 2
+}
+```
 
 **Supported Languages**: 
 - **Source languages (transcription)**: 71 languages - See `TRANSCRIPTION_LANGUAGES` in `backend/languageConfig.js`

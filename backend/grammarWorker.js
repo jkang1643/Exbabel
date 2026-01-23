@@ -7,114 +7,18 @@
  * - Handles homophones, sermon/biblical language, STT mishears
  * - Caches results to reduce API calls
  * - Supports request cancellation for partials
+ * - MODULARIZED: Uses GrammarProviderFactory to support multiple LLM backends
  */
 
-import fetch from 'node-fetch';
-import { fetchWithRateLimit, isCurrentlyRateLimited } from './openaiRateLimiter.js';
-import { normalizePunctuation } from './transcriptionCleanup.js';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { isCurrentlyRateLimited } from './openaiRateLimiter.js';
+import { GrammarProviderFactory } from './providers/grammar/GrammarProviderFactory.js';
 
-const GRAMMAR_SYSTEM_PROMPT = `SYSTEM PROMPT — Grammar + Homophone + Sermon Speech Fixer
-
-You are a real-time transcription corrector for live church sermons transcribed by Whisper or other speech-to-text systems.
-
-Your goal is to take partial or final text transcribed from speech-to-text and make it readable while preserving the exact spoken meaning.
-
-**IMPORTANT: This is SPEECH transcription correction, not written text editing. Focus on catching common Whisper/STT mishears that occur in spoken language, especially words that sound similar but are contextually wrong.**
-
-### Rules:
-
-1. **Preserve meaning** — Never change what the speaker meant.
-2. **CRITICAL: Word replacement rules for STT/Whisper cleanup**:
-   - **ONLY correct words that sound highly similar** (homophones or near-homophones)
-   - **Common Whisper/STT speech mishears to watch for**:
-     - "so" → "those" (very common: "it was so small groups" → "it was those small groups")
-     - "a" → "the" or vice versa (when contextually wrong: "a Bible" vs "the Bible")
-     - "there/their/they're" confusion
-     - "to/too/two" confusion
-     - "sun/son", "hear/here", "right/write", "peace/piece", "break/brake", "see/sea"
-     - "knew/new", "know/no", "its/it's", "your/you're", "we're/were/where"
-     - "then/than", "affect/effect", "accept/except"
-     - "and counter" → "encounter"
-     - "are" → "our" (when possessive)
-   - **NEVER replace words with synonyms or contextually "better" alternatives** (e.g., "calling" → "addressing", "said" → "stated", "talk" → "speak", "big" → "large")
-   - **DO NOT replace words with contextually better alternatives if they don't sound similar**
-   - If a word makes sense in context but sounds different, KEEP IT AS IS - the speaker may have actually said that word
-   - Only fix words where STT clearly misheard a similar-sounding word (e.g., "sun" → "Son" when referring to Jesus, "there" → "their" for possession)
-   - **Remember: Your job is transcription correction, not word improvement. Preserve the speaker's exact word choice unless it's clearly a sound-alike error.**
-   - **Pay special attention to speech-specific errors**: Words that are uncommon in written text but common in speech, especially when Whisper mishears similar-sounding words (e.g., "so" misheard instead of "those")
-   - **CRITICAL: Fix multi-word phrase mishears, not just single words**: When a phrase doesn't make contextual sense, identify the correct homophone phrase that sounds similar. Examples:
-     - "on a work" → "unaware" (sounds similar, "on a work" makes no sense contextually)
-     - "for theirs" → "for strangers" (when context suggests it)
-     - "do not neces to show" → "do not neglect to show" (when "neces" doesn't make sense)
-   - **Use context to identify phrase errors**: If a phrase sounds grammatically wrong or doesn't fit the context, check if there's a similar-sounding phrase that makes sense (e.g., "entertained angels on a work" → "entertained angels unaware")
-3. **Fix ALL errors aggressively**:
-   - Grammar (run-on sentences, sentence fragments, subject-verb agreement)
-   - Punctuation and capitalization (fix ALL capitalization errors, not just sentence starts)
-   - Spelling mistakes
-   - Homophones and near-homophones (ONLY when they sound similar - see rule 2)
-   - Speech-to-text mishears (ONLY choose words that *sound the same or very similar*)
-   - Fix incorrect capitalization of common words (e.g., "Hospitality" → "hospitality", "Brotherly Love" → "brotherly love" unless it's a proper noun)
-   - Fix run-on sentences by adding proper punctuation
-   - Fix sentence fragments by completing them naturally
-4. **Respect biblical / church language**:
-   - Keep proper nouns like "God", "Jesus", "Holy Spirit", "Gospel", "Revival", "Kingdom", "Scripture" capitalized.
-   - Do not modernize or rephrase verses or phrases from the Bible.
-   - Recognize sermon phrases like "praise the Lord", "come on somebody", "hallelujah", "amen" and keep them natural.
-5. **Never paraphrase or summarize**.
-6. **Never change numbers, names, or theological meaning.**
-7. If the sentence is incomplete, fix basic punctuation but don't guess the rest — just clean what you have.
-8. Maintain oral rhythm: short, natural sentences as a preacher might speak.
-9. **Be thorough**: Fix every error you see. Don't leave capitalization mistakes, run-on sentences, or grammar errors uncorrected.
-
-### Examples:
-
-Input: "and god so loved the world he give his only begotten sun. One of my Generations. Favorite authors is Max. Lucado. they're heart was broken. we must except Jesus as our savior"
-Output: "And God so loved the world that He gave His only begotten Son. One of my generation's favorite authors is Max Lucado. Their heart was broken. We must accept Jesus as our Savior."
-(Note: **Homophones:** "sun" → "Son", "they're" → "Their", "except" → "accept". **Grammar:** Fixes punctuation/capitalization errors aggressively.)
-
-Input: "It was so small groups leaving this church in, canoes and boats, and going out and chopping holes in roof and pulling people out. I want to read a Bible verse."
-Output: "It was those small groups leaving this church in canoes and boats, and going out and chopping holes in roofs and pulling people out. I want to read the Bible verse."
-(Note: **CRITICAL STT Fix:** "so" → "those" (very common STT mishear). **Punctuation/Capitalization** fixed. **A/The** correction.)
-
-Input: "Says, let Brotherly Love continue, do not neces to show. Hospitality to stranger for theirs. Thereby some have entertained angels on a work. we need to and counter God in our daily lives"
-Output: "Says, 'Let brotherly love continue. Do not neglect to show hospitality to strangers, for thereby some have entertained angels unaware.' We need to encounter God in our daily lives."
-(Note: **Multi-Word Mishears:** "on a work" → "unaware", "neces" → "neglect", "for theirs" → "for strangers". **Speech Mishears:** "and counter" → "encounter". **Capitalization** corrected.)
-
-
-### Output format:
-Output ONLY as a JSON object with the key 'corrected_text'. Example: {"corrected_text": "Your corrected text here"}.`;
-
-// Helper function to validate that AI response is actually a correction, not an error message
-function validateCorrectionResponse(corrected, original) {
-  // Filter out common AI error/help responses that shouldn't be treated as transcriptions
-  const errorPatterns = [
-    /I'm sorry/i,
-    /I need the text/i,
-    /would like me to correct/i,
-    /Please provide/i,
-    /I'll be happy to assist/i,
-    /I can help/i,
-    /I don't understand/i,
-    /Could you please/i,
-    /Can you provide/i,
-    /I'm here to help/i,
-    /What text would you like/i,
-    /I cannot/i,
-    /I'm unable/i,
-    /I don't have/i,
-    /I need more information/i
-  ];
-
-  const isErrorResponse = errorPatterns.some(pattern => pattern.test(corrected));
-
-  if (isErrorResponse) {
-    console.warn(`[GrammarWorker] ⚠️ AI returned error/question instead of correction: "${corrected.substring(0, 100)}..."`);
-    console.warn(`[GrammarWorker] ⚠️ Using original text instead: "${original.substring(0, 100)}..."`);
-    return original; // Use original text instead of error message
-  }
-
-  return corrected;
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 export class GrammarWorker {
   constructor() {
@@ -130,6 +34,23 @@ export class GrammarWorker {
     this.pendingPartialBuffer = null;
     this.pendingPartialTimeout = null;
     this.pendingPartialResolvers = new Map(); // Track promises waiting for batched results
+
+    // Initialize Provider
+    // In the future, this could come from process.env or a config file
+    // Defaulting to OpenAI for now
+    const providerType = process.env.GRAMMAR_PROVIDER || 'openai';
+    const providerModel = process.env.GRAMMAR_MODEL || 'gpt-4o-mini';
+
+    this.provider = GrammarProviderFactory.createProvider(providerType, {
+      model: providerModel
+    });
+
+    // Log initialization in a visible format to match Server/Translation logs
+    console.log('[GrammarWorker] ===== GRAMMAR CORRECTION SERVICE =====');
+    console.log(`[GrammarWorker] Provider Name: ${this.provider.name}`);
+    console.log(`[GrammarWorker] Model Config:  ${this.provider.model || 'Default'}`);
+    console.log(`[GrammarWorker] Class Instance: ${this.provider.constructor.name}`);
+    console.log('[GrammarWorker] ======================================');
   }
 
   /**
@@ -196,61 +117,23 @@ export class GrammarWorker {
       text
     });
 
-    // Add 2-second timeout for partials to prevent blocking UI
+    // Add timeout for partials to prevent blocking UI
+    // Use 10s for reasoning models (o1, o3, gpt-5), 2s for standard models
+    const isReasoningModel = this.provider.model?.startsWith('o1') || this.provider.model?.startsWith('o3') || this.provider.model?.startsWith('gpt-5');
+    const timeoutMs = isReasoningModel ? 10000 : 2000;
     const timeoutId = setTimeout(() => {
-      console.log(`[GrammarWorker] ⏱️ PARTIAL correction timeout after 2s - aborting`);
+      console.log(`[GrammarWorker] ⏱️ PARTIAL correction timeout after ${timeoutMs}ms - aborting`);
       abortController.abort();
-    }, 2000);
+    }, timeoutMs);
 
     try {
-      console.log(`[GrammarWorker] 🔄 Correcting PARTIAL (${text.length} chars): "${text}"`);
-
-      const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini', // Same model as translation worker
-          messages: [
-            { role: 'system', content: GRAMMAR_SYSTEM_PROMPT },
-            { role: 'user', content: text }
-          ],
-          temperature: 0.2, // Lower temperature for consistency
-          max_tokens: 800, // Reduced for partials - they're typically short
-          response_format: { type: 'json_object' } // Use JSON mode instead of tools/functions to reduce token cost
-        }),
+      // Delegate to the provider
+      const corrected = await this.provider.correctPartial(text, {
+        apiKey,
         signal: abortController.signal
       });
 
       clearTimeout(timeoutId); // Clear timeout on success
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        throw new Error(`Grammar API error: ${error.error?.message || response.statusText}`);
-      }
-
-      const data = await response.json();
-      let corrected = text; // Default to original text
-
-      // Parse JSON response
-      try {
-        const content = data.choices[0]?.message?.content?.trim() || '';
-        if (content) {
-          const jsonResponse = JSON.parse(content);
-          corrected = jsonResponse.corrected_text || text;
-        }
-      } catch (parseError) {
-        console.warn(`[GrammarWorker] ⚠️ Failed to parse JSON response, using original text:`, parseError.message);
-        corrected = text;
-      }
-
-      // Validate that response is actually a correction, not an error message
-      corrected = validateCorrectionResponse(corrected, text);
-
-      // Normalize punctuation (e.g. Chinese full-stop to half-width period)
-      corrected = normalizePunctuation(corrected);
 
       if (corrected !== text) {
         // Show full diff for better visibility
@@ -430,62 +313,26 @@ export class GrammarWorker {
     let timeoutId = null;
     try {
       const startTime = Date.now();
-      console.log(`[GrammarWorker] 🔄 Correcting FINAL (${text.length} chars): "${text}"`);
 
-      // Create abort controller with 5 second timeout for finals
+      const isReasoningModel = this.provider.model?.startsWith('o1') || this.provider.model?.startsWith('o3') || this.provider.model?.startsWith('gpt-5');
+      const timeoutMs = isReasoningModel ? 15000 : 5000;
+
+      // Create abort controller with dynamic timeout for finals
       const abortController = new AbortController();
       timeoutId = setTimeout(() => {
-        console.log(`[GrammarWorker] ⏱️ FINAL correction timeout after 5s - returning original`);
+        console.log(`[GrammarWorker] ⏱️ FINAL correction timeout after ${timeoutMs}ms - returning original`);
         abortController.abort();
-      }, 5000);
+      }, timeoutMs);
 
-      const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
-        signal: abortController.signal,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            { role: 'system', content: GRAMMAR_SYSTEM_PROMPT },
-            { role: 'user', content: text }
-          ],
-          temperature: 0.2,
-          max_tokens: 2000,
-          response_format: { type: 'json_object' } // Use JSON mode instead of tools/functions to reduce token cost
-        })
+      // Delegate to Provider
+      const corrected = await this.provider.correctFinal(text, {
+        apiKey,
+        signal: abortController.signal
       });
 
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
-        throw new Error(`Grammar API error: ${error.error?.message || response.statusText}`);
-      }
-
-      const data = await response.json();
       clearTimeout(timeoutId); // Clear timeout on success
 
       const elapsed = Date.now() - startTime;
-      let corrected = text; // Default to original text
-
-      // Parse JSON response
-      try {
-        const content = data.choices[0]?.message?.content?.trim() || '';
-        if (content) {
-          const jsonResponse = JSON.parse(content);
-          corrected = jsonResponse.corrected_text || text;
-        }
-      } catch (parseError) {
-        console.warn(`[GrammarWorker] ⚠️ Failed to parse JSON response, using original text:`, parseError.message);
-        corrected = text;
-      }
-
-      // Validate that response is actually a correction, not an error message
-      corrected = validateCorrectionResponse(corrected, text);
-
-      // Normalize punctuation (e.g. Chinese full-stop to half-width period)
-      corrected = normalizePunctuation(corrected);
 
       if (corrected !== text) {
         // Show full diff for better visibility
@@ -520,4 +367,3 @@ export class GrammarWorker {
 }
 
 export const grammarWorker = new GrammarWorker();
-

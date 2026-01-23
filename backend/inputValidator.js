@@ -10,10 +10,10 @@ class InputValidator {
   constructor() {
     // Maximum audio chunk size (64KB)
     this.MAX_AUDIO_CHUNK_SIZE = 64 * 1024;
-    
+
     // Maximum message payload size (1MB)
     this.MAX_MESSAGE_SIZE = 1024 * 1024;
-    
+
     // Maximum string length for text fields
     this.MAX_TEXT_LENGTH = 10000;
   }
@@ -31,7 +31,7 @@ class InputValidator {
         error: 'Language code must be a non-empty string'
       };
     }
-    
+
     // If allowTranslationOnly is true, check translation languages (131+ languages)
     if (allowTranslationOnly) {
       if (!isTranslationSupported(langCode)) {
@@ -42,7 +42,7 @@ class InputValidator {
       }
       return { valid: true };
     }
-    
+
     // Otherwise, check transcription languages (71 languages)
     if (!isTranscriptionSupported(langCode)) {
       return {
@@ -50,7 +50,7 @@ class InputValidator {
         error: `Language code '${langCode}' is not supported for transcription`
       };
     }
-    
+
     return { valid: true };
   }
 
@@ -66,9 +66,9 @@ class InputValidator {
         error: 'Audio data is required'
       };
     }
-    
+
     let buffer;
-    
+
     // Convert to Buffer if needed
     if (Buffer.isBuffer(audioData)) {
       buffer = audioData;
@@ -90,7 +90,7 @@ class InputValidator {
         error: 'Audio data must be Buffer, Uint8Array, or base64 string'
       };
     }
-    
+
     // Check size
     if (buffer.length > this.MAX_AUDIO_CHUNK_SIZE) {
       return {
@@ -98,14 +98,14 @@ class InputValidator {
         error: `Audio chunk too large: ${buffer.length} bytes (max: ${this.MAX_AUDIO_CHUNK_SIZE} bytes)`
       };
     }
-    
+
     if (buffer.length === 0) {
       return {
         valid: false,
         error: 'Audio chunk cannot be empty'
       };
     }
-    
+
     return {
       valid: true,
       data: buffer
@@ -124,7 +124,7 @@ class InputValidator {
       required = false,
       allowEmpty = true
     } = options;
-    
+
     if (input === null || input === undefined) {
       if (required) {
         return {
@@ -134,43 +134,43 @@ class InputValidator {
       }
       return { valid: true, sanitized: '' };
     }
-    
+
     if (typeof input !== 'string') {
       return {
         valid: false,
         error: 'Field must be a string'
       };
     }
-    
+
     // Trim whitespace
     const sanitized = input.trim();
-    
+
     if (!allowEmpty && sanitized.length === 0) {
       return {
         valid: false,
         error: 'String field cannot be empty'
       };
     }
-    
+
     if (sanitized.length > maxLength) {
       return {
         valid: false,
         error: `String too long: ${sanitized.length} characters (max: ${maxLength})`
       };
     }
-    
+
     // Basic XSS prevention - remove script tags and dangerous patterns
     const dangerousPatterns = [
       /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
       /javascript:/gi,
       /on\w+\s*=/gi
     ];
-    
+
     let cleaned = sanitized;
     for (const pattern of dangerousPatterns) {
       cleaned = cleaned.replace(pattern, '');
     }
-    
+
     return {
       valid: true,
       sanitized: cleaned
@@ -189,7 +189,7 @@ class InputValidator {
         error: 'Message must be a valid JSON object'
       };
     }
-    
+
     // Check message size (rough estimate)
     const messageSize = JSON.stringify(message).length;
     if (messageSize > this.MAX_MESSAGE_SIZE) {
@@ -198,7 +198,7 @@ class InputValidator {
         error: `Message too large: ${messageSize} bytes (max: ${this.MAX_MESSAGE_SIZE} bytes)`
       };
     }
-    
+
     // Validate message type
     if (!message.type || typeof message.type !== 'string') {
       return {
@@ -206,9 +206,9 @@ class InputValidator {
         error: 'Message must have a valid type field'
       };
     }
-    
+
     const sanitized = { ...message };
-    
+
     // Validate based on message type
     switch (message.type) {
       case 'init':
@@ -218,21 +218,43 @@ class InputValidator {
         if (!sourceLangValidation.valid) {
           return sourceLangValidation;
         }
-        
+
         // Validate targetLang - can be any translation-supported language (131+ languages)
         // Target language is used for translation, so it can be in TRANSLATION_LANGUAGES
         const targetLangValidation = this.validateLanguageCode(message.targetLang, true);
         if (!targetLangValidation.valid) {
           return targetLangValidation;
         }
-        
+
         // Sanitize optional fields
         if (message.tier !== undefined) {
           sanitized.tier = typeof message.tier === 'string' ? message.tier : String(message.tier);
         }
-        
+
+        // Multi-language options
+        if (message.enableMultiLanguage !== undefined) {
+          sanitized.enableMultiLanguage = Boolean(message.enableMultiLanguage);
+        }
+        if (Array.isArray(message.alternativeLanguageCodes)) {
+          sanitized.alternativeLanguageCodes = message.alternativeLanguageCodes
+            .filter(code => typeof code === 'string')
+            .map(code => code.trim())
+            .slice(0, 3);
+        }
+
+        // Diarization options
+        if (message.enableSpeakerDiarization !== undefined) {
+          sanitized.enableSpeakerDiarization = Boolean(message.enableSpeakerDiarization);
+        }
+        if (message.minSpeakers !== undefined) {
+          sanitized.minSpeakers = parseInt(message.minSpeakers, 10) || 2;
+        }
+        if (message.maxSpeakers !== undefined) {
+          sanitized.maxSpeakers = parseInt(message.maxSpeakers, 10) || 6;
+        }
+
         break;
-        
+
       case 'audio':
         // Validate audio data
         const audioValidation = this.validateAudioChunk(message.data);
@@ -240,7 +262,7 @@ class InputValidator {
           return audioValidation;
         }
         sanitized.data = audioValidation.data;
-        
+
         // Validate optional metadata
         if (message.chunkIndex !== undefined) {
           if (typeof message.chunkIndex !== 'number' || message.chunkIndex < 0) {
@@ -250,7 +272,7 @@ class InputValidator {
             };
           }
         }
-        
+
         if (message.clientTimestamp !== undefined) {
           if (typeof message.clientTimestamp !== 'number' || message.clientTimestamp < 0) {
             return {
@@ -259,20 +281,20 @@ class InputValidator {
             };
           }
         }
-        
+
         break;
-        
+
       case 'audio_end':
       case 'ping':
       case 'pong':
         // These message types don't need additional validation
         break;
-        
+
       default:
         // Unknown message type - allow but log
         console.warn(`[InputValidator] Unknown message type: ${message.type}`);
     }
-    
+
     return {
       valid: true,
       sanitized
@@ -290,13 +312,13 @@ class InputValidator {
     if (forwarded) {
       return forwarded.split(',')[0].trim();
     }
-    
+
     // Check for real IP header
     const realIP = req.headers['x-real-ip'];
     if (realIP) {
       return realIP;
     }
-    
+
     // Fall back to socket remote address
     return req.socket?.remoteAddress || 'unknown';
   }

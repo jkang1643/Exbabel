@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:dev\"",
     "backend:dev": "cd backend && npm run dev",
-    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:dev": "node scripts/waitForBackend.js && cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
     "start": "cd backend && npm start",
     "lint": "eslint .",

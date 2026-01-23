@@ -1373,11 +1373,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
 
       {/* NEW: Full-page scrollable area with bottom anchoring */}
-      <div className="flex-1 overflow-y-auto flex flex-col-reverse px-2 sm:px-4 pb-4 sm:pb-8">
+      <div className="flex-1 overflow-y-auto flex flex-col-reverse px-2 sm:px-4">
         <div className="container mx-auto w-full flex flex-col-reverse relative">
 
           {/* LIVE TRANSLATION BOX - Sticky at the start of the reversed container (visual bottom) */}
-          <div className="sticky bottom-0 z-10 pb-2 pt-4 mt-2">
+          <div className="sticky bottom-0 z-10 pt-4">
             <div
               onClick={() => setShowLiveOriginal(!showLiveOriginal)}
               className="bg-gradient-to-br from-green-500 via-emerald-500 to-teal-600 rounded-lg sm:rounded-2xl p-4 sm:p-6 shadow-2xl border-4 border-white/20 ring-1 ring-black/5 cursor-pointer hover:ring-white/20 transition-all active:scale-[0.99]"
@@ -1447,7 +1447,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           </div>
 
           {/* Translation History - Part of the same reversed flow */}
-          <div className="bg-gray-50/50 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 mt-4 mb-2">
+          <div className="bg-gray-50/50 backdrop-blur-sm rounded-lg sm:rounded-xl p-3 sm:p-5 border-2 border-gray-200 mb-2">
             <div className="flex items-center justify-between mb-3 sm:mb-4">
               <h3 className="text-xs sm:text-sm font-semibold text-gray-700 flex items-center gap-1 sm:gap-2">
                 <span className="text-green-600">📝</span>

@@ -250,11 +250,16 @@ export async function handleHostConnection(clientWs, sessionId) {
               console.log(`[HostMode] 🚀 Creating Google Speech stream for ${currentSourceLang}...`);
               speechStream = new GoogleSpeechStream();
 
-              // Initialize with source language for transcription
+              // Initialize with source language and dynamic options from init message
               await speechStream.initialize(currentSourceLang, {
                 encoding: message.encoding,
                 sampleRateHertz: message.sampleRateHertz,
-                disablePunctuation: message.disablePunctuation
+                disablePunctuation: message.disablePunctuation,
+                enableMultiLanguage: message.enableMultiLanguage,
+                alternativeLanguageCodes: message.alternativeLanguageCodes,
+                enableSpeakerDiarization: message.enableSpeakerDiarization,
+                minSpeakers: message.minSpeakers,
+                maxSpeakers: message.maxSpeakers,
               });
 
               // Set up error callback

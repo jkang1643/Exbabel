@@ -70,3 +70,59 @@ Verification tests confirm 100% success rate on previously failing triggers:
 *   "Can you do automatic translation?" -> Translated ✅
 *   "I'm sorry, I can't help" -> Translated ✅
 *   "Hello, how are you?" -> Translated ✅
+
+---
+
+## Part 3: DeepSeek Grammar Integration and Fixes
+
+**Context:** The grammar correction worker (`GrammarWorker`) required updates to handle "reasoning models" (like `gpt-5-nano`) and to reduce costs for cached input tokens.
+
+### 1. DeepSeek V3 Integration (Cost Reduction)
+*   **Problem**: High cached token costs with `gpt-4o-mini` for repetitive grammar correction contexts.
+*   **Solution**: Implemented `DeepSeekGrammarProvider` using `deepseek-chat` (DeepSeek V3).
+    *   **Cost**: significantly cheaper API for cached contexts ($0.014/1M vs $0.075/1M).
+    *   **Performance**: Comparable speed and quality for grammar tasks.
+    *   **Configuration**: Selectable via `GRAMMAR_PROVIDER=deepseek` and `DEEPSEEK_API` env var.
+
+### 2. Timeouts for Reasoning Models
+*   **Problem**: `gpt-5-nano` and other reasoning models (o1, o3) were timing out on "FINAL" corrections because the hardcoded 5s limit was too short.
+*   **Fix**: Dynamic timeout logic in `grammarWorker.js`.
+    *   **Standard Models**: 5s timeout (unchanged).
+    *   **Reasoning Models**: 15s timeout (detected by model name prefix).
+
+### 3. Initialization Fixes
+*   **Problem**: `GrammarWorker` was logging default providers even when configured otherwise.
+*   **Root Cause**: `server.js` imported the worker before loading `.env`.
+*   **Fix**: Added explicit `dotenv.config()` inside `grammarWorker.js` to ensure environment variables are available at instantiation time.
+
+---
+
+## Part 4: STT Enhancements (Multi-Language & Diarization)
+
+**Context:** Expanded the capabilities of the Google Speech-to-Text streaming service (`googleSpeechStream.js`) by unlocking experimental features of the `v1p1beta1` API, implemented safely behind feature flags.
+
+### 1. Multi-Language Auto-Detect
+*   **Feature**: Allows the engine to automatically detect and switch between a primary language and up to 3 alternative languages.
+*   **Implementation**: Utilizes `alternativeLanguageCodes` in the recognition config.
+*   **Detection**: The `detectedLanguage` is extracted from the Google API response and passed through the pipeline metadata.
+*   **Configuration**: 
+    ```env
+    STT_MULTI_LANG_ENABLED=true
+    STT_MULTI_LANG_CODES=es-ES,fr-FR  # Comma-separated BCP-47 codes
+    ```
+
+### 2. Speaker Diarization
+*   **Feature**: Identifies "who is speaking" by tagging each word with a `speakerTag`.
+*   **Implementation**: Injects `diarizationConfig` into the streaming request.
+*   **Extraction**: Captures the `speakerTag` from the latest word in a result and passes it to the frontend via result metadata.
+*   **Configuration**:
+    ```env
+    STT_DIARIZATION_ENABLED=true
+    STT_DIARIZATION_MIN_SPEAKERS=2
+    STT_DIARIZATION_MAX_SPEAKERS=6
+    ```
+
+### 3. Surgical Implementation & Safety
+*   **Surgical Logic**: All changes are additive `if` blocks. If flags are disabled, the request payload remains identical to the previous stable version.
+*   **Verification**: Created standalone test scripts `testMultiLangDetection.js` and `testDiarization.js` to verify configuration integrity before audio is sent.
+*   **Limitations**: Streaming diarization is documented as "best-effort" due to V1 API limitations (Google may retroactively change labels as more audio context is gathered).

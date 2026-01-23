@@ -11,6 +11,7 @@
 import { GoogleSpeechStream } from './googleSpeechStream.js';
 import WebSocket from 'ws';
 import translationManager from './translationManager.js';
+import { grammarWorker } from './grammarWorker.js';
 import { partialTranslationWorker, finalTranslationWorker } from './translationWorkers.js';
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
 import { normalizePunctuation } from './transcriptionCleanup.js';
@@ -242,11 +243,16 @@ export async function handleSoloMode(clientWs) {
               console.log(`[SoloMode] 🚀 Creating Google Speech stream for ${currentSourceLang}...`);
               speechStream = new GoogleSpeechStream();
 
-              // Initialize with source language for transcription
+              // Initialize with source language and dynamic options from init message
               await speechStream.initialize(currentSourceLang, {
                 encoding: message.encoding,
                 sampleRateHertz: message.sampleRateHertz,
-                disablePunctuation: false
+                disablePunctuation: false,
+                enableMultiLanguage: message.enableMultiLanguage,
+                alternativeLanguageCodes: message.alternativeLanguageCodes,
+                enableSpeakerDiarization: message.enableSpeakerDiarization,
+                minSpeakers: message.minSpeakers,
+                maxSpeakers: message.maxSpeakers,
               });
 
               const isTranscriptionOnly = currentSourceLang === currentTargetLang;
