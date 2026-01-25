@@ -37,11 +37,16 @@ export function SoloPage({ onBackToHome }) {
     // Refs
     const wsRef = useRef(null);
     const targetLangRef = useRef(targetLang); // For closure-safe access
+    const streamingTtsRef = useRef(streamingTts); // Sync with state
 
-    // Keep targetLangRef in sync
+    // Keep refs in sync
     useEffect(() => {
         targetLangRef.current = targetLang;
     }, [targetLang]);
+
+    useEffect(() => {
+        streamingTtsRef.current = streamingTts;
+    }, [streamingTts]);
 
     // Session state machine
     const session = useSoloSession({
@@ -54,16 +59,30 @@ export function SoloPage({ onBackToHome }) {
         onFinal: (text) => {
             console.log('[SoloPage] Final:', text.substring(0, 50));
         },
-        onTranslation: (text) => {
-            console.log('[SoloPage] Translation:', text.substring(0, 50));
+        onTranslation: (text, translatedText) => {
+            console.log('[SoloPage] Translation:', { text, translatedText });
+
+            // If streaming is enabled, the backend handles TTS via Orchestrator
+            // We ONLY enqueue for Unary if streaming is DISABLED
+            if (streamingTtsRef.current) {
+                console.log('[SoloPage] Streaming enabled - skipping Unary TTS enqueue');
+                return;
+            }
+
             // Auto-enqueue for TTS if not text-only mode
             // Use ref for closure-safe access to current targetLang
             if (session.mode !== SoloMode.TEXT_ONLY) {
-                ttsQueue.enqueue({
-                    text,
-                    translatedText: text,
-                    languageCode: targetLangRef.current // Use ref instead of stale closure
-                });
+                const textToSpeak = translatedText || text;
+
+                if (textToSpeak && textToSpeak.trim().length > 0) {
+                    ttsQueue.enqueue({
+                        text: text, // Original
+                        translatedText: textToSpeak, // Text to speak
+                        languageCode: targetLangRef.current // Use ref instead of stale closure
+                    });
+                } else {
+                    console.warn('[SoloPage] Skipping TTS enqueue - empty text');
+                }
             }
         },
         onStateChange: (state) => {
@@ -138,7 +157,8 @@ export function SoloPage({ onBackToHome }) {
                 type: 'init',
                 sourceLang,
                 targetLang,
-                tier: 'basic'
+                tier: 'basic',
+                sessionId: streamingSessionIdRef.current
             }));
         };
 
@@ -281,7 +301,8 @@ export function SoloPage({ onBackToHome }) {
                 type: 'init',
                 sourceLang: newSourceLang,
                 targetLang: newTargetLang,
-                tier: 'basic'
+                tier: 'basic',
+                sessionId: streamingSessionIdRef.current
             };
 
             console.log('[SoloPage] 📤 Sending init message:', initMessage);

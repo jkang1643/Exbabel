@@ -34,7 +34,7 @@ export async function handleSoloMode(clientWs) {
 
   // MULTI-SESSION OPTIMIZATION: Track this session for fair-share allocation
   // This allows the rate limiter to distribute capacity fairly across sessions
-  const sessionId = legacySessionId;
+  let sessionId = legacySessionId;
 
   // PHASE 7: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (replaces individual engine instances)
@@ -222,6 +222,11 @@ export async function handleSoloMode(clientWs) {
           const prevTargetLang = currentTargetLang;
 
           console.log(`[SoloMode] Init received - sourceLang: ${message.sourceLang}, targetLang: ${message.targetLang}, tier: ${message.tier || 'basic'}`);
+
+          if (message.sessionId) {
+            sessionId = message.sessionId;
+            console.log(`[SoloMode] 🔗 Synced session ID: ${sessionId}`);
+          }
 
           if (message.sourceLang) {
             currentSourceLang = message.sourceLang;

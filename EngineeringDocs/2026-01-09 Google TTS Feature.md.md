@@ -757,6 +757,21 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 
 ## 1) What we did (feature updates / changes)
 
+### 2026-01-25 — Solo Mode TTS Streaming Integration
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Expanded the real-time TTS Streaming architecture to support **Solo Mode** (hands-free translation), ensuring parity with the Listener experience.
+
+**Key Changes:**
+- **Session Synchronization:** Updated `SoloPage.jsx` to generate a stable, streaming-compatible `sessionId` and synchronize it with the backend via the `init` handshake. This allows the backend `soloModeHandler.js` to register the correct session with the `TtsStreamingOrchestrator`.
+- **Mode Gating Logic:** Implemented `streamingTtsRef` in `SoloPage.jsx` to strictly enforce mutual exclusion between Legacy Unary TTS and Real-time Streaming Tts. This prevents "double-audio" issues where both engines would synthesize the same segment.
+- **Payload Hardening:** Added robust validation in the frontend to prevent `undefined` or empty text payloads from crashing the TTS queue.
+
+**Verification:**
+- Confirmed successful connection, buffering, and playback of ElevenLabs streaming audio during a live Solo Mode session (6+ seconds buffered).
+
+---
+
 ### 2026-01-25 — PR 11: Multi-Provider TTS Streaming (ElevenLabs)
 **Status:** ✅ IMPLEMENTED - Production Ready
 
