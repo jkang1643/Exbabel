@@ -1,81 +1,105 @@
 import React from 'react';
-import { X, Clock, Volume2 } from 'lucide-react';
+import { X, Clock, Volume2, Wifi } from 'lucide-react';
 
 /**
  * AdvancedSettingsDrawer - Hidden settings panel
  */
 export function AdvancedSettingsDrawer({
-    isOpen,
-    onClose,
-    silenceThreshold,
-    onSilenceThresholdChange,
-    speakerPriority,
-    onSpeakerPriorityChange
+  isOpen,
+  onClose,
+  silenceThreshold,
+  onSilenceThresholdChange,
+  speakerPriority,
+  onSpeakerPriorityChange,
+  streamingTts,
+  onStreamingTtsChange
 }) {
-    if (!isOpen) return null;
+  if (!isOpen) return null;
 
-    return (
-        <>
-            {/* Backdrop */}
-            <div className="drawer-backdrop" onClick={onClose} />
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="drawer-backdrop" onClick={onClose} />
 
-            {/* Drawer */}
-            <div className="settings-drawer">
-                <div className="drawer-header">
-                    <h3>Advanced Settings</h3>
-                    <button className="close-btn" onClick={onClose}>
-                        <X size={20} />
-                    </button>
-                </div>
+      {/* Drawer */}
+      <div className="settings-drawer">
+        <div className="drawer-header">
+          <h3>Advanced Settings</h3>
+          <button className="close-btn" onClick={onClose}>
+            <X size={20} />
+          </button>
+        </div>
 
-                <div className="drawer-content">
-                    {/* Silence Threshold */}
-                    <div className="setting-group">
-                        <div className="setting-header">
-                            <Clock size={18} />
-                            <span>Silence Detection</span>
-                        </div>
-                        <p className="setting-desc">
-                            Time to wait after speech stops before finalizing
-                        </p>
-                        <div className="setting-control">
-                            <input
-                                type="range"
-                                min="400"
-                                max="1500"
-                                step="100"
-                                value={silenceThreshold}
-                                onChange={(e) => onSilenceThresholdChange(Number(e.target.value))}
-                            />
-                            <span className="setting-value">{silenceThreshold}ms</span>
-                        </div>
-                    </div>
-
-                    {/* Speaker Priority */}
-                    <div className="setting-group">
-                        <div className="setting-header">
-                            <Volume2 size={18} />
-                            <span>Speaker Priority</span>
-                        </div>
-                        <p className="setting-desc">
-                            New speech interrupts and cancels current TTS playback
-                        </p>
-                        <label className="toggle-switch">
-                            <input
-                                type="checkbox"
-                                checked={speakerPriority}
-                                onChange={(e) => onSpeakerPriorityChange(e.target.checked)}
-                            />
-                            <span className="toggle-slider" />
-                            <span className="toggle-label">
-                                {speakerPriority ? 'On' : 'Off'}
-                            </span>
-                        </label>
-                    </div>
-                </div>
+        <div className="drawer-content">
+          {/* Silence Threshold */}
+          <div className="setting-group">
+            <div className="setting-header">
+              <Clock size={18} />
+              <span>Silence Detection</span>
             </div>
+            <p className="setting-desc">
+              Time to wait after speech stops before finalizing
+            </p>
+            <div className="setting-control">
+              <input
+                type="range"
+                min="400"
+                max="1500"
+                step="100"
+                value={silenceThreshold}
+                onChange={(e) => onSilenceThresholdChange(Number(e.target.value))}
+              />
+              <span className="setting-value">{silenceThreshold}ms</span>
+            </div>
+          </div>
 
-            <style>{`
+          {/* Speaker Priority */}
+          <div className="setting-group">
+            <div className="setting-header">
+              <Volume2 size={18} />
+              <span>Speaker Priority</span>
+            </div>
+            <p className="setting-desc">
+              New speech interrupts and cancels current TTS playback
+            </p>
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={speakerPriority}
+                onChange={(e) => onSpeakerPriorityChange(e.target.checked)}
+              />
+              <span className="toggle-slider" />
+              <span className="toggle-label">
+                {speakerPriority ? 'On' : 'Off'}
+              </span>
+            </label>
+          </div>
+
+          {/* Streaming TTS */}
+          <div className="setting-group">
+            <div className="setting-header">
+              <Wifi size={18} />
+              <span>Streaming TTS</span>
+            </div>
+            <p className="setting-desc">
+              Real-time audio streaming with lower latency (experimental)
+            </p>
+            <label className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={streamingTts}
+                onChange={(e) => onStreamingTtsChange(e.target.checked)}
+              />
+              <span className="toggle-slider" />
+              <span className="toggle-label">
+                {streamingTts ? 'On' : 'Off'}
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
         .drawer-backdrop {
           position: fixed;
           inset: 0;
@@ -247,8 +271,8 @@ export function AdvancedSettingsDrawer({
           font-size: 0.9rem;
         }
       `}</style>
-        </>
-    );
+    </>
+  );
 }
 
 export default AdvancedSettingsDrawer;

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ArrowLeft, Settings, Mic, Volume2, VolumeX, RefreshCw } from 'lucide-react';
 import { useSoloSession, SessionState, SoloMode } from '../../hooks/useSoloSession';
 import { useTtsQueue } from '../../hooks/useTtsQueue';
+import { useTtsStreaming } from '../../hooks/useTtsStreaming';
 import { useAudioCapture } from '../../hooks/useAudioCapture';
 import ModeSelector from './ModeSelector';
 import LanguageSelector from './LanguageSelector';
@@ -9,6 +10,7 @@ import StatusIndicator from './StatusIndicator';
 import TurnIndicator from './TurnIndicator';
 import TranscriptPanel from './TranscriptPanel';
 import PlaybackQueueBadge from './PlaybackQueueBadge';
+import TtsStreamingControl from '../tts/TtsStreamingControl';
 import AdvancedSettingsDrawer from './AdvancedSettingsDrawer';
 
 /**
@@ -29,7 +31,8 @@ export function SoloPage({ onBackToHome }) {
     // Settings
     const [showSettings, setShowSettings] = useState(false);
     const [silenceThreshold, setSilenceThreshold] = useState(800);
-    const [speakerPriority, setSpeakerPriority] = useState(false); // new speech cancels TTS
+    const [speakerPriority, setSpeakerPriority] = useState(false);
+    const [streamingTts, setStreamingTts] = useState(false); // new speech cancels TTS
 
     // Refs
     const wsRef = useRef(null);
@@ -82,6 +85,24 @@ export function SoloPage({ onBackToHome }) {
         },
         onError: (error) => {
             console.error('[SoloPage] TTS error:', error);
+        }
+    });
+
+    // Stable session ID for streaming (must not change on re-render)
+    const streamingSessionIdRef = useRef(`solo_${Date.now()}`);
+
+    // TTS streaming (real-time)
+    const ttsStreaming = useTtsStreaming({
+        sessionId: streamingSessionIdRef.current,
+        enabled: streamingTts && session.mode !== SoloMode.TEXT_ONLY,
+        onBufferUpdate: (ms) => {
+            console.log('[SoloPage] Buffer:', ms, 'ms');
+        },
+        onUnderrun: (count) => {
+            console.warn('[SoloPage] Audio underrun:', count);
+        },
+        onError: (err) => {
+            console.error('[SoloPage] Streaming error:', err);
         }
     });
 
@@ -392,6 +413,15 @@ export function SoloPage({ onBackToHome }) {
                 {ttsQueue.queueLength > 0 && (
                     <PlaybackQueueBadge count={ttsQueue.queueLength} />
                 )}
+
+                {/* Streaming Status */}
+                <TtsStreamingControl
+                    isEnabled={streamingTts}
+                    isConnected={ttsStreaming.isConnected}
+                    isPlaying={ttsStreaming.isPlaying}
+                    bufferedMs={ttsStreaming.bufferedMs}
+                    stats={ttsStreaming.stats}
+                />
             </div>
 
             {/* Transcript Panel */}
@@ -432,6 +462,8 @@ export function SoloPage({ onBackToHome }) {
                     onSilenceThresholdChange={setSilenceThreshold}
                     speakerPriority={speakerPriority}
                     onSpeakerPriorityChange={setSpeakerPriority}
+                    streamingTts={streamingTts}
+                    onStreamingTtsChange={setStreamingTts}
                 />
             )}
 

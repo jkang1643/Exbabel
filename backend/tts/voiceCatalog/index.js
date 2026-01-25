@@ -106,30 +106,18 @@ export async function getVoicesFor({ languageCode, allowedTiers }) {
     const allVoices = await getAllVoices();
     const { full, base } = normalizeLanguageCode(languageCode);
 
-    // Try exact match first
+    // Filter voices that match either exact region OR base language OR are multilingual
     let matches = allVoices.filter(voice => {
         if (!allowedTiers.includes(voice.tier)) return false;
-        return voice.languageCodes.includes(full);
-    });
 
-    if (matches.length > 0) {
-        return matches;
-    }
+        // Multilingual flag
+        if (voice.multilingual) return true;
 
-    // Try base language match (e.g., 'es' for 'es-ES', 'es-US')
-    matches = allVoices.filter(voice => {
-        if (!allowedTiers.includes(voice.tier)) return false;
-        return voice.languageCodes.some(lang => lang.startsWith(`${base}-`));
-    });
-
-    if (matches.length > 0) {
-        return matches;
-    }
-
-    // Try multilingual voices (languageCodes includes all languages)
-    matches = allVoices.filter(voice => {
-        if (!allowedTiers.includes(voice.tier)) return false;
-        return voice.multilingual === true;
+        // Check language codes
+        return voice.languageCodes.some(lang =>
+            lang === full || // Exact match (e.g. 'es-ES')
+            lang === base    // Generic match (e.g. 'es')
+        );
     });
 
     if (matches.length > 0) {
@@ -140,7 +128,8 @@ export async function getVoicesFor({ languageCode, allowedTiers }) {
     console.warn(`[VoiceCatalog] No voices found for ${languageCode}, falling back to English`);
     return allVoices.filter(voice => {
         if (!allowedTiers.includes(voice.tier)) return false;
-        return voice.languageCodes.includes('en-US');
+        // Check for 'en' or 'en-US'
+        return voice.languageCodes.includes('en') || voice.languageCodes.includes('en-US');
     });
 }
 
@@ -157,11 +146,17 @@ export async function getVoicesFor({ languageCode, allowedTiers }) {
  */
 export async function isVoiceValid({ voiceId, voiceName, languageCode, tier }) {
     const allVoices = await getAllVoices();
-    const { full } = normalizeLanguageCode(languageCode);
+    const { full, base } = normalizeLanguageCode(languageCode);
 
     return allVoices.some(voice => {
         // Match by voiceId or voiceName
-        const idMatch = voiceId ? voice.voiceId === voiceId : voice.voiceName === voiceName;
+        // For ElevenLabs, we support flexible ID matching (raw ID or tier/ID)
+        const idMatch = voiceId ? (
+            voice.voiceId === voiceId ||
+            (voice.provider === 'elevenlabs' && voice.voiceId.endsWith(voiceId)) ||
+            (voice.provider === 'elevenlabs' && voiceId.includes('/') && voice.voiceId.endsWith(voiceId.split('/').pop()))
+        ) : voice.voiceName === voiceName;
+
         if (!idMatch) return false;
 
         // Check tier
@@ -169,7 +164,12 @@ export async function isVoiceValid({ voiceId, voiceName, languageCode, tier }) {
 
         // Check language (multilingual voices support all)
         if (voice.multilingual) return true;
-        return voice.languageCodes.includes(full);
+
+        // Check language codes (allow exact or base match)
+        return voice.languageCodes.some(lang =>
+            lang === full || // Exact match (e.g. 'es-ES')
+            lang === base    // Generic match (e.g. 'es')
+        );
     });
 }
 

@@ -152,6 +152,7 @@ import { handleHostConnection } from './host/adapter.js';
 import { handleListenerConnection } from './websocketHandler.js';
 import { handleSoloMode } from './soloModeHandler.js';
 import { handleAPIConnection } from './apiWebSocketHandler.js';
+import { handleTtsStreamingConnection } from './tts/ttsStreamingHandler.js';
 import apiAuth from './apiAuth.js';
 import rateLimiter from './rateLimiter.js';
 import inputValidator from './inputValidator.js';
@@ -172,6 +173,12 @@ server.on("upgrade", (req, socket, head) => {
       wss.emit("connection", ws, req);
     });
   }
+  // TTS Streaming endpoint (for real-time audio)
+  else if (url.startsWith("/ws/tts")) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  }
   // Existing frontend endpoint
   else if (url.startsWith("/translate")) {
     wss.handleUpgrade(req, socket, head, (ws) => {
@@ -187,6 +194,13 @@ server.on("upgrade", (req, socket, head) => {
 // Handle WebSocket connections
 wss.on("connection", async (clientWs, req) => {
   const url = req.url || '';
+
+  // Route TTS streaming connections
+  if (url.startsWith("/ws/tts")) {
+    console.log("[Backend] TTS Streaming WebSocket connection");
+    handleTtsStreamingConnection(clientWs, req);
+    return;
+  }
 
   // Route API connections to secure API handler
   if (url.startsWith("/api/translate")) {
@@ -482,6 +496,11 @@ app.post('/test-translation', async (req, res) => {
 // Serve test WebSocket API page (development)
 app.get('/test-websocket-api.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'test-websocket-api.html'));
+});
+
+// Serve TTS isolation test page (development)
+app.get('/test_streaming_isolation.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'test_streaming_isolation.html'));
 });
 
 // Serve static files in production

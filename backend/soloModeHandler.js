@@ -19,6 +19,7 @@ import { CoreEngine } from '../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';
 import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmittedText, hasAlphaNumeric } from '../core/utils/emitGuards.js';
+import { onCommittedSegment, cleanupSession } from './tts/TtsStreamingOrchestrator.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -176,6 +177,24 @@ export async function handleSoloMode(clientWs) {
     }
 
     return seqId;
+  };
+
+  // Helper: Trigger TTS streaming for committed segments
+  const triggerTtsStreaming = (seqId, text, targetLang, voiceId = null) => {
+    // Only trigger for non-empty text
+    if (!text || text.trim().length === 0) return;
+
+    // Use default ElevenLabs voice if not specified
+    // TODO: Get from user preferences/session config
+    const defaultVoiceId = voiceId || 'elevenlabs-21m00Tcm4TlvDq8ikWAM'; // Default Rachel voice
+
+    onCommittedSegment(sessionId, {
+      seqId,
+      text: text.trim(),
+      lang: targetLang || currentTargetLang,
+      voiceId: defaultVoiceId,
+      isFinal: true
+    });
   };
 
   // Handle client messages
@@ -815,6 +834,9 @@ export async function handleSoloMode(clientWs) {
                           // Track last emitted text for this seqId
                           setLastEmittedText(finalSeqId, correctedText);
 
+                          // Trigger TTS streaming for this committed segment
+                          triggerTtsStreaming(finalSeqId, correctedText, currentTargetLang);
+
                           // CRITICAL: Update last sent FINAL tracking after sending
                           // Track both original and corrected text to prevent duplicates
                           lastSentOriginalText = textToProcess; // Always track the original
@@ -855,6 +877,9 @@ export async function handleSoloMode(clientWs) {
                           // Track last emitted text
                           setLastEmittedText(finalSeqIdError, textToProcess);
 
+                          // Trigger TTS streaming for this committed segment
+                          triggerTtsStreaming(finalSeqIdError, textToProcess, currentTargetLang);
+
                           // CRITICAL: Update last sent FINAL tracking after sending (even on error)
                           lastSentOriginalText = textToProcess; // Track original
                           lastSentFinalText = textToProcess; // No correction, so same as original
@@ -891,6 +916,9 @@ export async function handleSoloMode(clientWs) {
 
                         // Track last emitted text
                         setLastEmittedText(finalSeqIdNonEn, textToProcess);
+
+                        // Trigger TTS streaming for this committed segment
+                        triggerTtsStreaming(finalSeqIdNonEn, textToProcess, currentTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         lastSentFinalText = textToProcess;
@@ -996,6 +1024,9 @@ export async function handleSoloMode(clientWs) {
 
                         // Track last emitted text
                         setLastEmittedText(finalSeqIdTrans, translatedText);
+
+                        // Trigger TTS streaming for this committed segment (use translated text)
+                        triggerTtsStreaming(finalSeqIdTrans, translatedText, currentTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates

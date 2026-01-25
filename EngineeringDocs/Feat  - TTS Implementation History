@@ -1562,3 +1562,67 @@ Migrated the entire TTS system to a server-authoritative voice catalog. Transiti
 - **Dynamic Population**: Confirmed `ListenerPage` and `TtsPanel` populate voices correctly from the backend.
 - **Resilience**: Verified that the UI recovers from connection drops and correctly re-fetches the catalog.
 - **Clean Console**: Verified 0 `ReferenceError` or React prop warnings in the developer console.
+
+
+TTS WebSocket Streaming Implementation - Walkthrough
+Summary
+Implemented real-time audio streaming over WebSockets for the Exbabel translation app using ElevenLabs as the first provider. All core infrastructure is in place and verified.
+
+Files Created
+Backend
+File	Purpose
+ttsStreamingConfig.js
+Feature flag and streaming configuration
+ttsStreamingTransport.js
+WS protocol, binary frames, client registry
+ttsStreamingHandler.js
+WebSocket connection handler
+elevenlabsStreamingProvider.js
+True HTTP streaming from ElevenLabs
+TtsStreamingOrchestrator.js
+Pipeline coordination and fanout
+Frontend
+File	Purpose
+StreamingAudioPlayer.js
+MediaSource-based MP3 playback
+Modified
+File	Change
+.env
+Added TTS_STREAMING_ENABLED flag
+server.js
+Mounted /ws/tts endpoint
+Testing Results
+=== Test Summary ===
+Passed: 18
+Failed: 0
+Total: 18
+✓ All tests passed!
+How to Enable
+Set in 
+backend/.env
+:
+
+TTS_STREAMING_ENABLED=true
+Restart backend
+
+Connect to /ws/tts?sessionId=<id> and send audio.hello message
+
+### PR 11 — PR 11 Hardening & Connectivity Fixes
+**Status:** ✅ COMPLETE
+**Date:** 2026-01-25
+
+#### Overview
+Resolved critical connectivity and stability issues in the ElevenLabs TTS streaming pipeline. Hardened the frontend connection logic and established a reliable proxy path for binary transport.
+
+#### Changes Made
+- **WebSocket Proxying**: Added `/ws` proxy rule to `vite.config.js` to enable binary WebSocket transport over the standard development port (3000), bypassing firewall/port restrictions on 3001.
+- **Hook Stability**: Refactored `useTtsStreaming.js` to use internal `useRef` callbacks. This decoupled the connection lifecycle from frontend re-renders, eliminating the "rapid-reconnect" loop.
+- **Mode Decoupling**: Hardened `ListenerPage.jsx` to treat `streamingTts` as a mutual exclusion flag. When enabled, Unary segment triggers are suppressed, ensuring a clean handover to the Streaming Orchestrator.
+- **Environment Parity**: Synchronized `VITE_WS_URL` and `VITE_API_URL` to use the unified proxy port (3000), ensuring consistent origin matching for both HTTP and WS traffic.
+
+#### Verification
+- **Isolation Testing**: Created `test_streaming_isolation.html` to verify direct vs. proxied WebSocket health.
+- **Integration Testing**: Confirmed the orchestrator successfully enqueues segments and streams chunked audio to listeners with significantly reduced latency compared to unary mode.
+
+---
+**END OF IMPLEMENTATION HISTORY**

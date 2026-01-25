@@ -51,6 +51,7 @@ import { CoreEngine } from '../../core/engine/coreEngine.js';
 import { mergeRecoveryText, wordsAreRelated } from '../utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../../core/utils/partialDeduplicator.js';
 import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmittedText, hasAlphaNumeric } from '../../core/utils/emitGuards.js';
+import { onCommittedSegment, cleanupSession } from '../tts/TtsStreamingOrchestrator.js';
 
 /**
  * Normalize text for comparison
@@ -598,6 +599,24 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
 
                 return seqId;
+              };
+
+              // Helper: Trigger TTS streaming for committed segments
+              const triggerTtsStreaming = (seqId, text, targetLang, voiceId = null) => {
+                // Only trigger for non-empty text
+                if (!text || text.trim().length === 0) return;
+
+                // Use default ElevenLabs voice if not specified
+                // TODO: Get from user preferences/session config
+                const defaultVoiceId = voiceId || 'elevenlabs-21m00Tcm4TlvDq8ikWAM'; // Default Rachel voice
+
+                onCommittedSegment(currentSessionId, {
+                  seqId,
+                  text: text.trim(),
+                  lang: targetLang || currentTargetLang,
+                  voiceId: defaultVoiceId,
+                  isFinal: true
+                });
               };
 
               // Grammar correction cache (from solo mode)
@@ -1176,6 +1195,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                       // CRITICAL: Check for partials that arrived during async processing (grammar correction, translation)
                       // This catches words that were spoken while the final was being processed
                       checkForExtendingPartialsAfterFinal(lastSentFinalText);
+
+                      // Trigger TTS streaming for this committed segment
+                      triggerTtsStreaming(finalSeqId, lastSentFinalText, currentTargetLang);
                     } catch (error) {
                       console.error(`[HostMode] Final processing error:`, error);
                       // If it's a skip request error, use corrected text (or original if not set)

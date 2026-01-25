@@ -9,6 +9,40 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
 
+### BUG 37: FIXED — Missing Message Routing for TTS Catalog (Listener Page)
+**Status:** ✅ RESOLVED (2026-01-25)
+
+Resolved an issue where the voice dropdown on the Listener Page remained empty even when the backend correctly loaded the catalog.
+
+#### Root Cause:
+1. **Message Drop**: The WebSocket `onmessage` handler in `ListenerPage.jsx` lacked cases for `tts/voices` and `tts/defaults`.
+2. **Controller Isolation**: `TtsPlayerController` had no way to receive the data it requested because the parent component didn't delegate the response.
+
+#### Key Fixes:
+1. **Delegation Logic**: Added specific case handling for `tts/voices` and `tts/defaults` in the `ListenerPage` switch statement, forwarding them to the controller's `onWsMessage` method.
+
+#### Impact:
+- ✅ **Dynamic Population**: The voice catalog now populates instantly upon connection and language change.
+
+---
+
+### BUG 36: FIXED — ElevenLabs / Google Regional Filtering (Voice List Gaps)
+**Status:** ✅ RESOLVED (2026-01-25)
+
+Resolved a critical filtering bug where requesting a regional language code (e.g., `es-ES`) would only return exact matches (Google), causing generic multilingual voices (ElevenLabs `es`) to be excluded from the catalog.
+
+#### Root Cause:
+1. **Early Exit Logic**: `voiceCatalog/index.js` performed filtering in stages (Exact → Generic → Multilingual). If an exact match was found (Google), it returned early, never reaching the ElevenLabs voices.
+
+#### Key Fixes:
+1. **Unified Filter Pass**: Rewrote `getVoicesFor` to use a single unified filter that matches either exact region OR base language OR multilingual flags in a single pass.
+2. **Language Normalization**: Enhanced the normalization logic to ensure base language matching (e.g. 'es') is always attempted alongside regional matching.
+
+#### Impact:
+- ✅ **Complete Catalog Visibility**: Users selecting 'Spanish' now see BOTH high-fidelity Google/Chirp voices and ElevenLabs personas in a single dropdown.
+
+---
+
 ### BUG 35: FIXED — Frontend/Backend Voice Catalog Desync
 **Status:** ✅ RESOLVED (2026-01-22)
 
@@ -723,6 +757,35 @@ Resolved `INVALID_ARGUMENT` and `PERMISSION_DENIED` errors when requesting "Stud
 
 ## 1) What we did (feature updates / changes)
 
+### 2026-01-25 — PR 11: Multi-Provider TTS Streaming (ElevenLabs)
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Implemented true real-time audio streaming for TTS, moving from segment-based unary playback to low-latency chunked delivery. Integrated with ElevenLabs WebSocket API for near-zero latency audio generation.
+
+**Key Changes:**
+- **Streaming Orchestrator**: Created `TtsStreamingOrchestrator.js` to coordinate real-time audio fanout across multiple connected listeners.
+- **Provider Abstraction**: Implemented `elevenlabsStreamingProvider.js` using ElevenLabs' WebSocket API for chunked audio generation.
+- **Binary Transport**: Revamped `ttsStreamingTransport.js` to handle binary audio frames and sequence synchronization.
+- **MediaSource Playback**: Created `StreamingAudioPlayer.js` (frontend) utilizing the `MediaSource` API to decode and play MP3 chunks as they arrive.
+- **Connectivity & Stability Hardening**:
+    - **Proxy Integration**: Updated Vite configuration and environment variables to route `/ws/tts` through the dev server proxy, resolving cross-origin and direct-port connection issues.
+    - **Hook Optimization**: Refactored `useTtsStreaming.js` with stable `useRef` callbacks to prevent effect-triggering loops during connection establishment.
+    - **Mode Gating**: Implemented conditional gating in `ListenerPage.jsx` to disable Unary TTS triggers when Streaming mode is active, preventing parallel playback interference.
+
+**Resolved Bugs:**
+- **Bug 40: TTS Disconnection Loop**
+    - **Issue**: Passed inline functions to `useTtsStreaming` caused the hook to reconnect on every render.
+    - **Fix**: Wrapped callback handlers in stable refs inside the hook.
+- **Bug 41: Parallel Unary/Streaming Playback**
+    - **Issue**: Enabling streaming mode didn't disable the legacy Unary segment-based synthesis, causing duplicate audio and race conditions.
+    - **Fix**: Added `!streamingTts` checks to all `TtsPlayerController.onFinalSegment` trigger points.
+
+**Where implemented:**
+- **Backend:** `backend/tts/TtsStreamingOrchestrator.js`, `backend/tts/providers/elevenlabsStreamingProvider.js`, `backend/tts/transport/ttsStreamingTransport.js`, `backend/tts/ttsStreamingHandler.js`, `backend/server.js`, `vite.config.js`
+- **Frontend:** `frontend/src/tts/StreamingAudioPlayer.js`, `frontend/src/hooks/useTtsStreaming.js`, `frontend/src/components/ListenerPage.jsx`
+
+---
+
 ### 2026-01-22 — PR 4.2: Voice Catalog Sync & Frontend Hardening
 **Status:** ✅ IMPLEMENTED - Production Ready
 
@@ -979,6 +1042,7 @@ Implemented the complete scaffolding for Google TTS integration, supporting both
 ## 2) Where we are now (implementation status)
 
 ### ✅ Implemented
+- **Multi-Provider Streaming:** Low-latency streaming implemented for ElevenLabs via MediaSource API (PR 11).
 - **Gemini Prompted Delivery:** Natural language style control with presets and intensity (PR 4).
 - **Chirp 3 Dynamic Prosody:** Phrase-level rate/pitch variation for preaching styles (PR 3).
 - **Scaffolding:** Feature flags, policy engine, and WebSocket command architecture.
@@ -992,7 +1056,7 @@ Implemented the complete scaffolding for Google TTS integration, supporting both
 - **Comprehensive Testing:** Frontend/Backend unit tests for prompted synthesis.
 - **Auto-synthesis Integration:** Hooking synthesis into the main translation loop.
 - **Persistence:** Usage tracking currently in-memory.
-- **Streaming Mode:** Currently returns `NOT_IMPLEMENTED`.
+- **Google TTS Streaming:** Extending the streaming architecture to support Google Chirp/Gemini streaming endpoints.
 
 ---
 

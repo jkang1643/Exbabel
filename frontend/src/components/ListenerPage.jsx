@@ -18,6 +18,8 @@ import { TtsSettingsModal } from './TtsSettingsModal';
 import { TtsMode, TtsPlayerState } from '../tts/types.js';
 import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
 import { CaptionClientEngine, SentenceSegmenter } from '@jkang1643/caption-engine';
+import { useTtsStreaming } from '../hooks/useTtsStreaming';
+import TtsStreamingControl from './tts/TtsStreamingControl';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -195,8 +197,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           const newLines = state.committedLines.slice(lastCommittedLength);
           lastCommittedLength = state.committedLines.length;
 
-          // Enqueue new lines for TTS
-          if (ttsControllerRef.current && ttsControllerRef.current.getState().state === 'PLAYING') {
+          // Enqueue new lines for TTS (Unary mode only - streaming mode uses backend orchestrator)
+          if (!streamingTts && ttsControllerRef.current && ttsControllerRef.current.getState().state === 'PLAYING') {
             newLines.forEach(line => {
               if (!line.text) return;
 
@@ -282,6 +284,25 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   });
   const [availableVoices, setAvailableVoices] = useState([]);
   const [ttsDefaults, setTtsDefaults] = useState({});
+  const [streamingTts, setStreamingTts] = useState(false);
+
+  // Stable session ID for streaming (must not change on re-render)
+  const streamingSessionIdRef = useRef(`listener_${Date.now()}`);
+
+  // TTS streaming (real-time) - uses session ID from join if available
+  const ttsStreaming = useTtsStreaming({
+    sessionId: sessionInfo?.sessionId || streamingSessionIdRef.current,
+    enabled: streamingTts && isJoined && connectionState === 'open',
+    onBufferUpdate: (ms) => {
+      console.log('[ListenerPage] Buffer:', ms, 'ms');
+    },
+    onUnderrun: (count) => {
+      console.warn('[ListenerPage] Audio underrun:', count);
+    },
+    onError: (err) => {
+      console.error('[ListenerPage] Streaming error:', err);
+    }
+  });
 
   // Commit counter for tracing leaked rows
   const commitCounterRef = useRef(0);
@@ -1176,8 +1197,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
                 // Radio Mode: Auto-enqueue finalized segment for TTS
                 // GATED: Only run this legacy path if NOT using the shared engine (which handles its own TTS triggers)
+                // ALSO GATED: Skip if streaming mode is enabled (backend orchestrator handles it)
                 try {
                   if (!USE_SHARED_ENGINE &&
+                    !streamingTts &&
                     ttsControllerRef.current &&
                     ttsControllerRef.current.getState().state === 'PLAYING' &&
                     (isForMyLanguage || isTranscriptionMode) &&
@@ -1227,6 +1250,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           case 'tts/audio_chunk':
           case 'tts/error':
           case 'tts/ack':
+          case 'tts/voices':
+          case 'tts/defaults':
             if (ttsControllerRef.current) {
               ttsControllerRef.current.onWsMessage(message);
             }
@@ -1686,7 +1711,22 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         selectedVoice={selectedVoice}
         targetLang={targetLang}
         voices={availableVoices}
+        streamingTts={streamingTts}
+        onStreamingTtsChange={setStreamingTts}
       />
+
+      {/* Streaming Status (when enabled) */}
+      {streamingTts && isJoined && (
+        <div className="fixed bottom-32 right-4 z-50">
+          <TtsStreamingControl
+            isEnabled={streamingTts}
+            isConnected={ttsStreaming.isConnected}
+            isPlaying={ttsStreaming.isPlaying}
+            bufferedMs={ttsStreaming.bufferedMs}
+            stats={ttsStreaming.stats}
+          />
+        </div>
+      )}
 
       {error && (
         <div className="fixed bottom-20 left-4 right-4 z-[60] p-4 bg-red-100 border border-red-400 text-red-700 rounded shadow-lg animate-in slide-in-from-bottom duration-300">
