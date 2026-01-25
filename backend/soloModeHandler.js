@@ -3105,6 +3105,399 @@ export async function handleSoloMode(clientWs) {
           console.log('[SoloMode] 📴 Client tab visible - resuming normal operation');
           break;
 
+        // ============================================================
+        // TTS HANDLERS - Ported from websocketHandler.js (Host Mode)
+        // ============================================================
+
+        case 'tts/start':
+          console.log('[SoloMode] Starting TTS playback');
+
+          // Initialize TTS state on socket
+          if (!clientWs.ttsState) {
+            clientWs.ttsState = {};
+          }
+
+          clientWs.ttsState.playbackState = 'PLAYING';
+          clientWs.ttsState.languageCode = message.languageCode || currentTargetLang;
+          clientWs.ttsState.voiceName = message.voiceName || null;
+          clientWs.ttsState.tier = message.tier || 'gemini';
+          clientWs.ttsState.mode = message.mode || 'unary';
+          clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (300 * 1000); // 5 minutes
+
+          // Store full config for lease validation
+          clientWs.ttsState.ttsConfig = {
+            languageCode: message.languageCode || currentTargetLang,
+            voiceName: message.voiceName,
+            tier: message.tier || 'gemini',
+            mode: message.mode || 'unary',
+            ssmlOptions: message.ssmlOptions,
+            promptPresetId: message.promptPresetId,
+            ttsPrompt: message.ttsPrompt,
+            intensity: message.intensity
+          };
+
+          // Send acknowledgment
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'start',
+              state: clientWs.ttsState,
+              leaseExpiresAt: clientWs.ttsState.ttsLeaseExpiresAt
+            }));
+          }
+          console.log('[SoloMode] TTS state:', clientWs.ttsState);
+          break;
+
+        case 'tts/pause':
+          console.log('[SoloMode] Pausing TTS playback');
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'PAUSED';
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (60 * 1000); // 1 minute
+          }
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'pause',
+              leaseExpiresAt: clientWs.ttsState?.ttsLeaseExpiresAt
+            }));
+          }
+          break;
+
+        case 'tts/resume':
+          console.log('[SoloMode] Resuming TTS playback');
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'PLAYING';
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (300 * 1000); // 5 minutes
+          }
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'resume',
+              leaseExpiresAt: clientWs.ttsState?.ttsLeaseExpiresAt
+            }));
+          }
+          break;
+
+        case 'tts/stop':
+          console.log('[SoloMode] Stopping TTS playback');
+          if (clientWs.ttsState) {
+            clientWs.ttsState.playbackState = 'STOPPED';
+            clientWs.ttsState.ttsLeaseExpiresAt = null;
+            clientWs.ttsState.ttsConfig = null;
+          }
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'tts/ack',
+              action: 'stop'
+            }));
+          }
+          break;
+
+        case 'tts/list_voices': {
+          console.log(`[SoloMode] Requesting voice list for ${message.languageCode}`);
+
+          if (!message.languageCode) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'INVALID_REQUEST',
+                message: 'Missing required field: languageCode'
+              }));
+            }
+            break;
+          }
+
+          try {
+            const { getVoicesFor } = await import('./tts/voiceCatalog.js');
+            const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
+
+            const orgId = 'default';
+            const allowedTiers = getAllowedTiers(orgId);
+
+            const voices = await getVoicesFor({
+              languageCode: message.languageCode,
+              allowedTiers
+            });
+
+            const clientVoices = voices.map(v => ({
+              tier: v.tier,
+              voiceId: v.voiceId,
+              voiceName: v.voiceName,
+              displayName: v.displayName
+            }));
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/voices',
+                languageCode: message.languageCode,
+                voices: clientVoices
+              }));
+            }
+            console.log(`[SoloMode] Sent ${clientVoices.length} voices for ${message.languageCode}`);
+          } catch (error) {
+            console.error('[SoloMode] Failed to list voices:', error);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'VOICE_LIST_FAILED',
+                message: `Failed to list voices: ${error.message}`
+              }));
+            }
+          }
+          break;
+        }
+
+        case 'tts/get_defaults': {
+          console.log('[SoloMode] Requesting voice defaults');
+
+          try {
+            const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
+
+            const orgId = 'default';
+            const defaults = await getOrgVoiceDefaults(orgId);
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/defaults',
+                defaultsByLanguage: defaults
+              }));
+            }
+            console.log(`[SoloMode] Sent voice defaults for ${Object.keys(defaults).length} languages`);
+          } catch (error) {
+            console.error('[SoloMode] Failed to get defaults:', error);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'GET_DEFAULTS_FAILED',
+                message: `Failed to get defaults: ${error.message}`
+              }));
+            }
+          }
+          break;
+        }
+
+        case 'tts/synthesize': {
+          console.log('[SoloMode] TTS synthesis request');
+
+          // Validate payload
+          if (!message.segmentId || !message.text || !message.languageCode) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'INVALID_REQUEST',
+                message: 'Missing required fields: segmentId, text, languageCode',
+                details: {
+                  segmentId: message.segmentId,
+                  hasText: !!message.text,
+                  hasLanguageCode: !!message.languageCode
+                }
+              }));
+            }
+            break;
+          }
+
+          // Check playback state
+          if (!clientWs.ttsState || clientWs.ttsState.playbackState !== 'PLAYING') {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_NOT_PLAYING',
+                message: 'TTS synthesis requires active playback state. Please start TTS playback first.',
+                details: {
+                  segmentId: message.segmentId,
+                  currentState: clientWs.ttsState?.playbackState || 'STOPPED'
+                }
+              }));
+            }
+            break;
+          }
+
+          // Check lease expiry
+          if (clientWs.ttsState.ttsLeaseExpiresAt && Date.now() > clientWs.ttsState.ttsLeaseExpiresAt) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_LEASE_EXPIRED',
+                message: 'TTS playback lease expired. Please restart playback.',
+                details: {
+                  segmentId: message.segmentId,
+                  leaseExpiredAt: clientWs.ttsState.ttsLeaseExpiresAt,
+                  currentTime: Date.now()
+                }
+              }));
+            }
+            break;
+          }
+
+          // Refresh lease on active synthesis
+          if (clientWs.ttsState.playbackState === 'PLAYING') {
+            clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (300 * 1000);
+          }
+
+          // Streaming mode not implemented
+          if (message.mode === 'streaming') {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'TTS_STREAMING_NOT_IMPLEMENTED',
+                message: 'TTS streaming mode not implemented yet',
+                details: { segmentId: message.segmentId }
+              }));
+            }
+            break;
+          }
+
+          try {
+            // Import TTS modules
+            const { getTtsServiceForProvider } = await import('./tts/ttsService.js');
+            const { validateTtsRequest } = await import('./tts/ttsPolicy.js');
+            const { canSynthesize } = await import('./tts/ttsQuota.js');
+            const { recordUsage } = await import('./tts/ttsUsage.js');
+            const { resolveTtsRoute } = await import('./tts/ttsRouting.js');
+
+            // Fix tier typo
+            if (message.tier === 'chirp_hd') {
+              message.tier = 'chirp3_hd';
+            }
+
+            // Resolve TTS routing
+            const route = await resolveTtsRoute({
+              requestedTier: message.tier || 'gemini',
+              requestedVoice: message.voiceName,
+              languageCode: message.languageCode,
+              mode: 'unary',
+              orgConfig: {},
+              userSubscription: {}
+            });
+
+            // Build TTS request
+            const ttsRequest = {
+              sessionId: sessionId,
+              userId: 'solo_user',
+              orgId: 'default',
+              text: message.text,
+              segmentId: message.segmentId,
+              profile: {
+                engine: route.engine,
+                requestedTier: message.tier || 'gemini',
+                languageCode: route.languageCode,
+                voiceName: route.voiceName,
+                modelName: route.model || message.modelName,
+                encoding: route.audioEncoding,
+                streaming: false,
+                prompt: message.prompt
+              },
+              ssmlOptions: message.ssmlOptions || null,
+              promptPresetId: message.promptPresetId || null,
+              ttsPrompt: message.ttsPrompt || null,
+              intensity: message.intensity || null
+            };
+
+            // Check quota
+            const quotaCheck = canSynthesize({
+              orgId: ttsRequest.orgId,
+              userId: ttsRequest.userId,
+              sessionId: ttsRequest.sessionId,
+              characters: ttsRequest.text.length
+            });
+
+            if (!quotaCheck.allowed) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: quotaCheck.error.code,
+                  message: quotaCheck.error.message,
+                  details: quotaCheck.error.details,
+                  segmentId: message.segmentId
+                }));
+              }
+              break;
+            }
+
+            // Validate policy
+            const policyError = await validateTtsRequest(ttsRequest);
+            if (policyError) {
+              if (clientWs.readyState === WebSocket.OPEN) {
+                clientWs.send(JSON.stringify({
+                  type: 'tts/error',
+                  code: policyError.code,
+                  message: policyError.message,
+                  details: policyError.details,
+                  segmentId: message.segmentId
+                }));
+              }
+              break;
+            }
+
+            // Synthesize audio
+            const ttsService = getTtsServiceForProvider(route.provider);
+            const response = await ttsService.synthesizeUnary(ttsRequest, route);
+
+            // Send audio response
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/audio',
+                segmentId: response.segmentId,
+                audio: {
+                  bytesBase64: response.audio.bytesBase64,
+                  mimeType: response.audio.mimeType,
+                  durationMs: response.audio.durationMs,
+                  sampleRateHz: response.audio.sampleRateHz
+                },
+                mode: response.mode,
+                resolvedRoute: response.route,
+                ssmlOptions: ttsRequest.ssmlOptions || null
+              }));
+            }
+
+            // Record usage
+            await recordUsage({
+              orgId: ttsRequest.orgId,
+              userId: ttsRequest.userId,
+              sessionId: ttsRequest.sessionId,
+              segmentId: message.segmentId,
+              requested: {
+                tier: message.tier || 'gemini',
+                voiceName: message.voiceName,
+                languageCode: message.languageCode
+              },
+              route: response.route,
+              characters: ttsRequest.text.length,
+              audioSeconds: response.durationMs ? response.durationMs / 1000 : null,
+              status: 'success'
+            });
+
+            console.log(`[SoloMode] TTS synthesis successful: ${message.segmentId}`);
+
+          } catch (error) {
+            console.error('[SoloMode] TTS synthesis error:', error);
+
+            let errorCode = 'SYNTHESIS_FAILED';
+            let errorMessage = error.message;
+            let errorDetails = {};
+
+            try {
+              const parsedError = JSON.parse(error.message);
+              errorCode = parsedError.code || errorCode;
+              errorMessage = parsedError.message || errorMessage;
+              errorDetails = parsedError.details || {};
+            } catch (e) {
+              // Not a JSON error
+            }
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: errorCode,
+                message: errorMessage,
+                details: errorDetails,
+                segmentId: message.segmentId
+              }));
+            }
+          }
+          break;
+        }
+
         default:
           console.log(`[SoloMode] Unknown message type: ${message.type}`);
       }

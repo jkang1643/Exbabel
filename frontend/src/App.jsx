@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { HomePage } from './components/HomePage'
-import TranslationInterface from './components/TranslationInterface'
+import { SoloPage } from './components/solo'
 import { HostPage } from './components/HostPage'
 import { ListenerPage } from './components/ListenerPage'
 import DemoPage from './components/DemoPage'
@@ -48,7 +48,7 @@ function App() {
   }
 
   if (mode === 'solo') {
-    return <TranslationInterface onBackToHome={handleBackToHome} />
+    return <SoloPage onBackToHome={handleBackToHome} />
   }
 
   if (mode === 'host') {
