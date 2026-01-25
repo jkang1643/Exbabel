@@ -221,14 +221,18 @@ export class GoogleSpeechStream {
     const multiLangCodes = this.initOptions?.alternativeLanguageCodes || (process.env.STT_MULTI_LANG_CODES ? process.env.STT_MULTI_LANG_CODES.split(',') : []);
 
     if (isMultiLangEnabled && multiLangCodes.length > 0) {
+      // Read max codes limit from env (default 3, Google's max)
+      const maxCodes = parseInt(process.env.STT_MULTI_LANG_MAX_CODES, 10) || 3;
+      const effectiveMax = Math.min(Math.max(maxCodes, 1), 3); // Clamp between 1-3
+
       const altCodes = multiLangCodes
         .map(code => code.trim())
         .filter(code => code.length > 0 && code !== this.languageCode) // Exclude primary language
-        .slice(0, 3); // Google allows max 3 alternative languages
+        .slice(0, effectiveMax); // Use configurable limit
 
       if (altCodes.length > 0) {
         requestConfig.alternativeLanguageCodes = altCodes;
-        console.log(`[GoogleSpeech] 🌍 MULTI-LANG ENABLED: Primary=${this.languageCode}, Alternatives=${altCodes.join(', ')}`);
+        console.log(`[GoogleSpeech] 🌍 MULTI-LANG ENABLED: Primary=${this.languageCode}, Alternatives=${altCodes.join(', ')} (max: ${effectiveMax})`);
       } else {
         console.log(`[GoogleSpeech] ⚠️ Multi-lang enabled but no valid alternative codes provided`);
       }
