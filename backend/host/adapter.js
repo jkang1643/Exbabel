@@ -1197,7 +1197,7 @@ export async function handleHostConnection(clientWs, sessionId) {
                       checkForExtendingPartialsAfterFinal(lastSentFinalText);
 
                       // Trigger TTS streaming for this committed segment
-                      triggerTtsStreaming(finalSeqId, lastSentFinalText, currentTargetLang);
+                      triggerTtsStreaming(finalSourceSeqId, lastSentFinalText, currentTargetLang);
                     } catch (error) {
                       console.error(`[HostMode] Final processing error:`, error);
                       // If it's a skip request error, use corrected text (or original if not set)

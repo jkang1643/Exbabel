@@ -198,7 +198,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           lastCommittedLength = state.committedLines.length;
 
           // Enqueue new lines for TTS (Unary mode only - streaming mode uses backend orchestrator)
-          if (!streamingTts && ttsControllerRef.current && ttsControllerRef.current.getState().state === 'PLAYING') {
+          if (!streamingTtsRef.current && ttsControllerRef.current && ttsControllerRef.current.getState().state === 'PLAYING') {
             newLines.forEach(line => {
               if (!line.text) return;
 
@@ -285,6 +285,12 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [availableVoices, setAvailableVoices] = useState([]);
   const [ttsDefaults, setTtsDefaults] = useState({});
   const [streamingTts, setStreamingTts] = useState(false);
+  const streamingTtsRef = useRef(streamingTts);
+
+  // Sync ref with state to prevent stale closures in event handlers
+  useEffect(() => {
+    streamingTtsRef.current = streamingTts;
+  }, [streamingTts]);
 
   // Stable session ID for streaming (must not change on re-render)
   const streamingSessionIdRef = useRef(`listener_${Date.now()}`);
@@ -1200,7 +1206,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 // ALSO GATED: Skip if streaming mode is enabled (backend orchestrator handles it)
                 try {
                   if (!USE_SHARED_ENGINE &&
-                    !streamingTts &&
+                    !streamingTtsRef.current &&
                     ttsControllerRef.current &&
                     ttsControllerRef.current.getState().state === 'PLAYING' &&
                     (isForMyLanguage || isTranscriptionMode) &&

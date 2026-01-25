@@ -205,16 +205,26 @@ class SessionOrchestrator {
      * @returns {string}
      */
     resolveVoiceId(voiceId) {
+        // Handle complex ID: provider:tier:engine:voiceId
+        // e.g. elevenlabs:elevenlabs_v3:-:pNInz6obpgDQGcFmaJgB
+        if (voiceId.includes(':')) {
+            const parts = voiceId.split(':');
+            const lastPart = parts[parts.length - 1];
+
+            // Check if extracted part looks like an ElevenLabs ID (20-22 chars)
+            if (/^[a-zA-Z0-9]{20,22}$/.test(lastPart)) {
+                return lastPart;
+            }
+        }
+
         // Known ElevenLabs ID format (20-22 chars, alphanumeric)
         // or explicitly prefixed with 'elevenlabs-'
-
         if (voiceId.startsWith('elevenlabs-')) {
             return voiceId.replace('elevenlabs-', '');
         }
 
         // Check if it looks like an ElevenLabs ID (simple heuristic)
         // valid IDs are usually ~20 chars, e.g. 21m00Tcm4TlvDq8ikWAM
-        // Google IDs are structured like en-US-Neural2-F
         const isLikelyElevenLabs = /^[a-zA-Z0-9]{20,22}$/.test(voiceId);
 
         if (isLikelyElevenLabs) {

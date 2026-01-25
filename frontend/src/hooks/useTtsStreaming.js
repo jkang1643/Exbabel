@@ -69,6 +69,7 @@ export function useTtsStreaming({
         console.log('[useTtsStreaming] Connecting to:', wsUrl);
 
         const ws = new WebSocket(wsUrl);
+        ws.binaryType = 'arraybuffer';
         wsRef.current = ws;
 
         ws.onopen = async () => {
@@ -182,7 +183,7 @@ export function useTtsStreaming({
             console.error('[useTtsStreaming] WebSocket error event');
             onErrorRef.current?.(err);
         };
-    }, [enabled, sessionId, getWebSocketUrl, isPlaying]);
+    }, [enabled, sessionId, getWebSocketUrl]);
 
     // Disconnect
     const disconnect = useCallback(() => {
