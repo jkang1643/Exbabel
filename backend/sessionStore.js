@@ -16,7 +16,7 @@ class SessionStore {
   createSession() {
     const sessionId = this.generateUUID();
     const sessionCode = this.generateSessionCode();
-    
+
     const sessionData = {
       sessionId,
       sessionCode,
@@ -27,12 +27,13 @@ class SessionStore {
       sourceLang: 'en',
       createdAt: Date.now(),
       lastActivity: Date.now(),
-      isActive: false
+      isActive: false,
+      voicePreferences: new Map() // Map<targetLang, voiceId> - Last Write Wins for shared channel
     };
-    
+
     this.sessions.set(sessionId, sessionData);
     console.log(`[SessionStore] Created session ${sessionCode} (${sessionId})`);
-    
+
     return { sessionId, sessionCode };
   }
 
@@ -63,12 +64,12 @@ class SessionStore {
     if (!session) {
       throw new Error('Session not found');
     }
-    
+
     session.hostSocket = hostSocket;
     session.hostGeminiSocket = geminiSocket;
     session.isActive = true;
     session.lastActivity = Date.now();
-    
+
     console.log(`[SessionStore] Host connected to session ${session.sessionCode}`);
   }
 
@@ -170,7 +171,7 @@ class SessionStore {
           session.languageGroups.delete(listener.targetLang);
         }
       }
-      
+
       session.listeners.delete(socketId);
       console.log(`[SessionStore] Listener removed from session ${session.sessionCode} - Remaining: ${session.listeners.size}`);
     }
@@ -197,7 +198,7 @@ class SessionStore {
   getSessionLanguages(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return [];
-    
+
     return Array.from(session.languageGroups.keys());
   }
 
@@ -239,15 +240,33 @@ class SessionStore {
     console.log(`[SessionStore] Broadcast to ${sentCount}/${listeners.length} listeners${targetLang ? ` (${targetLang})` : ''}`);
   }
 
-  /**
-   * Update session source language
-   */
   updateSourceLanguage(sessionId, sourceLang) {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.sourceLang = sourceLang;
       session.lastActivity = Date.now();
     }
+  }
+
+  /**
+   * Update voice preference for a session language
+   */
+  updateSessionVoice(sessionId, targetLang, voiceId) {
+    const session = this.sessions.get(sessionId);
+    if (session && targetLang && voiceId) {
+      session.voicePreferences.set(targetLang, voiceId);
+      session.lastActivity = Date.now();
+      console.log(`[SessionStore] Voice updated for session ${session.sessionCode} (${targetLang}): ${voiceId}`);
+    }
+  }
+
+  /**
+   * Get voice preference for a session language
+   */
+  getSessionVoice(sessionId, targetLang) {
+    const session = this.sessions.get(sessionId);
+    if (!session || !targetLang) return null;
+    return session.voicePreferences.get(targetLang);
   }
 
   /**
@@ -308,7 +327,7 @@ class SessionStore {
   cleanupInactiveSessions() {
     const MAX_INACTIVE_TIME = 60 * 60 * 1000; // 1 hour
     const now = Date.now();
-    
+
     for (const [sessionId, session] of this.sessions.entries()) {
       if (now - session.lastActivity > MAX_INACTIVE_TIME) {
         console.log(`[SessionStore] Cleaning up inactive session ${session.sessionCode}`);
@@ -321,7 +340,7 @@ class SessionStore {
    * Generate a UUID
    */
   generateUUID() {
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
       const r = Math.random() * 16 | 0;
       const v = c === 'x' ? r : (r & 0x3 | 0x8);
       return v.toString(16);

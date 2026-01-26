@@ -67,29 +67,8 @@ export class StreamingAudioPlayer {
             this.mediaSource.addEventListener('error', reject, { once: true });
         });
 
-        // Create SourceBuffer for MP3
-        const mimeType = 'audio/mpeg';
-        if (!MediaSource.isTypeSupported(mimeType)) {
-            const error = new Error(`MIME type ${mimeType} not supported`);
-            console.error('[StreamingPlayer]', error);
-            if (this.onError) this.onError(error);
-            throw error;
-        }
-
-        this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
-        this.sourceBuffer.mode = 'sequence';
-
-        // Handle buffer updates
-        this.sourceBuffer.addEventListener('updateend', () => {
-            this.isAppending = false;
-            this._processQueue();
-            this._updateBufferedMs();
-        });
-
-        this.sourceBuffer.addEventListener('error', (e) => {
-            console.error('[StreamingPlayer] SourceBuffer error:', e);
-            if (this.onError) this.onError(e);
-        });
+        // Create SourceBuffer on demand or use default
+        await this._initSourceBuffer(streamConfig.codec || 'mp3');
 
         // Handle playback events
         this.audioElement.addEventListener('waiting', () => {
@@ -100,6 +79,182 @@ export class StreamingAudioPlayer {
 
         this.isStarted = true;
         console.log('[StreamingPlayer] Started successfully');
+    }
+
+    /**
+     * Initialize SourceBuffer with correct MIME type
+     * @private
+     */
+    async _initSourceBuffer(codec) {
+        if (!this.mediaSource || this.mediaSource.readyState !== 'open') return;
+
+        let mimeType = 'audio/mpeg'; // default mp3
+        if (codec === 'opus' || codec === 'ogg_opus') {
+            // Robust detection of supported Opus container
+            const opusTypes = [
+                'audio/webm; codecs="opus"',
+                'audio/webm; codecs=opus',
+                'audio/ogg; codecs="opus"',
+                'audio/ogg; codecs=opus',
+                'audio/mp4; codecs="opus"' // Safari might prefer this
+            ];
+
+            const supported = opusTypes.find(t => MediaSource.isTypeSupported(t));
+            if (supported) {
+                mimeType = supported;
+                console.log(`[StreamingPlayer] Selected supported Opus format: ${mimeType}`);
+            } else {
+                console.warn('[StreamingPlayer] No supported Opus format found, defaulting to audio/ogg');
+                mimeType = 'audio/ogg; codecs="opus"';
+            }
+        }
+
+        // Check if current buffer matches and needs switching
+        if (this.sourceBuffer && this.currentMimeType !== mimeType) {
+            console.log(`[StreamingPlayer] Switching codec from ${this.currentMimeType} to ${mimeType}`);
+
+            // Clear queue to prevent appending wrong format data to new buffer
+            this.queue = [];
+            this.isAppending = false;
+
+            const oldBuffer = this.sourceBuffer;
+            this.sourceBuffer = null; // Prevent use during removal
+
+            try {
+                // Abort any pending operations
+                if (oldBuffer.updating) {
+                    oldBuffer.abort();
+                }
+                this.mediaSource.removeSourceBuffer(oldBuffer);
+                console.log('[StreamingPlayer] Removed old SourceBuffer');
+            } catch (e) {
+                console.warn('[StreamingPlayer] Error removing source buffer:', e);
+            }
+        }
+
+        if (!this.sourceBuffer) {
+            // Try to add SourceBuffer
+            console.log(`[StreamingPlayer] Creating SourceBuffer for ${mimeType}`);
+            try {
+                this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
+            } catch (e) {
+                console.error(`[StreamingPlayer] Failed to add SourceBuffer for ${mimeType}:`, e);
+
+                // Retry logic for QuotaExceededError or Limit Error
+                if (e.name === 'QuotaExceededError' || e.message.includes('limit')) {
+                    console.log('[StreamingPlayer] Quota exceeded, performing full MediaSource reset...');
+                    try {
+                        await this._resetMediaSource();
+                        this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
+                        console.log('[StreamingPlayer] Reset and retry successful');
+                    } catch (retryErr) {
+                        console.error('[StreamingPlayer] Reset retry failed:', retryErr);
+                        if (this.onError) this.onError(retryErr);
+                        return;
+                    }
+                } else {
+                    if (this.onError) this.onError(e);
+                    return;
+                }
+            }
+
+            this.sourceBuffer.mode = 'sequence';
+            this._setupSourceBufferListeners();
+        }
+    }
+
+    /**
+     * Hard reset of MediaSource pipeline to recover from QuotaExceededError
+     * @private
+     */
+    async _resetMediaSource() {
+        console.log('[StreamingPlayer] Performing hard reset of MediaSource pipeline...');
+        if (this.mediaSource) {
+            try {
+                if (this.mediaSource.readyState === 'open') {
+                    this.mediaSource.endOfStream();
+                }
+            } catch (ignore) { }
+            // Remove old listeners to prevent leaks
+            this.mediaSource = null;
+        }
+
+        this.mediaSource = new MediaSource();
+        // Revoke old object URL if possible? Browser handles it usually.
+        this.audioElement.src = URL.createObjectURL(this.mediaSource);
+
+        await new Promise((resolve, reject) => {
+            const onOpen = () => {
+                this.mediaSource.removeEventListener('error', onError);
+                resolve();
+            };
+            const onError = (e) => {
+                this.mediaSource.removeEventListener('sourceopen', onOpen);
+                reject(e);
+            };
+            this.mediaSource.addEventListener('sourceopen', onOpen, { once: true });
+            this.mediaSource.addEventListener('error', onError, { once: true });
+
+            // Safety timeout
+            setTimeout(() => reject(new Error('MediaSource open timeout')), 5000);
+        });
+        console.log('[StreamingPlayer] MediaSource reset complete');
+    }
+
+    /**
+     * Attach listeners to the active SourceBuffer
+     * @private
+     */
+    _setupSourceBufferListeners() {
+        if (!this.sourceBuffer) return;
+
+        this.sourceBuffer.addEventListener('updateend', () => {
+            this.isAppending = false;
+            // Try to start playback after first chunk
+            this._checkPlaybackStart();
+            this._processQueue();
+            this._updateBufferedMs();
+        });
+
+        this.sourceBuffer.addEventListener('error', (e) => {
+            console.error('[StreamingPlayer] SourceBuffer error:', e);
+            if (this.onError) this.onError(e);
+        });
+    }
+
+
+
+    /**
+     * Helper to start playback
+     * @private
+     */
+    _checkPlaybackStart() {
+        if (this.audioElement && this.audioElement.paused && this.sourceBuffer && this.sourceBuffer.buffered.length > 0) {
+            const bufferedMs = this.getBufferedMs();
+            // Wait for jitter buffer before starting (default 300ms)
+            if (bufferedMs >= (this.jitterBufferMs || 300)) {
+                console.log(`[StreamingPlayer] Buffering complete (${bufferedMs.toFixed(0)}ms), starting playback...`);
+                this.audioElement.play()
+                    .then(() => {
+                        console.log('[StreamingPlayer] Playback started successfully');
+                    })
+                    .catch(err => {
+                        console.error('[StreamingPlayer] Failed to start playback:', err);
+                    });
+            } else {
+                console.log(`[StreamingPlayer] Buffering... ${bufferedMs.toFixed(0)}ms / ${this.jitterBufferMs || 300}ms`);
+            }
+        }
+    }
+
+    /**
+     * Handle start of new segment/stream
+     * @param {Object} message - audio.start message with codec
+     */
+    handleStartMessage(message) {
+        if (message.codec) {
+            this._initSourceBuffer(message.codec);
+        }
     }
 
     /**
@@ -115,6 +270,14 @@ export class StreamingAudioPlayer {
 
         // Track current segment
         this.currentSegmentId = meta.segmentId;
+
+        console.log(`[StreamingPlayer] Enqueued chunk ${meta.chunkIndex} for segment ${meta.segmentId}: ${audioBytes.length} bytes, isLast=${meta.isLast}`);
+
+        // Skip empty chunks (end-of-stream markers)
+        if (audioBytes.length === 0) {
+            console.log('[StreamingPlayer] Skipping empty chunk (end marker)');
+            return;
+        }
 
         // Add to queue
         this.queue.push({ meta, audioBytes });
@@ -134,6 +297,11 @@ export class StreamingAudioPlayer {
             return;
         }
 
+        // Ensure MediaSource is open
+        if (!this.mediaSource || this.mediaSource.readyState !== 'open') {
+            return;
+        }
+
         // Check if source buffer is ready
         if (this.sourceBuffer.updating) {
             return;
@@ -141,9 +309,12 @@ export class StreamingAudioPlayer {
 
         const { meta, audioBytes } = this.queue.shift();
 
+        console.log(`[StreamingPlayer] Appending chunk ${meta.chunkIndex} to buffer: ${audioBytes.length} bytes`);
+
         try {
             this.isAppending = true;
             this.sourceBuffer.appendBuffer(audioBytes);
+            console.log(`[StreamingPlayer] Successfully appended chunk ${meta.chunkIndex}`);
         } catch (e) {
             console.error('[StreamingPlayer] Error appending buffer:', e);
             this.isAppending = false;
@@ -165,8 +336,31 @@ export class StreamingAudioPlayer {
             const buffered = this.sourceBuffer.buffered;
             if (buffered.length > 0) {
                 const currentTime = this.audioElement.currentTime;
-                const bufferedEnd = buffered.end(buffered.length - 1);
-                this.bufferedMs = Math.max(0, (bufferedEnd - currentTime) * 1000);
+
+                // Find continuous range containing current time
+                let rangeEnd = currentTime;
+                let foundRange = false;
+
+                for (let i = 0; i < buffered.length; i++) {
+                    const start = buffered.start(i);
+                    const end = buffered.end(i);
+
+                    // Allow small tolerance (0.1s) for gaps
+                    if (currentTime >= start - 0.1 && currentTime <= end + 0.1) {
+                        rangeEnd = end;
+                        foundRange = true;
+                    }
+                }
+
+                if (foundRange) {
+                    this.bufferedMs = Math.max(0, (rangeEnd - currentTime) * 1000);
+                } else {
+                    this.bufferedMs = 0;
+                }
+
+                if (buffered.length > 1) {
+                    // console.warn(`[StreamingPlayer] Buffer fragmented! ${buffered.length} ranges`);
+                }
             } else {
                 this.bufferedMs = 0;
             }

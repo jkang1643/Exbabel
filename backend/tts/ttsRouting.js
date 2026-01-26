@@ -937,21 +937,25 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
     // ElevenLabs voices: Strip prefix and pass through voice ID
     // Support all ElevenLabs tiers: elevenlabs, elevenlabs_v3, elevenlabs_turbo, elevenlabs_flash
     if (tier === 'elevenlabs' || tier === 'elevenlabs_v3' || tier === 'elevenlabs_turbo' || tier === 'elevenlabs_flash') {
-      // ElevenLabs voices are prefixed with 'elevenlabs-' in the frontend
-      // Strip the prefix to get the raw voice ID
-      if (requestedVoiceName.startsWith('elevenlabs-')) {
-        let voiceId = requestedVoiceName.substring(11);
+      // ElevenLabs voices are prefixed with 'elevenlabs-' in the frontend OR catalog URNs
+      // Strip the prefix to get the raw voice ID (20-22 chars)
+      let voiceId = requestedVoiceName;
 
-        // Strip backend suffix if present (e.g. __elevenlabs_v3) which is used for frontend uniqueness
-        if (voiceId.includes('__')) {
-          voiceId = voiceId.split('__')[0];
-        }
-
-
-        return voiceId;
+      // Handle URN format: elevenlabs:elevenlabs_v3:-:VOICEID
+      if (voiceId.includes(':')) {
+        const parts = voiceId.split(':');
+        voiceId = parts[parts.length - 1]; // Take the last part (the actual ID)
+      } else if (voiceId.startsWith('elevenlabs-')) {
+        // Legacy frontend behavior
+        voiceId = voiceId.substring(11);
       }
-      // Already a raw voice ID
-      return requestedVoiceName;
+
+      // Strip backend suffix if present (e.g. __elevenlabs_v3) which is used for frontend uniqueness
+      if (voiceId.includes('__')) {
+        voiceId = voiceId.split('__')[0];
+      }
+
+      return voiceId;
     }
 
     if (tier === 'gemini') {
@@ -966,37 +970,68 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
         'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
       ];
 
-      // Strip 'gemini-' prefix if present to match frontend voice naming convention
-      // Frontend sends voices as 'gemini-Kore', 'gemini-Charon', etc.
-      // but Gemini API expects bare names like 'Kore', 'Charon'
-      const normalizedVoiceName = requestedVoiceName.startsWith('gemini-')
-        ? requestedVoiceName.substring(7)  // Remove 'gemini-' prefix (7 characters)
-        : requestedVoiceName;
+      // Handle catalog URNs like gemini:gemini_tts:-:Achernar
+      let normalizedVoiceName = requestedVoiceName;
+      if (normalizedVoiceName.includes(':')) {
+        const parts = normalizedVoiceName.split(':');
+        normalizedVoiceName = parts[parts.length - 1];
+      }
+
+      // Strip 'gemini-' prefix if present (legacy frontend convention)
+      if (normalizedVoiceName.startsWith('gemini-')) {
+        normalizedVoiceName = normalizedVoiceName.substring(7);
+      }
 
       if (GEMINI_VOICES.includes(normalizedVoiceName)) {
         console.log(`[TTS Routing] Gemini voice resolved: ${requestedVoiceName} -> ${normalizedVoiceName}`);
         return normalizedVoiceName;  // Return bare name for Gemini API
       }
     } else {
-      // For other tiers, check if it matches any of the expected patterns for that tier
+      // For other tiers (chirp3_hd, neural2, standard), handle voice name extraction
+
+      // List of Gemini/Chirp3 persona names (shared between Gemini and Chirp3 tiers)
+      const PERSONA_NAMES = [
+        'Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
+        'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam',
+        'Autonoe', 'Callirrhoe', 'Despina', 'Enceladus', 'Erinome',
+        'Gacrux', 'Iapetus', 'Laomedeia', 'Orus', 'Pulcherrima',
+        'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar', 'Sulafat',
+        'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
+      ];
+
       const TIER_NAME_TAGS = {
         'chirp3_hd': ['Chirp3', 'Chirp_3', 'Chirp-3'],
         'neural2': ['Neural2', 'Wavenet', 'Studio'],
         'standard': ['Standard', 'Polyglot', 'Chirp-HD', 'Chirp']
       };
 
+      // Extract voice name from URN if present (e.g., google_cloud_tts:chirp3_hd:es-ES:Leda -> Leda)
+      let cleanVoiceName = requestedVoiceName;
+      if (cleanVoiceName.includes(':')) {
+        const parts = cleanVoiceName.split(':');
+        cleanVoiceName = parts[parts.length - 1];
+      }
+
+      // SPECIAL CASE: Chirp3 with persona names
+      // If tier is chirp3_hd and the voice name is a known persona, construct the full Chirp3 voice name
+      if (tier === 'chirp3_hd' && PERSONA_NAMES.includes(cleanVoiceName)) {
+        const fullChirp3Name = `${normalizedCode}-Chirp3-HD-${cleanVoiceName}`;
+        console.log(`[TTS Routing] Chirp3 persona resolved: ${requestedVoiceName} -> ${fullChirp3Name}`);
+        return fullChirp3Name;
+      }
+
+      // GENERAL CASE: Check if the voice name already contains tier-specific tags
       const allowedTags = TIER_NAME_TAGS[tier] || [];
-      const hasTierMatch = allowedTags.some(tag => requestedVoiceName.includes(tag));
+      const hasTierMatch = allowedTags.some(tag => cleanVoiceName.includes(tag));
 
       // Language match: check for full locale or just the language prefix
       const langPrefix = normalizedCode.split('-')[0];
-      const hasLangMatch = requestedVoiceName.includes(normalizedCode) ||
-        (requestedVoiceName.startsWith(langPrefix + '-') && !requestedVoiceName.includes('Polyglot'));
-      // Polyglot voices are cross-language, so we allow them handled specifically if needed
-      // but usually they have the locale they were selected for in the name too.
+      const hasLangMatch = cleanVoiceName.includes(normalizedCode) ||
+        (cleanVoiceName.startsWith(langPrefix + '-') && !cleanVoiceName.includes('Polyglot'));
 
       if (hasTierMatch && hasLangMatch) {
-        return requestedVoiceName;
+        console.log(`[TTS Routing] Voice name validated: ${cleanVoiceName}`);
+        return cleanVoiceName;
       }
     }
   }
@@ -1053,8 +1088,42 @@ export async function resolveTtsRoute({
 }) {
   // Normalize inputs
   const normalizedLanguageCode = _normalizeLanguageCode(languageCode);
-  let resolvedTier = _resolveTier(requestedTier, normalizedLanguageCode, orgConfig);
+
+  console.log(`[TTS Routing] 🔍 resolveTtsRoute called:`);
+  console.log(`[TTS Routing]   requestedTier: ${requestedTier}`);
+  console.log(`[TTS Routing]   requestedVoice: ${requestedVoice}`);
+  console.log(`[TTS Routing]   languageCode: ${languageCode} -> ${normalizedLanguageCode}`);
+
+  // INFER TIER FROM VOICE if not explicitly specified
+  // If we have a requested voice but NO explicit tier preference, we try to detect the tier from the voice name.
+  // CRITICAL: Only infer if requestedTier is still the default ('neural2'), meaning user didn't specify a tier.
+  let effectiveTier = requestedTier;
+
+  if (requestedVoice && requestedTier === 'neural2') {
+    console.log(`[TTS Routing]   ⚠️ Tier is default 'neural2', attempting to infer from voice name...`);
+    // Only infer tier if user didn't explicitly request one
+    if (requestedVoice.includes('elevenlabs') || /^[a-zA-Z0-9]{20,22}$/.test(requestedVoice)) {
+      effectiveTier = 'elevenlabs';
+      console.log(`[TTS Routing]   ✅ Inferred tier: elevenlabs`);
+    } else if (requestedVoice.includes('Neural2')) {
+      effectiveTier = 'neural2';
+      console.log(`[TTS Routing]   ✅ Inferred tier: neural2`);
+    } else if (requestedVoice.includes('Chirp3') || requestedVoice.includes('Chirp-3')) {
+      effectiveTier = 'chirp3_hd';
+      console.log(`[TTS Routing]   ✅ Inferred tier: chirp3_hd`);
+    } else if (['Kore', 'Fenrir', 'Puck', 'Charon'].some(n => requestedVoice.includes(n))) {
+      effectiveTier = 'gemini';
+      console.log(`[TTS Routing]   ✅ Inferred tier: gemini (matched Gemini persona)`);
+    }
+  } else {
+    console.log(`[TTS Routing]   ✅ Using explicit tier: ${effectiveTier}`);
+  }
+
+  let resolvedTier = _resolveTier(effectiveTier, normalizedLanguageCode, orgConfig);
+  console.log(`[TTS Routing]   📍 Resolved tier: ${resolvedTier}`);
+
   let resolvedVoiceName = await _resolveVoice(resolvedTier, normalizedLanguageCode, requestedVoice);
+  console.log(`[TTS Routing]   📍 Resolved voice: ${resolvedVoiceName}`);
 
   // Get tier configuration
   const tierConfig = TIER_CONFIG[resolvedTier];

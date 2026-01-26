@@ -1,0 +1,280 @@
+# Cursor Prompt: WebSocket Audio Streaming (Real-time TTS) — PR Plan + Implementation Tasks
+
+You are working in the Exbabel codebase. We currently support unary TTS synthesis (request → full audio → play). We also have an existing transcript pipeline that emits interim partials and committed/final segments, ordered by `seqId`, used in both Solo mode and Host mode (fanout to listeners).
+
+## Objective
+Implement **real WebSocket audio streaming** so that as the transcript/translation pipeline commits speakable text, the backend begins **streaming audio bytes over WebSockets** to clients, and the client plays audio immediately with a jitter buffer. Preserve the old unary route and gate the new streaming route behind feature flags.
+
+We want this in incremental PRs (PR0..PR7). Each PR must be shippable and not break the existing unary route.
+
+---
+
+# Non-Negotiables / Constraints
+1) **Preserve unary route** (existing behavior unchanged unless streaming is enabled).
+2) Streaming is **WebSocket-based** transport for audio frames + control messages.
+3) Must support **Solo mode** and **Host mode** (fanout semantics).
+4) Ordering/identity must be explicit: use `(sessionId, streamId, segmentId, version, seqId)` to correlate text→audio.
+5) Must handle reconnection + cancellation cleanly.
+6) Avoid choppy speech: implement **segmentization** rules (punctuation/min chars/max wait) and client jitter buffer.
+7) Add logs/metrics for latency, underruns, buffer depth, provider latency, bytes sent.
+
+---
+
+# Deliverable: Break into PRs + implement code scaffolding
+Implement the following PRs. For each PR, produce:
+- file list / modules to create
+- message schemas
+- key functions/classes
+- minimal tests (unit/integration)
+- acceptance criteria checklist
+
+---
+
+## PR0 — Feature Flags + Config + Observability
+### Goal
+Add feature flags and config so streaming can be enabled per session/org without touching unary.
+
+### Implement
+- Feature flag: `TTS_STREAMING_ENABLED` (env + server config)
+- Session config field: `ttsMode: "unary" | "streaming"`
+- Client capability handshake: canPlayPCM/canPlayOpus/canPlayMp3
+- Logging fields: `sessionId, streamId, segmentId, version, seqId, provider, codec, latency_ms, bytes_sent, audio_ms`
+- Add a single place where TTS mode is selected.
+
+### Acceptance
+- Unary unchanged
+- Streaming path can be toggled off/on without redeploying (if you already have org/session config)
+
+---
+
+## PR0.5 — Commit Event Emitter (Synthesis Hook Point)
+Goal: Guarantee a single server-side stream of committed speakable segments (post-translation) exists for both Solo + Host, so the orchestrator can subscribe.
+
+Implement
+
+Create/identify translationCommitEmitter (or reuse existing broadcaster) that emits:
+
+{ sessionId, seqId, lang, voiceId?, text, isCommitted: true, isFinal?: boolean, timestamp }
+
+Ensure it fires:
+
+Solo mode: when solo pipeline commits translation
+
+Host mode: when host pipeline commits translation before fanout
+
+Ensure ordering by seqId and append-only semantics (or document if updates occur)
+
+Acceptance
+
+A unit/integration test can fire a fake commit and observe the emitter.
+
+No TTS changes yet.
+
+Why: your repo docs say “Auto-synthesis integration / hook synthesis into translation loop” is still a remaining step. 
+
+## PR1 — WebSocket Audio Transport (Server + Client plumbing)
+### Goal
+Create a dedicated WebSocket channel to carry audio and control messages.
+
+### Message Schema (JSON control frames)
+All control messages are JSON:
+- `audio.hello` (client → server): { sessionId, clientId, capabilities, desiredCodec, desiredSampleRate }
+- `audio.ready` (server → client): { streamId, codec, sampleRate, channels }
+- `audio.start` (server → client): { streamId, segmentId, version, seqIdStart, seqIdEnd, lang, voiceId, textPreview }
+- `audio.end` (server → client): { streamId, segmentId, version }
+- `audio.cancel` (server → client): { streamId, reason, segmentId? }
+- `audio.error` (server → client): { streamId, errorCode, message }
+
+### Audio Frames (binary)
+Audio chunks should be sent as **binary WS frames** with a small header:
+- Prefer: first N bytes = a fixed header (or send a JSON “audio.chunk.meta” followed by binary)
+- Minimal approach: send JSON meta for chunk then binary data immediately after.
+
+Chunk metadata must include:
+{ streamId, segmentId, version, chunkIndex, isLastChunk }
+
+### Implement
+- New WS endpoint/namespace: `/ws/tts` (or existing WS server with a new channel)
+- Client connect + handshake
+- A simple server “test stream” that emits synthetic audio (sine wave PCM) so we can test end-to-end without providers yet.
+
+### Acceptance
+- Client can connect and play server-generated audio stream reliably.
+
+“Implement audio transport either as a new /ws/tts endpoint OR as a new tts channel in the existing WebSocket server (preferred if your repo already has WS infrastructure). Do not duplicate auth/session lookup; reuse existing middleware.”
+
+## PR2 — Client Streaming Audio Player (Queue + Jitter Buffer)
+### Goal
+Play streaming audio smoothly with buffering and backpressure.
+
+### Implement
+Create `StreamingAudioPlayer`:
+- Queue keyed by `{streamId, segmentId, version}`
+- Jitter buffer: target buffer ms (configurable 200–400ms)
+- Playback via Web Audio API:
+  - If codec = PCM: use AudioWorklet (preferred) or ScriptProcessorNode fallback
+  - If codec = MP3/Opus: consider MediaSource (only if already supported)
+- Backpressure: periodically send `audio.ack`:
+  - { streamId, bufferedMs, underruns, playbackPositionMs }
+
+### Acceptance
+- Smooth playback with simulated jitter
+- No runaway memory (buffer caps + dropping policy)
+
+---
+
+## PR3 — Segmentization Rules (Text → SpeakSegments)
+### Goal
+Convert transcript events into “speakable segments” that drive TTS generation.
+
+### Implement
+Server-side `SegmentBuilder`:
+Inputs:
+- transcript events: partials + commits + updates (ordered by `seqId`)
+Outputs:
+- `SpeakSegment` objects:
+  - { segmentId, version, seqIdStart, seqIdEnd, text, lang, voiceId, isFinalish, createdAt }
+
+Segment rules (configurable):
+- `MIN_CHARS` (e.g., 25)
+- `PUNCTUATION_TRIGGER` on .?!:; newline
+- `MAX_WAIT_MS` (e.g., 1200ms since last emit)
+- `SILENCE_COMMIT` / force-final integration
+- Handling “update same seqId”:
+  - Increment `version` for same `segmentId`
+  - Policy: (a) ignore updates if already played past threshold OR (b) cancel+restart if within early window
+
+### Acceptance
+- Segmentization produces natural chunks, not word-by-word choppiness.
+- Deterministic behavior on updates.
+
+---
+
+## PR4 — Provider Streaming Adapter Interface (Google + ElevenLabs)
+### Goal
+Abstract streaming providers behind one interface.
+
+### Implement
+Create `TtsStreamingProvider` interface:
+- `startStream({ voiceId, lang, codec, sampleRate, ... }) -> handle`
+- `synthesize(handle, textOrSsml) -> AsyncIterable<Uint8Array>` OR provider-specific streaming method
+- `close(handle)`
+- `cancel(handle)`
+
+Implement adapters:
+- `ElevenLabsStreamingProvider`
+- `GoogleTtsStreamingProvider`
+If any provider doesn’t support true incremental streaming, implement “pseudo-streaming” by chunking text and sending chunks as they complete, but keep the interface the same.
+
+### Acceptance
+- You can stream “Hello world” audio chunks from provider through the server to the client.
+
+---
+
+## PR5 — Server Orchestrator (Transcript → SegmentBuilder → Provider → WS Fanout)
+### Goal
+Tie it together for solo + host mode.
+
+### Implement
+`TtsStreamingOrchestrator`:
+- Subscribes to transcript pipeline events
+- Uses SegmentBuilder to emit SpeakSegments
+- For each SpeakSegment:
+  - send `audio.start`
+  - stream provider audio chunks → WS binary frames
+  - send `audio.end`
+- Cancellation rules:
+  - on voice/language change
+  - on stop button
+  - on session end
+  - on forced stream restart
+- Fanout:
+  - If all listeners share the same voice/lang: generate once and broadcast
+  - If different: generate per listener (future optimization)
+
+Backpressure:
+- If client reports bufferedMs too high, throttle send or pause chunk reading (best-effort)
+
+### Acceptance
+- Solo: live streaming works
+- Host: multiple listeners receive same audio stream correctly ordered
+
+### Provider-specific requirements (MUST IMPLEMENT)
+
+#### ElevenLabs
+- Implement true audio streaming by consuming the HTTP response body as a stream (chunked transfer).
+- Use AbortController for cancellation.
+- Support output format PCM16 (preferred for lowest latency) if available; otherwise MP3 with MediaSource client path.
+- Forward audio chunks to client as WS binary frames with chunk metadata.
+
+#### Google TTS
+- Determine whether our chosen Google TTS API supports true streaming responses.
+  - If YES: implement true streaming (read response stream and forward chunks).
+  - If NO: implement pseudo-streaming by segmentizing text and making multiple unary requests, then streaming results as sequential chunks over WS while preserving segmentId/version ordering.
+- Ensure consistent sample rate/codec across providers per session.
+
+---
+
+## PR6 — Reconnect + Recovery + Late Join
+### Goal
+Make it robust for real live events.
+
+### Implement
+- Reconnect handshake includes last known:
+  - { streamId, lastSegmentId, lastVersion, lastChunkIndex }
+- Add optional short-lived audio cache per segment (10–30s) to support late joiners / reconnect
+- Metrics:
+  - underrun count
+  - avg provider first-byte latency
+  - avg segment latency (commit → first audio)
+  - bytes/sec
+
+### Acceptance
+- Refresh page and rejoin without chaos
+- Late join receives current/next segments reliably
+
+---
+
+## PR7 — UX Controls + Debug HUD
+### Goal
+Make it operable + debuggable.
+
+### Implement
+- UI toggle for streaming mode (dev/admin)
+- Debug HUD:
+  - buffer ms
+  - current segmentId/version/seqId
+  - codec/provider
+  - RTT + underruns
+
+### Acceptance
+- You can demo confidently and diagnose issues quickly.
+
+---
+
+# Implementation Guidance
+## Preferred codec for first beta
+Start with **PCM** for simplest streaming and lowest latency; use AudioWorklet on client.
+Later PR can add Opus.
+
+## Identity Model
+- `seqId` = ordering from transcript pipeline
+- `segmentId` = stable per speakable segment
+- `version` = increments when text updates for same segment
+- `streamId` = per continuous playback session (reset on stop/restart)
+
+## Tests
+- Unit tests: SegmentBuilder rules
+- Integration: WS handshake + synthetic audio streaming
+- Integration: Orchestrator streams a fixed segment and client plays it
+- Load: multiple listeners host fanout
+
+---
+
+# Output Requirements
+1) Create/update the necessary files and scaffolding.
+2) Implement PR0 and PR1 fully (feature flag + WS + synthetic audio stream), with tests.
+3) Stub PR2–PR7 modules with TODOs and clear interfaces so later PRs are straightforward.
+4) Add clear README dev notes: how to run, how to test, how to toggle streaming.
+
+Proceed now.

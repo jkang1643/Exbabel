@@ -628,17 +628,10 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           clientWs.ttsState.mode = message.mode || 'unary';
           clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (TTS_PLAYING_LEASE_SECONDS * 1000);
 
-          // VOICE ROUTING: Update session store with preferred voice
-          if (message.voiceId) {
-            sessionStore.updateSessionVoice(sessionId, message.languageCode || targetLang, message.voiceId);
-            clientWs.ttsState.voiceId = message.voiceId;
-          }
-
           // Store full config for lease validation
           clientWs.ttsState.ttsConfig = {
             languageCode: message.languageCode || targetLang,
             voiceName: message.voiceName,
-            voiceId: message.voiceId, // Track voiceId
             tier: message.tier || 'gemini',
             mode: message.mode || 'unary',
             ssmlOptions: message.ssmlOptions,

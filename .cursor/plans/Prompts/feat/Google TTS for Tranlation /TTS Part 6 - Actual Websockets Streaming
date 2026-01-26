@@ -1,0 +1,221 @@
+```md
+# Cursor Prompt: Implement REAL WebSocket Audio Streaming MVP (ElevenLabs-first) — PR0/PR1/PR2/PR4/PR5
+
+You are implementing the first working end-to-end MVP of **real-time audio streaming over WebSockets** in the Exbabel codebase.
+
+We already have a transcript pipeline that emits ordered events (`seqId`) and “committed” segments suitable for speaking in both Solo and Host modes. We currently have a unary TTS route (request → full audio → play). We must **preserve unary** and add a new **streaming mode** behind a feature flag.
+
+## Goal (MVP)
+When streaming mode is enabled:
+1) Server opens a **/ws/tts** WebSocket for the session.
+2) Server takes “speakable committed segments” and sends them to ElevenLabs streaming TTS.
+3) Server forwards **audio chunks** from ElevenLabs to the client over WebSocket (binary frames).
+4) Client plays audio immediately using a **jitter buffer** (PCM preferred) and a streaming player.
+5) Works in **Solo mode** and **Host mode** (fanout). For MVP, assume all listeners share same voice/language and can receive the same audio stream.
+
+## Non-negotiables
+- Keep the existing unary TTS path untouched.
+- Streaming path must be toggled via `TTS_STREAMING_ENABLED` and/or `ttsMode: "streaming"`.
+- Implement cancellation/stop so audio doesn’t continue after toggling off / session ends.
+- Implement basic logging for time-to-first-audio and underruns.
+
+---
+
+# Implementation Scope (MVP ONLY)
+Implement the following in code now:
+- PR0: feature flag/config selection
+- PR1: WebSocket audio transport with control messages + binary chunks
+- PR2: Client streaming audio player with jitter buffer
+- PR4: ElevenLabs streaming provider adapter (TRUE streaming; do not fake it)
+- PR5: Orchestrator wiring transcript commits → provider stream → WS fanout
+
+Defer PR3 segmentization tuning, PR6 reconnect cache, PR7 HUD to later. For now, segmentize simply: **speak only committed/final segments** (not interim partials).
+
+---
+
+# 1) Define Protocol: WS Control Messages + Binary Audio Frames
+
+## Control messages (JSON)
+All JSON messages have `{ type: string, ...payload }`.
+
+Client → Server:
+- `audio.hello`: { sessionId, clientId, capabilities: { pcm: boolean, mp3: boolean }, desiredCodec: "pcm"|"mp3", desiredSampleRate: 16000|24000|44100 }
+- `audio.ack`: { streamId, bufferedMs, underruns }
+
+Server → Client:
+- `audio.ready`: { streamId, codec: "pcm"|"mp3", sampleRate, channels: 1 }
+- `audio.start`: { streamId, segmentId, version, seqId, lang, voiceId, textPreview }
+- `audio.end`: { streamId, segmentId, version }
+- `audio.cancel`: { streamId, reason, segmentId? }
+- `audio.error`: { streamId, errorCode, message }
+
+## Binary audio chunk frames
+Send as WS binary frames where the first bytes are a small header:
+- 4 bytes: magic "EXA1"
+- 1 byte: headerLen (N)
+- N bytes: UTF-8 JSON meta: { streamId, segmentId, version, chunkIndex, isLast }
+- remaining bytes: raw audio chunk
+
+Implement helpers:
+- `encodeAudioFrame(meta, bytes) -> Uint8Array`
+- `decodeAudioFrame(frame) -> { meta, bytes }`
+
+---
+
+# 2) Server: WebSocket Endpoint + Session Registry
+
+## Add /ws/tts endpoint
+- Accept connections
+- Handle `audio.hello`
+- Store connection in a per-session registry: `ttsWsRegistry[sessionId] = Set<wsClients>`
+- On connect, respond with `audio.ready` including chosen codec/sampleRate.
+
+## Broadcast helpers
+- `broadcastControl(sessionId, msg)`
+- `broadcastAudioFrame(sessionId, frameBytes)`
+
+MVP: broadcast same stream to all connected listeners in session.
+
+Add logging:
+- log connect/disconnect
+- log `time_to_first_audio_ms` per segment
+- log bytes sent per segment
+
+---
+
+# 3) Client: Streaming Player (PCM-first)
+Implement `StreamingAudioPlayer` that can play streamed PCM chunks smoothly.
+
+## Requirements
+- Supports codec "pcm" at 16kHz mono PCM16 little-endian (preferred).
+- Uses Web Audio API:
+  - Use AudioWorklet if available; fallback to ScriptProcessorNode if necessary (ok for MVP).
+- Maintains:
+  - queue of PCM chunks
+  - jitter buffer target (default 250ms)
+  - `bufferedMs` calculation
+  - underrun counter
+- Sends `audio.ack` every 500ms with bufferedMs and underruns.
+
+## Implementation Guidance
+- If using ScriptProcessorNode (MVP ok):
+  - convert PCM16 bytes → Float32 samples
+  - feed into processor callback from a ring buffer
+- Provide methods:
+  - `start(streamConfig)`
+  - `enqueue(meta, bytes)`
+  - `stop(reason)`
+  - `getBufferedMs()`
+
+Wire this into your UI layer so that when streaming mode is enabled and WS is connected, audio plays.
+
+---
+
+# 4) ElevenLabs Streaming Provider Adapter (TRUE streaming)
+Implement `ElevenLabsStreamingProvider` that returns an async iterator of audio chunks.
+
+## Requirements
+- Use HTTP streaming response body (chunked transfer). Do NOT wait for full body.
+- Support AbortController cancellation.
+- Support output format:
+  - Prefer PCM16 if supported by ElevenLabs in your current plan/models.
+  - If PCM streaming not available, use MP3 streaming and update client to handle MP3 via MediaSource (only if needed).
+- Inputs:
+  - `voiceId`, `modelId`, `text`, `apiKey`, `outputFormat`, `latencyOptimization` (if applicable)
+- Output:
+  - `AsyncIterable<Uint8Array>` audio chunks
+  - Provide `timeToFirstByteMs`
+
+## Notes
+- Read ElevenLabs streaming response as a web stream (node fetch or undici).
+- Implement chunk iteration with backpressure: yield as chunks arrive.
+
+Provide interface:
+- `streamTts({ text, voiceId, lang, codec, sampleRate }) -> { chunks: AsyncIterable<Uint8Array>, cancel: () => void }`
+
+“MVP uses ElevenLabs HTTP /stream endpoint (response body streaming). Future PR can switch to ElevenLabs WS stream-input for true incremental text deltas.”
+
+# 5) Orchestrator: Transcript Commits → ElevenLabs → WS
+Implement `TtsStreamingOrchestrator`:
+
+## Responsibilities
+- Subscribes to your existing transcript pipeline for committed/final segments.
+- For MVP: only trigger on committed/final segments (no interim partials).
+- For each segment:
+  - define:
+    - `segmentId` (stable unique id; can be `${sessionId}:${seqId}`)
+    - `version = 1`
+    - `streamId` (per session playback stream; regenerate when stop/restart)
+  - send `audio.start`
+  - call ElevenLabs streaming adapter and forward chunks:
+    - first chunk → record time-to-first-audio
+    - each chunk → send binary frame via WS to all clients in session
+  - send `audio.end`
+
+## Cancellation rules (MVP)
+- If session ends or client requests stop:
+  - abort provider stream
+  - broadcast `audio.cancel`
+- If a new segment arrives while previous is still streaming:
+  - For MVP, allow sequential playback: queue segments server-side and stream them one-by-one.
+
+Implement a simple server-side queue:
+- `segmentQueue` per session
+- `isStreaming` flag
+- `enqueueSegment(segment)`
+- `processQueue()` loops sequentially
+
+---
+
+# 6) Integration Points (find and wire)
+You must locate the existing code paths that:
+- emit/broadcast transcript committed segments
+- distinguish solo vs host mode session objects
+- already have a sessionStore or broadcaster
+
+Wire orchestrator so it receives events in BOTH modes:
+- Solo: segments originate from the solo session pipeline
+- Host: segments originate from host session pipeline; broadcast to listeners via WS audio channel
+
+If needed, implement a small adapter that listens to whichever event emitter currently sends translations to clients.
+
+
+6.5) Ensure Commit Stream Exists
+Locate the code path that emits/broadcasts committed translated segments (ordered by seqId) and expose a server-side emitter/callback (onCommittedSegment). The orchestrator must subscribe to this; do not invent a parallel transcript store.
+---
+
+# 7) Tests (MVP)
+Add tests that verify:
+1) WS protocol:
+   - encode/decode binary frame works
+2) Orchestrator:
+   - when a “committed segment” event fires, server sends `audio.start`, some audio frames, then `audio.end`
+3) Synthetic provider test:
+   - if ElevenLabs key not available in test, create a `FakeStreamingProvider` that yields known chunks and validate WS send order.
+
+---
+
+# 8) Dev Notes / README
+Add a README section:
+- How to enable: `TTS_STREAMING_ENABLED=1`
+- How to run client with streaming
+- How to verify logs show time-to-first-audio
+- Known limitations: no reconnect resume yet, no update-in-place versions yet
+
+---
+
+# Output Instructions
+1) Implement the server WS endpoint, registry, protocol helpers, and client player.
+2) Implement ElevenLabs streaming adapter with true streaming iteration + cancellation.
+3) Implement orchestrator wiring committed segments → streaming TTS → WS fanout.
+4) Keep unary route intact and add a switch.
+5) Add minimal tests + README notes.
+
+Proceed now. Create the files and code in the repo accordingly.
+```
+Notes
+In audio.hello: keep capabilities, but server chooses PCM if client supports it; otherwise reject streaming and fall back to unary.
+
+In PR2: implement PCM path only (AudioWorklet / ScriptProcessor fallback).
+
+In PR4: request PCM output format from ElevenLabs if available; if not, return audio.error and tell client to fall back to unary.

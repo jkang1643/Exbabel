@@ -1,0 +1,7 @@
+Cursor is NOT allowed to design UI/UX
+
+Cusor may only: 
+1. Reuse existing components
+2. Match existing patterns exactly 
+
+Any deviation is a bug

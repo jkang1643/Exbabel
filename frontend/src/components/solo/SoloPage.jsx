@@ -11,6 +11,7 @@ import TurnIndicator from './TurnIndicator';
 import TranscriptPanel from './TranscriptPanel';
 import PlaybackQueueBadge from './PlaybackQueueBadge';
 import TtsStreamingControl from '../tts/TtsStreamingControl';
+import TtsRoutingOverlay from '../tts/TtsRoutingOverlay';
 import AdvancedSettingsDrawer from './AdvancedSettingsDrawer';
 
 /**
@@ -34,10 +35,18 @@ export function SoloPage({ onBackToHome }) {
     const [speakerPriority, setSpeakerPriority] = useState(false);
     const [streamingTts, setStreamingTts] = useState(false); // new speech cancels TTS
 
+    // Voice selection
+    const [selectedVoice, setSelectedVoice] = useState(null);
+    const [availableVoices, setAvailableVoices] = useState([]);
+
     // Refs
     const wsRef = useRef(null);
     const targetLangRef = useRef(targetLang); // For closure-safe access
     const streamingTtsRef = useRef(streamingTts); // Sync with state
+
+    // Routing Overlay State
+    const [activeRouting, setActiveRouting] = useState(null);
+    const routingTimeoutRef = useRef(null);
 
     // Keep refs in sync
     useEffect(() => {
@@ -78,7 +87,8 @@ export function SoloPage({ onBackToHome }) {
                     ttsQueue.enqueue({
                         text: text, // Original
                         translatedText: textToSpeak, // Text to speak
-                        languageCode: targetLangRef.current // Use ref instead of stale closure
+                        languageCode: targetLangRef.current, // Use ref instead of stale closure
+                        voiceId: selectedVoice?.voiceId // Pass selected voice explicitely
                     });
                 } else {
                     console.warn('[SoloPage] Skipping TTS enqueue - empty text');
@@ -158,7 +168,14 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang,
                 targetLang,
                 tier: 'basic',
-                sessionId: streamingSessionIdRef.current
+                sessionId: streamingSessionIdRef.current,
+                voiceId: selectedVoice?.voiceId || null
+            }));
+
+            // Request available voices
+            socket.send(JSON.stringify({
+                type: 'tts/list_voices',
+                languageCode: targetLang
             }));
         };
 
@@ -186,7 +203,34 @@ export function SoloPage({ onBackToHome }) {
     const handleMessage = useCallback((message) => {
         // TTS messages
         if (message.type?.startsWith('tts/')) {
-            ttsQueue.handleTtsMessage(message);
+            // Handle voice list response
+            if (message.type === 'tts/voices') {
+                console.log('[SoloPage] Received voices:', message.voices?.length);
+                setAvailableVoices(message.voices || []);
+                // Auto-select first voice if none selected
+                if (!selectedVoice && message.voices?.length > 0) {
+                    setSelectedVoice(message.voices[0]);
+                }
+                return;
+            }
+        }
+        ttsQueue.handleTtsMessage(message);
+
+        // Handle routing info (broadcasted by backend)
+        if (message.type === 'tts/routing') {
+            console.log('[SoloPage] 🧭 Received routing info:', message);
+            setActiveRouting({
+                voiceName: message.voiceName,
+                provider: message.provider,
+                tier: message.tier,
+                latencyMs: message.latencyMs
+            });
+
+            // Auto-hide after 5 seconds of inactivity
+            if (routingTimeoutRef.current) clearTimeout(routingTimeoutRef.current);
+            routingTimeoutRef.current = setTimeout(() => {
+                setActiveRouting(null);
+            }, 5000);
             return;
         }
 
@@ -302,7 +346,8 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang: newSourceLang,
                 targetLang: newTargetLang,
                 tier: 'basic',
-                sessionId: streamingSessionIdRef.current
+                sessionId: streamingSessionIdRef.current,
+                voiceId: selectedVoice?.voiceId || null // Include current voice
             };
 
             console.log('[SoloPage] 📤 Sending init message:', initMessage);
@@ -313,6 +358,27 @@ export function SoloPage({ onBackToHome }) {
         }
 
         console.log('[SoloPage] Languages changed:', newSourceLang, '→', newTargetLang);
+    }, [sourceLang, targetLang, selectedVoice]);
+
+    // Handle voice change
+    const handleVoiceChange = useCallback((voice) => {
+        console.log('[SoloPage] 🎙️ Voice changed to:', voice.voiceName);
+        setSelectedVoice(voice);
+
+        // Reinitialize backend with new voice
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            const initMessage = {
+                type: 'init',
+                sourceLang: sourceLang,
+                targetLang: targetLang,
+                tier: 'basic',
+                sessionId: streamingSessionIdRef.current,
+                voiceId: voice.voiceId
+            };
+
+            console.log('[SoloPage] 📤 Sending init message (voice update):', initMessage);
+            wsRef.current.send(JSON.stringify(initMessage));
+        }
     }, [sourceLang, targetLang]);
 
     // Handle language swap (exchange source and target)
@@ -364,6 +430,17 @@ export function SoloPage({ onBackToHome }) {
             }
         };
     }, []);
+
+    // Re-fetch voices when target language changes
+    useEffect(() => {
+        if (isConnected && wsRef.current?.readyState === WebSocket.OPEN) {
+            console.log('[SoloPage] Fetching voices for:', targetLang);
+            wsRef.current.send(JSON.stringify({
+                type: 'tts/list_voices',
+                languageCode: targetLang
+            }));
+        }
+    }, [targetLang, isConnected]);
 
     // Get display state
     const getDisplayState = () => {
@@ -430,6 +507,12 @@ export function SoloPage({ onBackToHome }) {
                     />
                 )}
 
+                {/* RTS Routing Overlay */}
+                <TtsRoutingOverlay
+                    isActive={!!activeRouting}
+                    {...activeRouting}
+                />
+
                 {/* Queue Badge */}
                 {ttsQueue.queueLength > 0 && (
                     <PlaybackQueueBadge count={ttsQueue.queueLength} />
@@ -485,6 +568,9 @@ export function SoloPage({ onBackToHome }) {
                     onSpeakerPriorityChange={setSpeakerPriority}
                     streamingTts={streamingTts}
                     onStreamingTtsChange={setStreamingTts}
+                    availableVoices={availableVoices}
+                    selectedVoice={selectedVoice}
+                    onVoiceChange={handleVoiceChange}
                 />
             )}
 

@@ -20,6 +20,8 @@ import { mergeRecoveryText, wordsAreRelated } from './utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../core/utils/partialDeduplicator.js';
 import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmittedText, hasAlphaNumeric } from '../core/utils/emitGuards.js';
 import { onCommittedSegment, cleanupSession } from './tts/TtsStreamingOrchestrator.js';
+import { resolveVoice } from './tts/voiceResolver.js';
+import { isStreamingEnabled } from './tts/ttsStreamingConfig.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -31,6 +33,7 @@ export async function handleSoloMode(clientWs) {
   let currentTargetLang = 'es';
   let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
   let legacySessionId = `session_${Date.now()}`;
+  let currentVoiceId = null; // Track selected voice ID
 
   // MULTI-SESSION OPTIMIZATION: Track this session for fair-share allocation
   // This allows the rate limiter to distribute capacity fairly across sessions
@@ -180,19 +183,52 @@ export async function handleSoloMode(clientWs) {
   };
 
   // Helper: Trigger TTS streaming for committed segments
-  const triggerTtsStreaming = (seqId, text, targetLang, voiceId = null) => {
+  const triggerTtsStreaming = async (seqId, text, targetLang, voiceId = null) => {
     // Only trigger for non-empty text
     if (!text || text.trim().length === 0) return;
+    if (!isStreamingEnabled()) return;
 
-    // Use default ElevenLabs voice if not specified
-    // TODO: Get from user preferences/session config
-    const defaultVoiceId = voiceId || 'elevenlabs-21m00Tcm4TlvDq8ikWAM'; // Default Rachel voice
+    // DEBUG: Log voice selection state before resolution
+    console.log(`[SoloMode] Resolving voice for TTS - targetLang: ${targetLang || currentTargetLang}`);
+    console.log(`[SoloMode]   Specific voiceId arg: ${voiceId}`);
+    console.log(`[SoloMode]   Persisted currentVoiceId: ${currentVoiceId}`);
+
+    // Resolve voice using authoritative catalog
+    // We use sessionId as orgId for solo mode for now
+    // We allow all tiers that might support streaming
+
+    // Extract tier from voiceId URN if present (e.g. google_cloud_tts:chirp3_hd:...)
+    let voiceIdToUse = voiceId || currentVoiceId;
+    let tierToUse = null;
+
+    if (voiceIdToUse) {
+      if (voiceIdToUse.includes(':')) {
+        const parts = voiceIdToUse.split(':');
+        if (parts.length >= 2) {
+          // Map URN tier 'gemini_tts' to 'gemini' for the resolver check
+          tierToUse = parts[1] === 'gemini_tts' ? 'gemini' : parts[1];
+        }
+      } else if (voiceIdToUse.startsWith('elevenlabs')) {
+        tierToUse = 'elevenlabs';
+      }
+    }
+
+    const resolved = await resolveVoice({
+      orgId: sessionId,
+      userPref: voiceIdToUse ? { voiceId: voiceIdToUse, tier: tierToUse } : null,
+      languageCode: targetLang || currentTargetLang,
+      allowedTiers: ['gemini', 'chirp3_hd', 'neural2', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash', 'elevenlabs', 'standard']
+    });
+
+    console.log(`[SoloMode]   -> Resolved to: ${resolved.voiceId} (tier: ${resolved.tier})`);
+
+    console.log(`[SoloMode] Triggering TTS: voiceId=${resolved.voiceId}, tier=${resolved.tier}, reason=${resolved.reason}`);
 
     onCommittedSegment(sessionId, {
       seqId,
       text: text.trim(),
       lang: targetLang || currentTargetLang,
-      voiceId: defaultVoiceId,
+      voiceId: resolved.voiceId,
       isFinal: true
     });
   };
@@ -222,6 +258,16 @@ export async function handleSoloMode(clientWs) {
           const prevTargetLang = currentTargetLang;
 
           console.log(`[SoloMode] Init received - sourceLang: ${message.sourceLang}, targetLang: ${message.targetLang}, tier: ${message.tier || 'basic'}`);
+
+          currentSourceLang = message.sourceLang || 'en';
+          currentTargetLang = message.targetLang || 'es';
+          usePremiumTier = message.tier === 'premium';
+
+          // Update voice preference if provided
+          if (message.voiceId) {
+            currentVoiceId = message.voiceId;
+            console.log(`[SoloMode] 🎙️ Voice updated to: ${currentVoiceId}`);
+          }
 
           if (message.sessionId) {
             sessionId = message.sessionId;
@@ -840,7 +886,7 @@ export async function handleSoloMode(clientWs) {
                           setLastEmittedText(finalSeqId, correctedText);
 
                           // Trigger TTS streaming for this committed segment
-                          triggerTtsStreaming(finalSeqId, correctedText, currentTargetLang);
+                          await triggerTtsStreaming(finalSeqId, correctedText, currentTargetLang);
 
                           // CRITICAL: Update last sent FINAL tracking after sending
                           // Track both original and corrected text to prevent duplicates
@@ -883,7 +929,7 @@ export async function handleSoloMode(clientWs) {
                           setLastEmittedText(finalSeqIdError, textToProcess);
 
                           // Trigger TTS streaming for this committed segment
-                          triggerTtsStreaming(finalSeqIdError, textToProcess, currentTargetLang);
+                          await triggerTtsStreaming(finalSeqIdError, textToProcess, currentTargetLang);
 
                           // CRITICAL: Update last sent FINAL tracking after sending (even on error)
                           lastSentOriginalText = textToProcess; // Track original
@@ -923,7 +969,7 @@ export async function handleSoloMode(clientWs) {
                         setLastEmittedText(finalSeqIdNonEn, textToProcess);
 
                         // Trigger TTS streaming for this committed segment
-                        triggerTtsStreaming(finalSeqIdNonEn, textToProcess, currentTargetLang);
+                        await triggerTtsStreaming(finalSeqIdNonEn, textToProcess, currentTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         lastSentFinalText = textToProcess;
@@ -1031,7 +1077,7 @@ export async function handleSoloMode(clientWs) {
                         setLastEmittedText(finalSeqIdTrans, translatedText);
 
                         // Trigger TTS streaming for this committed segment (use translated text)
-                        triggerTtsStreaming(finalSeqIdTrans, translatedText, currentTargetLang);
+                        await triggerTtsStreaming(finalSeqIdTrans, translatedText, currentTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates
@@ -3396,15 +3442,74 @@ export async function handleSoloMode(clientWs) {
               message.tier = 'chirp3_hd';
             }
 
+            // Determine voice preference
+            // Priority: 1. Message-specific override, 2. Persisted session voice, 3. Null (let resolver decide)
+            const voicePreference = message.voiceId || message.voiceName || currentVoiceId;
+
+            console.log(`[SoloMode] 🔍 Unary TTS Request Debug:`);
+            console.log(`[SoloMode]   message.tier: ${message.tier}`);
+            console.log(`[SoloMode]   message.voiceId: ${message.voiceId}`);
+            console.log(`[SoloMode]   message.voiceName: ${message.voiceName}`);
+            console.log(`[SoloMode]   currentVoiceId: ${currentVoiceId}`);
+            console.log(`[SoloMode]   voicePreference: ${voicePreference}`);
+
+            // Determine tier preference
+            // CRITICAL: Extract tier from voice URN if present (same logic as Streaming mode)
+            let tierPreference = message.tier;
+
+            if (!tierPreference && voicePreference) {
+              // Extract tier from voiceId URN if present (e.g. google_cloud_tts:chirp3_hd:...)
+              if (voicePreference.includes(':')) {
+                const parts = voicePreference.split(':');
+                if (parts.length >= 2) {
+                  // Map URN tier 'gemini_tts' to 'gemini' for the resolver check
+                  const extractedTier = parts[1] === 'gemini_tts' ? 'gemini' : parts[1];
+                  tierPreference = extractedTier;
+                  console.log(`[SoloMode]   ✅ Extracted tier from URN: ${extractedTier}`);
+                }
+              } else if (voicePreference.startsWith('elevenlabs')) {
+                tierPreference = 'elevenlabs';
+                console.log(`[SoloMode]   ✅ Detected ElevenLabs tier`);
+              }
+            }
+
+            // If still no tier and no voice, default to gemini
+            if (!tierPreference && !voicePreference) {
+              tierPreference = 'gemini';
+              console.log(`[SoloMode]   ⚠️ No tier or voice, defaulting to gemini`);
+            }
+
+            console.log(`[SoloMode]   📍 Final tierPreference: ${tierPreference}`);
+            console.log(`[SoloMode]   📍 Final voicePreference: ${voicePreference}`);
+
             // Resolve TTS routing
             const route = await resolveTtsRoute({
-              requestedTier: message.tier || 'gemini',
-              requestedVoice: message.voiceName,
+              requestedTier: tierPreference,
+              requestedVoice: voicePreference,
               languageCode: message.languageCode,
               mode: 'unary',
               orgConfig: {},
               userSubscription: {}
             });
+
+            console.log(`[SoloMode]   🎯 Resolved route:`, JSON.stringify(route, null, 2));
+
+            // Broadcast routing info for overlay (consistent with Streaming Orchestrator)
+            if (clientWs.readyState === WebSocket.OPEN) {
+              // Correctly resolve provider name from the route object
+              // route.provider is populated by resolveTtsRoute (e.g. 'elevenlabs', 'google')
+              const providerName = route.provider === 'elevenlabs' ? 'ElevenLabs' : 'Google';
+
+              clientWs.send(JSON.stringify({
+                type: 'tts/routing',
+                voiceName: route.voiceName,
+                // Map internal engine/provider names to overlay expectations
+                provider: providerName,
+                tier: route.tier || message.tier || 'gemini',  // Use route.tier (the returned property)
+                latencyMs: 0, // Unary starts immediately
+                timestamp: Date.now()
+              }));
+            }
 
             // Build TTS request
             const ttsRequest = {

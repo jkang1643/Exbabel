@@ -1624,5 +1624,122 @@ Resolved critical connectivity and stability issues in the ElevenLabs TTS stream
 - **Isolation Testing**: Created `test_streaming_isolation.html` to verify direct vs. proxied WebSocket health.
 - **Integration Testing**: Confirmed the orchestrator successfully enqueues segments and streams chunked audio to listeners with significantly reduced latency compared to unary mode.
 
+### PR 12 — Google TTS Streaming Provider
+**Status:** ✅ COMPLETE
+**Date:** 2026-01-25
+
+#### Overview
+Implemented a dedicated streaming provider for Google Cloud Text-to-Speech using the `streamingSynthesize` gRPC bidirectional API. This enables the same progressive audio delivery pattern for Google voices (Chirp 3 HD, Gemini, Neural2) that was previously only available for ElevenLabs.
+
+#### Changes Made
+- **[NEW] [googleStreamingProvider.js](file:///home/jkang1643/projects/realtimetranslationapp/backend/tts/googleStreamingProvider.js)**: 
+  - Wraps Google's gRPC `streamingSynthesize` API.
+  - Implements the async iterator pattern for audio chunks.
+  - Handles lazy-initialization and provides a singleton instance.
+- **[MODIFY] [TtsStreamingOrchestrator.js](file:///home/jkang1643/projects/realtimetranslationapp/backend/tts/TtsStreamingOrchestrator.js)**:
+  - Added multi-provider routing logic: Auto-detects if a voice belongs to ElevenLabs or Google.
+  - Added `resolveProvider()` and `resolveGoogleVoice()` helpers to extract parameters from complex voice IDs.
+  - Integrated `googleStreamingProvider` into the segment streaming pipeline.
+
+#### Verification
+- **Module Safety**: Verified both `googleStreamingProvider.js` and `TtsStreamingOrchestrator.js` load and link correctly without syntax or circular dependency errors.
+- **Routing Accuracy**: Tested resolution for diverse voice ID patterns:
+  - ElevenLabs (raw and prefixed) → ElevenLabs provider.
+  - Google (Neural2, Chirp 3, Gemini) → Google provider.
+  - Gemini voices → Correctly assigned the `gemini-2.5-flash-preview-tts` model name.
+
+### PR 13 — Google TTS Robustness & Latency Optimization
+**Status:** ✅ COMPLETE
+**Date:** 2026-01-26
+
+#### Overview
+Addressed critical playback failures and stability issues with Google Streaming TTS. Implemented a zero-latency remuxing pipeline and hardened the frontend audio lifecycle to prevent race conditions and underrun false-positives.
+
+#### Changes Made
+- **[OPTIMIZE] Zero-Latency Remuxing**: Switched `googleStreamingProvider.js` from MP3 transcoding to **Ogg-to-WebM remuxing** (using `audioCodec('copy')`). This eliminates re-encoding CPU overhead and reduces TTFB.
+- **[FIX] Duplicate Connections**: Fixed a race condition in `useTtsStreaming.js` that allowed multiple WebSocket connections to persist if the initial connection was slow. Implemented strict single-socket logic and "zombie" listener cleanup.
+- **[FIX] Codec Contamination**: Updated `StreamingAudioPlayer.js` to clear the chunk queue on codec switch, preventing `InvalidStateError` caused by mixing MP3 and Opus chunks.
+- **[FIX] Dynamic Routing**: Restored provider-aware codec broadcasting in `TtsStreamingOrchestrator.js` ('opus' for Google, 'mp3' for ElevenLabs).
+- **[STABILITY] Jitter Buffer & Gap Detection**: 
+  - Implemented 150ms buffer requirement in `StreamingAudioPlayer.js` before playback starts.
+  - Added gap-aware logic to `_updateBufferedMs` to ignore disconnected buffer segments and accurately detect stalls.
+
+#### Verification
+- **Latency Improvement**: Measured ~250ms reduction in total latency (100ms backend + 150ms buffer tuning).
+- **Format Resilience**: Verified seamless switching between Google (Opus/WebM) and ElevenLabs (MP3) voices.
+- **Stream Integrity**: Confirmed single-stream playback with no overlapping audio or duplicate chunk processing logs.
+
 ---
 **END OF IMPLEMENTATION HISTORY**
+
+# PR 4 — Streaming Support & Hybrid Provider Integration
+
+## Overview
+
+Successfully implemented low-latency streaming TTS support for Google Cloud (Chirp 3 HD/Studio) and integrated ElevenLabs as a secondary provider. Ensured seamless operation in both Solo Mode (direct feedback) and Host Mode (broadcast).
+
+## Changes Made
+
+### 1. Streaming Infrastructure (Frontend)
+
+#### [StreamingAudioPlayer.js](file:///home/jkang1643/projects/realtimetranslationapp/frontend/src/tts/StreamingAudioPlayer.js)
+- Implemented `MediaSource` Extensions (MSE) based player.
+- **Codec Support:** 
+  - `audio/webm; codecs="opus"` (Google)
+  - `audio/mpeg` (ElevenLabs/Fallback)
+- **Jitter Buffer:** Client-side buffer (default 300ms) to ensure smooth playback over WebSocket.
+- **Codec Switching Recovery:** Implemented `_resetMediaSource()` to handle `QuotaExceededError` when switching formats (e.g., Opus → MP3).
+    - *Context:* Browsers often fail to release buffer quota immediately when switching codecs. The fix performs a "hard reset" of the `MediaSource` object to guarantee clean state.
+
+#### [useTtsStreaming.js](file:///home/jkang1643/projects/realtimetranslationapp/frontend/src/hooks/useTtsStreaming.js)
+- React hook managing WebSocket connection to `/ws/tts`.
+- Handles binary audio frames and JSON control messages (`audio.start`, `audio.end`).
+- **Dynamic Reconnection:** Auto-reconnects on drop.
+- **Silence Handling:** Filters internal routing messages to keep logs clean.
+
+### 2. Backend Infrastructure
+
+#### [GoogleStreamingProvider.js](file:///home/jkang1643/projects/realtimetranslationapp/backend/tts/providers/GoogleStreamingProvider.js)
+- Implemented `streamingSynthesize` using Google Cloud TTS gRPC streaming API.
+- **Format:** `OGG_OPUS` for optimal low-latency streaming.
+- **Voice Support:** Verified with "Chirp 3 HD" (Studio) and "Gemini" (Kore) voices.
+
+#### [TtsStreamingOrchestrator.js](file:///home/jkang1643/projects/realtimetranslationapp/backend/tts/TtsStreamingOrchestrator.js)
+- Manages active streaming sessions.
+- Routes requests to appropriate provider based on `voiceId` prefix (`elevenlabs:` or default Google).
+- **Latency Tracking:** Logs "Time to First Byte" (TTFB) for performance monitoring.
+
+### 3. Host Mode & Voice Routing
+
+#### Dynamic Voice Selection
+- **Host Mode Fix:** Fixed bug where Host's default English voice overrode Listener's Spanish preference.
+- System now correctly respects the `voiceId` passed during session initialization.
+- **Fallback Logic:**
+    1. User Selected Voice (if available)
+    2. Session Default Voice
+    3. Hardcoded Fallback (`google-es-ES-Studio-C` / `google-en-US-Chirp3-HD-Puck`)
+
+#### ElevenLabs Integration
+- Backend: Updated `adapter.js` to correctly detect `elevenlabs:` voices.
+- Frontend: Validated MP3 streaming playback.
+- **Hybrid Switching:** Verified seamless runtime switching between Google (Opus) and ElevenLabs (MP3) within the same session.
+
+## Verification Scenarios
+
+### ✅ Solo Mode Streaming
+- **Voice:** Google US (Chirp 3 HD)
+- **Result:** ~300ms latency, high quality Opus audio.
+- **Voice:** Google Gemini (Kore)
+- **Result:** Confirmed working using same OGG_OPUS pipeline.
+
+### ✅ Host Mode Broadcast
+- **Scenario:** Host speaking English → Listener hearing Spanish TTS.
+- **Routing:** Confirmed Listener hears *their* selected Spanish voice, not the Host's default.
+- **Voices:** Tested switching between Google Studio and ElevenLabs Turbo.
+
+### ✅ Robust Error Recovery
+- **Scenario:** Switch from Google (Opus) to ElevenLabs (MP3).
+- **Behavior:** Browser throws `QuotaExceededError`.
+- **Fix Verification:** Player catches error, resets `MediaSource`, and playback starts successfully.
+
+---

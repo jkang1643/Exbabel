@@ -175,7 +175,9 @@ export function useTtsQueue({
             text: item.text,
             languageCode: item.languageCode || languageCode,
             voiceName,
-            tier,
+            // CRITICAL: Do NOT send tier here - let backend extract it from voiceId
+            // The backend will parse the tier from the voiceId URN (e.g., google_cloud_tts:chirp3_hd:...)
+            // tier,  // REMOVED - was overriding voice selection
             mode: 'unary'
         }));
 
@@ -183,7 +185,7 @@ export function useTtsQueue({
         pendingRequestsRef.current.set(item.id, item);
 
         console.log('[useTtsQueue] Synthesis requested:', item.id);
-    }, [languageCode, voiceName, tier, onError]);
+    }, [languageCode, voiceName, onError]);  // Removed 'tier' from dependencies
 
     // Play audio from base64
     const playAudio = useCallback(async (audioData, segmentId) => {

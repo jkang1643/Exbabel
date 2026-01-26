@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Clock, Volume2, Wifi } from 'lucide-react';
+import { X, Clock, Volume2, Wifi, Music } from 'lucide-react';
 
 /**
  * AdvancedSettingsDrawer - Hidden settings panel
@@ -12,7 +12,10 @@ export function AdvancedSettingsDrawer({
   speakerPriority,
   onSpeakerPriorityChange,
   streamingTts,
-  onStreamingTtsChange
+  onStreamingTtsChange,
+  availableVoices = [],
+  selectedVoice,
+  onVoiceChange
 }) {
   if (!isOpen) return null;
 
@@ -95,6 +98,35 @@ export function AdvancedSettingsDrawer({
                 {streamingTts ? 'On' : 'Off'}
               </span>
             </label>
+          </div>
+
+          {/* Voice Selection */}
+          <div className="setting-group">
+            <div className="setting-header">
+              <Music size={18} />
+              <span>Voice Selection</span>
+            </div>
+            <p className="setting-desc">
+              Choose a voice for TTS playback
+            </p>
+            <select
+              className="voice-select"
+              value={selectedVoice?.voiceId || ''}
+              onChange={(e) => {
+                const voice = availableVoices.find(v => v.voiceId === e.target.value);
+                if (voice) onVoiceChange(voice);
+              }}
+            >
+              {availableVoices.length === 0 ? (
+                <option value="">Loading voices...</option>
+              ) : (
+                availableVoices.map(voice => (
+                  <option key={voice.voiceId} value={voice.voiceId}>
+                    {voice.displayName || voice.voiceName} ({voice.tier})
+                  </option>
+                ))
+              )}
+            </select>
           </div>
         </div>
       </div>
@@ -269,6 +301,33 @@ export function AdvancedSettingsDrawer({
         .toggle-label {
           color: rgba(255, 255, 255, 0.7);
           font-size: 0.9rem;
+        }
+        
+        .voice-select {
+          width: 100%;
+          padding: 0.75rem 1rem;
+          background: rgba(255, 255, 255, 0.1);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          border-radius: 8px;
+          color: #fff;
+          font-size: 0.9rem;
+          cursor: pointer;
+          appearance: none;
+          background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23fff' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+          background-repeat: no-repeat;
+          background-position: right 1rem center;
+        }
+        
+        .voice-select:focus {
+          outline: none;
+          border-color: #a855f7;
+          box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.3);
+        }
+        
+        .voice-select option {
+          background: #1a1a2e;
+          color: #fff;
+          padding: 0.5rem;
         }
       `}</style>
     </>

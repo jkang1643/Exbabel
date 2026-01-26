@@ -543,41 +543,63 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     if (!ttsControllerRef.current) return;
 
     // Update language
+    let lang = targetLang;
     if (targetLang) {
       ttsControllerRef.current.currentLanguageCode = targetLang;
     }
 
     // Update voice AND tier
+    let voiceId = selectedVoice;
+    let voiceName = null;
+    let tier = 'neural2'; // Default
+
     if (selectedVoice) {
       ttsControllerRef.current.currentVoiceId = selectedVoice;
 
       // Update tier based on selected voice
       const voiceOption = availableVoices.find(v => v.voiceId === selectedVoice);
       if (voiceOption) {
-        ttsControllerRef.current.currentVoiceName = voiceOption.voiceName;
-        ttsControllerRef.current.tier = voiceOption.tier || 'neural2';
-        console.log(`[ListenerPage] Updated voice and tier: ${selectedVoice} (${voiceOption.tier})`);
+        voiceName = voiceOption.voiceName;
+        tier = voiceOption.tier || 'neural2';
+        ttsControllerRef.current.currentVoiceName = voiceName;
+        ttsControllerRef.current.tier = tier;
+        console.log(`[ListenerPage] Updated voice and tier: ${selectedVoice} (${tier})`);
       }
     }
 
-    // Update settings (SSML/Prompts) - Syncing minimal defaults
-    const isGemini = selectedVoice?.startsWith('gemini-');
-
     // Sync SSML options
-    ttsControllerRef.current.ssmlOptions = {
+    const ssmlOptions = {
       enabled: ttsSettings.ssmlEnabled,
       deliveryStyle: ttsSettings.deliveryStyle,
       rate: ttsSettings.speakingRate,
       pitch: '+1st',
       pauseIntensity: getDeliveryStyle(ttsSettings.deliveryStyle).pauseIntensity,
-      emphasizePowerWords: true,
+      emphasizePowerWords: true, // internal logic assumption
       emphasisLevel: 'moderate',
-      supportsPhraseProsody: true // Simplified assumption for internal logic preservation
+      supportsPhraseProsody: true
     };
+    ttsControllerRef.current.ssmlOptions = ssmlOptions;
 
     // Sync Prompt options
     ttsControllerRef.current.promptPresetId = ttsSettings.promptPresetId;
     ttsControllerRef.current.intensity = ttsSettings.intensity;
+    // Also sync to instance properties
+    ttsControllerRef.current.ttsPrompt = null; // simplified
+
+    // CRITICAL FIX: Send 'tts/start' to backend to update session preferred voice
+    // Only if we have a valid voice selected
+    if (voiceId && connectionState === 'open') {
+      ttsControllerRef.current.start({
+        languageCode: lang,
+        voiceName,
+        voiceId,
+        tier,
+        mode: TtsMode.UNARY, // Host listener uses Unary requests for fallback/config? Or just config.
+        ssmlOptions,
+        promptPresetId: ttsSettings.promptPresetId,
+        intensity: ttsSettings.intensity
+      });
+    }
 
     // Trigger voice fetch if changed
     ttsControllerRef.current.fetchVoices(targetLang);
@@ -608,10 +630,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         return;
       }
 
-      // Fallback: Just take the first one (likely Gemini)
-      setSelectedVoice(availableVoices[0].voiceId);
+      // Fallback 4: Construct a safe Google Voice ID (even if list is empty)
+      // This prevents defaulting to ElevenLabs on backend
+      const safeDefault = `google-${targetLang}-Standard-A`;
+      console.log(`[ListenerPage] ⚠️ No available voices found, forcing safe default: ${safeDefault}`);
+      setSelectedVoice(safeDefault);
     }
-  }, [availableVoices, selectedVoice]);
+  }, [availableVoices, selectedVoice, targetLang]);
 
   // Track previous tier to detect tier changes and reset speed accordingly
   const prevTierRef = useRef(null);
@@ -1205,12 +1230,23 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 // GATED: Only run this legacy path if NOT using the shared engine (which handles its own TTS triggers)
                 // ALSO GATED: Skip if streaming mode is enabled (backend orchestrator handles it)
                 try {
-                  if (!USE_SHARED_ENGINE &&
+                  // TRANSLATION LANGUAGE GUARD: Skip if translatedText is suspiciously similar to originalText (API misfire)
+                  // Use robust detection (not just !==)
+                  const isSuspiciousEnglish = !isTranscriptionMode &&
+                    textToDisplay &&
+                    originalText &&
+                    textToDisplay.toLowerCase().trim() === originalText.toLowerCase().trim();
+
+                  if (isSuspiciousEnglish && targetLangRef.current !== 'en') {
+                    console.log('[ListenerPage] 🚫 Skipping TTS: English text detected in non-English channel', { text: textToDisplay });
+                  } else if (!USE_SHARED_ENGINE &&
                     !streamingTtsRef.current &&
                     ttsControllerRef.current &&
                     ttsControllerRef.current.getState().state === 'PLAYING' &&
                     (isForMyLanguage || isTranscriptionMode) &&
                     textToDisplay) {
+
+                    console.log('[ListenerPage] 🗣️ Queuing TTS segment:', { id: message.seqId, text: textToDisplay });
                     ttsControllerRef.current.onFinalSegment({
                       id: (message.sourceSeqId ?? message.seqId ?? `seg_${Date.now()}`).toString(),
                       text: textToDisplay,

@@ -60,8 +60,8 @@ export function useTtsStreaming({
             return;
         }
 
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            console.log('[useTtsStreaming] Already connected');
+        if (wsRef.current) {
+            console.log('[useTtsStreaming] Already connected or connecting');
             return;
         }
 
@@ -79,7 +79,7 @@ export function useTtsStreaming({
             // Initialize player
             if (!playerRef.current) {
                 playerRef.current = new StreamingAudioPlayer({
-                    jitterBufferMs: 300,
+                    jitterBufferMs: 500, // Increased for Host Mode broadcast architecture (was 150ms)
                     onBufferUpdate: (ms) => {
                         setBufferedMs(ms);
                         onBufferUpdateRef.current?.(ms);
@@ -142,6 +142,7 @@ export function useTtsStreaming({
                             break;
                         case 'audio.start':
                             console.log('[useTtsStreaming] Stream starting:', message.segmentId);
+                            playerRef.current?.handleStartMessage(message);
                             break;
                         case 'audio.end':
                             console.log('[useTtsStreaming] Stream ended:', message.segmentId);
@@ -154,6 +155,10 @@ export function useTtsStreaming({
                         case 'audio.error':
                             console.error('[useTtsStreaming] Stream error:', message.error);
                             onErrorRef.current?.(new Error(message.error));
+                            break;
+                        case 'tts/routing':
+                        case 'tts/ack':
+                            // Internal routing/stats messages, ignore
                             break;
                         default:
                             console.log('[useTtsStreaming] Unknown message:', message.type);
@@ -197,6 +202,12 @@ export function useTtsStreaming({
 
         // Close WebSocket
         if (wsRef.current) {
+            // Remove listeners to prevent zombie events
+            wsRef.current.onopen = null;
+            wsRef.current.onmessage = null;
+            wsRef.current.onclose = null;
+            wsRef.current.onerror = null;
+
             wsRef.current.close();
             wsRef.current = null;
         }

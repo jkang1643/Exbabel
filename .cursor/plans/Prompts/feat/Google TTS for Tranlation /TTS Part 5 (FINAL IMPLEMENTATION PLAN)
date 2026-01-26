@@ -1,0 +1,176 @@
+TTS WebSocket Streaming Implementation Plan
+Real - time audio streaming over WebSockets for the Exbabel translation app, using ElevenLabs as the first provider.
+
+User Review Required
+IMPORTANT
+
+ElevenLabs Creator Plan Limitation: Creator plan typically supports MP3 streaming but NOT PCM.The plan uses MP3 streaming with MediaSource Extensions on the client side.Confirm you're okay with this before proceeding.
+
+WARNING
+
+Breaking Change Risk: None.The existing unary TTS route is preserved.Streaming is gated behind TTS_STREAMING_ENABLED = true.
+
+Architecture Overview
+Frontend
+Backend
+soloModeHandler.jssendWithSequence
+ORCHOrchestrator
+hostModeHandler.jsbroadcastWithSequence
+TtsStreamingOrchestrator
+ElevenLabsStreamingProvider
+WS Audio Transport
+StreamingAudioPlayer
+MediaSourceMP3 Playback
+Proposed Changes
+PR0 — Feature Flags + Config
+[MODIFY]
+    .env
+Add feature flag:
+
+TTS_STREAMING_ENABLED = false
+[NEW]
+ttsStreamingConfig.js
+// Streaming configuration with defaults
+export const TTS_STREAMING_CONFIG = {
+    enabled: process.env.TTS_STREAMING_ENABLED === 'true',
+    defaultCodec: 'mp3',  // MP3 for Creator plan compatibility
+    defaultSampleRate: 44100,
+    jitterBufferMs: 300,
+    outputFormat: 'mp3_44100_128'
+};
+PR1 — WebSocket Audio Transport
+[NEW]
+ttsStreamingTransport.js
+WS session registry: ttsWsRegistry[sessionId] = Set < wsClients >
+    Protocol helpers: encodeAudioFrame(), decodeAudioFrame()
+Message handlers for: audio.hello, audio.ready, audio.start, audio.end, audio.cancel
+Binary frame format: [4 bytes: "EXA1"][1 byte: headerLen][N bytes: JSON meta][audio bytes]
+[MODIFY]
+server.js
+Add import for ttsStreamingTransport.js
+Mount WS upgrade handler for /ws/tts path(or add channel to existing WS)
+PR2 — Client Streaming Player(MP3 via MediaSource)
+[NEW]
+StreamingAudioPlayer.js
+// Streaming player using MediaSource Extensions for MP3
+class StreamingAudioPlayer {
+    constructor(config = {}) {
+        this.jitterBufferMs = config.jitterBufferMs || 300;
+        this.mediaSource = null;
+        this.sourceBuffer = null;
+        this.queue = [];
+        this.bufferedMs = 0;
+        this.underruns = 0;
+    }
+
+    start(streamConfig) { /* Init MediaSource + audio element */ }
+    enqueue(meta, bytes) { /* Append to SourceBuffer */ }
+    stop(reason) { /* Clean up */ }
+    getBufferedMs() { /* Return bufferedMs */ }
+}
+[MODIFY]
+TtsPlayerController.js
+Add streaming mode detection
+Delegate to StreamingAudioPlayer when ttsMode === 'streaming'
+PR4 — ElevenLabs Streaming Adapter
+[NEW]
+elevenlabsStreamingProvider.js
+// TRUE streaming using ElevenLabs HTTP /v1/text-to-speech/{voice_id}/stream
+export class ElevenLabsStreamingProvider {
+    async streamTts({ text, voiceId, modelId, outputFormat = 'mp3_44100_128' }) {
+        const controller = new AbortController();
+        const response = await fetch(url, {
+            method: 'POST',
+            signal: controller.signal,
+            body: JSON.stringify({ text, model_id: modelId }),
+            headers: { 'xi-api-key': apiKey }
+        });
+
+        return {
+            chunks: this._iterateStream(response.body),
+            cancel: () => controller.abort(),
+            timeToFirstByteMs: null  // Measured on first chunk
+        };
+    }
+    async *_iterateStream(body) {
+        const reader = body.getReader();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            yield value;
+        }
+    }
+}
+PR5 — Orchestrator Wiring
+[NEW]
+TtsStreamingOrchestrator.js
+Main orchestrator that:
+
+Subscribes to committed segments from
+sendWithSequence
+    /
+    broadcastWithSequence
+Queues segments sequentially
+Calls ElevenLabsStreamingProvider.streamTts()
+Forwards chunks via WS binary frames
+Sends audio.start → chunks → audio.end
+[MODIFY]
+soloModeHandler.js
+After
+sendWithSequence
+ emits a FINAL / committed segment:
+If streaming enabled: emit to TtsStreamingOrchestrator.onCommittedSegment()
+[MODIFY]
+hostModeHandler.js
+After
+broadcastWithSequence
+ emits a FINAL / committed segment:
+If streaming enabled: emit to TtsStreamingOrchestrator.onCommittedSegment()
+File Summary
+Action	File	Purpose
+MODIFY
+backend /.env
+Add TTS_STREAMING_ENABLED flag
+NEW	backend / tts / ttsStreamingConfig.js	Streaming constants
+NEW	backend / tts / ttsStreamingTransport.js	WS protocol + registry
+NEW	backend / tts / elevenlabsStreamingProvider.js	True HTTP streaming
+NEW	backend / tts / TtsStreamingOrchestrator.js	Pipeline wiring
+MODIFY
+backend / server.js
+Mount WS endpoint
+MODIFY
+backend / soloModeHandler.js
+Hook committed segments
+MODIFY
+backend / hostModeHandler.js
+Hook committed segments
+NEW	frontend / src / tts / StreamingAudioPlayer.js	MediaSource player
+MODIFY
+frontend / src / tts / TtsPlayerController.js
+Mode delegation
+Verification Plan
+Unit Tests
+New test: backend / tests / unit / tts / ttsStreamingTransport.test.js
+Test encodeAudioFrame() / decodeAudioFrame() round - trip
+Run: node backend / tests / unit / tts / ttsStreamingTransport.test.js
+New test: backend / tests / unit / tts / elevenlabsStreamingProvider.test.js
+Test mock streaming with fake fetch
+Run: node backend / tests / unit / tts / elevenlabsStreamingProvider.test.js
+Integration Test
+New test: backend / tests / integration / tts / streaming - flow.test.js
+Connect WS, trigger synthetic segment, verify audio.start → binary frames → audio.end
+Run: node backend / tests / integration / tts / streaming - flow.test.js
+Manual Verification
+Start backend with TTS_STREAMING_ENABLED = true
+Start frontend with npm run dev
+Open browser dev tools → Network → WS tab
+Start a solo session, speak a sentence
+Expected: See audio.start message, binary frames, audio.end message
+Expected: Hear audio playing smoothly without gaps
+Implementation Order
+PR0(0.5 day) → Feature flag, can merge immediately
+PR1(2 days) → WS transport with synthetic audio test
+PR2(2 days) → Client player against synthetic stream
+PR4(1.5 days) → ElevenLabs streaming adapter
+PR5(2 days) → Full wiring + testing
+Total estimate: ~8 days for MVP

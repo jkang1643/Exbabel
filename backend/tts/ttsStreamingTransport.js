@@ -154,7 +154,7 @@ export function createReadyMessage(streamId, codec, sampleRate, channels = 1) {
 /**
  * Create audio.start message
  */
-export function createStartMessage({ streamId, segmentId, version, seqId, lang, voiceId, textPreview }) {
+export function createStartMessage({ streamId, segmentId, version, seqId, lang, voiceId, textPreview, codec }) {
     return {
         type: MessageType.START,
         streamId,
@@ -163,7 +163,8 @@ export function createStartMessage({ streamId, segmentId, version, seqId, lang, 
         seqId,
         lang,
         voiceId,
-        textPreview: textPreview?.substring(0, 50) // Limit preview length
+        textPreview: textPreview?.substring(0, 50), // Limit preview length
+        codec
     };
 }
 

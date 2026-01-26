@@ -167,6 +167,9 @@ export async function handleHostConnection(clientWs, sessionId) {
   let nextFinalAfterRecovery = null;
   let recoveryStartTime = 0;
 
+  // Track voice preferences per target language
+  const targetVoiceIds = new Map(); // lang -> voiceId
+
   // Helper: Measure RTT from client timestamp
   const measureRTT = (clientTimestamp) => {
     return rttTracker.measureRTT(clientTimestamp);
@@ -241,6 +244,13 @@ export async function handleHostConnection(clientWs, sessionId) {
             } else {
               console.log(`[HostMode] Tier: ${usePremiumTier ? 'PREMIUM (Realtime API)' : 'BASIC (Chat API)'}`);
             }
+          }
+
+          // Update voice preference if provided
+          if (message.voiceId) {
+            const langTarget = message.targetLang || currentTargetLang || 'es';
+            targetVoiceIds.set(langTarget, message.voiceId);
+            console.log(`[HostMode] 🎙️ Voice updated for ${langTarget}: ${message.voiceId}`);
           }
 
           console.log(`[HostMode] Session ${currentSessionId} initialized with source language: ${currentSourceLang}`);
@@ -606,14 +616,36 @@ export async function handleHostConnection(clientWs, sessionId) {
                 // Only trigger for non-empty text
                 if (!text || text.trim().length === 0) return;
 
-                // Use default ElevenLabs voice if not specified
-                // TODO: Get from user preferences/session config
-                const defaultVoiceId = voiceId || 'elevenlabs-21m00Tcm4TlvDq8ikWAM'; // Default Rachel voice
+                // Use safe Google default voice if not specified (prevents ElevenLabs fallback)
+                // Format: google-{locale}-Standard-A (e.g. google-es-ES-Standard-A)
+                const safeLang = targetLang || currentTargetLang || 'en';
+                const langPrefix = safeLang.split('-')[0].toLowerCase();
+
+                // Map short codes to full locales for Google TTS
+                const fullLocales = {
+                  'en': 'en-US',
+                  'es': 'es-ES',
+                  'fr': 'fr-FR',
+                  'de': 'de-DE',
+                  'it': 'it-IT',
+                  'pt': 'pt-BR',
+                  'ja': 'ja-JP',
+                  'ko': 'ko-KR',
+                  'zh': 'cmn-CN',
+                  'hi': 'hi-IN'
+                };
+                const locale = fullLocales[langPrefix] || 'en-US';
+
+                // Construct valid Google Chirp Voice ID (Puck is generally available)
+                // NOTE: Streaming API ONLY supports Chirp 3 HD voices currently!
+                // PRIORITY: User selected voice (from SessionStore shared state) -> Default Chirp 3
+                const userVoiceId = sessionStore.getSessionVoice(currentSessionId, safeLang) || targetVoiceIds.get(safeLang);
+                const defaultVoiceId = userVoiceId || voiceId || `google-${locale}-Chirp3-HD-Puck`;
 
                 onCommittedSegment(currentSessionId, {
                   seqId,
                   text: text.trim(),
-                  lang: targetLang || currentTargetLang,
+                  lang: safeLang,
                   voiceId: defaultVoiceId,
                   isFinal: true
                 });
@@ -1176,6 +1208,15 @@ export async function handleHostConnection(clientWs, sessionId) {
                         }
 
                         broadcastWithSequence(messageToSend, false, targetLang);
+
+                        // CRITICAL: Trigger TTS streaming for this target language
+                        // Use translatedText if available, otherwise correctedText (for same-lang)
+                        // Do NOT trigger if translation failed (undefined translatedText)
+                        const ttsText = (targetLang === currentSourceLang) ? correctedText : translatedText;
+
+                        if (ttsText) {
+                          triggerTtsStreaming(finalSourceSeqId, ttsText, targetLang);
+                        }
                       }
 
                       // Increment epoch and cancel any pending delayed partial timers when FINAL is emitted
@@ -1197,7 +1238,8 @@ export async function handleHostConnection(clientWs, sessionId) {
                       checkForExtendingPartialsAfterFinal(lastSentFinalText);
 
                       // Trigger TTS streaming for this committed segment
-                      triggerTtsStreaming(finalSourceSeqId, lastSentFinalText, currentTargetLang);
+                      // Check for extending partials after final
+                      checkForExtendingPartialsAfterFinal(lastSentFinalText);
                     } catch (error) {
                       console.error(`[HostMode] Final processing error:`, error);
                       // If it's a skip request error, use corrected text (or original if not set)
