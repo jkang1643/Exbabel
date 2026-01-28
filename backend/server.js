@@ -157,6 +157,9 @@ import apiAuth from './apiAuth.js';
 import rateLimiter from './rateLimiter.js';
 import inputValidator from './inputValidator.js';
 
+// Import API routes
+import { meRouter } from './routes/me.js';
+
 // Reload API keys now that dotenv has loaded the .env file
 // (apiAuth is instantiated when imported, but dotenv.config runs after imports)
 apiAuth.loadKeys();
@@ -233,6 +236,13 @@ wss.on("connection", async (clientWs, req) => {
   console.log("[Backend] Solo mode connection - using Google Speech + OpenAI Translation");
   handleSoloMode(clientWs);
 });
+
+// ========================================
+// API ROUTES
+// ========================================
+
+// Mount authentication and user context routes
+app.use('/api', meRouter);
 
 // ========================================
 // SESSION MANAGEMENT ENDPOINTS
