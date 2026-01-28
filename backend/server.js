@@ -159,6 +159,7 @@ import inputValidator from './inputValidator.js';
 
 // Import API routes
 import { meRouter } from './routes/me.js';
+import { entitlementsRouter } from './routes/entitlements.js';
 
 // Reload API keys now that dotenv has loaded the .env file
 // (apiAuth is instantiated when imported, but dotenv.config runs after imports)
@@ -243,6 +244,7 @@ wss.on("connection", async (clientWs, req) => {
 
 // Mount authentication and user context routes
 app.use('/api', meRouter);
+app.use('/api', entitlementsRouter);
 
 // ========================================
 // SESSION MANAGEMENT ENDPOINTS

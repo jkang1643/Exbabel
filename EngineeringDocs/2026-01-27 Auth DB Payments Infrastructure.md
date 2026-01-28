@@ -152,6 +152,47 @@ app.use('/api', meRouter);
 
 ---
 
+## Part 4: Entitlement Enforcement Infrastructure (PR6)
+
+**Context:** After establishing the DB baseline, we implemented the logic to enforce plan limits, billing settings, and model routing for every request.
+
+#### 1. Entitlements Module
+
+**Directory:** `backend/entitlements/`
+
+**Components:**
+- `getEntitlements.js`: Fetches normalized entitlements with a 60-second in-memory TTL cache.
+- `resolveModel.js`: Resolves provider/model/params by capability (throws if missing).
+- `assertEntitled.js`: Enforcement helpers for status, language limits, and feature flags.
+
+**Data Model (Normalized):**
+```typescript
+{
+  churchId: string,
+  subscription: { status, planCode, planId, ... },
+  limits: { maxSimultaneousLanguages, sttTier, ttsTier, featureFlags },
+  billing: { paygEnabled, paygRateCentsPerHour, ... },
+  routing: { capability: { provider, model, params } }
+}
+```
+
+#### 2. Entitlements Middleware
+
+**File:** `backend/middleware/requireEntitlements.js`
+
+**Variants:**
+- `requireEntitlements`: Builds on `requireAuthContext` and attaches `req.entitlements`.
+- `requireActiveSubscription`: Enforces `active` or `trialing` status (blocks `past_due`, `canceled`, `paused`, `none`).
+- `requireAdmin`: Enforces `admin` role for billable or sensitive actions.
+
+#### 3. Debug Endpoint
+
+**Endpoint:** `GET /api/debug/entitlements`
+**Protection:** Requires admin role (production) or development mode.
+**Purpose:** Verification tool to inspect a church's current entitlements and routing map.
+
+---
+
 ### 4. Environment Configuration
 
 **File:** `backend/.env`
@@ -256,7 +297,14 @@ We use the Supabase CLI for version-controlled migrations:
 ### New Files
 - `backend/supabaseAdmin.js` - Supabase admin client
 - `backend/middleware/requireAuthContext.js` - Auth middleware
+- `backend/middleware/requireEntitlements.js` - Entitlements middleware [NEW]
+- `backend/entitlements/index.js` - Entitlements module entry [NEW]
+- `backend/entitlements/getEntitlements.js` - Fetcher & Cache [NEW]
+- `backend/entitlements/resolveModel.js` - Model resolver [NEW]
+- `backend/entitlements/assertEntitled.js` - Enforcement helpers [NEW]
 - `backend/routes/me.js` - User context endpoint
+- `backend/routes/entitlements.js` - Entitlements debug endpoint [NEW]
+- `backend/tests/manual/entitlements.test.js` - Unit tests (12 pass) [NEW]
 - `backend/AUTH_TESTING.md` - Testing guide
 
 ### Modified Files
@@ -266,11 +314,18 @@ We use the Supabase CLI for version-controlled migrations:
 ### Directory Structure
 ```
 backend/
+├── entitlements/             [NEW]
+│   ├── getEntitlements.js
+│   ├── resolveModel.js
+│   ├── assertEntitled.js
+│   └── index.js
 ├── middleware/
-│   └── requireAuthContext.js    [NEW]
+│   ├── requireAuthContext.js
+│   └── requireEntitlements.js [NEW]
 ├── routes/
-│   └── me.js                     [NEW]
-├── supabaseAdmin.js              [NEW]
+│   ├── me.js
+│   └── entitlements.js        [NEW]
+├── supabaseAdmin.js
 ├── .env                          [MODIFIED]
 └── server.js                     [MODIFIED]
 ```
@@ -279,10 +334,14 @@ backend/
 
 ## Next Steps
 
-### Immediate (Auth & DB Baseline Complete ✅)
-- [x] Implement Supabase admin client
-- [x] Create authentication middleware
-- [x] Add `/api/me` endpoint
+### Immediate (PR6 Complete ✅)
+- [x] Implement deterministic entitlements fetcher
+- [x] Implement model routing resolver
+- [x] Implement enforcement helpers (status, limits)
+- [x] Add 60s in-memory TTL cache
+- [x] Create entitlement middleware variants
+- [x] Add `/api/debug/entitlements` endpoint
+- [ ] Wire enforcement into real routes (e.g., Session Start, TTS)
 - [x] Create baseline migration with 6-table schema
 - [x] Test authentication and multi-tenant RLS
 - [x] Switch to dedicated `feat/auth-db-billing` branch
@@ -378,3 +437,11 @@ backend/
 - ✅ Configured environment variables
 - ✅ Tested authentication flow
 - ✅ Documented implementation
+
+### 2026-01-28 - Entitlement Enforcement (PR6)
+- ✅ Implemented `getEntitlements` with 60s TTL cache
+- ✅ Implemented model resolver and enforcement helpers
+- ✅ Created `requireEntitlements` and `requireActiveSubscription` middleware
+- ✅ Added `/api/debug/entitlements` debug endpoint
+- ✅ Verified with 12 unit tests (passing)
+- ✅ Updated engineering documentation
