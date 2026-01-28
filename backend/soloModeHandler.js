@@ -22,6 +22,7 @@ import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmitte
 import { onCommittedSegment, cleanupSession } from './tts/TtsStreamingOrchestrator.js';
 import { resolveVoice } from './tts/voiceResolver.js';
 import { isStreamingEnabled } from './tts/ttsStreamingConfig.js';
+import { resolveModel } from './entitlements/index.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -38,6 +39,22 @@ export async function handleSoloMode(clientWs) {
   // MULTI-SESSION OPTIMIZATION: Track this session for fair-share allocation
   // This allows the rate limiter to distribute capacity fairly across sessions
   let sessionId = legacySessionId;
+
+  // PHASE 1: Extract entitlements from WS connection (attached by server.js)
+  const entitlements = clientWs.entitlements || null;
+  let translateModel = 'gpt-4o-mini'; // Default if no entitlements
+
+  if (entitlements) {
+    try {
+      const translateRouting = resolveModel(entitlements, 'translate');
+      translateModel = translateRouting.model;
+      console.log(`[SoloMode] ✓ Using resolved translate model: ${translateModel}`);
+    } catch (err) {
+      console.warn(`[SoloMode] Failed to resolve translate model, using default: ${err.message}`);
+    }
+  } else {
+    console.log(`[SoloMode] No entitlements - using default translate model: ${translateModel}`);
+  }
 
   // PHASE 7: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (replaces individual engine instances)
@@ -818,7 +835,8 @@ export async function handleSoloMode(clientWs) {
                                 currentSourceLang,
                                 currentTargetLang,
                                 process.env.OPENAI_API_KEY,
-                                sessionId
+                                sessionId,
+                                { model: translateModel } // Use resolved model from entitlements
                               );
 
                               // Send translation update with same seqId
@@ -1012,7 +1030,8 @@ export async function handleSoloMode(clientWs) {
                             currentSourceLang,
                             currentTargetLang,
                             process.env.OPENAI_API_KEY,
-                            sessionId // MULTI-SESSION: Pass sessionId for fair-share allocation
+                            sessionId, // MULTI-SESSION: Pass sessionId for fair-share allocation
+                            { model: translateModel } // Use resolved model from entitlements
                           );
                         } catch (translationError) {
                           // If it's a skip request error (rate limited), use original text silently

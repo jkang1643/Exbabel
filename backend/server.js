@@ -17,23 +17,28 @@
  * See LICENSE file for complete terms and conditions.
  */
 
-import express from "express";
-import WebSocket, { WebSocketServer } from "ws";
-import fetch from "node-fetch";
-import cors from "cors";
+// CRITICAL: Load environment variables FIRST, before any imports that need them
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
-import sessionStore from "./sessionStore.js";
-import translationManager from "./translationManager.js";
-import { fetchWithRateLimit } from "./openaiRateLimiter.js";
-import { loadAllCatalogs } from './tts/voiceCatalog/catalogLoader.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load .env from backend directory
 dotenv.config({ path: path.join(__dirname, '.env') });
+
+// Now import modules that depend on environment variables
+import express from "express";
+import WebSocket, { WebSocketServer } from "ws";
+import fetch from "node-fetch";
+import cors from "cors";
+import sessionStore from "./sessionStore.js";
+import translationManager from "./translationManager.js";
+import { fetchWithRateLimit } from "./openaiRateLimiter.js";
+import { loadAllCatalogs } from './tts/voiceCatalog/catalogLoader.js';
+import { supabaseAdmin } from "./supabaseAdmin.js";
+import { getEntitlements } from "./entitlements/index.js";
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -160,6 +165,7 @@ import inputValidator from './inputValidator.js';
 // Import API routes
 import { meRouter } from './routes/me.js';
 import { entitlementsRouter } from './routes/entitlements.js';
+import usageRouter from './routes/usage.js';
 
 // Reload API keys now that dotenv has loaded the .env file
 // (apiAuth is instantiated when imported, but dotenv.config runs after imports)
@@ -235,6 +241,42 @@ wss.on("connection", async (clientWs, req) => {
   // Fall back to solo mode for backward compatibility
   // Uses Google Speech for transcription + OpenAI for translation
   console.log("[Backend] Solo mode connection - using Google Speech + OpenAI Translation");
+
+  // PHASE 1: Load entitlements if auth token is provided
+  const authToken = urlObj.searchParams.get('token');
+  if (authToken) {
+    try {
+      // Verify token with Supabase
+      const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(authToken);
+
+      if (authError || !user) {
+        console.warn(`[Backend] WS auth failed: ${authError?.message || 'No user'}`);
+        // Continue without entitlements (graceful degradation)
+      } else {
+        // Get user's church_id from profile
+        const { data: profile } = await supabaseAdmin
+          .from('profiles')
+          .select('church_id')
+          .eq('id', user.id)
+          .single();
+
+        if (profile?.church_id) {
+          const entitlements = await getEntitlements(profile.church_id);
+          clientWs.entitlements = entitlements;
+          clientWs.churchId = profile.church_id;
+          console.log(`[Backend] ✓ Entitlements loaded for church ${profile.church_id}: plan=${entitlements.subscription.planCode}`);
+        } else {
+          console.warn(`[Backend] User ${user.id} has no church_id`);
+        }
+      }
+    } catch (entError) {
+      console.error(`[Backend] Entitlements load error:`, entError.message);
+      // Continue without entitlements (graceful degradation)
+    }
+  } else {
+    console.log(`[Backend] No auth token provided - using default behavior`);
+  }
+
   handleSoloMode(clientWs);
 });
 
@@ -245,6 +287,7 @@ wss.on("connection", async (clientWs, req) => {
 // Mount authentication and user context routes
 app.use('/api', meRouter);
 app.use('/api', entitlementsRouter);
+app.use('/api', usageRouter);
 
 // ========================================
 // SESSION MANAGEMENT ENDPOINTS

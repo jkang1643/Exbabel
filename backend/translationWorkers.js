@@ -23,11 +23,14 @@ import { normalizePunctuation } from './transcriptionCleanup.js';
  * Partial Translation Worker - Optimized for speed and low latency
  */
 export class PartialTranslationWorker {
-  constructor() {
+  constructor(options = {}) {
     this.cache = new Map();
     this.pendingRequests = new Map(); // Track pending requests for cancellation
     this.MAX_CACHE_SIZE = 200; // Larger cache for partials
     this.CACHE_TTL = 120000; // 2 minutes cache for partials (longer since partials repeat)
+
+    // Configurable model - defaults to gpt-4o-mini
+    this.defaultModel = options.model || 'gpt-4o-mini';
 
     // Throttling configuration for partial translations
     this.THROTTLE_MS = 2000; // Throttle to ~1 request every 2 seconds (was 800ms)
@@ -75,7 +78,7 @@ export class PartialTranslationWorker {
           'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini', // Faster model for partials
+          model: this.defaultModel, // Configurable model
           messages: [
             {
               role: 'system',
@@ -370,7 +373,7 @@ PARTIAL TEXT RULES:
           'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini', // Faster model for partials
+          model: this.defaultModel, // Configurable model
           messages: [
             {
               role: 'system',
@@ -675,10 +678,13 @@ PARTIAL TEXT RULES:
  * Final Translation Worker - Optimized for quality and accuracy
  */
 export class FinalTranslationWorker {
-  constructor() {
+  constructor(options = {}) {
     this.cache = new Map();
     this.MAX_CACHE_SIZE = 100;
     this.CACHE_TTL = 600000; // 10 minutes cache for finals (longer since they're stable)
+
+    // Configurable model - defaults to gpt-4o-mini
+    this.defaultModel = options.model || 'gpt-4o-mini';
   }
 
   /**
@@ -689,8 +695,12 @@ export class FinalTranslationWorker {
    * @param {string} targetLang - Target language code
    * @param {string} apiKey - OpenAI API key
    * @param {string} sessionId - Optional session ID for multi-session tracking
+   * @param {object} options - Optional config: { model: 'gpt-4o' }
    */
-  async translateFinal(text, sourceLang, targetLang, apiKey, sessionId = null) {
+  async translateFinal(text, sourceLang, targetLang, apiKey, sessionId = null, options = {}) {
+    // Per-call model override
+    const model = options.model || this.defaultModel;
+
     if (!text || text.trim().length === 0) {
       return text;
     }
@@ -731,7 +741,7 @@ export class FinalTranslationWorker {
           'Authorization': `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini', // Faster model for final translations
+          model: model, // Per-call override or constructor default
           messages: [
             {
               role: 'system',

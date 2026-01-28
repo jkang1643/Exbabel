@@ -1,1 +1,109 @@
-/**\n * Entitlements Middleware\n * \n * Middleware that requires authentication and loads entitlements.\n * Use this for routes that need entitlement enforcement.\n * \n * @module middleware/requireEntitlements\n */\n\nimport { requireAuthContext } from \"./requireAuthContext.js\";\nimport { getEntitlements, assertSubscriptionActive, SubscriptionInactiveError } from \"../entitlements/index.js\";\n\n/**\n * Middleware: Require authenticated user with entitlements loaded\n * \n * Builds on requireAuthContext, then loads and attaches entitlements.\n * Sets req.entitlements = { churchId, subscription, limits, billing, routing }\n * \n * @param {Request} req - Express request\n * @param {Response} res - Express response\n * @param {NextFunction} next - Express next function\n */\nexport async function requireEntitlements(req, res, next) {\n    // First run requireAuthContext\n    await requireAuthContext(req, res, async () => {\n        try {\n            // If auth failed, req.auth won't exist\n            if (!req.auth || !req.auth.church_id) {\n                // Auth middleware already sent response\n                return;\n            }\n\n            // Load entitlements\n            const entitlements = await getEntitlements(req.auth.church_id);\n            req.entitlements = entitlements;\n\n            console.log(\n                `[Auth+E] ✓ user=${req.auth.user_id} church=${req.auth.church_id} plan=${entitlements.subscription.planCode} status=${entitlements.subscription.status}`\n            );\n\n            return next();\n        } catch (e) {\n            console.error(\"[Auth+E] Error loading entitlements:\", e);\n            return res.status(500).json({\n                error: \"Failed to load entitlements\",\n            });\n        }\n    });\n}\n\n/**\n * Middleware: Require active subscription\n * \n * Use after requireEntitlements to enforce subscription status gating.\n * Blocks past_due, canceled, paused, none.\n * \n * @param {Request} req - Express request (must have req.entitlements)\n * @param {Response} res - Express response\n * @param {NextFunction} next - Express next function\n */\nexport function requireActiveSubscription(req, res, next) {\n    try {\n        if (!req.entitlements) {\n            // Entitlements not loaded - programming error\n            console.error(\"[Subscription] requireActiveSubscription called without entitlements\");\n            return res.status(500).json({ error: \"Internal error\" });\n        }\n\n        assertSubscriptionActive(req.entitlements);\n        return next();\n    } catch (e) {\n        if (e instanceof SubscriptionInactiveError) {\n            console.warn(`[Subscription] ✗ Blocked: status=${e.status} plan=${e.planCode}`);\n            return res.status(e.httpStatus).json({\n                error: e.message,\n                status: e.status,\n                planCode: e.planCode,\n            });\n        }\n        return res.status(500).json({ error: \"Internal error\" });\n    }\n}\n\n/**\n * Middleware: Require admin role\n * \n * Use after requireAuthContext or requireEntitlements.\n * Blocks non-admin users from billable/admin actions.\n * \n * @param {Request} req - Express request (must have req.auth)\n * @param {Response} res - Express response\n * @param {NextFunction} next - Express next function\n */\nexport function requireAdmin(req, res, next) {\n    if (!req.auth) {\n        return res.status(401).json({ error: \"Not authenticated\" });\n    }\n\n    if (req.auth.role !== \"admin\") {\n        console.warn(`[Admin] ✗ Blocked: user=${req.auth.user_id} role=${req.auth.role}`);\n        return res.status(403).json({\n            error: \"Admin role required\",\n            role: req.auth.role,\n        });\n    }\n\n    console.log(`[Admin] ✓ OK: user=${req.auth.user_id}`);\n    return next();\n}\n
+/**
+ * Entitlements Middleware
+ * 
+ * Middleware that requires authentication and loads entitlements.
+ * Use this for routes that need entitlement enforcement.
+ * 
+ * @module middleware/requireEntitlements
+ */
+
+import { requireAuthContext } from "./requireAuthContext.js";
+import { getEntitlements, assertSubscriptionActive, SubscriptionInactiveError } from "../entitlements/index.js";
+
+/**
+ * Middleware: Require authenticated user with entitlements loaded
+ * 
+ * Builds on requireAuthContext, then loads and attaches entitlements.
+ * Sets req.entitlements = { churchId, subscription, limits, billing, routing }
+ * 
+ * @param {Request} req - Express request
+ * @param {Response} res - Express response
+ * @param {NextFunction} next - Express next function
+ */
+export async function requireEntitlements(req, res, next) {
+    // First run requireAuthContext
+    await requireAuthContext(req, res, async () => {
+        try {
+            // If auth failed, req.auth won't exist
+            if (!req.auth || !req.auth.church_id) {
+                // Auth middleware already sent response
+                return;
+            }
+
+            // Load entitlements
+            const entitlements = await getEntitlements(req.auth.church_id);
+            req.entitlements = entitlements;
+
+            console.log(
+                `[Auth+E] ✓ user=${req.auth.user_id} church=${req.auth.church_id} plan=${entitlements.subscription.planCode} status=${entitlements.subscription.status}`
+            );
+
+            return next();
+        } catch (e) {
+            console.error("[Auth+E] Error loading entitlements:", e);
+            return res.status(500).json({
+                error: "Failed to load entitlements",
+            });
+        }
+    });
+}
+
+/**
+ * Middleware: Require active subscription
+ * 
+ * Use after requireEntitlements to enforce subscription status gating.
+ * Blocks past_due, canceled, paused, none.
+ * 
+ * @param {Request} req - Express request (must have req.entitlements)
+ * @param {Response} res - Express response
+ * @param {NextFunction} next - Express next function
+ */
+export function requireActiveSubscription(req, res, next) {
+    try {
+        if (!req.entitlements) {
+            // Entitlements not loaded - programming error
+            console.error("[Subscription] requireActiveSubscription called without entitlements");
+            return res.status(500).json({ error: "Internal error" });
+        }
+
+        assertSubscriptionActive(req.entitlements);
+        return next();
+    } catch (e) {
+        if (e instanceof SubscriptionInactiveError) {
+            console.warn(`[Subscription] ✗ Blocked: status=${e.status} plan=${e.planCode}`);
+            return res.status(e.httpStatus).json({
+                error: e.message,
+                status: e.status,
+                planCode: e.planCode,
+            });
+        }
+        return res.status(500).json({ error: "Internal error" });
+    }
+}
+
+/**
+ * Middleware: Require admin role
+ * 
+ * Use after requireAuthContext or requireEntitlements.
+ * Blocks non-admin users from billable/admin actions.
+ * 
+ * @param {Request} req - Express request (must have req.auth)
+ * @param {Response} res - Express response
+ * @param {NextFunction} next - Express next function
+ */
+export function requireAdmin(req, res, next) {
+    if (!req.auth) {
+        return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    if (req.auth.role !== "admin") {
+        console.warn(`[Admin] ✗ Blocked: user=${req.auth.user_id} role=${req.auth.role}`);
+        return res.status(403).json({
+            error: "Admin role required",
+            role: req.auth.role,
+        });
+    }
+
+    console.log(`[Admin] ✓ OK: user=${req.auth.user_id}`);
+    return next();
+}
