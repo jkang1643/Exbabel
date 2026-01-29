@@ -21,6 +21,8 @@ import { getOrgVoiceDefaults } from './defaults/defaultsStore.js';
  * @returns {Promise<object>} Resolved voice { tier, voiceName, reason }
  */
 export async function resolveVoice({ orgId, userPref, languageCode, allowedTiers }) {
+    console.log(`[VoiceResolver] Resolving for ${languageCode} (allowed: ${allowedTiers.join(',')})`);
+
     // 1. User preference (if provided and allowed)
     if (userPref?.tier && (userPref?.voiceId || userPref?.voiceName)) {
         // Check if tier is allowed

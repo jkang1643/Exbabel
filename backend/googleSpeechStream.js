@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import { TRANSCRIPTION_LANGUAGES, getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
 import AudioBufferManager from './audioBufferManager.js';
 import { normalizePunctuation } from './transcriptionCleanup.js';
+import { resolveModel } from './entitlements/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -123,10 +124,27 @@ export class GoogleSpeechStream {
    */
   async initialize(sourceLang, options = {}) {
     console.log(`[GoogleSpeech] Initializing streaming transcription for ${sourceLang}...`);
-    console.log(`[GoogleSpeech] ✅ Using API v1p1beta1 for PhraseSet support`);
 
     // Store initialization options for startStream
     this.initOptions = options;
+
+    // PHASE 7: Resolve STT routing if entitlements provided
+    if (options.entitlements) {
+      try {
+        const sttRouting = resolveModel(options.entitlements, 'stt');
+        this.sttRouting = sttRouting;
+        console.log(`[GoogleSpeech] ✓ Resolved STT routing: ${sttRouting.provider}/${sttRouting.model}`);
+      } catch (err) {
+        console.warn(`[GoogleSpeech] Failed to resolve STT routing, using default: ${err.message}`);
+      }
+    }
+
+    // Default to v1p1beta1
+    let selectedSpeechClient = speech.v1p1beta1;
+    // Allow routing to override API version if v2 is implemented in future
+    if (this.sttRouting && this.sttRouting.model === 'v2') {
+      console.log(`[GoogleSpeech] ℹ️ STT v2 requested via routing (v2 client implementation pending, using v1p1beta1 enhanced)`);
+    }
 
     // Create Speech client with authentication options
     const clientOptions = {};
@@ -146,8 +164,8 @@ export class GoogleSpeechStream {
       console.log('[GoogleSpeech] Using default credentials (GCP environment)');
     }
 
-    // Use v1p1beta1 client for PhraseSet support (v1 doesn't support PhraseSets, v2 requires Recognizer resource)
-    this.client = new speechClient.SpeechClient(clientOptions);
+    // Use selected client version (v1p1beta1 baseline)
+    this.client = new selectedSpeechClient.SpeechClient(clientOptions);
 
     // Get language code for Google Speech (only supports transcription languages)
     // If language is not supported for transcription, fall back to English
@@ -215,6 +233,13 @@ export class GoogleSpeechStream {
       alternativeLanguageCodes: [],
     };
 
+    // PHASE 7: Merge parameters from STT routing (Provider-defined params)
+    if (this.sttRouting && this.sttRouting.params) {
+      console.log(`[GoogleSpeech] 🔧 Applying STT routing parameters: ${JSON.stringify(this.sttRouting.params)}`);
+      Object.assign(requestConfig, this.sttRouting.params);
+    }
+
+
     // ========== FEATURE FLAG: Multi-Language Auto-Detect ==========
     // Options priority: 1) this.initOptions (dynamic), 2) .env (global)
     const isMultiLangEnabled = this.initOptions?.enableMultiLanguage === true || process.env.STT_MULTI_LANG_ENABLED === 'true';
@@ -274,7 +299,9 @@ export class GoogleSpeechStream {
 
     if (forceEnhanced || (this.useEnhancedModel && !this.hasTriedEnhancedModel)) {
       requestConfig.useEnhanced = true;
-      requestConfig.model = 'latest_long'; // Enhanced model for long-form audio
+      if (!requestConfig.model) {
+        requestConfig.model = 'latest_long'; // Enhanced model for long-form audio
+      }
       if (forceEnhanced) {
         console.log(`[GoogleSpeech] ✅ FORCING enhanced model (latest_long) for recovery stream - maximum accuracy`);
       }

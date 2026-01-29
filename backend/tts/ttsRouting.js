@@ -12,6 +12,7 @@
  */
 
 import { TtsEngine, TtsEncoding } from './tts.types.js';
+import { getAllowedTtsTiers } from '../entitlements/index.js';
 
 // Global voice cache - will be populated by dynamic discovery
 let VOICE_CACHE = new Map();
@@ -394,6 +395,14 @@ const TIER_CONFIG = {
     supportsAllLanguages: true,
     fallbackTier: 'standard'
   },
+  studio: {
+    provider: 'google',
+    tier: 'studio',
+    engine: TtsEngine.CHIRP3_HD, // Studio voices use Chirp3 HD engine
+    model: null,
+    supportsAllLanguages: false, // Studio voices have limited language support
+    fallbackTier: 'neural2' // Fallback to neural2 if studio not available
+  },
   standard: {
     provider: 'google',
     tier: 'standard',
@@ -551,18 +560,21 @@ const LANGUAGE_TIER_AVAILABILITY = {
   "en-IN": [
     "gemini",
     "chirp3_hd",
+    "studio",
     "neural2",
     "standard"
   ],
   "en-GB": [
     "gemini",
     "chirp3_hd",
+    "studio",
     "neural2",
     "standard"
   ],
   "en-US": [
     "gemini",
     "chirp3_hd",
+    "studio",
     "neural2",
     "standard"
   ],
@@ -867,7 +879,7 @@ function _isTierAvailableForLanguage(tier, languageCode) {
  * Resolve tier based on user request, language, and availability
  * @private
  */
-function _resolveTier(requestedTier, languageCode, orgConfig = {}) {
+function _resolveTier(requestedTier, languageCode, orgConfig = {}, userSubscription = {}) {
   // Start with requested tier
   let resolvedTier = requestedTier;
 
@@ -886,8 +898,45 @@ function _resolveTier(requestedTier, languageCode, orgConfig = {}) {
     }
   }
 
-  // TODO: Check org/subscription restrictions
-  // For now, allow all tiers
+  // Check org/subscription restrictions
+  if (userSubscription && userSubscription.limits && userSubscription.limits.ttsTier) {
+    const allowedTiers = getAllowedTtsTiers(userSubscription.limits.ttsTier);
+    console.log(`[TTS Routing] Checking tier '${resolvedTier}' against allowed: [${allowedTiers.join(', ')}] (Plan: ${userSubscription.subscription?.planCode || 'unknown'})`);
+
+    if (!allowedTiers.includes(resolvedTier)) {
+      console.warn(`[TTS Routing] ⚠️ Tier '${resolvedTier}' not allowed for plan. finding fallback...`);
+
+      // Fallback strategies:
+      // 1. Try to find a lower tier that is allowed AND available for this language
+      // Available tiers for this language (sorted by quality/preference usually)
+      const availableLangTiers = _getAvailableTiersForLanguage(languageCode);
+
+      // Filter to only those allowed by subscription
+      const candidates = availableLangTiers.filter(t => allowedTiers.includes(t));
+
+      if (candidates.length > 0) {
+        // Pick the "best" candidate (assuming availableLangTiers is sorted best-to-worst, or we just pick the first one)
+        // Usually 'standard' is always available/allowed.
+        // Let's try to preserve the highest quality allowed.
+        // Since we don't have a strict quality ordering in this array, we can check specific fallbacks.
+
+        if (allowedTiers.includes('chirp3_hd') && candidates.includes('chirp3_hd')) {
+          resolvedTier = 'chirp3_hd';
+        } else if (allowedTiers.includes('neural2') && candidates.includes('neural2')) {
+          resolvedTier = 'neural2';
+        } else if (allowedTiers.includes('standard') && candidates.includes('standard')) {
+          resolvedTier = 'standard';
+        } else {
+          resolvedTier = candidates[0];
+        }
+        console.log(`[TTS Routing] ⬇️ Downgraded to allowed tier: ${resolvedTier}`);
+      } else {
+        // If nothing is allowed (e.g. 'none' plan), this might return a tier that will fail later or 'standard' as safety
+        console.warn(`[TTS Routing] ❌ No tiers allowed for this language/plan combination! Defaulting to standard.`);
+        resolvedTier = 'standard';
+      }
+    }
+  }
 
   return resolvedTier;
 }
@@ -1001,8 +1050,9 @@ async function _resolveVoice(tier, languageCode, requestedVoiceName) {
 
       const TIER_NAME_TAGS = {
         'chirp3_hd': ['Chirp3', 'Chirp_3', 'Chirp-3'],
-        'neural2': ['Neural2', 'Wavenet', 'Studio'],
-        'standard': ['Standard', 'Polyglot', 'Chirp-HD', 'Chirp']
+        'neural2': ['Neural2', 'Wavenet'],
+        'studio': ['Studio'],
+        'standard': ['Standard', 'Polyglot']
       };
 
       // Extract voice name from URN if present (e.g., google_cloud_tts:chirp3_hd:es-ES:Leda -> Leda)
@@ -1119,7 +1169,7 @@ export async function resolveTtsRoute({
     console.log(`[TTS Routing]   ✅ Using explicit tier: ${effectiveTier}`);
   }
 
-  let resolvedTier = _resolveTier(effectiveTier, normalizedLanguageCode, orgConfig);
+  let resolvedTier = _resolveTier(effectiveTier, normalizedLanguageCode, orgConfig, userSubscription);
   console.log(`[TTS Routing]   📍 Resolved tier: ${resolvedTier}`);
 
   let resolvedVoiceName = await _resolveVoice(resolvedTier, normalizedLanguageCode, requestedVoice);

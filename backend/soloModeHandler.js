@@ -22,7 +22,9 @@ import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmitte
 import { onCommittedSegment, cleanupSession } from './tts/TtsStreamingOrchestrator.js';
 import { resolveVoice } from './tts/voiceResolver.js';
 import { isStreamingEnabled } from './tts/ttsStreamingConfig.js';
-import { resolveModel } from './entitlements/index.js';
+import { resolveModel, getAllowedTtsTiers } from './entitlements/index.js';
+import { recordUsageEvent } from './usage/recordUsage.js';
+import crypto from 'crypto';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -39,6 +41,10 @@ export async function handleSoloMode(clientWs) {
   // MULTI-SESSION OPTIMIZATION: Track this session for fair-share allocation
   // This allows the rate limiter to distribute capacity fairly across sessions
   let sessionId = legacySessionId;
+
+  // SESSION-LEVEL USAGE TRACKING: Count total transcribed characters for aggregate STT metering
+  let totalTranscribedCharacters = 0;
+  const sessionStartTime = Date.now();
 
   // PHASE 1: Extract entitlements from WS connection (attached by server.js)
   const entitlements = clientWs.entitlements || null;
@@ -230,11 +236,22 @@ export async function handleSoloMode(clientWs) {
       }
     }
 
+    // Get allowed TTS tiers from entitlements (defaults to all if no entitlements)
+    const allowedTiers = entitlements
+      ? getAllowedTtsTiers(entitlements.limits.ttsTier)
+      : ['gemini', 'chirp3_hd', 'neural2', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash', 'elevenlabs', 'studio', 'standard'];
+
+    // If no tiers allowed, TTS is disabled for this subscription
+    if (allowedTiers.length === 0) {
+      console.warn(`[SoloMode] TTS disabled - no allowed tiers for this subscription`);
+      return;
+    }
+
     const resolved = await resolveVoice({
       orgId: sessionId,
       userPref: voiceIdToUse ? { voiceId: voiceIdToUse, tier: tierToUse } : null,
       languageCode: targetLang || currentTargetLang,
-      allowedTiers: ['gemini', 'chirp3_hd', 'neural2', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash', 'elevenlabs', 'standard']
+      allowedTiers
     });
 
     console.log(`[SoloMode]   -> Resolved to: ${resolved.voiceId} (tier: ${resolved.tier})`);
@@ -247,7 +264,7 @@ export async function handleSoloMode(clientWs) {
       lang: targetLang || currentTargetLang,
       voiceId: resolved.voiceId,
       isFinal: true
-    });
+    }, clientWs.churchId);
   };
 
   // Handle client messages
@@ -298,7 +315,23 @@ export async function handleSoloMode(clientWs) {
             currentTargetLang = message.targetLang;
           }
           if (message.tier !== undefined) {
-            const newTier = message.tier === 'premium' || message.tier === true;
+            let newTier = message.tier === 'premium' || message.tier === true;
+
+            // PHASE 7: Tier Gating - Only Unlimited plan can use Premium (GPT Realtime) tier
+            if (newTier && entitlements && entitlements.subscription.planCode !== 'unlimited') {
+              console.warn(`[SoloMode] 🚫 TIER GATING: Plan '${entitlements.subscription.planCode}' rejected premium tier request. Falling back to basic.`);
+
+              // Only send warning if they explicitly requested premium
+              if (message.tier === 'premium' || message.tier === true) {
+                clientWs.send(JSON.stringify({
+                  type: 'warning',
+                  message: 'Your current plan does not support Premium (Realtime) mode. Falling back to Basic.',
+                  plan: entitlements.subscription.planCode
+                }));
+              }
+              newTier = false;
+            }
+
             const tierChanged = newTier !== usePremiumTier;
             usePremiumTier = newTier;
 
@@ -340,6 +373,7 @@ export async function handleSoloMode(clientWs) {
                 enableSpeakerDiarization: message.enableSpeakerDiarization,
                 minSpeakers: message.minSpeakers,
                 maxSpeakers: message.maxSpeakers,
+                entitlements: entitlements // PHASE 7: Pass entitlements for STT version routing
               });
 
               const isTranscriptionOnly = currentSourceLang === currentTargetLang;
@@ -598,6 +632,10 @@ export async function handleSoloMode(clientWs) {
                     // This prevents sending grammar-corrected version of same original text twice
                     const trimmedText = textToProcess.trim();
                     const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
+
+                    // SESSION USAGE TRACKING: Count transcribed characters (after duplicate check)
+                    // This runs before duplicate detection returns, so we count all unique finals
+                    totalTranscribedCharacters += trimmedText.length;
 
                     // Always check for duplicates if we have tracking data (not just within time window)
                     // This catches duplicates even if they arrive outside the continuation window
@@ -3694,6 +3732,33 @@ export async function handleSoloMode(clientWs) {
     if (speechStream) {
       speechStream.destroy();
       speechStream = null;
+    }
+
+    // AGGREGATE STT USAGE METERING: Record total transcription usage at session end
+    if (totalTranscribedCharacters > 0 && clientWs.churchId) {
+      const sessionDurationSeconds = Math.ceil((Date.now() - sessionStartTime) / 1000);
+      // Estimate transcription seconds from character count (avg ~15 chars/second of speech)
+      const estimatedTranscriptionSeconds = Math.ceil(totalTranscribedCharacters / 15);
+      const sessionHash = crypto.createHash('md5').update(sessionId).digest('hex').substring(0, 8);
+      const idempotencyKey = `stt:${clientWs.churchId}:${sessionId}:${sessionHash}`;
+
+      recordUsageEvent({
+        church_id: clientWs.churchId,
+        metric: 'transcription_seconds',
+        quantity: estimatedTranscriptionSeconds,
+        idempotency_key: idempotencyKey,
+        metadata: {
+          sessionId,
+          totalCharacters: totalTranscribedCharacters,
+          sessionDurationSeconds,
+          sourceLang: currentSourceLang,
+          targetLang: currentTargetLang
+        }
+      }).then(() => {
+        console.log(`[SoloMode] ✓ Recorded usage: ${estimatedTranscriptionSeconds} transcription_seconds (key: ${idempotencyKey})`);
+      }).catch(err => {
+        console.warn(`[SoloMode] ⚠️ Failed to record STT usage:`, err.message);
+      });
     }
   });
 

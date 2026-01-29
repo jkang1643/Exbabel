@@ -394,11 +394,13 @@ export function HostPage({ onBackToHome }) {
       setConnectionState('open');
 
       // Send initialization
-      ws.send(JSON.stringify({
+      const initMessage = {
         type: 'init',
         sourceLang: sourceLang,
         tier: usePremiumTier ? 'premium' : 'basic'
-      }));
+      };
+      console.log('[Host] Sending init message:', initMessage);
+      ws.send(JSON.stringify(initMessage));
     };
 
     ws.onclose = () => {
@@ -1017,6 +1019,19 @@ export function HostPage({ onBackToHome }) {
     }
 
     try {
+      // FORCE INIT: Ensure backend is initialized before sending audio
+      if (wsRef.current.readyState === WebSocket.OPEN) {
+        const initMessage = {
+          type: 'init',
+          sourceLang: sourceLang,
+          tier: usePremiumTier ? 'premium' : 'basic',
+          encoding: 'LINEAR16',
+          sampleRateHertz: 24000 // Matches useAudioCapture configuration
+        };
+        console.log('[Host] Force-sending init message before broadcast:', initMessage);
+        wsRef.current.send(JSON.stringify(initMessage));
+      }
+
       await startRecording((audioData) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({

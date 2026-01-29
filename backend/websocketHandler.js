@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
 import { normalizePunctuation } from './transcriptionCleanup.js';
+import { getEntitlements } from './entitlements/index.js';
 
 /**
  * Handle host connection
@@ -409,18 +410,41 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       }));
     }
 
-    // Send welcome message
-    if (clientWs.readyState === WebSocket.OPEN) {
-      clientWs.send(JSON.stringify({
-        type: 'session_joined',
-        sessionId: session.sessionId,
-        sessionCode: session.sessionCode,
-        role: 'listener',
-        targetLang: targetLang,
-        sourceLang: session.sourceLang,
-        message: `Connected to session ${session.sessionCode}`
-      }));
-    }
+    // Fetch entitlements to send plan info and send welcome message
+    // TODO: Use actual orgId from session/auth
+    const orgId = 'default';
+    getEntitlements(orgId)
+      .then(entitlements => {
+        const plan = entitlements?.subscription?.planCode || 'starter';
+        if (clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(JSON.stringify({
+            type: 'session_joined',
+            sessionId: session.sessionId,
+            sessionCode: session.sessionCode,
+            role: 'listener',
+            targetLang: targetLang,
+            sourceLang: session.sourceLang,
+            plan: plan, // Send plan info to frontend
+            message: `Connected to session ${session.sessionCode}`
+          }));
+        }
+      })
+      .catch(err => {
+        console.warn(`[Listener] Failed to fetch plan info: ${err.message}`);
+        // Send welcome message without plan
+        if (clientWs.readyState === WebSocket.OPEN) {
+          clientWs.send(JSON.stringify({
+            type: 'session_joined',
+            sessionId: session.sessionId,
+            sessionCode: session.sessionCode,
+            role: 'listener',
+            targetLang: targetLang,
+            sourceLang: session.sourceLang,
+            plan: 'starter', // Fallback default
+            message: `Connected to session ${session.sessionCode}`
+          }));
+        }
+      });
 
     // Send session stats periodically
     const statsInterval = setInterval(() => {
@@ -898,13 +922,23 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
 
             // 1. Resolve TTS routing (single source of truth)
             const { resolveTtsRoute } = await import('./tts/ttsRouting.js');
+            const { getEntitlements } = await import('./entitlements/index.js');
+
+            // Get entitlements for the org
+            let userSubscription = {};
+            try {
+              userSubscription = await getEntitlements('default'); // TODO: Use actual orgId
+            } catch (err) {
+              console.warn(`[Listener] Failed to fetch entitlements: ${err.message}`);
+            }
+
             const route = await resolveTtsRoute({
               requestedTier: message.tier || (message.engine === 'chirp3_hd' ? 'chirp3_hd' : 'gemini'),
               requestedVoice: message.voiceName,
               languageCode: message.languageCode,
               mode: 'unary',
               orgConfig: {}, // TODO: Pass actual org config
-              userSubscription: {} // TODO: Pass actual subscription
+              userSubscription: userSubscription
             });
 
             // 2. Build TTS request

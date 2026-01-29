@@ -231,6 +231,40 @@ wss.on("connection", async (clientWs, req) => {
 
   // Route to appropriate handler
   if (role === 'host' && sessionId) {
+    // Load entitlements for host mode (same as solo mode)
+    const authToken = urlObj.searchParams.get('token');
+    if (authToken) {
+      try {
+        const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(authToken);
+        if (!authError && user) {
+          const { data: profile } = await supabaseAdmin
+            .from('profiles')
+            .select('church_id')
+            .eq('user_id', user.id)
+            .single();
+
+          if (profile?.church_id) {
+            const entitlements = await getEntitlements(profile.church_id);
+            clientWs.entitlements = entitlements;
+            clientWs.churchId = profile.church_id;
+            console.log(`[Backend] ✓ Host entitlements loaded for church ${profile.church_id}: plan=${entitlements.subscription.planCode}`);
+          }
+        }
+      } catch (entError) {
+        console.error(`[Backend] Host entitlements load error:`, entError.message);
+      }
+    } else if (process.env.TEST_CHURCH_ID) {
+      // TEMPORARY: For testing tier gating without frontend auth integration
+      try {
+        const testChurchId = process.env.TEST_CHURCH_ID;
+        const entitlements = await getEntitlements(testChurchId);
+        clientWs.entitlements = entitlements;
+        clientWs.churchId = testChurchId;
+        console.log(`[Backend] ⚠️ TEST MODE (Host): Using TEST_CHURCH_ID=${testChurchId}, plan=${entitlements.subscription.planCode}`);
+      } catch (testErr) {
+        console.error(`[Backend] TEST_CHURCH_ID load failed (Host):`, testErr.message);
+      }
+    }
     handleHostConnection(clientWs, sessionId);
     return;
   } else if (role === 'listener' && sessionId) {
@@ -257,7 +291,7 @@ wss.on("connection", async (clientWs, req) => {
         const { data: profile } = await supabaseAdmin
           .from('profiles')
           .select('church_id')
-          .eq('id', user.id)
+          .eq('user_id', user.id)
           .single();
 
         if (profile?.church_id) {
@@ -275,6 +309,19 @@ wss.on("connection", async (clientWs, req) => {
     }
   } else {
     console.log(`[Backend] No auth token provided - using default behavior`);
+
+    // TEMPORARY: For testing tier gating without frontend auth integration
+    if (process.env.TEST_CHURCH_ID) {
+      try {
+        const testChurchId = process.env.TEST_CHURCH_ID;
+        const entitlements = await getEntitlements(testChurchId);
+        clientWs.entitlements = entitlements;
+        clientWs.churchId = testChurchId;
+        console.log(`[Backend] ⚠️ TEST MODE: Using TEST_CHURCH_ID=${testChurchId}, plan=${entitlements.subscription.planCode}`);
+      } catch (testErr) {
+        console.error(`[Backend] TEST_CHURCH_ID load failed:`, testErr.message);
+      }
+    }
   }
 
   handleSoloMode(clientWs);

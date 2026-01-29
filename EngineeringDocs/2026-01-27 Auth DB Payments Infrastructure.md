@@ -328,6 +328,31 @@ We have implemented a comprehensive 6-table schema that covers multitenancy, sub
 | `church_billing_settings` | PAYG & Overage settings | Admins can update |
 | `plan_model_routing` | Model config per plan | Publicly readable |
 
+### 4. 3-Tier Plan Structure
+We have finalized three distinct business tiers with specific model routing:
+
+| Tier | Code | STT Engine | Chat Engine | TTS Engine |
+| :--- | :--- | :--- | :--- | :--- |
+| **Starter** | `starter` | Standard Google | `gpt-4o-mini` | Standard, Neural2, Studio |
+| **Pro** | `pro` | Enhanced Google | `gpt-4o` | **Chirp 3 HD** (+ Starter) |
+| **Unlimited** | `unlimited` | **STT 2.0** (`latest_long`) | **GPT Realtime** | **Gemini**, **ElevenLabs** (+ Pro) |
+
+### 5. TTS Technical Tier Mapping
+The mapping between business tiers (in the database `plans.tts_tier`) and technical voice families (in the `voiceCatalog`) is enforced in `backend/entitlements/assertEntitled.js`.
+
+| Technical Tier | Included In | Provider | Notes |
+| :--- | :--- | :--- | :--- |
+| `standard` | Starter | Google | Basic concatenative voices |
+| `neural2` | Starter | Google | High-quality neural voices |
+| `studio` | Starter | Google | Premium studio-quality voices |
+| `chirp3_hd` | Pro | Google | STT 2.0-aligned high-fidelity voices |
+| `gemini` | Unlimited | Google/Gemini | Advanced LLM-based speech synthesis |
+| `elevenlabs` | Unlimited | ElevenLabs | Realistic, cloneable AI voices |
+
+This structure ensures that while the database manages the "what" (Business Plan), the code manages the "how" (Technical Capabilities).
+
+This structure is enforced at the backend level by the `entitlements` module, which resolves the provider/model/params dynamically for every session.
+
 ### 2. Multi-Tenant Strategy
 - **Church-Level Isolation**: All sensitive tables include `church_id`.
 - **Auth Integration**: RLS policies use `auth.uid()` to verify user access via the `profiles` table.
@@ -424,8 +449,9 @@ backend/
 - [x] Create atomic usage recording RPC (`record_usage_event`)
 - [x] Implement idempotent usage recording service
 - [x] Add `/api/debug/usage` endpoints
-- [ ] Wire usage recording into real routes (minutes, characters)
-- [ ] Implement TTS tier gating (simple catalog filtering)
+- [x] Wire usage recording into real routes (minutes, characters) (PR7.3)
+- [x] Implement TTS tier gating (simple catalog filtering) (PR7.2)
+- [x] Align Dev and Production database configurations (IDs & Routing) (PR7.3)
 
 ### Short-Term (Stripe Integration)
 - [ ] Connect Stripe account to backend
@@ -482,6 +508,7 @@ backend/
 2. **Connection Pooling** - Reuse Supabase connections
 3. **JWT Validation** - Validate JWT locally (skip Supabase API call)
 4. **Batch Loading** - Load multiple profiles in single query
+5. **Database Indexing** - Added indices on `usage_events(church_id, occurred_at)` to optimize usage reporting and billing lookups.
 
 **Note:** Current performance is acceptable for MVP. Optimizations can be implemented as traffic scales.
 
@@ -534,4 +561,21 @@ backend/
 - ✅ Implemented lazy-initialization Proxy for `supabaseAdmin` to fix ES module timing issues
 - ✅ Standardized admin role enforcement using `req.auth.role`
 - ✅ Verified admin role-gating on production debug endpoints
+
+### 2026-01-29 - PR 7.2 & 7.3 - Tier Gating & Usage Completion
+- ✅ Implemented TTS Tier Gating based on `tts_tier` (Starter/Pro/Unlimited)
+- ✅ Wired real-time usage recording for STT (seconds) and TTS (characters)
+- ✅ Implemented GPT Realtime (Premium) gating in `soloModeHandler`
+- ✅ Resolved dynamic STT parameters (`latest_long`, auto-punctuation) from DB routing
+- ✅ **Database Alignment**: Synchronized Dev and Production environments to match IDs and Plan UUIDs 1:1 using `surgical-sync.js`
+- ✅ **Bug Fix: Profile Lookup**: Corrected `server.js` to look up profiles via `user_id` instead of `id`, ensuring entitlements load correctly.
+- ✅ **Bug Fix: TTS Usage**: Wired `churchId` into `TtsStreamingOrchestrator` to enable `tts_characters` usage recording.
+- ✅ **Performance**: Applied migration to add indices to `usage_events` table on `church_id` and `occurred_at`.
+- ✅ **Enhancement: Tier-Aware Voice Defaults**: Updated `getDefaultVoice` to select tier-appropriate defaults (Starter→standard, Pro→chirp3_hd, Unlimited→elevenlabs_flash).
+### 2026-01-29 - Session Fixes - Host Mode & Stability
+- ✅ **Fix: Host Mode Audio Race Condition**: Implemented message queuing in `hostModeHandler.js` to buffer audio packets received before the Google Speech stream is fully initialized.
+- ✅ **Fix: Profile Lookup Bug**: Updated `server.js` to query profiles by `user_id` instead of `id`, fixing entitlement loading for users.
+- ✅ **Fix: Entitlements Fetch**: Resolved a `SyntaxError` in `websocketHandler.js` related to dynamic imports, ensuring reliable plan fetching.
+- ✅ **Enhancement: Tier Gating Backend**: Updated `ttsRouting.js` to properly enforce tier limits (Starter/Pro/Unlimited) and fallback strategies.
+- ✅ **Enhancement: Database Indices**: Added indices to `usage_events` for performance optimization.
 

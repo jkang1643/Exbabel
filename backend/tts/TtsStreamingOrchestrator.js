@@ -23,6 +23,10 @@ import {
     recordBytesSent
 } from './ttsStreamingTransport.js';
 import { isStreamingEnabled, TTS_STREAMING_CONFIG } from './ttsStreamingConfig.js';
+import { recordUsageEvent } from '../usage/recordUsage.js';
+import crypto from 'crypto';
+import { resolveTtsRoute } from './ttsRouting.js';
+import { getEntitlements } from '../entitlements/index.js';
 
 // Helper to broadcast routing info for debug overlay
 const broadcastRoutingInfo = (sessionId, info) => {
@@ -37,8 +41,9 @@ const broadcastRoutingInfo = (sessionId, info) => {
  * Per-session orchestrator state
  */
 class SessionOrchestrator {
-    constructor(sessionId) {
+    constructor(sessionId, churchId = null) {
         this.sessionId = sessionId;
+        this.churchId = churchId;
         this.streamId = `${sessionId}:${Date.now()}`;
         this.segmentQueue = [];
         this.isStreaming = false;
@@ -126,46 +131,72 @@ class SessionOrchestrator {
             throw new Error('voiceId is required for streaming TTS');
         }
 
-        // Resolve provider based on voice ID
-        const { provider, providerName } = this.resolveProvider(voiceId);
-        if (!provider.isConfigured()) {
-            throw new Error(`${providerName} streaming provider not configured`);
+        // Fetch entitlements if available
+        let userSubscription = {};
+        if (this.churchId) {
+            try {
+                const entitlements = await getEntitlements(this.churchId);
+                userSubscription = entitlements;
+            } catch (err) {
+                console.warn(`[TTS-Orch] Failed to load entitlements for voice resolution: ${err.message}`);
+            }
         }
 
-        console.log(`[TTS-Orch] Using ${providerName} for voice ${voiceId}`);
+        // Resolve Route (Provider, Tier, Engine, Voice)
+        // This enforces tier gating via ttsRouting.js
+        const route = await resolveTtsRoute({
+            requestedTier: 'neural2', // Default start tier, let inference upgrade it
+            requestedVoice: voiceId,
+            languageCode: lang || 'en-US',
+            mode: 'streaming',
+            userSubscription: userSubscription
+        });
+
+        console.log(`[TTS-Orch] Resolved route for ${voiceId}: provider=${route.provider}, tier=${route.tier}, voice=${route.voiceName}`);
 
         // Broadcast audio.start
         // Use 'opus' for Google (WebM remuxing optimization), 'mp3' for others (ElevenLabs/OpenAI)
-        const codec = providerName === 'Google' ? 'opus' : 'mp3';
+        const codec = route.provider === 'google' ? 'opus' : 'mp3';
+
+        // Broadcast metadata including routing decisions
         broadcastControl(this.sessionId, createStartMessage({
             streamId: this.streamId,
             segmentId,
             version,
             seqId,
             lang,
-            voiceId,
+            voiceId: route.voiceName, // Send actual resolved voice
             textPreview: text,
-            codec // Pass codec to frontend
+            codec,
+            routing: {
+                tier: route.tier,
+                provider: route.provider
+            }
         }));
 
-        // Start streaming with provider-specific parameters
+        // Start streaming based on provider
         let streamHandle;
-        if (providerName === 'ElevenLabs') {
+
+        if (route.provider === 'elevenlabs') {
+            const provider = getElevenLabsStreamingProvider();
+            if (!provider.isConfigured()) throw new Error('ElevenLabs provider not configured');
+
             streamHandle = provider.streamTts({
                 text,
-                voiceId: this.resolveVoiceId(voiceId),
-                modelId: 'eleven_multilingual_v2',
+                voiceId: route.voiceName, // resolveTtsRoute handles ID cleaning
+                modelId: route.model || 'eleven_multilingual_v2',
                 outputFormat: TTS_STREAMING_CONFIG.outputFormat
             });
         } else {
             // Google TTS
-            const resolved = this.resolveGoogleVoice(voiceId, lang);
+            const provider = getGoogleStreamingProvider();
+
             streamHandle = provider.streamTts({
                 text,
-                voiceName: resolved.voiceName,
-                languageCode: resolved.languageCode,
-                modelName: resolved.modelName,
-                audioEncoding: 'MP3'
+                voiceName: route.voiceName,
+                languageCode: route.languageCode,
+                modelName: route.model, // Can be null for standard voices
+                audioEncoding: 'MP3' // Provider transcodes to Opus if needed or we send MP3 chunks
             });
         }
 
@@ -179,6 +210,10 @@ class SessionOrchestrator {
         let totalBytes = 0;
 
         try {
+            // Helper for logging/broadcasting
+            const providerName = route.provider === 'google' ? 'Google' : 'ElevenLabs';
+
+
             for await (const chunk of streamHandle.chunks) {
                 if (this.isShutdown) {
                     streamHandle.cancel();
@@ -194,9 +229,9 @@ class SessionOrchestrator {
 
                     // Update overlay with actual latency
                     broadcastRoutingInfo(this.sessionId, {
-                        voiceName: voiceId,
+                        voiceName: route.voiceName,
                         provider: providerName,
-                        tier: providerName === 'Google' ? (voiceId.includes('gemini') ? 'gemini' : 'chirp') : 'elevenlabs',
+                        tier: route.tier,
                         latencyMs: latency
                     });
                 }
@@ -232,6 +267,44 @@ class SessionOrchestrator {
             broadcastAudioFrame(this.sessionId, finalFrame);
 
             console.log(`[TTS-Orch] Segment ${segmentId} complete: ${chunkIndex} chunks, ${totalBytes} bytes`);
+
+            // Record TTS usage (tts_characters) with idempotency key
+            // Pattern: tts:${churchId}:${sessionId}:${segmentId}
+            // Note: churchId comes from session if available, otherwise use sessionId as fallback
+            const characterCount = text.length;
+            const textHash = crypto.createHash('md5').update(text).digest('hex').substring(0, 8);
+            const idempotencyKey = `tts:${this.sessionId}:${segmentId}:${textHash}`;
+
+            try {
+                if (this.churchId) {
+                    console.log(`[TTS-Orch] 📊 Recording usage for church ${this.churchId}: ${characterCount} chars`);
+                } else {
+                    console.warn(`[TTS-Orch] ⚠️ Skipping usage record - no churchId`);
+                }
+
+                await recordUsageEvent({
+                    // church_id will be null for now - will be wired when session has church context
+                    church_id: this.churchId || null,
+                    metric: 'tts_characters',
+                    quantity: characterCount,
+                    idempotency_key: idempotencyKey,
+                    metadata: {
+                        sessionId: this.sessionId,
+                        segmentId,
+                        voiceId: route.voiceName,
+                        lang,
+                        provider: providerName,
+                        textLength: characterCount,
+                        audioBytesGenerated: totalBytes,
+                        plan: userSubscription?.subscription?.planCode || 'unknown',
+                        tier: route.tier
+                    }
+                });
+                console.log(`[TTS-Orch] ✓ Recorded usage: ${characterCount} tts_characters (key: ${idempotencyKey})`);
+            } catch (usageErr) {
+                // Log but don't fail the TTS stream
+                console.warn(`[TTS-Orch] ⚠️ Failed to record TTS usage:`, usageErr.message);
+            }
 
         } finally {
             this.currentStreamHandle = null;
@@ -505,9 +578,12 @@ const orchestrators = new Map();
  * @param {string} sessionId
  * @returns {SessionOrchestrator}
  */
-export function getOrchestrator(sessionId) {
+export function getOrchestrator(sessionId, churchId = null) {
     if (!orchestrators.has(sessionId)) {
-        orchestrators.set(sessionId, new SessionOrchestrator(sessionId));
+        orchestrators.set(sessionId, new SessionOrchestrator(sessionId, churchId));
+    } else if (churchId && !orchestrators.get(sessionId).churchId) {
+        // Late-bind churchId if it was missing during creation
+        orchestrators.get(sessionId).churchId = churchId;
     }
     return orchestrators.get(sessionId);
 }
@@ -531,7 +607,7 @@ export function removeOrchestrator(sessionId) {
  * @param {string} sessionId - Session ID
  * @param {Object} segment - { seqId, text, lang, voiceId, isFinal }
  */
-export function onCommittedSegment(sessionId, segment) {
+export function onCommittedSegment(sessionId, segment, churchId = null) {
     if (!isStreamingEnabled()) {
         return;
     }
@@ -541,7 +617,7 @@ export function onCommittedSegment(sessionId, segment) {
         return;
     }
 
-    const orch = getOrchestrator(sessionId);
+    const orch = getOrchestrator(sessionId, churchId);
     orch.enqueueSegment(segment);
 }
 

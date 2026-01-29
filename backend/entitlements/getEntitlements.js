@@ -131,25 +131,25 @@ export async function getEntitlements(churchId) {
         .eq("church_id", churchId)
         .single();
 
-    // Handle no subscription: return "not entitled" (status: 'none')
-    // NOTE: We use 'none' not 'canceled' to distinguish missing from Stripe-canceled
+    // Handle no subscription: return basic entitlements (starter tier fallback)
+    // NOTE: We use 'starter' fallback so anonymous/unsubscribed users get basic voice access
     if (subError || !subscriptionData) {
-        console.warn(`[Entitlements] No subscription found for church=${churchId}`);
-        const notEntitled = {
+        console.warn(`[Entitlements] No subscription found for church=${churchId}, using starter fallback`);
+        const fallbackEntitlements = {
             churchId,
             subscription: {
                 status: "none",
                 currentPeriodStart: null,
                 currentPeriodEnd: null,
-                planCode: "none",
+                planCode: "starter",
                 planId: null,
             },
             limits: {
                 includedSecondsPerMonth: 0,
                 maxSessionSeconds: 0,
-                maxSimultaneousLanguages: 0,
-                sttTier: "none",
-                ttsTier: "none",
+                maxSimultaneousLanguages: 1,
+                sttTier: "standard",
+                ttsTier: "starter", // Changed from 'none' to 'starter' for basic voice access
                 featureFlags: {},
             },
             billing: {
@@ -160,8 +160,8 @@ export async function getEntitlements(churchId) {
             },
             routing: {},
         };
-        setCache(churchId, notEntitled);
-        return notEntitled;
+        setCache(churchId, fallbackEntitlements);
+        return fallbackEntitlements;
     }
 
     // Subscription exists but plan is missing - misconfigured DB

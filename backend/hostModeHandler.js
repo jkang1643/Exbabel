@@ -50,6 +50,10 @@ export async function handleHostConnection(clientWs, sessionId) {
   let currentSourceLang = 'en';
   let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
 
+  // Track stream readiness and queue messages
+  let isStreamReady = false;
+  let messageQueue = [];
+
   // PHASE 8: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (same as solo mode)
   const coreEngine = new CoreEngine({
@@ -2457,6 +2461,18 @@ export async function handleHostConnection(clientWs, sessionId) {
               });
 
               console.log('[HostMode] ✅ Google Speech stream initialized and ready');
+
+              // Mark stream as ready and process queued messages
+              isStreamReady = true;
+              if (messageQueue.length > 0) {
+                console.log(`[HostMode] 🔄 Processing ${messageQueue.length} queued messages`);
+                for (const queuedMsg of messageQueue) {
+                  if (queuedMsg.type === 'audio' && speechStream) {
+                    await speechStream.processAudio(queuedMsg.audioData);
+                  }
+                }
+                messageQueue = [];
+              }
             } catch (error) {
               console.error('[HostMode] Failed to initialize Google Speech stream:', error);
               if (clientWs.readyState === WebSocket.OPEN) {
@@ -2479,13 +2495,20 @@ export async function handleHostConnection(clientWs, sessionId) {
           }
           break;
 
+
         case 'audio':
           // Process audio through Google Speech stream
-          if (speechStream) {
+          if (isStreamReady && speechStream) {
             // Stream audio to Google Speech for transcription
             await speechStream.processAudio(message.audioData);
           } else {
-            console.warn('[HostMode] Received audio before stream initialization');
+            // Queue message if stream not ready
+            if (messageQueue.length < 50) { // Limit queue size to prevent memory leaks
+              console.log('[HostMode] ⏳ Stream not ready, queuing audio message');
+              messageQueue.push(message);
+            } else {
+              console.warn('[HostMode] ⚠️ Message queue full, dropping audio message');
+            }
           }
           break;
 

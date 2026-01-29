@@ -1743,3 +1743,41 @@ Successfully implemented low-latency streaming TTS support for Google Cloud (Chi
 - **Fix Verification:** Player catches error, resets `MediaSource`, and playback starts successfully.
 
 ---
+
+## PR 7.2 — Verification & UI Gating Refinements
+**Feature:** Frontend Voice Selection & Plan-Based Gating  
+**Status:** ✅ Implemented & Verified  
+**Date:** 2026-01-29
+
+### What Was Implemented
+
+1. **Plan-Based Voice Defaults**:
+   - Instead of defaulting to a static voice, the system now selects a default voice based on the user's plan tier:
+     - **Starter**: Defaults to Google **Standard** (e.g., `es-ES-Standard-A`).
+     - **Pro**: Defaults to **Chirp 3 HD** (e.g., `...Kore`).
+     - **Unlimited**: Defaults to **ElevenLabs** (e.g., `elevenlabs_flash_...`).
+
+2. **UI Tier Gating**:
+   - The dropdown menu now strictly enforces access to voices based on the user's plan.
+   - Disallowed voices are visually disabled and marked with a lock icon (🔒).
+   - **Tier Rules**:
+     - **Starter**: `Standard`, `Neural2`, `Studio`.
+     - **Pro**: All Starter tiers + `Chirp 3 HD`, `Gemini`. (No ElevenLabs).
+     - **Unlimited**: All tiers (including ElevenLabs).
+
+3. **Stability Fixes**:
+   - **Race Condition**: Fixed `ListenerPage` to wait for the `session_joined` message (containing the plan) before attempting to select a default voice.
+   - **Backend Crash**: Fixed a critical crash in `ttsRouting.js` caused by missing entitlement data during fallback resolution.
+
+### Changes Made
+
+**Frontend**
+- `ListenerPage.jsx`:
+  - Added `userPlan` state to track subscription tier.
+  - Updated `isTierAllowed` logic to implement the specific business rules for Starter/Pro/Unlimited.
+  - Updated selection `useEffect` to abort if `userPlan` is not yet loaded.
+  - Updated voice dropdown to disable restricted options.
+
+**Backend**
+- `websocketHandler.js`: Updated `session_joined` message to include the `plan` field from entitlements.
+- `hostModeHandler.js`: Fixed race condition where audio `speechStream` was accessed before initialization.

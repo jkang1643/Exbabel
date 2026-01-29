@@ -19,8 +19,12 @@ export {
     assertLanguageLimit,
     assertFeatureEnabled,
     assertRole,
+    assertTtsTierAllowed,
+    getAllowedTtsTiers,
     SubscriptionInactiveError,
     LanguageLimitExceededError,
     FeatureNotEnabledError,
     InsufficientRoleError,
+    TtsTierNotAllowedError,
 } from "./assertEntitled.js";
+

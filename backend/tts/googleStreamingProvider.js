@@ -118,36 +118,12 @@ export class GoogleStreamingProvider {
                 // Ensure client is initialized
                 await self._initClient();
 
-                // Build streaming request
-                const stream = self.client.streamingSynthesize();
+                // Detect if voice supports streaming (Chirp 3 HD / Gemini) or needs fallback (Standard / Neural2)
+                const isLegacyVoice = targetVoiceName.includes('Standard') || targetVoiceName.includes('Neural2') || targetVoiceName.includes('Wavenet');
 
-                const voiceConfig = {
-                    languageCode: languageCode,
-                    name: targetVoiceName
-                };
-
-                // Build streaming config (must be sent first)
-                const streamingConfig = {
-                    voice: voiceConfig,
-                    streamingAudioConfig: {
-                        audioEncoding: 'OGG_OPUS', // Always request OGG_OPUS for best quality/latency from Google
-                        sampleRateHertz: 24000
-                    }
-                };
-
-                // Send config
-                stream.write({ streamingConfig });
-
-                // Send text
-                stream.write({
-                    input: { text: text }
-                });
-
-                // Signal end of input
-                stream.end();
-
-                requestStartTime = Date.now();
-                console.log(`[Google-Stream] Starting request: voice=${targetVoiceName}, lang=${languageCode}, textLen=${text.length} (Transcoding to MP3)`);
+                if (isLegacyVoice) {
+                    console.log(`[Google-Stream] Voice ${targetVoiceName} requires unary fallback (simulating stream)`);
+                }
 
                 // Create transcoding pipeline
                 const ffmpegInput = new PassThrough();
@@ -173,26 +149,84 @@ export class GoogleStreamingProvider {
                 // Start processing Google stream in background
                 const processGoogleStream = async () => {
                     try {
-                        let totalBytes = 0;
-                        let firstByteReceived = false;
+                        requestStartTime = Date.now();
 
-                        for await (const response of stream) {
-                            if (response.audioContent && response.audioContent.length > 0) {
-                                if (!firstByteReceived) {
-                                    timeToFirstByteMs = Date.now() - requestStartTime;
-                                    firstByteReceived = true;
-                                    // console.log(`[Google-Stream] Google TTFB: ${timeToFirstByteMs}ms`);
+                        if (isLegacyVoice) {
+                            // UNARY FALLBACK PATH
+                            console.log(`[Google-Stream] Starting UNARY request: voice=${targetVoiceName}, lang=${languageCode}`);
+
+                            const request = {
+                                input: { text: text },
+                                voice: {
+                                    languageCode: languageCode,
+                                    name: targetVoiceName
+                                },
+                                audioConfig: {
+                                    audioEncoding: 'OGG_OPUS',
+                                    sampleRateHertz: 24000
                                 }
-                                totalBytes += response.audioContent.length;
+                            };
 
-                                const buffer = response.audioContent;
-                                if (!ffmpegInput.write(buffer)) {
-                                    await new Promise(resolve => ffmpegInput.once('drain', resolve));
+                            const [response] = await self.client.synthesizeSpeech(request);
+
+                            timeToFirstByteMs = Date.now() - requestStartTime;
+                            console.log(`[Google-Stream] Google Unary TTFB: ${timeToFirstByteMs}ms, Size: ${response.audioContent.length}`);
+
+                            // Write entire buffer to ffmpeg
+                            if (!ffmpegInput.write(response.audioContent)) {
+                                await new Promise(resolve => ffmpegInput.once('drain', resolve));
+                            }
+
+                        } else {
+                            // STREAMING PATH
+                            const stream = self.client.streamingSynthesize();
+
+                            const streamingConfig = {
+                                voice: {
+                                    languageCode: languageCode,
+                                    name: targetVoiceName,
+                                    // Add model name if present (for Gemini)
+                                    ...(targetModelName ? { model: targetModelName } : {})
+                                },
+                                streamingAudioConfig: {
+                                    audioEncoding: 'OGG_OPUS',
+                                    sampleRateHertz: 24000
+                                }
+                            };
+
+                            // Send config
+                            stream.write({ streamingConfig });
+
+                            // Send text
+                            stream.write({
+                                input: { text: text }
+                            });
+
+                            // Signal end of input
+                            stream.end();
+
+                            console.log(`[Google-Stream] Starting STREAMING request: voice=${targetVoiceName}, lang=${languageCode}, model=${targetModelName}`);
+
+                            let totalBytes = 0;
+                            let firstByteReceived = false;
+
+                            for await (const response of stream) {
+                                if (response.audioContent && response.audioContent.length > 0) {
+                                    if (!firstByteReceived) {
+                                        timeToFirstByteMs = Date.now() - requestStartTime;
+                                        firstByteReceived = true;
+                                    }
+                                    totalBytes += response.audioContent.length;
+
+                                    const buffer = response.audioContent;
+                                    if (!ffmpegInput.write(buffer)) {
+                                        await new Promise(resolve => ffmpegInput.once('drain', resolve));
+                                    }
                                 }
                             }
                         }
+
                         ffmpegInput.end();
-                        // console.log(`[Google-Stream] Google stream complete. Total bytes: ${totalBytes}`);
                     } catch (err) {
                         console.error('[Google-Stream] Error reading Google stream:', err);
                         ffmpegInput.destroy(err);

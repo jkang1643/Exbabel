@@ -52,6 +52,10 @@ import { mergeRecoveryText, wordsAreRelated } from '../utils/recoveryMerge.js';
 import { deduplicatePartialText } from '../../core/utils/partialDeduplicator.js';
 import { shouldEmitPartial, shouldEmitFinal, setLastEmittedText, clearLastEmittedText, hasAlphaNumeric } from '../../core/utils/emitGuards.js';
 import { onCommittedSegment, cleanupSession } from '../tts/TtsStreamingOrchestrator.js';
+import { resolveVoice } from '../tts/voiceResolver.js';
+import { getAllowedTtsTiers } from '../entitlements/index.js';
+import { recordUsageEvent } from '../usage/recordUsage.js';
+import crypto from 'crypto';
 
 /**
  * Normalize text for comparison
@@ -108,6 +112,9 @@ export async function handleHostConnection(clientWs, sessionId) {
 
   console.log(`[HostMode] ⚡ Host connecting to session ${sessionId} - Using Google Speech + OpenAI Translation`);
 
+  // Extract entitlements from WebSocket (attached by server.js)
+  const entitlements = clientWs.entitlements || null;
+
   const session = sessionStore.getSession(sessionId);
   if (!session) {
     clientWs.send(JSON.stringify({
@@ -123,6 +130,10 @@ export async function handleHostConnection(clientWs, sessionId) {
 
   let speechStream = null;
   let currentSourceLang = 'en';
+
+  // SESSION-LEVEL USAGE TRACKING: Count total transcribed characters for aggregate STT metering
+  let totalTranscribedCharacters = 0;
+  const sessionStartTime = Date.now();
   let currentTargetLang = 'es'; // Default to Spanish (consistent with solo mode)
   let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
 
@@ -224,6 +235,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
       switch (message.type) {
         case 'init':
+          console.log(`[HostMode] Received init message:`, JSON.stringify(message, null, 2));
           if (message.sourceLang) {
             currentSourceLang = message.sourceLang;
             sessionStore.updateSourceLanguage(currentSessionId, currentSourceLang);
@@ -262,9 +274,10 @@ export async function handleHostConnection(clientWs, sessionId) {
               speechStream = new GoogleSpeechStream();
 
               // Initialize with source language and dynamic options from init message
+              // Provide defaults for audio configuration if not specified
               await speechStream.initialize(currentSourceLang, {
-                encoding: message.encoding,
-                sampleRateHertz: message.sampleRateHertz,
+                encoding: message.encoding || 'LINEAR16',
+                sampleRateHertz: message.sampleRateHertz || 48000,
                 disablePunctuation: message.disablePunctuation,
                 enableMultiLanguage: message.enableMultiLanguage,
                 alternativeLanguageCodes: message.alternativeLanguageCodes,
@@ -612,43 +625,56 @@ export async function handleHostConnection(clientWs, sessionId) {
               };
 
               // Helper: Trigger TTS streaming for committed segments
-              const triggerTtsStreaming = (seqId, text, targetLang, voiceId = null) => {
+              const triggerTtsStreaming = async (seqId, text, targetLang, voiceId = null) => {
                 // Only trigger for non-empty text
                 if (!text || text.trim().length === 0) return;
 
-                // Use safe Google default voice if not specified (prevents ElevenLabs fallback)
-                // Format: google-{locale}-Standard-A (e.g. google-es-ES-Standard-A)
                 const safeLang = targetLang || currentTargetLang || 'en';
-                const langPrefix = safeLang.split('-')[0].toLowerCase();
 
-                // Map short codes to full locales for Google TTS
-                const fullLocales = {
-                  'en': 'en-US',
-                  'es': 'es-ES',
-                  'fr': 'fr-FR',
-                  'de': 'de-DE',
-                  'it': 'it-IT',
-                  'pt': 'pt-BR',
-                  'ja': 'ja-JP',
-                  'ko': 'ko-KR',
-                  'zh': 'cmn-CN',
-                  'hi': 'hi-IN'
-                };
-                const locale = fullLocales[langPrefix] || 'en-US';
+                // Get allowed TTS tiers from entitlements (defaults to all if no entitlements)
+                const allowedTiers = entitlements
+                  ? getAllowedTtsTiers(entitlements.limits.ttsTier)
+                  : ['gemini', 'chirp3_hd', 'neural2', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash', 'elevenlabs', 'studio', 'standard'];
 
-                // Construct valid Google Chirp Voice ID (Puck is generally available)
-                // NOTE: Streaming API ONLY supports Chirp 3 HD voices currently!
-                // PRIORITY: User selected voice (from SessionStore shared state) -> Default Chirp 3
-                const userVoiceId = sessionStore.getSessionVoice(currentSessionId, safeLang) || targetVoiceIds.get(safeLang);
-                const defaultVoiceId = userVoiceId || voiceId || `google-${locale}-Chirp3-HD-Puck`;
+                // If no tiers allowed, TTS is disabled for this subscription
+                if (allowedTiers.length === 0) {
+                  console.warn(`[HostMode] TTS disabled - no allowed tiers for this subscription`);
+                  return;
+                }
+
+                // Get user voice preference from session or local state
+                const userVoiceId = sessionStore.getSessionVoice(currentSessionId, safeLang) || targetVoiceIds.get(safeLang) || voiceId;
+
+                // Extract tier from voiceId if present
+                let tierToUse = null;
+                if (userVoiceId) {
+                  if (userVoiceId.includes(':')) {
+                    const parts = userVoiceId.split(':');
+                    if (parts.length >= 2) {
+                      tierToUse = parts[1] === 'gemini_tts' ? 'gemini' : parts[1];
+                    }
+                  } else if (userVoiceId.startsWith('elevenlabs')) {
+                    tierToUse = 'elevenlabs';
+                  }
+                }
+
+                // Resolve voice using authoritative catalog with tier filtering
+                const resolved = await resolveVoice({
+                  orgId: currentSessionId,
+                  userPref: userVoiceId ? { voiceId: userVoiceId, tier: tierToUse } : null,
+                  languageCode: safeLang,
+                  allowedTiers
+                });
+
+                console.log(`[HostMode] Triggering TTS: voiceId=${resolved.voiceId}, tier=${resolved.tier}, reason=${resolved.reason}`);
 
                 onCommittedSegment(currentSessionId, {
                   seqId,
                   text: text.trim(),
                   lang: safeLang,
-                  voiceId: defaultVoiceId,
+                  voiceId: resolved.voiceId,
                   isFinal: true
-                });
+                }, clientWs.churchId);
               };
 
               // Grammar correction cache (from solo mode)
@@ -786,6 +812,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                     const trimmedText = textToProcess.trim();
                     const textNormalized = trimmedText.replace(/\s+/g, ' ').toLowerCase();
                     const isForcedFinal = !!options.forceFinal;
+
+                    // SESSION USAGE TRACKING: Count transcribed characters (before duplicate check)
+                    totalTranscribedCharacters += trimmedText.length;
 
                     // Always check for duplicates if we have tracking data (not just within time window)
                     // This catches duplicates even if they arrive outside the continuation window
@@ -3962,7 +3991,17 @@ export async function handleHostConnection(clientWs, sessionId) {
           break;
       }
     } catch (error) {
-      console.error("[HostMode] Error processing message:", error);
+      console.error(`[HostMode] Error processing message (type: ${message?.type}):`, error);
+      console.error(`[HostMode] Stack trace:`, error.stack);
+
+      // Send error to client
+      if (clientWs && clientWs.readyState === WebSocket.OPEN) {
+        clientWs.send(JSON.stringify({
+          type: 'error',
+          message: `Server error: ${error.message}`,
+          code: 'MESSAGE_PROCESSING_ERROR'
+        }));
+      }
     }
   });
 
@@ -4001,6 +4040,33 @@ export async function handleHostConnection(clientWs, sessionId) {
     }
     // Reset core engine state
     coreEngine.reset();
+
+    // AGGREGATE STT USAGE METERING: Record total transcription usage at session end
+    if (totalTranscribedCharacters > 0 && clientWs.churchId) {
+      const sessionDurationSeconds = Math.ceil((Date.now() - sessionStartTime) / 1000);
+      // Estimate transcription seconds from character count (avg ~15 chars/second of speech)
+      const estimatedTranscriptionSeconds = Math.ceil(totalTranscribedCharacters / 15);
+      const sessionHash = crypto.createHash('md5').update(currentSessionId).digest('hex').substring(0, 8);
+      const idempotencyKey = `stt:${clientWs.churchId}:${currentSessionId}:${sessionHash}`;
+
+      recordUsageEvent({
+        church_id: clientWs.churchId,
+        metric: 'transcription_seconds',
+        quantity: estimatedTranscriptionSeconds,
+        idempotency_key: idempotencyKey,
+        metadata: {
+          sessionId: currentSessionId,
+          totalCharacters: totalTranscribedCharacters,
+          sessionDurationSeconds,
+          sourceLang: currentSourceLang,
+          mode: 'host'
+        }
+      }).then(() => {
+        console.log(`[HostMode] ✓ Recorded usage: ${estimatedTranscriptionSeconds} transcription_seconds (key: ${idempotencyKey})`);
+      }).catch(err => {
+        console.warn(`[HostMode] ⚠️ Failed to record STT usage:`, err.message);
+      });
+    }
   });
 
   // Handle errors

@@ -69,6 +69,58 @@ export class InsufficientRoleError extends Error {
     }
 }
 
+/**
+ * Error thrown when TTS tier is not allowed for the subscription.
+ */
+export class TtsTierNotAllowedError extends Error {
+    constructor(requestedTier, allowedTiers, planCode) {
+        super(
+            `TTS tier '${requestedTier}' not allowed for plan=${planCode}. Allowed: [${allowedTiers.join(', ')}]`
+        );
+        this.name = "TtsTierNotAllowedError";
+        this.requestedTier = requestedTier;
+        this.allowedTiers = allowedTiers;
+        this.planCode = planCode;
+        this.httpStatus = 403;
+    }
+}
+
+// ========================================
+// TTS Tier Mapping
+// ========================================
+
+/**
+ * Maps ttsTier subscription value to allowed voice tiers.
+ * 
+ * Tier hierarchy:
+ * - Starter: standard, neural2, studio (basic Google voices)
+ * - Pro: chirp3_hd + everything in Starter
+ * - Unlimited: gemini, elevenlabs (all variants) + everything in Pro
+ * 
+ * @param {string} ttsTier - The subscription's TTS tier ('unlimited', 'pro', 'starter', 'none')
+ * @returns {string[]} Array of allowed voice tier names
+ */
+export function getAllowedTtsTiers(ttsTier) {
+    // Base tiers for each plan level
+    const STARTER_TIERS = ['standard', 'neural2', 'studio'];
+    const PRO_TIERS = ['chirp3_hd', ...STARTER_TIERS];
+    const UNLIMITED_TIERS = ['gemini', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash', ...PRO_TIERS];
+
+    switch (ttsTier) {
+        case 'unlimited':
+            return UNLIMITED_TIERS;
+        case 'pro':
+            return PRO_TIERS;
+        case 'starter':
+        case 'basic':
+            return STARTER_TIERS;
+        case 'none':
+        default:
+            // No TTS allowed
+            return [];
+    }
+}
+
 // ========================================
 // Assertion Functions
 // ========================================
@@ -160,4 +212,25 @@ export function assertRole(auth, requiredRole) {
     }
 
     console.log(`[AssertEntitled] ✓ Role OK: required=${requiredRole} actual=${auth.role}`);
+}
+
+/**
+ * Asserts that the requested TTS tier is allowed for the subscription.
+ * 
+ * @param {Entitlements} entitlements - The entitlements object
+ * @param {string} requestedTier - The TTS tier being requested
+ * @throws {TtsTierNotAllowedError} If tier is not allowed
+ */
+export function assertTtsTierAllowed(entitlements, requestedTier) {
+    const allowedTiers = getAllowedTtsTiers(entitlements.limits.ttsTier);
+    const planCode = entitlements.subscription.planCode;
+
+    if (!allowedTiers.includes(requestedTier)) {
+        console.warn(
+            `[AssertEntitled] ✗ TTS tier not allowed: requested=${requestedTier} allowed=[${allowedTiers.join(', ')}] plan=${planCode} church=${entitlements.churchId}`
+        );
+        throw new TtsTierNotAllowedError(requestedTier, allowedTiers, planCode);
+    }
+
+    console.log(`[AssertEntitled] ✓ TTS tier OK: requested=${requestedTier}`);
 }
