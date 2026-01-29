@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Clock, Volume2, Wifi, Music } from 'lucide-react';
+import { X, Clock, Volume2, Wifi, Music, Lock } from 'lucide-react';
 
 /**
  * AdvancedSettingsDrawer - Hidden settings panel
@@ -15,7 +15,8 @@ export function AdvancedSettingsDrawer({
   onStreamingTtsChange,
   availableVoices = [],
   selectedVoice,
-  onVoiceChange
+  onVoiceChange,
+  planCode = 'starter'
 }) {
   if (!isOpen) return null;
 
@@ -105,24 +106,30 @@ export function AdvancedSettingsDrawer({
             <div className="setting-header">
               <Music size={18} />
               <span>Voice Selection</span>
+              <span className="plan-badge">{planCode}</span>
             </div>
             <p className="setting-desc">
-              Choose a voice for TTS playback
+              Choose a voice for TTS playback. Locked voices require a plan upgrade.
             </p>
             <select
               className="voice-select"
               value={selectedVoice?.voiceId || ''}
               onChange={(e) => {
                 const voice = availableVoices.find(v => v.voiceId === e.target.value);
-                if (voice) onVoiceChange(voice);
+                if (voice && voice.isAllowed) onVoiceChange(voice);
               }}
             >
               {availableVoices.length === 0 ? (
                 <option value="">Loading voices...</option>
               ) : (
                 availableVoices.map(voice => (
-                  <option key={voice.voiceId} value={voice.voiceId}>
-                    {voice.displayName || voice.voiceName} ({voice.tier})
+                  <option
+                    key={voice.voiceId}
+                    value={voice.voiceId}
+                    disabled={!voice.isAllowed}
+                    className={voice.isAllowed ? '' : 'locked-voice'}
+                  >
+                    {voice.isAllowed ? '' : '🔒 '}{voice.displayName || voice.voiceName} ({voice.tier})
                   </option>
                 ))
               )}
@@ -219,6 +226,18 @@ export function AdvancedSettingsDrawer({
           color: #fff;
           font-weight: 500;
           margin-bottom: 0.5rem;
+        }
+        
+        .plan-badge {
+          margin-left: auto;
+          padding: 0.2rem 0.6rem;
+          background: linear-gradient(135deg, #a855f7, #6366f1);
+          border-radius: 12px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: #fff;
         }
         
         .setting-desc {

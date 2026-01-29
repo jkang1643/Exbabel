@@ -271,6 +271,7 @@ export async function handleSoloMode(clientWs) {
   clientWs.on("message", async (msg) => {
     try {
       const message = JSON.parse(msg.toString());
+      console.log("[SoloMode] RAW MSG RECEIVED:", message.type);
       console.log("[SoloMode] Client message:", message.type);
 
       switch (message.type) {
@@ -3348,31 +3349,42 @@ export async function handleSoloMode(clientWs) {
 
           try {
             const { getVoicesFor } = await import('./tts/voiceCatalog.js');
-            const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
 
-            const orgId = 'default';
-            const allowedTiers = getAllowedTiers(orgId);
+            // Use real entitlements if available, otherwise fallback to starter tier
+            const ttsTier = entitlements?.limits?.ttsTier || 'starter';
+            const allowedTiers = getAllowedTtsTiers(ttsTier);
+            const planCode = entitlements?.subscription?.planCode || 'starter';
 
+            console.log(`[SoloMode] Fetching voices for ${message.languageCode} (plan=${planCode}, ttsTier=${ttsTier})`);
+            console.log(`[SoloMode] Allowed tiers: [${allowedTiers.join(', ')}]`);
+
+            // Get ALL voices for the language (not filtered by tier)
+            // We send all voices so frontend can show locked/unlocked state
+            const allTiers = ['gemini', 'chirp3_hd', 'neural2', 'standard', 'studio', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash'];
             const voices = await getVoicesFor({
               languageCode: message.languageCode,
-              allowedTiers
+              allowedTiers: allTiers  // Get all voices
             });
 
+            // Transform to client format with tier info
             const clientVoices = voices.map(v => ({
               tier: v.tier,
               voiceId: v.voiceId,
               voiceName: v.voiceName,
-              displayName: v.displayName
+              displayName: v.displayName,
+              isAllowed: allowedTiers.includes(v.tier)  // Mark if voice is allowed for this plan
             }));
 
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'tts/voices',
                 languageCode: message.languageCode,
-                voices: clientVoices
+                voices: clientVoices,
+                allowedTiers,  // Send allowed tiers to frontend
+                planCode       // Send plan code for display
               }));
             }
-            console.log(`[SoloMode] Sent ${clientVoices.length} voices for ${message.languageCode}`);
+            console.log(`[SoloMode] Sent ${clientVoices.length} voices for ${message.languageCode} (${allowedTiers.length} tiers allowed)`);
           } catch (error) {
             console.error('[SoloMode] Failed to list voices:', error);
             if (clientWs.readyState === WebSocket.OPEN) {

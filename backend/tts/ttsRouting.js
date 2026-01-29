@@ -599,6 +599,7 @@ const LANGUAGE_TIER_AVAILABILITY = {
   "fr-FR": [
     "gemini",
     "chirp3_hd",
+    "studio",
     "neural2",
     "standard"
   ],
@@ -608,6 +609,7 @@ const LANGUAGE_TIER_AVAILABILITY = {
   "de-DE": [
     "gemini",
     "chirp3_hd",
+    "studio",
     "neural2",
     "standard"
   ],
@@ -762,12 +764,14 @@ const LANGUAGE_TIER_AVAILABILITY = {
   "es-ES": [
     "gemini",
     "chirp3_hd",
+    "studio",
     "neural2",
     "standard"
   ],
   "es-US": [
     "gemini",
     "chirp3_hd",
+    "studio",
     "neural2",
     "standard"
   ],

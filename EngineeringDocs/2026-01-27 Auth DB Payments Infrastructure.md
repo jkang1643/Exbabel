@@ -578,4 +578,10 @@ backend/
 - ✅ **Fix: Entitlements Fetch**: Resolved a `SyntaxError` in `websocketHandler.js` related to dynamic imports, ensuring reliable plan fetching.
 - ✅ **Enhancement: Tier Gating Backend**: Updated `ttsRouting.js` to properly enforce tier limits (Starter/Pro/Unlimited) and fallback strategies.
 - ✅ **Enhancement: Database Indices**: Added indices to `usage_events` for performance optimization.
+- ✅ **Solo Mode: Tier Gating & Usage**: Implemented full feature parity for Solo Mode, including:
+    - Real-time plan enforcement (Starter/Pro/Unlimited) using `getAllowedTtsTiers`
+    - Dynamic voice dropdown with lock indicators for premium voices
+    - Accurate usage tracking for STT (seconds) and TTS (characters)
+    - Fixed race condition in initial voice list fetching
+    - Fixed voice routing bug where Studio voices incorrectly fell back to Gemini
 

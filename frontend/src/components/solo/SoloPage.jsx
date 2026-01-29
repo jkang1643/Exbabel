@@ -24,6 +24,7 @@ export function SoloPage({ onBackToHome }) {
     // Connection state
     const [ws, setWs] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
+    const [isServerReady, setIsServerReady] = useState(false);
 
     // Language state
     const [sourceLang, setSourceLang] = useState('en');
@@ -38,6 +39,8 @@ export function SoloPage({ onBackToHome }) {
     // Voice selection
     const [selectedVoice, setSelectedVoice] = useState(null);
     const [availableVoices, setAvailableVoices] = useState([]);
+    const [allowedTiers, setAllowedTiers] = useState([]);
+    const [planCode, setPlanCode] = useState('starter');
 
     // Refs
     const wsRef = useRef(null);
@@ -172,11 +175,7 @@ export function SoloPage({ onBackToHome }) {
                 voiceId: selectedVoice?.voiceId || null
             }));
 
-            // Request available voices
-            socket.send(JSON.stringify({
-                type: 'tts/list_voices',
-                languageCode: targetLang
-            }));
+
         };
 
         socket.onmessage = (event) => {
@@ -205,11 +204,18 @@ export function SoloPage({ onBackToHome }) {
         if (message.type?.startsWith('tts/')) {
             // Handle voice list response
             if (message.type === 'tts/voices') {
-                console.log('[SoloPage] Received voices:', message.voices?.length);
+                console.log('[SoloPage] Received voices:', message.voices?.length, 'allowedTiers:', message.allowedTiers, 'plan:', message.planCode);
                 setAvailableVoices(message.voices || []);
-                // Auto-select first voice if none selected
-                if (!selectedVoice && message.voices?.length > 0) {
-                    setSelectedVoice(message.voices[0]);
+                setAllowedTiers(message.allowedTiers || []);
+                setPlanCode(message.planCode || 'starter');
+                // Auto-select first ALLOWED voice if none selected
+                if (message.voices?.length > 0) {
+                    setSelectedVoice(prev => {
+                        if (prev) return prev;  // Keep existing selection
+                        // Find first allowed voice
+                        const firstAllowed = message.voices.find(v => v.isAllowed);
+                        return firstAllowed || message.voices[0];
+                    });
                 }
                 return;
             }
@@ -258,6 +264,11 @@ export function SoloPage({ onBackToHome }) {
         switch (message.type) {
             case 'info':
                 console.log('[SoloPage] Info:', message.message);
+                // The first info message confirms the backend handler is attached and ready
+                if (!isServerReady) {
+                    setIsServerReady(true);
+                    console.log('[SoloPage] Server ready - Requesting voices...');
+                }
                 break;
             case 'warning':
                 console.warn('[SoloPage] Warning:', message.message);
@@ -431,16 +442,16 @@ export function SoloPage({ onBackToHome }) {
         };
     }, []);
 
-    // Re-fetch voices when target language changes
+    // Re-fetch voices when target language changes AND server is ready
     useEffect(() => {
-        if (isConnected && wsRef.current?.readyState === WebSocket.OPEN) {
+        if (isConnected && isServerReady && wsRef.current?.readyState === WebSocket.OPEN) {
             console.log('[SoloPage] Fetching voices for:', targetLang);
             wsRef.current.send(JSON.stringify({
                 type: 'tts/list_voices',
                 languageCode: targetLang
             }));
         }
-    }, [targetLang, isConnected]);
+    }, [targetLang, isConnected, isServerReady]);
 
     // Get display state
     const getDisplayState = () => {
@@ -571,6 +582,7 @@ export function SoloPage({ onBackToHome }) {
                     availableVoices={availableVoices}
                     selectedVoice={selectedVoice}
                     onVoiceChange={handleVoiceChange}
+                    planCode={planCode}
                 />
             )}
 
