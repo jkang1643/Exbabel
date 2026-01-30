@@ -1,6 +1,35 @@
 import React from 'react'
 import { Globe } from 'lucide-react'
 import { TOP_LANGUAGES } from '../config/languages.js'
+import {
+  isGeminiSupported,
+  isElevenLabsSupported,
+  isGoogleTierSupported,
+  LANGUAGE_TIER_AVAILABILITY
+} from '../config/languageSupportData.js'
+
+/**
+ * Get TTS indicator for a language
+ * 🔊 = Standard support available (60 languages)
+ * 🔊⭐ = Premium ONLY (Gemini/ElevenLabs only, no Standard voices) (27 languages)
+ */
+const getTtsIndicator = (code) => {
+  if (!code) return '';
+
+  // 1. Check for Standard tier support (Priority)
+  // If a language has standard voices, it gets the standard icon
+  if (isGoogleTierSupported(code, 'standard')) {
+    return ' 🔊';
+  }
+
+  // 2. Check for Premium-only support
+  // If no standard voices but has Gemini/ElevenLabs, it gets the star
+  if (isGeminiSupported(code) || isElevenLabsSupported(code, 'elevenlabs_v3')) {
+    return ' 🔊⭐';
+  }
+
+  return '';
+};
 
 function LanguageSelector({ label, languages, selectedLanguage, onLanguageChange, compact = false }) {
   // Get top 10 languages that are in the languages list
@@ -16,6 +45,13 @@ function LanguageSelector({ label, languages, selectedLanguage, onLanguageChange
     .filter(lang => !topLanguageCodes.has(lang.code))
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  // DEBUG: Check if regional variants are present
+  React.useEffect(() => {
+    const hasEsMx = languages.some(l => l.code === 'es-MX');
+    console.log('[LanguageSelector] Total languages:', languages.length, 'Has es-MX:', hasEsMx);
+    if (!hasEsMx) console.warn('[LanguageSelector] es-MX missing from input languages!');
+  }, [languages]);
+
   if (compact) {
     return (
       <div className="relative">
@@ -28,7 +64,7 @@ function LanguageSelector({ label, languages, selectedLanguage, onLanguageChange
             <optgroup label="Popular">
               {topLanguagesInList.map((lang) => (
                 <option key={lang.code} value={lang.code}>
-                  {lang.name}
+                  {lang.name}{getTtsIndicator(lang.code)}
                 </option>
               ))}
             </optgroup>
@@ -36,7 +72,7 @@ function LanguageSelector({ label, languages, selectedLanguage, onLanguageChange
           <optgroup label="All Languages">
             {allLanguagesAlphabetical.map((lang) => (
               <option key={lang.code} value={lang.code}>
-                {lang.name}
+                {lang.name}{getTtsIndicator(lang.code)}
               </option>
             ))}
           </optgroup>
@@ -62,7 +98,7 @@ function LanguageSelector({ label, languages, selectedLanguage, onLanguageChange
             <optgroup label="Popular">
               {topLanguagesInList.map((lang) => (
                 <option key={lang.code} value={lang.code}>
-                  {lang.name}
+                  {lang.name}{getTtsIndicator(lang.code)}
                 </option>
               ))}
             </optgroup>
@@ -72,7 +108,7 @@ function LanguageSelector({ label, languages, selectedLanguage, onLanguageChange
           <optgroup label="All Languages">
             {allLanguagesAlphabetical.map((lang) => (
               <option key={lang.code} value={lang.code}>
-                {lang.name}
+                {lang.name}{getTtsIndicator(lang.code)}
               </option>
             ))}
           </optgroup>

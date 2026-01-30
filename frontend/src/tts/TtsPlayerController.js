@@ -8,6 +8,7 @@
  */
 
 import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
+import { normalizeLanguageCode } from '../config/ttsVoices.js';
 // Global debug buffer for on-screen visual debugging (mobile)
 if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
     window.__AUDIO_DEBUG__ = [];
@@ -436,8 +437,8 @@ export class TtsPlayerController {
      */
     fetchVoices(languageCode) {
         if (!languageCode) return;
-        const normalized = languageCode.includes('-') ? languageCode : `${languageCode}-${languageCode.toUpperCase()}`;
-        console.log(`[TtsPlayerController] Requesting voice list for ${normalized}`);
+        const normalized = normalizeLanguageCode(languageCode);
+        console.log(`[TtsPlayerController] Requesting voice list for ${normalized} (was ${languageCode})`);
         if (this.sendMessage) {
             this.sendMessage({
                 type: 'tts/list_voices',

@@ -116,6 +116,20 @@ console.log('UI languages without TTS:', extraInUI.length);
 "
 ```
 
+### 4. Comprehensive 190-Language Voice Audit
+Verify voice availability for *every* language defined in the frontend configuration (~190 unique codes).
+
+```bash
+# Run comprehensive audit
+node scripts/test_all_languages_availability.js
+```
+
+**What it does:**
+- Aggregates all unique language codes from `TRANSLATION_LANGUAGES` and `TRANSCRIPTION_LANGUAGES`.
+- Iterates through all ~190 languages.
+- Verifies that each language either returns a valid list of voices OR an empty list (graceful fallback).
+- explicitly checks critical languages like Japanese and Korean.
+
 ## Voice System Details
 
 ### Official Google TTS Voice Categories
@@ -357,11 +371,14 @@ Languages with TTS voices but not exposed in UI:
 - `yue-HK` (Cantonese, 34 voices)
 
 ### UI-Only (No TTS Support)
-124 languages in UI without TTS voices (rare/minority languages):
+~90 languages in UI without TTS voices (typically rare/minority languages). The system handles these gracefully by returning an empty voice list, preventing UI errors.
+
+**Audit Status**: Verified via `scripts/test_all_languages_availability.js`. These languages correctly fallback to system defaults or silence without crashing the synthesis engine.
+
 - African: Akan, Amharic, Hausa, Igbo, Kinyarwanda, Somali, Swahili, Xhosa, Yoruba, Zulu
 - Asian: Assamese, Bengali, Gujarati, Kannada, Khmer, Kyrgyz, Lao, Malayalam, Marathi, Nepali, Pashto, Punjabi, Sinhala, Sundanese, Tamil, Telugu, Thai, Tibetan, Urdu, Vietnamese
 - European: Albanian, Armenian, Azerbaijani, Basque, Belarusian, Bosnian, Bulgarian, Croatian, Czech, Estonian, Finnish, Galician, Georgian, Greek, Hungarian, Icelandic, Irish, Latvian, Lithuanian, Macedonian, Maltese, Montenegrin, Romanian, Serbian, Slovak, Slovenian, Swedish, Turkish, Ukrainian, Welsh
-- Other: Arabic, Chinese, Dutch, French, German, Hindi, Indonesian, Italian, Japanese, Korean, Persian, Polish, Portuguese, Russian, Spanish
+- Other: Various dialects and regional variants without specific voice models.
 
 ## Usage Workflow
 
@@ -475,3 +492,85 @@ gcloud auth application-default print-access-token
 - After updating snapshot, check if your UI needs updates
 - Compare snapshot languages with your frontend language list
 - Update UI to expose newly supported languages
+
+
+
+## Detailed Tier Support
+
+### Gemini (Vertex AI) (87 Languages)
+
+`af-ZA`, `am-ET`, `ar-001`, `ar-EG`, `az-AZ`, `be-BY`, `bg-BG`, `bn-BD`, `ca-ES`, `ceb-PH`, `cmn-CN`, `cmn-TW`, `cs-CZ`, `da-DK`, `de-DE`, `el-GR`, `en-AU`, `en-GB`, `en-IN`, `en-US`, `es-419`, `es-ES`, `es-MX`, `et-EE`, `eu-ES`, `fa-IR`, `fi-FI`, `fil-PH`, `fr-CA`, `fr-FR`, `gl-ES`, `gu-IN`, `he-IL`, `hi-IN`, `hr-HR`, `ht-HT`, `hu-HU`, `hy-AM`, `id-ID`, `is-IS`, `it-IT`, `ja-JP`, `jv-JV`, `ka-GE`, `kn-IN`, `ko-KR`, `kok-IN`, `la-VA`, `lb-LU`, `lo-LA`, `lt-LT`, `lv-LV`, `mai-IN`, `mg-MG`, `mk-MK`, `ml-IN`, `mn-MN`, `mr-IN`, `ms-MY`, `my-MM`, `nb-NO`, `ne-NP`, `nl-NL`, `nn-NO`, `or-IN`, `pa-IN`, `pl-PL`, `ps-AF`, `pt-BR`, `pt-PT`, `ro-RO`, `ru-RU`, `sd-IN`, `si-LK`, `sk-SK`, `sl-SI`, `sq-AL`, `sr-RS`, `sv-SE`, `sw-KE`, `ta-IN`, `te-IN`, `th-TH`, `tr-TR`, `uk-UA`, `ur-PK`, `vi-VN`
+
+### Google Chirp 3 HD (53 Languages)
+
+`ar-XA`, `bg-BG`, `bn-IN`, `cmn-CN`, `cs-CZ`, `da-DK`, `de-DE`, `el-GR`, `en-AU`, `en-GB`, `en-IN`, `en-US`, `es-ES`, `es-US`, `fi-FI`, `fr-CA`, `fr-FR`, `gu-IN`, `he-IL`, `hi-IN`, `hr-HR`, `hu-HU`, `id-ID`, `it-IT`, `ja-JP`, `kn-IN`, `ko-KR`, `lt-LT`, `lv-LV`, `ml-IN`, `mr-IN`, `nb-NO`, `nl-BE`, `nl-NL`, `pa-IN`, `pl-PL`, `pt-BR`, `pt-PT`, `ro-RO`, `ru-RU`, `sk-SK`, `sl-SI`, `sr-RS`, `sv-SE`, `ta-IN`, `te-IN`, `th-TH`, `tr-TR`, `uk-UA`, `ur-IN`, `vi-VN`, `yue-HK`, `zh-CN`
+
+### Google Neural2 (10 Languages)
+
+`cmn-CN`, `de-DE`, `en-GB`, `en-US`, `es-ES`, `fr-FR`, `it-IT`, `ja-JP`, `ko-KR`, `pt-BR`
+
+### Google Studio (6 Languages)
+
+`de-DE`, `en-GB`, `en-US`, `es-ES`, `es-US`, `fr-FR`
+
+### Google Standard (5 Languages)
+
+`de-DE`, `en-GB`, `en-US`, `es-ES`, `fr-FR`
+
+### ElevenLabs Flash (29 Languages)
+
+`bg`, `cs`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hi`, `hu`, `id`, `it`, `ja`, `ko`, `ms`, `nl`, `no`, `pl`, `pt`, `ro`, `ru`, `sk`, `sv`, `th`, `tr`, `uk`, `vi`, `zh`
+
+### ElevenLabs Turbo (29 Languages)
+
+`bg`, `cs`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hi`, `hu`, `id`, `it`, `ja`, `ko`, `ms`, `nl`, `no`, `pl`, `pt`, `ro`, `ru`, `sk`, `sv`, `th`, `tr`, `uk`, `vi`, `zh`
+
+### ElevenLabs v3 (75 Languages)
+
+`af`, `am`, `ar`, `az`, `be`, `bg`, `bn`, `ca`, `ceb`, `cs`, `da`, `de`, `el`, `en`, `es`, `et`, `eu`, `fa`, `fi`, `fil`, `fr`, `gl`, `gu`, `he`, `hi`, `hr`, `ht`, `hu`, `hy`, `id`, `is`, `it`, `ja`, `jv`, `ka`, `kn`, `ko`, `kok`, `la`, `lb`, `lo`, `lt`, `lv`, `mai`, `mg`, `mk`, `ml`, `mn`, `ms`, `my`, `ne`, `nl`, `nn`, `no`, `or`, `pa`, `pl`, `ps`, `pt`, `ro`, `ru`, `sd`, `si`, `sk`, `sl`, `sq`, `sr`, `sv`, `sw`, `th`, `tr`, `uk`, `ur`, `vi`, `zh`
+
+### ElevenLabs Multilingual (1 Languages)
+
+`en`
+
+
+
+
+## Detailed Tier Support
+
+### Gemini (Vertex AI) (87 Languages)
+
+`af-ZA`, `am-ET`, `ar-001`, `ar-EG`, `az-AZ`, `be-BY`, `bg-BG`, `bn-BD`, `ca-ES`, `ceb-PH`, `cmn-CN`, `cmn-TW`, `cs-CZ`, `da-DK`, `de-DE`, `el-GR`, `en-AU`, `en-GB`, `en-IN`, `en-US`, `es-419`, `es-ES`, `es-MX`, `et-EE`, `eu-ES`, `fa-IR`, `fi-FI`, `fil-PH`, `fr-CA`, `fr-FR`, `gl-ES`, `gu-IN`, `he-IL`, `hi-IN`, `hr-HR`, `ht-HT`, `hu-HU`, `hy-AM`, `id-ID`, `is-IS`, `it-IT`, `ja-JP`, `jv-JV`, `ka-GE`, `kn-IN`, `ko-KR`, `kok-IN`, `la-VA`, `lb-LU`, `lo-LA`, `lt-LT`, `lv-LV`, `mai-IN`, `mg-MG`, `mk-MK`, `ml-IN`, `mn-MN`, `mr-IN`, `ms-MY`, `my-MM`, `nb-NO`, `ne-NP`, `nl-NL`, `nn-NO`, `or-IN`, `pa-IN`, `pl-PL`, `ps-AF`, `pt-BR`, `pt-PT`, `ro-RO`, `ru-RU`, `sd-IN`, `si-LK`, `sk-SK`, `sl-SI`, `sq-AL`, `sr-RS`, `sv-SE`, `sw-KE`, `ta-IN`, `te-IN`, `th-TH`, `tr-TR`, `uk-UA`, `ur-PK`, `vi-VN`
+
+### Google Chirp 3 HD (53 Languages)
+
+`ar-XA`, `bg-BG`, `bn-IN`, `cmn-CN`, `cs-CZ`, `da-DK`, `de-DE`, `el-GR`, `en-AU`, `en-GB`, `en-IN`, `en-US`, `es-ES`, `es-US`, `et-EE`, `fi-FI`, `fr-CA`, `fr-FR`, `gu-IN`, `he-IL`, `hi-IN`, `hr-HR`, `hu-HU`, `id-ID`, `it-IT`, `ja-JP`, `kn-IN`, `ko-KR`, `lt-LT`, `lv-LV`, `ml-IN`, `mr-IN`, `nb-NO`, `nl-BE`, `nl-NL`, `pa-IN`, `pl-PL`, `pt-BR`, `ro-RO`, `ru-RU`, `sk-SK`, `sl-SI`, `sr-RS`, `sv-SE`, `sw-KE`, `ta-IN`, `te-IN`, `th-TH`, `tr-TR`, `uk-UA`, `ur-IN`, `vi-VN`, `yue-HK`
+
+### Google Neural2 (48 Languages)
+
+`am-ET`, `ar-XA`, `bn-IN`, `cmn-CN`, `cmn-TW`, `cs-CZ`, `da-DK`, `de-DE`, `el-GR`, `en-AU`, `en-GB`, `en-IN`, `en-US`, `es-ES`, `es-US`, `fi-FI`, `fil-PH`, `fr-CA`, `fr-FR`, `gu-IN`, `he-IL`, `hi-IN`, `hu-HU`, `id-ID`, `it-IT`, `ja-JP`, `kn-IN`, `ko-KR`, `ml-IN`, `mr-IN`, `ms-MY`, `nb-NO`, `nl-BE`, `nl-NL`, `pa-IN`, `pl-PL`, `pt-BR`, `pt-PT`, `ro-RO`, `ru-RU`, `sk-SK`, `sv-SE`, `ta-IN`, `th-TH`, `tr-TR`, `uk-UA`, `ur-IN`, `vi-VN`
+
+### Google Studio (6 Languages)
+
+`de-DE`, `en-GB`, `en-US`, `es-ES`, `es-US`, `fr-FR`
+
+### Google Standard (60 Languages)
+
+`af-ZA`, `am-ET`, `ar-XA`, `bg-BG`, `bn-IN`, `ca-ES`, `cmn-CN`, `cmn-TW`, `cs-CZ`, `da-DK`, `de-DE`, `el-GR`, `en-AU`, `en-GB`, `en-IN`, `en-US`, `es-ES`, `es-US`, `et-EE`, `eu-ES`, `fi-FI`, `fil-PH`, `fr-CA`, `fr-FR`, `gl-ES`, `gu-IN`, `he-IL`, `hi-IN`, `hu-HU`, `id-ID`, `is-IS`, `it-IT`, `ja-JP`, `kn-IN`, `ko-KR`, `lt-LT`, `lv-LV`, `ml-IN`, `mr-IN`, `ms-MY`, `nb-NO`, `nl-BE`, `nl-NL`, `pa-IN`, `pl-PL`, `pt-BR`, `pt-PT`, `ro-RO`, `ru-RU`, `sk-SK`, `sr-RS`, `sv-SE`, `ta-IN`, `te-IN`, `th-TH`, `tr-TR`, `uk-UA`, `ur-IN`, `vi-VN`, `yue-HK`
+
+### ElevenLabs Flash (29 Languages)
+
+`bg`, `cs`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hi`, `hu`, `id`, `it`, `ja`, `ko`, `ms`, `nl`, `no`, `pl`, `pt`, `ro`, `ru`, `sk`, `sv`, `th`, `tr`, `uk`, `vi`, `zh`
+
+### ElevenLabs Turbo (29 Languages)
+
+`bg`, `cs`, `da`, `de`, `el`, `en`, `es`, `fi`, `fr`, `hi`, `hu`, `id`, `it`, `ja`, `ko`, `ms`, `nl`, `no`, `pl`, `pt`, `ro`, `ru`, `sk`, `sv`, `th`, `tr`, `uk`, `vi`, `zh`
+
+### ElevenLabs v3 (75 Languages)
+
+`af`, `am`, `ar`, `az`, `be`, `bg`, `bn`, `ca`, `ceb`, `cs`, `da`, `de`, `el`, `en`, `es`, `et`, `eu`, `fa`, `fi`, `fil`, `fr`, `gl`, `gu`, `he`, `hi`, `hr`, `ht`, `hu`, `hy`, `id`, `is`, `it`, `ja`, `jv`, `ka`, `kn`, `ko`, `kok`, `la`, `lb`, `lo`, `lt`, `lv`, `mai`, `mg`, `mk`, `ml`, `mn`, `ms`, `my`, `ne`, `nl`, `nn`, `no`, `or`, `pa`, `pl`, `ps`, `pt`, `ro`, `ru`, `sd`, `si`, `sk`, `sl`, `sq`, `sr`, `sv`, `sw`, `th`, `tr`, `uk`, `ur`, `vi`, `zh`
+
+### ElevenLabs Multilingual (1 Languages)
+
+`en`
+

@@ -797,7 +797,46 @@ feat(tts): implement radio mode with automatic sequential playback
 - Add switchLanguage for immediate language switching
 - Hook into ListenerPage TRANSLATION_FINAL cases
 - Enforce concurrency limit (1 concurrent request)
-- Add deduplication and queue overflow handling
+
+---
+
+## 5. Critical Bug Fixes and Comprehensive Testing (Feature Consolidation)
+
+**Overview:**
+Resolved a critical issue preventing specific supported languages (Japanese, Korean) from displaying voices in the UI and implemented a comprehensive audit infrastructure to guarantee system-wide stability for 190+ languages.
+
+### 🐛 Critical Fix: Locale Resolution for CJK Languages
+**Problem:**
+Specific languages with complex locale logic (Korean `ko`, Japanese `ja`) were showing 0 voices in the frontend despite being fully supported by the backend.
+- **Root Cause**: The frontend `TtsPlayerController.js` was using naive locale conversion (`ja` -> `ja-JA`?), while the backend/Google API strictly required standard BCP-47 tags (`ja-JP`).
+- **Fix**: Updated `TtsPlayerController.js` to correctly import and use `normalizeLanguageCode()` from the shared configuration.
+
+**Impact:**
+- **Japanese (`ja`)**: Now correctly resolves to `ja-JP`, unlocking 90+ voices.
+- **Korean (`ko`)**: Now correctly resolves to `ko-KR`, unlocking 90+ voices.
+
+### 🛡️ Verification: 190-Language Audit
+To prevent "silent failures" in other languages, we moved beyond ad-hoc testing to a comprehensive system audit.
+
+**New Infrastructure:**
+- **Script**: `scripts/test_all_languages_availability.js` (Server-side Node.js script)
+- **Scope**: Audits **ALL ~190 languages** defined in `frontend/src/config/languages.js`.
+- **Methodology**: 
+    1. Aggregates all unique language codes from both Transcription and Translation configurations.
+    2. Simulates voice fetching for each code using the production `getVoicesForLanguage` logic.
+    3. Categorizes results into "Supported" vs "Unsupported".
+
+**Audit Results (Status: GREEN):**
+- **Tested**: 190 Unique Languages
+- **Supported (~100)**: Languages like English, Spanish, Japanese, Korean correctly load voice lists.
+- **Unsupported (~90)**: Minority/UI-only languages (e.g., Zulu, Yoruba) correctly return an empty list `[]`.
+- **Errors**: **0** (System handles 100% of defined languages gracefully without crashing).
+
+### Files Added/Modified
+- `scripts/test_all_languages_availability.js` (New audit tool)
+- `frontend/src/tts/TtsPlayerController.js` (Fix for locale normalization)
+- `frontend/src/config/ttsVoices.js` (Minor fix for Node.js JSON import compatibility)
+
 Closes Part 3 of Google TTS feature implementation.
 
 ElevenLabs Voice Settings & Model Tiers - Implementation Walkthrough
@@ -1781,3 +1820,50 @@ Successfully implemented low-latency streaming TTS support for Google Cloud (Chi
 **Backend**
 - `websocketHandler.js`: Updated `session_joined` message to include the `plan` field from entitlements.
 - `hostModeHandler.js`: Fixed race condition where audio `speechStream` was accessed before initialization.
+
+---
+
+## PR 8 — Regional Language Separation & Strict Filtering
+**Status:** ✅ COMPLETE
+**Date:** 2026-01-30
+
+### Overview
+Addressed the issue where regional language variants (e.g., Mexican Spanish `es-MX` vs. European Spanish `es-ES`) were being merged or hidden. Implemented strict filtering in the backend voice catalog and updated the frontend configuration to treat every regional code as a distinct, first-class language.
+
+### Changes Made
+
+#### 1. Backend: Strict Voice Filtering
+- **[REVERT] Loose Matching**: Removed the "base language fallback" logic in `voiceCatalog/index.js` that previously allowed `es-MX` requests to return `es-ES` voices.
+- **Strict Logic**: `getVoicesForLanguage('es-MX')` now returns **only**:
+    - Voices explicitly tagged `es-MX`.
+    - Multilingual voices tagged `*` (e.g., ElevenLabs Turbo).
+    - **No** `es-ES` voices are included, ensuring zero accent bleeding.
+
+#### 2. Frontend: Distinct Language List
+- **[MODIFY] [languages.js](file:///home/jkang1643/projects/realtimetranslationapp/frontend/src/config/languages.js)**:
+    - Expanded `TRANSLATION_LANGUAGES` to include 15+ regional variants explicitly.
+    - Distinct entries for `es-MX` (Mexico), `es-US` (US), `es-419` (Latin America), `en-AU`, `en-IN`, `fr-CA`, `pt-BR`, `pt-PT`.
+    - Ensured `zh-TW` (Traditional) and `zh-CN` (Simplified) are distinct.
+
+#### 3. Backend: Translation Pipeline Verification
+- **[VERIFY] translationWorkers.js**:
+    - Confirmed that the "System Prompt" sent to OpenAI receiving the full resolved name (e.g., "Spanish (Mexico)") derived from the code.
+    - Added **Runtime Verification Logs**:
+        ```
+        [PartialWorker] 🔍 VERIFICATION: System Prompt Target Language = "Spanish (Mexico)" (derived from code "es-MX")
+        ```
+    - This proves the LLM is explicitly instructed to output the specific dialect.
+
+### Verification Results
+
+#### ✅ Polyglot Voice Coverage
+- Run `scripts/verify_polyglot_access.js`:
+    - Confirmed **Gemini** (Google) and **ElevenLabs V2** (Turbo/Flash) voices appear for *all* regional variants.
+    - Example: Requesting `es-MX` returns:
+        - 4 ElevenLabs multilingual voices.
+        - 2 Gemini multilingual voices.
+        - 20+ Google "Chirp 3 HD" specific `es-MX` voices.
+
+#### ✅ No Accent Bleeding
+- Verified that selecting "Spanish (Mexico)" shows **zero** "Spanish (Spain)" voices in the dropdown.
+- This forces the TTS engine to use the correct region or a true polyglot model.

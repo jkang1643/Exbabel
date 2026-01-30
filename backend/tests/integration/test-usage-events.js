@@ -12,6 +12,14 @@
 import { recordUsageEvent } from '../../usage/recordUsage.js';
 import { supabaseAdmin } from '../../supabaseAdmin.js';
 import crypto from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+
+// Load .env from backend root
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const TEST_CHURCH_ID = process.env.TEST_CHURCH_ID || null;
 

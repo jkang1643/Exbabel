@@ -2,10 +2,16 @@
  * TTS Voice Configuration
  * 
  * This file uses the auto-generated ttsVoices.json (extracted from Available languages.txt)
- * and adds language-agnostic Gemini voices and normalization logic.
+ * and filters voices based on actual language support using languageSupportData.js.
  */
 
-import ttsVoicesJson from './ttsVoices.json';
+import ttsVoicesJson from './ttsVoices.json' with { type: 'json' };
+import {
+    isGeminiSupported,
+    isElevenLabsSupported,
+    isGoogleTierSupported,
+    LANGUAGE_TIER_AVAILABILITY
+} from './languageSupportData.js';
 
 // Gemini voices (language-agnostic Studio voices)
 export const GEMINI_VOICE_OPTIONS = [
@@ -76,60 +82,92 @@ export const ELEVENLABS_VOICE_OPTIONS = [
     { value: `elevenlabs-${CUSTOM_VOICE_ID}__elevenlabs`, label: 'Pastor John Brown (Multilingual)', tier: 'elevenlabs' }
 ];
 
-/**
- * Mapping of language codes to their available voices.
- * Combines auto-generated voices with language-agnostic Gemini and ElevenLabs voices.
- */
-export const VOICE_OPTIONS_BY_LANG = Object.keys(ttsVoicesJson).reduce((acc, langCode) => {
-    // Start with premium voices (Gemini and ElevenLabs), then language-specific voices
-    acc[langCode] = [...GEMINI_VOICE_OPTIONS, ...ELEVENLABS_VOICE_OPTIONS, ...ttsVoicesJson[langCode]];
-    return acc;
-}, {});
 
 /**
- * Normalize language code to full locale (frontend version)
+ * Normalize language code to full locale
+ * Maps short codes (zh, he) to full locale (cmn-CN, he-IL) for ttsVoices.json lookup
  */
+const LOCALE_MAP = {
+    'es': 'es-ES', 'en': 'en-US', 'fr': 'fr-FR', 'de': 'de-DE', 'it': 'it-IT',
+    'pt': 'pt-BR', 'ja': 'ja-JP', 'ko': 'ko-KR', 'zh': 'cmn-CN', 'ar': 'ar-XA',
+    'hi': 'hi-IN', 'ru': 'ru-RU', 'he': 'he-IL', 'nl': 'nl-NL', 'pl': 'pl-PL',
+    'tr': 'tr-TR', 'cs': 'cs-CZ', 'da': 'da-DK', 'fi': 'fi-FI', 'el': 'el-GR',
+    'hu': 'hu-HU', 'id': 'id-ID', 'ms': 'ms-MY', 'nb': 'nb-NO', 'ro': 'ro-RO',
+    'sk': 'sk-SK', 'sv': 'sv-SE', 'th': 'th-TH', 'uk': 'uk-UA', 'vi': 'vi-VN',
+    'bg': 'bg-BG', 'hr': 'hr-HR', 'lt': 'lt-LT', 'lv': 'lv-LV', 'sl': 'sl-SI',
+    'sr': 'sr-RS', 'af': 'af-ZA', 'bn': 'bn-IN', 'ca': 'ca-ES', 'eu': 'eu-ES',
+    'fil': 'fil-PH', 'gl': 'gl-ES', 'gu': 'gu-IN', 'is': 'is-IS', 'kn': 'kn-IN',
+    'ml': 'ml-IN', 'mr': 'mr-IN', 'pa': 'pa-IN', 'ta': 'ta-IN', 'te': 'te-IN',
+    'ur': 'ur-IN', 'cy': 'cy-GB', 'et': 'et-EE'
+};
+
 export const normalizeLanguageCode = (languageCode) => {
     if (!languageCode) return null;
-    if (languageCode.includes('-')) {
-        // Handle special case where backend/STT might use 'zh' or 'zh-CN' which maps to 'cmn-CN'
-        if (languageCode === 'zh-CN' || languageCode === 'zh') return 'cmn-CN';
-        return languageCode;
-    }
-
-    const languageMap = {
-        'es': 'es-ES',
-        'en': 'en-US',
-        'fr': 'fr-FR',
-        'de': 'de-DE',
-        'it': 'it-IT',
-        'pt': 'pt-BR',
-        'ja': 'ja-JP',
-        'ko': 'ko-KR',
-        'zh': 'cmn-CN',
-        'ar': 'ar-XA',
-        'hi': 'hi-IN',
-        'ru': 'ru-RU'
-    };
-
-    return languageMap[languageCode] || `${languageCode}-${languageCode.toUpperCase()}`;
+    // If already full locale, return as-is
+    if (languageCode.includes('-')) return languageCode;
+    // Map short code to full locale
+    return LOCALE_MAP[languageCode] || `${languageCode}-${languageCode.toUpperCase()}`;
 };
 
 /**
- * Get available voices for a language
+ * Get available voices for a language - computed ON DEMAND
+ * 
+ * Rules:
+ * 1. Base voices = exactly what's in ttsVoices.json (CANONICAL)
+ * 2. Gemini/ElevenLabs are additive ONLY if language is supported
+ * 3. If language NOT in ttsVoices.json AND not Gemini/ElevenLabs = empty array
+ * 
+ * @param {string} languageCode - Short (zh) or full locale (cmn-CN)
+ * @returns {Array} Voice options for the language
  */
 export const getVoicesForLanguage = (languageCode) => {
-    const normalizedCode = normalizeLanguageCode(languageCode);
-    const voices = VOICE_OPTIONS_BY_LANG[normalizedCode];
+    if (!languageCode) return [];
 
-    if (voices && voices.length > 0) {
-        return voices;
+    const normalizedCode = normalizeLanguageCode(languageCode);
+    const voices = [];
+
+    // 1. BASE VOICES from ttsVoices.json (CANONICAL - never filter, never reshape)
+    if (ttsVoicesJson[normalizedCode]) {
+        voices.push(...ttsVoicesJson[normalizedCode]);
     }
 
-    // Fallback if the specific locale or normalization didn't find voices
-    return [
-        ...GEMINI_VOICE_OPTIONS,
-        ...ELEVENLABS_VOICE_OPTIONS,
-        { value: `${normalizedCode}-Standard-A`, label: 'Standard-A (Fallback)', tier: 'standard' }
-    ];
+    // 2. GEMINI voices (additive, only if supported)
+    if (isGeminiSupported(languageCode) || isGeminiSupported(normalizedCode)) {
+        voices.unshift(...GEMINI_VOICE_OPTIONS);
+    }
+
+    // 3. ELEVENLABS voices (additive, only if supported per tier)
+    const elevenLabsToAdd = [];
+    for (const voice of ELEVENLABS_VOICE_OPTIONS) {
+        if (isElevenLabsSupported(languageCode, voice.tier) ||
+            isElevenLabsSupported(normalizedCode, voice.tier)) {
+            elevenLabsToAdd.push(voice);
+        }
+    }
+    if (elevenLabsToAdd.length > 0) {
+        // Insert after Gemini but before base voices
+        const geminiCount = (isGeminiSupported(languageCode) || isGeminiSupported(normalizedCode))
+            ? GEMINI_VOICE_OPTIONS.length : 0;
+        voices.splice(geminiCount, 0, ...elevenLabsToAdd);
+    }
+
+    return voices;
 };
+
+/**
+ * DEPRECATED: Use getVoicesForLanguage instead
+ * Kept for backwards compatibility - maps to on-demand function
+ */
+export const VOICE_OPTIONS_BY_LANG = new Proxy({}, {
+    get: (target, prop) => {
+        if (typeof prop === 'string') {
+            return getVoicesForLanguage(prop);
+        }
+        return undefined;
+    },
+    has: (target, prop) => {
+        const voices = getVoicesForLanguage(prop);
+        return voices.length > 0;
+    },
+    ownKeys: () => Object.keys(ttsVoicesJson)
+});

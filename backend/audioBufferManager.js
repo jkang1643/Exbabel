@@ -294,10 +294,11 @@ export class AudioBufferManager extends EventEmitter {
         this.oldestChunkTimestamp = null;
       }
 
-      this.logger.debug('[AudioBuffer] 🧹 Cleaned up expired chunks', {
-        removed,
-        remaining: this.buffer.length,
-      });
+      // Too noisy for standard debug
+      // this.logger.debug('[AudioBuffer] 🧹 Cleaned up expired chunks', {
+      //   removed,
+      //   remaining: this.buffer.length,
+      // });
 
       this.emit('chunks_expired', { count: removed });
     }

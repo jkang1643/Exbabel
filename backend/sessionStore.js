@@ -1,25 +1,45 @@
 /**
  * Session Store - Manages live translation sessions
  * Handles master (host) and listeners for each session
+ * 
+ * ARCHITECTURE:
+ * - In-memory Map for real-time performance (sockets, listeners)
+ * - Supabase DB for persistence (survives restarts, enables auditing)
+ * - DB is source of truth for session_id → church_id mapping
+ * 
+ * SESSION LIFECYCLE:
+ * - Session ends when: (1) host clicks End Session, (2) host disconnects and doesn't reconnect within grace period
+ * - Session does NOT end when: listener leaves
  */
+
+import { supabaseAdmin } from './supabaseAdmin.js';
+
+// Grace period before ending session after host disconnects (allows reconnection)
+const HOST_DISCONNECT_GRACE_MS = 30000; // 30 seconds
 
 class SessionStore {
   constructor() {
-    // Map<sessionId, SessionData>
+    // Map<sessionId, SessionData> - in-memory cache for real-time ops
     this.sessions = new Map();
+    // Map<sessionId, timeoutId> - pending end timers for grace period
+    this.pendingEndTimers = new Map();
   }
 
   /**
    * Creates a new session
-   * @returns {Object} { sessionId, sessionCode }
+   * @param {string|null} churchId - Optional tenant ID for billing/entitlements
+   * @param {string|null} hostUserId - Optional host user ID
+   * @returns {Promise<Object>} { sessionId, sessionCode }
    */
-  createSession() {
+  async createSession(churchId = null, hostUserId = null) {
     const sessionId = this.generateUUID();
     const sessionCode = this.generateSessionCode();
 
     const sessionData = {
       sessionId,
       sessionCode,
+      churchId,           // Tenant context for billing/entitlements (immutable once set)
+      hostUserId,
       hostSocket: null,
       hostGeminiSocket: null,
       listeners: new Map(), // Map<socketId, ListenerData>
@@ -31,10 +51,85 @@ class SessionStore {
       voicePreferences: new Map() // Map<targetLang, voiceId> - Last Write Wins for shared channel
     };
 
+    // Persist to DB (if churchId is known)
+    if (churchId) {
+      try {
+        const { error } = await supabaseAdmin
+          .from('sessions')
+          .insert({
+            id: sessionId,
+            church_id: churchId,
+            host_user_id: hostUserId,
+            session_code: sessionCode,
+            status: 'active',
+            source_lang: 'en'
+          });
+
+        if (error) {
+          console.error(`[SessionStore] DB insert failed:`, error.message);
+          // Continue with in-memory only (graceful degradation)
+        } else {
+          console.log(`[SessionStore] ✓ Session persisted to DB: ${sessionCode}`);
+        }
+      } catch (dbErr) {
+        console.error(`[SessionStore] DB error:`, dbErr.message);
+      }
+    }
+
     this.sessions.set(sessionId, sessionData);
-    console.log(`[SessionStore] Created session ${sessionCode} (${sessionId})`);
+    console.log(`[SessionStore] Created session ${sessionCode} (${sessionId}) churchId=${churchId || 'pending'}`);
 
     return { sessionId, sessionCode };
+  }
+
+  /**
+   * Set the churchId for a session (immutable once set)
+   * Also persists/updates in DB if not already there
+   * @param {string} sessionId
+   * @param {string} churchId
+   * @param {string|null} hostUserId - Optional host user ID
+   * @returns {Promise<boolean>} true if set, false if already set to different value
+   */
+  async setChurchId(sessionId, churchId, hostUserId = null) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      console.error(`[SessionStore] setChurchId failed: session ${sessionId} not found`);
+      return false;
+    }
+
+    // Immutability check: once set, can't change
+    if (session.churchId && session.churchId !== churchId) {
+      console.error(`[SessionStore] ❌ INVARIANT VIOLATION: Attempted to change churchId from ${session.churchId} to ${churchId} for session ${sessionId}`);
+      return false;
+    }
+
+    session.churchId = churchId;
+    session.lastActivity = Date.now();
+
+    // Persist to DB (upsert pattern - insert or update)
+    try {
+      const { error } = await supabaseAdmin
+        .from('sessions')
+        .upsert({
+          id: sessionId,
+          church_id: churchId,
+          host_user_id: hostUserId || session.hostUserId,
+          session_code: session.sessionCode,
+          status: 'active',
+          source_lang: session.sourceLang || 'en'
+        }, { onConflict: 'id' });
+
+      if (error) {
+        console.error(`[SessionStore] DB upsert failed:`, error.message);
+      } else {
+        console.log(`[SessionStore] ✓ Session churchId persisted to DB: ${session.sessionCode}`);
+      }
+    } catch (dbErr) {
+      console.error(`[SessionStore] DB error:`, dbErr.message);
+    }
+
+    console.log(`[SessionStore] ✓ churchId set for session ${session.sessionCode}: ${churchId}`);
+    return true;
   }
 
   /**
@@ -46,14 +141,57 @@ class SessionStore {
 
   /**
    * Get session by code
+   * Checks in-memory cache first, then DB fallback for recovery after restart
+   * @param {string} sessionCode
+   * @returns {Promise<Object|null>} session or null
    */
-  getSessionByCode(sessionCode) {
+  async getSessionByCode(sessionCode) {
+    const upperCode = sessionCode.toUpperCase();
+
+    // Check in-memory cache first
     for (const [sessionId, session] of this.sessions.entries()) {
-      if (session.sessionCode === sessionCode.toUpperCase()) {
+      if (session.sessionCode === upperCode) {
         return session;
       }
     }
-    return null;
+
+    // DB fallback: session might exist from before restart
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('sessions')
+        .select('id, church_id, host_user_id, session_code, status, source_lang, created_at')
+        .eq('session_code', upperCode)
+        .eq('status', 'active')
+        .single();
+
+      if (error || !data) {
+        return null;
+      }
+
+      // Reconstitute session in memory (without sockets - host will need to reconnect)
+      const sessionData = {
+        sessionId: data.id,
+        sessionCode: data.session_code,
+        churchId: data.church_id,
+        hostUserId: data.host_user_id,
+        hostSocket: null,
+        hostGeminiSocket: null,
+        listeners: new Map(),
+        languageGroups: new Map(),
+        sourceLang: data.source_lang || 'en',
+        createdAt: new Date(data.created_at).getTime(),
+        lastActivity: Date.now(),
+        isActive: false, // Host needs to reconnect to activate
+        voicePreferences: new Map()
+      };
+
+      this.sessions.set(data.id, sessionData);
+      console.log(`[SessionStore] ✓ Session recovered from DB: ${data.session_code} (churchId=${data.church_id})`);
+      return sessionData;
+    } catch (dbErr) {
+      console.error(`[SessionStore] DB lookup error:`, dbErr.message);
+      return null;
+    }
   }
 
   /**
@@ -270,33 +408,158 @@ class SessionStore {
   }
 
   /**
-   * Close a session and clean up
+   * END SESSION - The authoritative way to end a session
+   * Call this for: explicit end button, grace period timeout, startup cleanup
+   * @param {string} sessionId
+   * @param {string} reason - Why session ended: 'host_clicked_end', 'host_disconnected', 'backend_restart_cleanup', etc.
+   * @returns {Promise<boolean>} true if ended, false if already ended or not found
    */
-  closeSession(sessionId) {
+  async endSession(sessionId, reason = 'unknown') {
+    // Cancel any pending end timer
+    this.cancelScheduledEnd(sessionId);
+
+    const session = this.sessions.get(sessionId);
+    const sessionCode = session?.sessionCode || sessionId.substring(0, 8);
+
+    console.log(`[SessionStore] 🔴 Ending session ${sessionCode} (${sessionId}) (reason: ${reason})`);
+
+    // Update DB first (idempotent - won't fail if already ended)
+    try {
+      console.log(`[SessionStore] 🔍 DEBUG: Attempting DB update for ${sessionId}...`);
+      const { data, error } = await supabaseAdmin
+        .from('sessions')
+        .update({
+          status: 'ended',
+          ended_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          metadata: supabaseAdmin.rpc ? undefined : { ended_reason: reason }
+        })
+        .eq('id', sessionId)
+        .select();
+
+      if (error) {
+        console.error(`[SessionStore] ❌ DB update failed on end:`, error.message, error.details);
+      } else if (data && data.length > 0) {
+        const row = data[0];
+        console.log(`[SessionStore] ✓ Session marked ended in DB: ${sessionCode} (status=${row.status}, ended_at=${row.ended_at})`);
+      } else {
+        console.log(`[SessionStore] ⚠️ DB update returned no rows! Session ${sessionId} might not exist in DB or is already ended.`);
+        // Try to fetch it to see what's wrong
+        const { data: check } = await supabaseAdmin.from('sessions').select('*').eq('id', sessionId).single();
+        console.log(`[SessionStore] 🔍 DB State for ${sessionId}:`, check);
+      }
+    } catch (dbErr) {
+      console.error(`[SessionStore] DB error on end:`, dbErr.message);
+    }
+
+    // Clean up in-memory state
+    if (session) {
+      // Close host Gemini connection
+      if (session.hostGeminiSocket && session.hostGeminiSocket.readyState === 1) {
+        session.hostGeminiSocket.close();
+      }
+
+      // Notify all listeners
+      this.broadcastToListeners(sessionId, {
+        type: 'session_ended',
+        reason: reason,
+        message: reason === 'host_clicked_end'
+          ? 'The host has ended the session'
+          : 'The session has ended'
+      });
+
+      // Close all listener connections
+      session.listeners.forEach(listener => {
+        if (listener.socket.readyState === 1) {
+          listener.socket.close();
+        }
+      });
+
+      this.sessions.delete(sessionId);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Schedule session end after grace period (for host disconnect)
+   * Host can reconnect within grace period to cancel
+   * @param {string} sessionId
+   */
+  scheduleSessionEnd(sessionId) {
+    // Cancel any existing timer
+    this.cancelScheduledEnd(sessionId);
+
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
-    console.log(`[SessionStore] Closing session ${session.sessionCode}`);
+    console.log(`[SessionStore] ⏳ Scheduling session end in ${HOST_DISCONNECT_GRACE_MS / 1000}s: ${session.sessionCode}`);
 
-    // Close host Gemini connection
-    if (session.hostGeminiSocket && session.hostGeminiSocket.readyState === 1) {
-      session.hostGeminiSocket.close();
-    }
+    const timerId = setTimeout(async () => {
+      this.pendingEndTimers.delete(sessionId);
+      console.log(`[SessionStore] ⏰ Grace period expired for ${session.sessionCode}, ending session`);
+      await this.endSession(sessionId, 'host_disconnected');
+    }, HOST_DISCONNECT_GRACE_MS);
 
-    // Notify all listeners
-    this.broadcastToListeners(sessionId, {
-      type: 'session_ended',
-      message: 'The host has ended the session'
-    });
+    this.pendingEndTimers.set(sessionId, timerId);
+  }
 
-    // Close all listener connections
-    session.listeners.forEach(listener => {
-      if (listener.socket.readyState === 1) {
-        listener.socket.close();
+  /**
+   * Cancel scheduled session end (host reconnected)
+   * @param {string} sessionId
+   */
+  cancelScheduledEnd(sessionId) {
+    const timerId = this.pendingEndTimers.get(sessionId);
+    if (timerId) {
+      clearTimeout(timerId);
+      this.pendingEndTimers.delete(sessionId);
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        console.log(`[SessionStore] ✓ Cancelled scheduled end for ${session.sessionCode} (host reconnected?)`);
       }
-    });
+    }
+  }
 
-    this.sessions.delete(sessionId);
+  /**
+   * Cleanup abandoned sessions on backend startup
+   * Marks all 'active' sessions as ended with reason 'backend_restart_cleanup'
+   * Call this once when the backend starts
+   */
+  async cleanupAbandonedSessions() {
+    console.log(`[SessionStore] 🧹 Cleaning up abandoned sessions from previous run...`);
+
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('sessions')
+        .update({
+          status: 'ended',
+          ended_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('status', 'active')
+        .select('id, session_code');
+
+      if (error) {
+        console.error(`[SessionStore] Cleanup failed:`, error.message);
+      } else if (data && data.length > 0) {
+        console.log(`[SessionStore] ✓ Cleaned up ${data.length} abandoned session(s):`);
+        data.forEach(s => console.log(`  - ${s.session_code} (${s.id})`));
+      } else {
+        console.log(`[SessionStore] ✓ No abandoned sessions to clean up`);
+      }
+    } catch (dbErr) {
+      console.error(`[SessionStore] Cleanup error:`, dbErr.message);
+    }
+  }
+
+  /**
+   * @deprecated Use endSession(sessionId, reason) instead
+   * Kept for backwards compatibility during transition
+   */
+  async closeSession(sessionId) {
+    console.warn(`[SessionStore] closeSession() is deprecated, use endSession() instead`);
+    return this.endSession(sessionId, 'close_session_deprecated');
   }
 
   /**
@@ -309,6 +572,7 @@ class SessionStore {
     return {
       sessionId: session.sessionId,
       sessionCode: session.sessionCode,
+      churchId: session.churchId,  // Include for debugging/verification
       isActive: session.isActive,
       listenerCount: session.listeners.size,
       languages: Array.from(session.languageGroups.keys()),

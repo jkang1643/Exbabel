@@ -1156,15 +1156,25 @@ export async function resolveTtsRoute({
   if (requestedVoice && requestedTier === 'neural2') {
     console.log(`[TTS Routing]   ⚠️ Tier is default 'neural2', attempting to infer from voice name...`);
     // Only infer tier if user didn't explicitly request one
-    if (requestedVoice.includes('elevenlabs') || /^[a-zA-Z0-9]{20,22}$/.test(requestedVoice)) {
+
+    // Normalize for case-insensitive checks
+    const voiceLower = requestedVoice.toLowerCase();
+
+    if (voiceLower.includes('elevenlabs') || /^[a-zA-Z0-9]{20,22}$/.test(requestedVoice)) {
       effectiveTier = 'elevenlabs';
       console.log(`[TTS Routing]   ✅ Inferred tier: elevenlabs`);
-    } else if (requestedVoice.includes('Neural2')) {
+    } else if (voiceLower.includes('neural2') || voiceLower.includes('wavenet')) {
       effectiveTier = 'neural2';
       console.log(`[TTS Routing]   ✅ Inferred tier: neural2`);
-    } else if (requestedVoice.includes('Chirp3') || requestedVoice.includes('Chirp-3')) {
+    } else if (voiceLower.includes('chirp3') || voiceLower.includes('chirp-3')) {
       effectiveTier = 'chirp3_hd';
       console.log(`[TTS Routing]   ✅ Inferred tier: chirp3_hd`);
+    } else if (voiceLower.includes('standard')) {
+      effectiveTier = 'standard';
+      console.log(`[TTS Routing]   ✅ Inferred tier: standard`);
+    } else if (voiceLower.includes('studio')) {
+      effectiveTier = 'studio';
+      console.log(`[TTS Routing]   ✅ Inferred tier: studio`);
     } else if (['Kore', 'Fenrir', 'Puck', 'Charon'].some(n => requestedVoice.includes(n))) {
       effectiveTier = 'gemini';
       console.log(`[TTS Routing]   ✅ Inferred tier: gemini (matched Gemini persona)`);

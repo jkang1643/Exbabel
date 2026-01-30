@@ -142,6 +142,13 @@ const server = app.listen(port, '0.0.0.0', async () => {
     console.error(`[Backend] ❌ Failed to initialize Voice Catalog:`, error.message);
   }
 
+  // Cleanup abandoned sessions from previous run
+  try {
+    await sessionStore.cleanupAbandonedSessions();
+  } catch (error) {
+    console.error(`[Backend] ❌ Failed to cleanup abandoned sessions:`, error.message);
+  }
+
   const apiPort = process.env.WS_API_PORT || 5000;
   if (apiPort !== port) {
     console.log(`[Backend] API WebSocket: ws://localhost:${apiPort}/api/translate`);
@@ -247,6 +254,8 @@ wss.on("connection", async (clientWs, req) => {
             const entitlements = await getEntitlements(profile.church_id);
             clientWs.entitlements = entitlements;
             clientWs.churchId = profile.church_id;
+            // Propagate to session so listeners inherit the host's plan
+            sessionStore.setChurchId(sessionId, profile.church_id);
             console.log(`[Backend] ✓ Host entitlements loaded for church ${profile.church_id}: plan=${entitlements.subscription.planCode}`);
           }
         }
@@ -260,6 +269,8 @@ wss.on("connection", async (clientWs, req) => {
         const entitlements = await getEntitlements(testChurchId);
         clientWs.entitlements = entitlements;
         clientWs.churchId = testChurchId;
+        // Propagate to session so listeners inherit the host's plan
+        sessionStore.setChurchId(sessionId, testChurchId);
         console.log(`[Backend] ⚠️ TEST MODE (Host): Using TEST_CHURCH_ID=${testChurchId}, plan=${entitlements.subscription.planCode}`);
       } catch (testErr) {
         console.error(`[Backend] TEST_CHURCH_ID load failed (Host):`, testErr.message);
@@ -344,7 +355,7 @@ app.use('/api', usageRouter);
  * POST /session/start
  * Creates a new live translation session for a host
  */
-app.post('/session/start', (req, res) => {
+app.post('/session/start', async (req, res) => {
   try {
     // Input validation
     const clientIP = inputValidator.getClientIP(req);
@@ -359,7 +370,7 @@ app.post('/session/start', (req, res) => {
       });
     }
 
-    const { sessionId, sessionCode } = sessionStore.createSession();
+    const { sessionId, sessionCode } = await sessionStore.createSession();
 
     res.json({
       success: true,
@@ -380,7 +391,7 @@ app.post('/session/start', (req, res) => {
  * POST /session/join
  * Allows a listener to join an existing session
  */
-app.post('/session/join', (req, res) => {
+app.post('/session/join', async (req, res) => {
   try {
     // Input validation
     const clientIP = inputValidator.getClientIP(req);
@@ -436,7 +447,7 @@ app.post('/session/join', (req, res) => {
       });
     }
 
-    const session = sessionStore.getSessionByCode(sessionCodeValidation.sanitized);
+    const session = await sessionStore.getSessionByCode(sessionCodeValidation.sanitized);
 
     if (!session) {
       return res.status(404).json({
@@ -476,10 +487,10 @@ app.post('/session/join', (req, res) => {
  * GET /session/:sessionCode/info
  * Get session information
  */
-app.get('/session/:sessionCode/info', (req, res) => {
+app.get('/session/:sessionCode/info', async (req, res) => {
   try {
     const { sessionCode } = req.params;
-    const session = sessionStore.getSessionByCode(sessionCode);
+    const session = await sessionStore.getSessionByCode(sessionCode);
 
     if (!session) {
       return res.status(404).json({

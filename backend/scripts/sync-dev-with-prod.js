@@ -18,7 +18,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const PROD_URL = 'https://fjkysulfacbgfmsbuyvv.supabase.co';
-const PROD_KEY = 'sb_secret_xG6Otfiw4SAqCdcgsbMpMw_MxFr8bEK';
+const PROD_KEY = process.env.SUPABASE_PROD_SERVICE_ROLE_KEY;
 
 const DEV_URL = process.env.SUPABASE_URL;
 const DEV_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;

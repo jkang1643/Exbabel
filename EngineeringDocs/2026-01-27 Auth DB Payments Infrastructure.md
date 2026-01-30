@@ -583,5 +583,12 @@ backend/
     - Dynamic voice dropdown with lock indicators for premium voices
     - Accurate usage tracking for STT (seconds) and TTS (characters)
     - Fixed race condition in initial voice list fetching
-    - Fixed voice routing bug where Studio voices incorrectly fell back to Gemini
+### 2026-01-30 - Session Lifecycle & Persistence
+- ✅ **Database Persistence**: Updated `sessionStore.js` to persist sessions to Supabase `sessions` table (create/upsert/end).
+- ✅ **Session Lifecycle**: Implemented robust session ending:
+    - **Explicit End**: "End Session" button in Host UI triggers `end_session` message.
+    - **Graceful End**: Host disconnect triggers 30s grace timer (`scheduleSessionEnd`) before closing.
+    - **Startup Cleanup**: `cleanupAbandonedSessions` runs on server start to mark zombie sessions as ended.
+- ✅ **Frontend**: Added distinct "End Session" button with confirmation dialog in `HostPage.jsx`.
+- ✅ **Host Adapter**: Wired `end_session` and grace timer logic into the active `adapter.js`.
 

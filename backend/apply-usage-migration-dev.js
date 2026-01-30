@@ -10,7 +10,11 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const supabaseUrl = "https://pmxfuofokccifbiqxhpp.supabase.co";
-const serviceRoleKey = "sb_secret_Jwf3GeG84fLLlYz_EWimuA_KH5SdClm";
+import dotenv from 'dotenv';
+dotenv.config({ path: path.join(__dirname, '.env') });
+
+const supabaseUrl = "https://pmxfuofokccifbiqxhpp.supabase.co";
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
     db: { schema: 'public' }

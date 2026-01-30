@@ -127,4 +127,23 @@ If you want the tight shortlist that prevents most disasters:
 5. one billing_settings row per church + never missing
 6. usage_events idempotency_key unique (no double counting)
 
-If you want, paste your **church creation** code path and I’ll give you the exact transaction that enforces the two “missing row” invariants permanently (subscription + billing settings) so you never backfill again.
+The invariant you want
+✅ Single source of truth
+
+For any live session:
+
+session_id → church_id is server-owned and persisted (or at least stored in an authoritative in-memory session store).
+
+All entitlements / routing decisions for everyone in that session come from:
+
+church_id → subscription → plan → entitlements + model routing
+
+❌ What to avoid (because it breaks later)
+
+Listeners derive church from .env
+
+Listeners derive church from “their own profile” (they might not have one)
+
+Listener flow uses a fallback like 'default'
+
+Client sends churchId and server trusts it

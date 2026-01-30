@@ -114,6 +114,10 @@ export async function handleHostConnection(clientWs, sessionId) {
   clientWs.on('message', async (msg) => {
     try {
       const message = JSON.parse(msg.toString());
+      // Log all control messages (exclude audio chunks to avoid spam)
+      if (message.type !== 'audio') {
+        console.log(`[HostMode] 📩 Received message: ${message.type}`, message.type === 'end_session' ? message : '');
+      }
 
       switch (message.type) {
         case 'init':
@@ -2518,6 +2522,33 @@ export async function handleHostConnection(clientWs, sessionId) {
             await speechStream.endAudio();
           }
           break;
+
+        case 'end_session':
+          // Explicit session end from host (End Session button)
+          console.log('[HostMode] 🔴 Host clicked End Session');
+
+          // Clean up speech stream
+          if (speechStream) {
+            speechStream.destroy();
+            speechStream = null;
+          }
+
+          // Reset core engine
+          coreEngine.reset();
+
+          // End session immediately with explicit reason
+          await sessionStore.endSession(currentSessionId, 'host_clicked_end');
+
+          // Close the WebSocket
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'session_ended',
+              reason: 'host_clicked_end',
+              message: 'Session ended successfully'
+            }));
+            clientWs.close(1000, 'Session ended by host');
+          }
+          break;
       }
     } catch (error) {
       console.error('[HostMode] Error processing message:', error);
@@ -2529,9 +2560,9 @@ export async function handleHostConnection(clientWs, sessionId) {
     console.error('[HostMode] Host WebSocket error:', error.message);
   });
 
-  // Handle host disconnect
-  clientWs.on('close', () => {
-    console.log('[HostMode] Host disconnected from session');
+  // Handle host disconnect - start grace timer (host can reconnect within 30s)
+  clientWs.on('close', async () => {
+    console.log('[HostMode] Host disconnected from session', currentSessionId);
 
     if (speechStream) {
       speechStream.destroy();
@@ -2541,7 +2572,8 @@ export async function handleHostConnection(clientWs, sessionId) {
     // PHASE 8: Reset core engine state
     coreEngine.reset();
 
-    sessionStore.closeSession(currentSessionId);
+    // Start grace timer - session ends after 30s if host doesn't reconnect
+    sessionStore.scheduleSessionEnd(currentSessionId);
   });
 
   // Initialize the session as active

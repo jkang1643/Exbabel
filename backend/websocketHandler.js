@@ -326,9 +326,9 @@ export async function handleHostConnection(clientWs, sessionId) {
     }
   });
 
-  // Handle host disconnect
-  clientWs.on('close', () => {
-    console.log('[Host] Disconnected from session');
+  // Handle host disconnect - start grace timer (host can reconnect within 30s)
+  clientWs.on('close', async () => {
+    console.log('[Host] Disconnected from session', sessionId);
 
     if (audioEndTimer) {
       clearTimeout(audioEndTimer);
@@ -339,7 +339,8 @@ export async function handleHostConnection(clientWs, sessionId) {
       geminiWs.close();
     }
 
-    sessionStore.closeSession(sessionId);
+    // Start grace timer - session ends after 30s if host doesn't reconnect
+    sessionStore.scheduleSessionEnd(sessionId);
   });
 
   // Initialize Gemini connection
@@ -410,12 +411,30 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       }));
     }
 
-    // Fetch entitlements to send plan info and send welcome message
-    // TODO: Use actual orgId from session/auth
-    const orgId = 'default';
-    getEntitlements(orgId)
+    // INVARIANT: Listener inherits churchId from the session (set by host)
+    // If session has no churchId, the host hasn't initialized properly - fail fast
+    const churchId = session.churchId;
+    if (!churchId) {
+      console.error(`[Listener] ❌ Session ${sessionId} has no churchId - host not initialized. Closing connection.`);
+      clientWs.send(JSON.stringify({
+        type: 'error',
+        code: 'SESSION_NOT_READY',
+        message: 'Session is not fully initialized. Please wait for the host to start.'
+      }));
+      clientWs.close(1008, 'Session has no churchId');
+      return;
+    }
+
+    // Fetch entitlements using the session's churchId (inherited from host)
+    getEntitlements(churchId)
       .then(entitlements => {
-        const plan = entitlements?.subscription?.planCode || 'starter';
+        // Cache on socket for later use (e.g., getAllowedTiers)
+        clientWs.entitlements = entitlements;
+        clientWs.churchId = churchId;
+
+        const plan = entitlements.subscription.planCode;
+        console.log(`[Listener] ✓ Join sessionId=${sessionId} churchId=${churchId} plan=${plan}`);
+
         if (clientWs.readyState === WebSocket.OPEN) {
           clientWs.send(JSON.stringify({
             type: 'session_joined',
@@ -424,14 +443,14 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             role: 'listener',
             targetLang: targetLang,
             sourceLang: session.sourceLang,
-            plan: plan, // Send plan info to frontend
+            plan: plan, // Send plan info to frontend (informational only)
             message: `Connected to session ${session.sessionCode}`
           }));
         }
       })
       .catch(err => {
-        console.warn(`[Listener] Failed to fetch plan info: ${err.message}`);
-        // Send welcome message without plan
+        console.error(`[Listener] ❌ Failed to fetch entitlements for churchId=${churchId}:`, err.message);
+        // Still allow connection but log the error - this is a backend issue, not user's fault
         if (clientWs.readyState === WebSocket.OPEN) {
           clientWs.send(JSON.stringify({
             type: 'session_joined',
@@ -440,7 +459,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             role: 'listener',
             targetLang: targetLang,
             sourceLang: session.sourceLang,
-            plan: 'starter', // Fallback default
+            plan: 'unknown', // Indicate error state
             message: `Connected to session ${session.sessionCode}`
           }));
         }
@@ -502,8 +521,20 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               const { getVoicesFor } = await import('./tts/voiceCatalog.js');
               const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
 
-              const orgId = 'default'; // TODO: Get from session/auth
-              const allowedTiers = getAllowedTiers(orgId);
+              // Use cached churchId from socket (set during connection)
+              const churchId = clientWs.churchId;
+              if (!churchId) {
+                console.error(`[Listener] ❌ No churchId cached on socket for voice list`);
+                if (clientWs.readyState === WebSocket.OPEN) {
+                  clientWs.send(JSON.stringify({
+                    type: 'tts/error',
+                    code: 'SESSION_NOT_READY',
+                    message: 'Session not initialized'
+                  }));
+                }
+                return;
+              }
+              const allowedTiers = getAllowedTiers(churchId);
 
               // Get voices filtered by language and allowed tiers
               const voices = await getVoicesFor({

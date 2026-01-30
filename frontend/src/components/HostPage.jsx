@@ -1062,6 +1062,32 @@ export function HostPage({ onBackToHome }) {
     setIsStreaming(false);
   };
 
+  // End Session - closes the session completely (different from Stop Broadcast)
+  const handleEndSession = () => {
+    console.log('[HostPage] 🚪 End Session requested');
+    // Stop recording if active
+    if (isStreaming) {
+      stopRecording();
+    }
+
+    // Send end_session message to backend
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('[HostPage] 📤 Sending end_session message');
+      wsRef.current.send(JSON.stringify({
+        type: 'end_session'
+      }));
+    } else {
+      console.error('[HostPage] ❌ Cannot send end_session: WebSocket not open');
+      alert('Connection lost. The session will end automatically in 30 seconds.');
+    }
+
+    setIsStreaming(false);
+    setSessionCode('');
+    setSessionId(null);
+    setConnectionState('closed');
+    onBackToHome(); // Navigate back to home
+  };
+
   const handleSourceLangChange = (lang) => {
     setSourceLang(lang);
 
@@ -1509,6 +1535,25 @@ export function HostPage({ onBackToHome }) {
                 ⏹️ Stop Broadcasting
               </button>
             )}
+          </div>
+
+          {/* End Session Button - Properly Themed */}
+          <div className="flex justify-center mb-4 sm:mb-6 border-t border-dashed border-gray-200 pt-4">
+            <button
+              onClick={() => {
+                if (window.confirm('⚠️ End this session completely?\n\nThis will disconnect all listeners and close the session for everyone. Use "Stop Broadcasting" if you just want to take a break.')) {
+                  handleEndSession();
+                }
+              }}
+              className="group flex items-center gap-2 px-5 py-2 text-sm text-red-600 bg-red-50 hover:bg-red-100 hover:text-red-700 font-medium rounded-full transition-all border border-transparent hover:border-red-200"
+              title="Close this session for everyone"
+            >
+              <span>🚪</span>
+              <span>End Session</span>
+              <span className="opacity-0 w-0 group-hover:w-auto group-hover:opacity-100 transition-all text-xs font-normal text-red-500 overflow-hidden whitespace-nowrap ml-1">
+                (disconnects all)
+              </span>
+            </button>
           </div>
 
           {/* Audio Level Indicator */}

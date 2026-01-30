@@ -1000,7 +1000,8 @@ export class GoogleSpeechStream {
 
     const timeoutHandle = setTimeout(() => {
       const elapsed = Date.now() - sendTimestamp;
-      console.warn(`[GoogleSpeech] ⚠️ Chunk ${chunkId} timeout after ${elapsed}ms (${this.CHUNK_TIMEOUT_MS}ms limit)`);
+      // Too noisy - commenting out per user request
+      // console.warn(`[GoogleSpeech] ⚠️ Chunk ${chunkId} timeout after ${elapsed}ms (${this.CHUNK_TIMEOUT_MS}ms limit)`);
 
       // Remove from timeout tracking and pending chunks
       this.chunkTimeouts.delete(chunkId);

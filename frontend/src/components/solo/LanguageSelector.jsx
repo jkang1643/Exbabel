@@ -1,7 +1,51 @@
 import React, { useState } from 'react';
 import { ChevronDown, ArrowRight } from 'lucide-react';
 import { TRANSCRIPTION_LANGUAGES, TRANSLATION_LANGUAGES } from '../../config/languages';
+import {
+    isGeminiSupported,
+    isElevenLabsSupported,
+    LANGUAGE_TIER_AVAILABILITY
+} from '../../config/languageSupportData';
 
+/**
+ * Get TTS support level for a language code
+ * Returns: 'premium' (Gemini 87 or ElevenLabs 75), 'standard' (Google Standard 60), or null
+ */
+const getTtsLevel = (code) => {
+    if (!code) return null;
+
+    // Premium tier: Gemini (87 languages) or ElevenLabs v3 (75 languages)
+    if (isGeminiSupported(code) || isElevenLabsSupported(code, 'elevenlabs_v3')) {
+        return 'premium';
+    }
+
+    // Check for Standard tier in LANGUAGE_TIER_AVAILABILITY
+    const localePatterns = [
+        code,
+        `${code}-${code.toUpperCase()}`,
+        `${code}-US`, `${code}-GB`, `${code}-IN`,
+        `${code}-ZA`, `${code}-XA`, `${code}-XX`
+    ];
+
+    for (const locale of localePatterns) {
+        const tiers = LANGUAGE_TIER_AVAILABILITY[locale];
+        if (tiers && (tiers.includes('standard') || tiers.includes('neural2') || tiers.includes('chirp3_hd'))) {
+            return 'standard';
+        }
+    }
+
+    return null;
+};
+
+/**
+ * Get TTS indicator based on support level
+ */
+const getTtsIndicator = (code) => {
+    const level = getTtsLevel(code);
+    if (level === 'premium') return '🔊⭐';
+    if (level === 'standard') return '🔊';
+    return null;
+};
 /**
  * LanguageSelector - Input/Output language pills
  * 
@@ -63,6 +107,7 @@ export function LanguageSelector({
                             >
                                 <span className="lang-flag">{getLanguageFlag(lang.code)}</span>
                                 <span>{lang.name}</span>
+                                {getTtsIndicator(lang.code) && <span className="tts-indicator" title="TTS Available">{getTtsIndicator(lang.code)}</span>}
                             </button>
                         ))}
                     </div>
@@ -101,6 +146,7 @@ export function LanguageSelector({
                             >
                                 <span className="lang-flag">{getLanguageFlag(lang.code)}</span>
                                 <span>{lang.name}</span>
+                                {getTtsIndicator(lang.code) && <span className="tts-indicator" title="TTS Available">{getTtsIndicator(lang.code)}</span>}
                             </button>
                         ))}
                     </div>
@@ -197,6 +243,12 @@ export function LanguageSelector({
           background: rgba(16, 185, 129, 0.2);
           color: #059669;
           font-weight: 600;
+        }
+        
+        .tts-indicator {
+          margin-left: auto;
+          font-size: 0.85rem;
+          opacity: 0.8;
         }
       `}</style>
         </div>

@@ -271,8 +271,11 @@ export async function handleSoloMode(clientWs) {
   clientWs.on("message", async (msg) => {
     try {
       const message = JSON.parse(msg.toString());
-      console.log("[SoloMode] RAW MSG RECEIVED:", message.type);
-      console.log("[SoloMode] Client message:", message.type);
+      // Filter out noisy audio message logs
+      if (message.type !== 'audio') {
+        console.log("[SoloMode] RAW MSG RECEIVED:", message.type);
+        console.log("[SoloMode] Client message:", message.type);
+      }
 
       switch (message.type) {
         case 'ping':

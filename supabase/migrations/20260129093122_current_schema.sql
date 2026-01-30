@@ -55,6 +55,21 @@ CREATE TABLE public.profiles (
   CONSTRAINT profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
   CONSTRAINT profiles_church_id_fkey FOREIGN KEY (church_id) REFERENCES public.churches(id)
 );
+CREATE TABLE public.sessions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  church_id uuid NOT NULL,
+  host_user_id uuid,
+  session_code text NOT NULL UNIQUE CHECK (char_length(session_code) >= 6 AND char_length(session_code) <= 12),
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'ended'::text])),
+  source_lang text NOT NULL DEFAULT 'en'::text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  ended_at timestamp with time zone,
+  metadata jsonb DEFAULT '{}'::jsonb,
+  CONSTRAINT sessions_pkey PRIMARY KEY (id),
+  CONSTRAINT sessions_church_id_fkey FOREIGN KEY (church_id) REFERENCES public.churches(id),
+  CONSTRAINT sessions_host_user_id_fkey FOREIGN KEY (host_user_id) REFERENCES auth.users(id)
+);
 CREATE TABLE public.subscriptions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   church_id uuid NOT NULL UNIQUE,

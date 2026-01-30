@@ -4,36 +4,346 @@
   "tier": "neural2",
   "voices": [
     {
-      "voiceId": "google_cloud_tts:neural2:en-US:A",
-      "voiceName": "en-US-Neural2-A",
-      "displayName": "en-US-Neural2-A",
+      "voiceId": "google_cloud_tts:neural2:am-ET:A",
+      "voiceName": "am-ET-Wavenet-A",
+      "displayName": "am-ET-Wavenet-A",
       "languageCodes": [
-        "en-US"
-      ]
+        "am-ET"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:en-US:C",
-      "voiceName": "en-US-Neural2-C",
-      "displayName": "en-US-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:am-ET:B",
+      "voiceName": "am-ET-Wavenet-B",
+      "displayName": "am-ET-Wavenet-B",
       "languageCodes": [
-        "en-US"
-      ]
+        "am-ET"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:en-US:D",
-      "voiceName": "en-US-Neural2-D",
-      "displayName": "en-US-Neural2-D",
+      "voiceId": "google_cloud_tts:neural2:ar-XA:A",
+      "voiceName": "ar-XA-Wavenet-A",
+      "displayName": "ar-XA-Wavenet-A",
       "languageCodes": [
-        "en-US"
-      ]
+        "ar-XA"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:en-US:F",
-      "voiceName": "en-US-Neural2-F",
-      "displayName": "en-US-Neural2-F",
+      "voiceId": "google_cloud_tts:neural2:ar-XA:B",
+      "voiceName": "ar-XA-Wavenet-B",
+      "displayName": "ar-XA-Wavenet-B",
       "languageCodes": [
-        "en-US"
-      ]
+        "ar-XA"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ar-XA:C",
+      "voiceName": "ar-XA-Wavenet-C",
+      "displayName": "ar-XA-Wavenet-C",
+      "languageCodes": [
+        "ar-XA"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ar-XA:D",
+      "voiceName": "ar-XA-Wavenet-D",
+      "displayName": "ar-XA-Wavenet-D",
+      "languageCodes": [
+        "ar-XA"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:bn-IN:A",
+      "voiceName": "bn-IN-Wavenet-A",
+      "displayName": "bn-IN-Wavenet-A",
+      "languageCodes": [
+        "bn-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:bn-IN:B",
+      "voiceName": "bn-IN-Wavenet-B",
+      "displayName": "bn-IN-Wavenet-B",
+      "languageCodes": [
+        "bn-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:bn-IN:C",
+      "voiceName": "bn-IN-Wavenet-C",
+      "displayName": "bn-IN-Wavenet-C",
+      "languageCodes": [
+        "bn-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:bn-IN:D",
+      "voiceName": "bn-IN-Wavenet-D",
+      "displayName": "bn-IN-Wavenet-D",
+      "languageCodes": [
+        "bn-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-CN:A",
+      "voiceName": "cmn-CN-Wavenet-A",
+      "displayName": "cmn-CN-Wavenet-A",
+      "languageCodes": [
+        "cmn-CN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-CN:B",
+      "voiceName": "cmn-CN-Wavenet-B",
+      "displayName": "cmn-CN-Wavenet-B",
+      "languageCodes": [
+        "cmn-CN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-CN:C",
+      "voiceName": "cmn-CN-Wavenet-C",
+      "displayName": "cmn-CN-Wavenet-C",
+      "languageCodes": [
+        "cmn-CN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-CN:D",
+      "voiceName": "cmn-CN-Wavenet-D",
+      "displayName": "cmn-CN-Wavenet-D",
+      "languageCodes": [
+        "cmn-CN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-TW:A",
+      "voiceName": "cmn-TW-Wavenet-A",
+      "displayName": "cmn-TW-Wavenet-A",
+      "languageCodes": [
+        "cmn-TW"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-TW:B",
+      "voiceName": "cmn-TW-Wavenet-B",
+      "displayName": "cmn-TW-Wavenet-B",
+      "languageCodes": [
+        "cmn-TW"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cmn-TW:C",
+      "voiceName": "cmn-TW-Wavenet-C",
+      "displayName": "cmn-TW-Wavenet-C",
+      "languageCodes": [
+        "cmn-TW"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:cs-CZ:B",
+      "voiceName": "cs-CZ-Wavenet-B",
+      "displayName": "cs-CZ-Wavenet-B",
+      "languageCodes": [
+        "cs-CZ"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:da-DK:F",
+      "voiceName": "da-DK-Neural2-F",
+      "displayName": "da-DK-Neural2-F",
+      "languageCodes": [
+        "da-DK"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:da-DK:F",
+      "voiceName": "da-DK-Wavenet-F",
+      "displayName": "da-DK-Wavenet-F",
+      "languageCodes": [
+        "da-DK"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:da-DK:G",
+      "voiceName": "da-DK-Wavenet-G",
+      "displayName": "da-DK-Wavenet-G",
+      "languageCodes": [
+        "da-DK"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:G",
+      "voiceName": "de-DE-Neural2-G",
+      "displayName": "de-DE-Neural2-G",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:H",
+      "voiceName": "de-DE-Neural2-H",
+      "displayName": "de-DE-Neural2-H",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:1",
+      "voiceName": "de-DE-Polyglot-1",
+      "displayName": "de-DE-Polyglot-1",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:B",
+      "voiceName": "de-DE-Studio-B",
+      "displayName": "de-DE-Studio-B",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:C",
+      "voiceName": "de-DE-Studio-C",
+      "displayName": "de-DE-Studio-C",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:G",
+      "voiceName": "de-DE-Wavenet-G",
+      "displayName": "de-DE-Wavenet-G",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:de-DE:H",
+      "voiceName": "de-DE-Wavenet-H",
+      "displayName": "de-DE-Wavenet-H",
+      "languageCodes": [
+        "de-DE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:el-GR:B",
+      "voiceName": "el-GR-Wavenet-B",
+      "displayName": "el-GR-Wavenet-B",
+      "languageCodes": [
+        "el-GR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:A",
+      "voiceName": "en-AU-Neural2-A",
+      "displayName": "en-AU-Neural2-A",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:B",
+      "voiceName": "en-AU-Neural2-B",
+      "displayName": "en-AU-Neural2-B",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:C",
+      "voiceName": "en-AU-Neural2-C",
+      "displayName": "en-AU-Neural2-C",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:D",
+      "voiceName": "en-AU-Neural2-D",
+      "displayName": "en-AU-Neural2-D",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:1",
+      "voiceName": "en-AU-Polyglot-1",
+      "displayName": "en-AU-Polyglot-1",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:A",
+      "voiceName": "en-AU-Wavenet-A",
+      "displayName": "en-AU-Wavenet-A",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:B",
+      "voiceName": "en-AU-Wavenet-B",
+      "displayName": "en-AU-Wavenet-B",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:C",
+      "voiceName": "en-AU-Wavenet-C",
+      "displayName": "en-AU-Wavenet-C",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-AU:D",
+      "voiceName": "en-AU-Wavenet-D",
+      "displayName": "en-AU-Wavenet-D",
+      "languageCodes": [
+        "en-AU"
+      ],
+      "ssmlGender": "MALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:en-GB:A",
@@ -41,7 +351,8 @@
       "displayName": "en-GB-Neural2-A",
       "languageCodes": [
         "en-GB"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:en-GB:B",
@@ -49,7 +360,8 @@
       "displayName": "en-GB-Neural2-B",
       "languageCodes": [
         "en-GB"
-      ]
+      ],
+      "ssmlGender": "MALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:en-GB:C",
@@ -57,7 +369,8 @@
       "displayName": "en-GB-Neural2-C",
       "languageCodes": [
         "en-GB"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:en-GB:D",
@@ -65,7 +378,404 @@
       "displayName": "en-GB-Neural2-D",
       "languageCodes": [
         "en-GB"
-      ]
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:F",
+      "voiceName": "en-GB-Neural2-F",
+      "displayName": "en-GB-Neural2-F",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:N",
+      "voiceName": "en-GB-Neural2-N",
+      "displayName": "en-GB-Neural2-N",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:O",
+      "voiceName": "en-GB-Neural2-O",
+      "displayName": "en-GB-Neural2-O",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:B",
+      "voiceName": "en-GB-Studio-B",
+      "displayName": "en-GB-Studio-B",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:C",
+      "voiceName": "en-GB-Studio-C",
+      "displayName": "en-GB-Studio-C",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:A",
+      "voiceName": "en-GB-Wavenet-A",
+      "displayName": "en-GB-Wavenet-A",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:B",
+      "voiceName": "en-GB-Wavenet-B",
+      "displayName": "en-GB-Wavenet-B",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:C",
+      "voiceName": "en-GB-Wavenet-C",
+      "displayName": "en-GB-Wavenet-C",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:D",
+      "voiceName": "en-GB-Wavenet-D",
+      "displayName": "en-GB-Wavenet-D",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:F",
+      "voiceName": "en-GB-Wavenet-F",
+      "displayName": "en-GB-Wavenet-F",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:N",
+      "voiceName": "en-GB-Wavenet-N",
+      "displayName": "en-GB-Wavenet-N",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-GB:O",
+      "voiceName": "en-GB-Wavenet-O",
+      "displayName": "en-GB-Wavenet-O",
+      "languageCodes": [
+        "en-GB"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:A",
+      "voiceName": "en-IN-Neural2-A",
+      "displayName": "en-IN-Neural2-A",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:B",
+      "voiceName": "en-IN-Neural2-B",
+      "displayName": "en-IN-Neural2-B",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:C",
+      "voiceName": "en-IN-Neural2-C",
+      "displayName": "en-IN-Neural2-C",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:D",
+      "voiceName": "en-IN-Neural2-D",
+      "displayName": "en-IN-Neural2-D",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:A",
+      "voiceName": "en-IN-Wavenet-A",
+      "displayName": "en-IN-Wavenet-A",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:B",
+      "voiceName": "en-IN-Wavenet-B",
+      "displayName": "en-IN-Wavenet-B",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:C",
+      "voiceName": "en-IN-Wavenet-C",
+      "displayName": "en-IN-Wavenet-C",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:D",
+      "voiceName": "en-IN-Wavenet-D",
+      "displayName": "en-IN-Wavenet-D",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:E",
+      "voiceName": "en-IN-Wavenet-E",
+      "displayName": "en-IN-Wavenet-E",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-IN:F",
+      "voiceName": "en-IN-Wavenet-F",
+      "displayName": "en-IN-Wavenet-F",
+      "languageCodes": [
+        "en-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:A",
+      "voiceName": "en-US-Neural2-A",
+      "displayName": "en-US-Neural2-A",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:C",
+      "voiceName": "en-US-Neural2-C",
+      "displayName": "en-US-Neural2-C",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:D",
+      "voiceName": "en-US-Neural2-D",
+      "displayName": "en-US-Neural2-D",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:E",
+      "voiceName": "en-US-Neural2-E",
+      "displayName": "en-US-Neural2-E",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:F",
+      "voiceName": "en-US-Neural2-F",
+      "displayName": "en-US-Neural2-F",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:G",
+      "voiceName": "en-US-Neural2-G",
+      "displayName": "en-US-Neural2-G",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:H",
+      "voiceName": "en-US-Neural2-H",
+      "displayName": "en-US-Neural2-H",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:I",
+      "voiceName": "en-US-Neural2-I",
+      "displayName": "en-US-Neural2-I",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:J",
+      "voiceName": "en-US-Neural2-J",
+      "displayName": "en-US-Neural2-J",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:1",
+      "voiceName": "en-US-Polyglot-1",
+      "displayName": "en-US-Polyglot-1",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:O",
+      "voiceName": "en-US-Studio-O",
+      "displayName": "en-US-Studio-O",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:Q",
+      "voiceName": "en-US-Studio-Q",
+      "displayName": "en-US-Studio-Q",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:A",
+      "voiceName": "en-US-Wavenet-A",
+      "displayName": "en-US-Wavenet-A",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:B",
+      "voiceName": "en-US-Wavenet-B",
+      "displayName": "en-US-Wavenet-B",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:C",
+      "voiceName": "en-US-Wavenet-C",
+      "displayName": "en-US-Wavenet-C",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:D",
+      "voiceName": "en-US-Wavenet-D",
+      "displayName": "en-US-Wavenet-D",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:E",
+      "voiceName": "en-US-Wavenet-E",
+      "displayName": "en-US-Wavenet-E",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:F",
+      "voiceName": "en-US-Wavenet-F",
+      "displayName": "en-US-Wavenet-F",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:G",
+      "voiceName": "en-US-Wavenet-G",
+      "displayName": "en-US-Wavenet-G",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:H",
+      "voiceName": "en-US-Wavenet-H",
+      "displayName": "en-US-Wavenet-H",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:I",
+      "voiceName": "en-US-Wavenet-I",
+      "displayName": "en-US-Wavenet-I",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:en-US:J",
+      "voiceName": "en-US-Wavenet-J",
+      "displayName": "en-US-Wavenet-J",
+      "languageCodes": [
+        "en-US"
+      ],
+      "ssmlGender": "MALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:es-ES:A",
@@ -73,143 +783,584 @@
       "displayName": "es-ES-Neural2-A",
       "languageCodes": [
         "es-ES"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:es-ES:B",
-      "voiceName": "es-ES-Neural2-B",
-      "displayName": "es-ES-Neural2-B",
+      "voiceId": "google_cloud_tts:neural2:es-ES:E",
+      "voiceName": "es-ES-Neural2-E",
+      "displayName": "es-ES-Neural2-E",
       "languageCodes": [
         "es-ES"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:F",
+      "voiceName": "es-ES-Neural2-F",
+      "displayName": "es-ES-Neural2-F",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:G",
+      "voiceName": "es-ES-Neural2-G",
+      "displayName": "es-ES-Neural2-G",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:H",
+      "voiceName": "es-ES-Neural2-H",
+      "displayName": "es-ES-Neural2-H",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:1",
+      "voiceName": "es-ES-Polyglot-1",
+      "displayName": "es-ES-Polyglot-1",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "MALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:es-ES:C",
-      "voiceName": "es-ES-Neural2-C",
-      "displayName": "es-ES-Neural2-C",
+      "voiceName": "es-ES-Studio-C",
+      "displayName": "es-ES-Studio-C",
       "languageCodes": [
         "es-ES"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:F",
+      "voiceName": "es-ES-Studio-F",
+      "displayName": "es-ES-Studio-F",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:E",
+      "voiceName": "es-ES-Wavenet-E",
+      "displayName": "es-ES-Wavenet-E",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:F",
+      "voiceName": "es-ES-Wavenet-F",
+      "displayName": "es-ES-Wavenet-F",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:G",
+      "voiceName": "es-ES-Wavenet-G",
+      "displayName": "es-ES-Wavenet-G",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-ES:H",
+      "voiceName": "es-ES-Wavenet-H",
+      "displayName": "es-ES-Wavenet-H",
+      "languageCodes": [
+        "es-ES"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:A",
+      "voiceName": "es-US-Neural2-A",
+      "displayName": "es-US-Neural2-A",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:B",
+      "voiceName": "es-US-Neural2-B",
+      "displayName": "es-US-Neural2-B",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:C",
+      "voiceName": "es-US-Neural2-C",
+      "displayName": "es-US-Neural2-C",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:1",
+      "voiceName": "es-US-Polyglot-1",
+      "displayName": "es-US-Polyglot-1",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:B",
+      "voiceName": "es-US-Studio-B",
+      "displayName": "es-US-Studio-B",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:A",
+      "voiceName": "es-US-Wavenet-A",
+      "displayName": "es-US-Wavenet-A",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:B",
+      "voiceName": "es-US-Wavenet-B",
+      "displayName": "es-US-Wavenet-B",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:es-US:C",
+      "voiceName": "es-US-Wavenet-C",
+      "displayName": "es-US-Wavenet-C",
+      "languageCodes": [
+        "es-US"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fi-FI:B",
+      "voiceName": "fi-FI-Wavenet-B",
+      "displayName": "fi-FI-Wavenet-B",
+      "languageCodes": [
+        "fi-FI"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fil-PH:A",
+      "voiceName": "fil-ph-Neural2-A",
+      "displayName": "fil-ph-Neural2-A",
+      "languageCodes": [
+        "fil-PH"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fil-PH:D",
+      "voiceName": "fil-ph-Neural2-D",
+      "displayName": "fil-ph-Neural2-D",
+      "languageCodes": [
+        "fil-PH"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fil-PH:A",
+      "voiceName": "fil-PH-Wavenet-A",
+      "displayName": "fil-PH-Wavenet-A",
+      "languageCodes": [
+        "fil-PH"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fil-PH:B",
+      "voiceName": "fil-PH-Wavenet-B",
+      "displayName": "fil-PH-Wavenet-B",
+      "languageCodes": [
+        "fil-PH"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fil-PH:C",
+      "voiceName": "fil-PH-Wavenet-C",
+      "displayName": "fil-PH-Wavenet-C",
+      "languageCodes": [
+        "fil-PH"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fil-PH:D",
+      "voiceName": "fil-PH-Wavenet-D",
+      "displayName": "fil-PH-Wavenet-D",
+      "languageCodes": [
+        "fil-PH"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:A",
+      "voiceName": "fr-CA-Neural2-A",
+      "displayName": "fr-CA-Neural2-A",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:B",
+      "voiceName": "fr-CA-Neural2-B",
+      "displayName": "fr-CA-Neural2-B",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:C",
+      "voiceName": "fr-CA-Neural2-C",
+      "displayName": "fr-CA-Neural2-C",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:D",
+      "voiceName": "fr-CA-Neural2-D",
+      "displayName": "fr-CA-Neural2-D",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:A",
+      "voiceName": "fr-CA-Wavenet-A",
+      "displayName": "fr-CA-Wavenet-A",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:B",
+      "voiceName": "fr-CA-Wavenet-B",
+      "displayName": "fr-CA-Wavenet-B",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:C",
+      "voiceName": "fr-CA-Wavenet-C",
+      "displayName": "fr-CA-Wavenet-C",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-CA:D",
+      "voiceName": "fr-CA-Wavenet-D",
+      "displayName": "fr-CA-Wavenet-D",
+      "languageCodes": [
+        "fr-CA"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-FR:F",
+      "voiceName": "fr-FR-Neural2-F",
+      "displayName": "fr-FR-Neural2-F",
+      "languageCodes": [
+        "fr-FR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-FR:G",
+      "voiceName": "fr-FR-Neural2-G",
+      "displayName": "fr-FR-Neural2-G",
+      "languageCodes": [
+        "fr-FR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:fr-FR:1",
+      "voiceName": "fr-FR-Polyglot-1",
+      "displayName": "fr-FR-Polyglot-1",
+      "languageCodes": [
+        "fr-FR"
+      ],
+      "ssmlGender": "MALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:fr-FR:A",
-      "voiceName": "fr-FR-Neural2-A",
-      "displayName": "fr-FR-Neural2-A",
+      "voiceName": "fr-FR-Studio-A",
+      "displayName": "fr-FR-Studio-A",
       "languageCodes": [
         "fr-FR"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:fr-FR:B",
-      "voiceName": "fr-FR-Neural2-B",
-      "displayName": "fr-FR-Neural2-B",
+      "voiceId": "google_cloud_tts:neural2:fr-FR:D",
+      "voiceName": "fr-FR-Studio-D",
+      "displayName": "fr-FR-Studio-D",
       "languageCodes": [
         "fr-FR"
-      ]
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:fr-FR:C",
-      "voiceName": "fr-FR-Neural2-C",
-      "displayName": "fr-FR-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:fr-FR:F",
+      "voiceName": "fr-FR-Wavenet-F",
+      "displayName": "fr-FR-Wavenet-F",
       "languageCodes": [
         "fr-FR"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:de-DE:A",
-      "voiceName": "de-DE-Neural2-A",
-      "displayName": "de-DE-Neural2-A",
+      "voiceId": "google_cloud_tts:neural2:fr-FR:G",
+      "voiceName": "fr-FR-Wavenet-G",
+      "displayName": "fr-FR-Wavenet-G",
       "languageCodes": [
-        "de-DE"
-      ]
+        "fr-FR"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:de-DE:B",
-      "voiceName": "de-DE-Neural2-B",
-      "displayName": "de-DE-Neural2-B",
+      "voiceId": "google_cloud_tts:neural2:gu-IN:A",
+      "voiceName": "gu-IN-Wavenet-A",
+      "displayName": "gu-IN-Wavenet-A",
       "languageCodes": [
-        "de-DE"
-      ]
+        "gu-IN"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:de-DE:C",
-      "voiceName": "de-DE-Neural2-C",
-      "displayName": "de-DE-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:gu-IN:B",
+      "voiceName": "gu-IN-Wavenet-B",
+      "displayName": "gu-IN-Wavenet-B",
       "languageCodes": [
-        "de-DE"
-      ]
+        "gu-IN"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:ja-JP:B",
-      "voiceName": "ja-JP-Neural2-B",
-      "displayName": "ja-JP-Neural2-B",
+      "voiceId": "google_cloud_tts:neural2:gu-IN:C",
+      "voiceName": "gu-IN-Wavenet-C",
+      "displayName": "gu-IN-Wavenet-C",
       "languageCodes": [
-        "ja-JP"
-      ]
+        "gu-IN"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:ja-JP:C",
-      "voiceName": "ja-JP-Neural2-C",
-      "displayName": "ja-JP-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:gu-IN:D",
+      "voiceName": "gu-IN-Wavenet-D",
+      "displayName": "gu-IN-Wavenet-D",
       "languageCodes": [
-        "ja-JP"
-      ]
+        "gu-IN"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:ja-JP:D",
-      "voiceName": "ja-JP-Neural2-D",
-      "displayName": "ja-JP-Neural2-D",
+      "voiceId": "google_cloud_tts:neural2:he-IL:A",
+      "voiceName": "he-IL-Wavenet-A",
+      "displayName": "he-IL-Wavenet-A",
       "languageCodes": [
-        "ja-JP"
-      ]
+        "he-IL"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:ko-KR:A",
-      "voiceName": "ko-KR-Neural2-A",
-      "displayName": "ko-KR-Neural2-A",
+      "voiceId": "google_cloud_tts:neural2:he-IL:B",
+      "voiceName": "he-IL-Wavenet-B",
+      "displayName": "he-IL-Wavenet-B",
       "languageCodes": [
-        "ko-KR"
-      ]
+        "he-IL"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:ko-KR:B",
-      "voiceName": "ko-KR-Neural2-B",
-      "displayName": "ko-KR-Neural2-B",
+      "voiceId": "google_cloud_tts:neural2:he-IL:C",
+      "voiceName": "he-IL-Wavenet-C",
+      "displayName": "he-IL-Wavenet-C",
       "languageCodes": [
-        "ko-KR"
-      ]
+        "he-IL"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:ko-KR:C",
-      "voiceName": "ko-KR-Neural2-C",
-      "displayName": "ko-KR-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:he-IL:D",
+      "voiceName": "he-IL-Wavenet-D",
+      "displayName": "he-IL-Wavenet-D",
       "languageCodes": [
-        "ko-KR"
-      ]
+        "he-IL"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:pt-BR:A",
-      "voiceName": "pt-BR-Neural2-A",
-      "displayName": "pt-BR-Neural2-A",
+      "voiceId": "google_cloud_tts:neural2:hi-IN:A",
+      "voiceName": "hi-IN-Neural2-A",
+      "displayName": "hi-IN-Neural2-A",
       "languageCodes": [
-        "pt-BR"
-      ]
+        "hi-IN"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:pt-BR:B",
-      "voiceName": "pt-BR-Neural2-B",
-      "displayName": "pt-BR-Neural2-B",
+      "voiceId": "google_cloud_tts:neural2:hi-IN:B",
+      "voiceName": "hi-IN-Neural2-B",
+      "displayName": "hi-IN-Neural2-B",
       "languageCodes": [
-        "pt-BR"
-      ]
+        "hi-IN"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:pt-BR:C",
-      "voiceName": "pt-BR-Neural2-C",
-      "displayName": "pt-BR-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:hi-IN:C",
+      "voiceName": "hi-IN-Neural2-C",
+      "displayName": "hi-IN-Neural2-C",
       "languageCodes": [
-        "pt-BR"
-      ]
+        "hi-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hi-IN:D",
+      "voiceName": "hi-IN-Neural2-D",
+      "displayName": "hi-IN-Neural2-D",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hi-IN:A",
+      "voiceName": "hi-IN-Wavenet-A",
+      "displayName": "hi-IN-Wavenet-A",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hi-IN:B",
+      "voiceName": "hi-IN-Wavenet-B",
+      "displayName": "hi-IN-Wavenet-B",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hi-IN:C",
+      "voiceName": "hi-IN-Wavenet-C",
+      "displayName": "hi-IN-Wavenet-C",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hi-IN:D",
+      "voiceName": "hi-IN-Wavenet-D",
+      "displayName": "hi-IN-Wavenet-D",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hi-IN:E",
+      "voiceName": "hi-IN-Wavenet-E",
+      "displayName": "hi-IN-Wavenet-E",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hi-IN:F",
+      "voiceName": "hi-IN-Wavenet-F",
+      "displayName": "hi-IN-Wavenet-F",
+      "languageCodes": [
+        "hi-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:hu-HU:B",
+      "voiceName": "hu-HU-Wavenet-B",
+      "displayName": "hu-HU-Wavenet-B",
+      "languageCodes": [
+        "hu-HU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:id-ID:A",
+      "voiceName": "id-ID-Wavenet-A",
+      "displayName": "id-ID-Wavenet-A",
+      "languageCodes": [
+        "id-ID"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:id-ID:B",
+      "voiceName": "id-ID-Wavenet-B",
+      "displayName": "id-ID-Wavenet-B",
+      "languageCodes": [
+        "id-ID"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:id-ID:C",
+      "voiceName": "id-ID-Wavenet-C",
+      "displayName": "id-ID-Wavenet-C",
+      "languageCodes": [
+        "id-ID"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:id-ID:D",
+      "voiceName": "id-ID-Wavenet-D",
+      "displayName": "id-ID-Wavenet-D",
+      "languageCodes": [
+        "id-ID"
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
       "voiceId": "google_cloud_tts:neural2:it-IT:A",
@@ -217,31 +1368,800 @@
       "displayName": "it-IT-Neural2-A",
       "languageCodes": [
         "it-IT"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:it-IT:C",
-      "voiceName": "it-IT-Neural2-C",
-      "displayName": "it-IT-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:it-IT:E",
+      "voiceName": "it-IT-Neural2-E",
+      "displayName": "it-IT-Neural2-E",
       "languageCodes": [
         "it-IT"
-      ]
+      ],
+      "ssmlGender": "FEMALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:cmn-CN:A",
-      "voiceName": "cmn-CN-Neural2-A",
-      "displayName": "cmn-CN-Neural2-A",
+      "voiceId": "google_cloud_tts:neural2:it-IT:F",
+      "voiceName": "it-IT-Neural2-F",
+      "displayName": "it-IT-Neural2-F",
       "languageCodes": [
-        "cmn-CN"
-      ]
+        "it-IT"
+      ],
+      "ssmlGender": "MALE"
     },
     {
-      "voiceId": "google_cloud_tts:neural2:cmn-CN:C",
-      "voiceName": "cmn-CN-Neural2-C",
-      "displayName": "cmn-CN-Neural2-C",
+      "voiceId": "google_cloud_tts:neural2:it-IT:E",
+      "voiceName": "it-IT-Wavenet-E",
+      "displayName": "it-IT-Wavenet-E",
       "languageCodes": [
-        "cmn-CN"
-      ]
+        "it-IT"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:it-IT:F",
+      "voiceName": "it-IT-Wavenet-F",
+      "displayName": "it-IT-Wavenet-F",
+      "languageCodes": [
+        "it-IT"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:B",
+      "voiceName": "ja-JP-Neural2-B",
+      "displayName": "ja-JP-Neural2-B",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:C",
+      "voiceName": "ja-JP-Neural2-C",
+      "displayName": "ja-JP-Neural2-C",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:D",
+      "voiceName": "ja-JP-Neural2-D",
+      "displayName": "ja-JP-Neural2-D",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:A",
+      "voiceName": "ja-JP-Wavenet-A",
+      "displayName": "ja-JP-Wavenet-A",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:B",
+      "voiceName": "ja-JP-Wavenet-B",
+      "displayName": "ja-JP-Wavenet-B",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:C",
+      "voiceName": "ja-JP-Wavenet-C",
+      "displayName": "ja-JP-Wavenet-C",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ja-JP:D",
+      "voiceName": "ja-JP-Wavenet-D",
+      "displayName": "ja-JP-Wavenet-D",
+      "languageCodes": [
+        "ja-JP"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:kn-IN:A",
+      "voiceName": "kn-IN-Wavenet-A",
+      "displayName": "kn-IN-Wavenet-A",
+      "languageCodes": [
+        "kn-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:kn-IN:B",
+      "voiceName": "kn-IN-Wavenet-B",
+      "displayName": "kn-IN-Wavenet-B",
+      "languageCodes": [
+        "kn-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:kn-IN:C",
+      "voiceName": "kn-IN-Wavenet-C",
+      "displayName": "kn-IN-Wavenet-C",
+      "languageCodes": [
+        "kn-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:kn-IN:D",
+      "voiceName": "kn-IN-Wavenet-D",
+      "displayName": "kn-IN-Wavenet-D",
+      "languageCodes": [
+        "kn-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:A",
+      "voiceName": "ko-KR-Neural2-A",
+      "displayName": "ko-KR-Neural2-A",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:B",
+      "voiceName": "ko-KR-Neural2-B",
+      "displayName": "ko-KR-Neural2-B",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:C",
+      "voiceName": "ko-KR-Neural2-C",
+      "displayName": "ko-KR-Neural2-C",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:A",
+      "voiceName": "ko-KR-Wavenet-A",
+      "displayName": "ko-KR-Wavenet-A",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:B",
+      "voiceName": "ko-KR-Wavenet-B",
+      "displayName": "ko-KR-Wavenet-B",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:C",
+      "voiceName": "ko-KR-Wavenet-C",
+      "displayName": "ko-KR-Wavenet-C",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ko-KR:D",
+      "voiceName": "ko-KR-Wavenet-D",
+      "displayName": "ko-KR-Wavenet-D",
+      "languageCodes": [
+        "ko-KR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ml-IN:A",
+      "voiceName": "ml-IN-Wavenet-A",
+      "displayName": "ml-IN-Wavenet-A",
+      "languageCodes": [
+        "ml-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ml-IN:B",
+      "voiceName": "ml-IN-Wavenet-B",
+      "displayName": "ml-IN-Wavenet-B",
+      "languageCodes": [
+        "ml-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ml-IN:C",
+      "voiceName": "ml-IN-Wavenet-C",
+      "displayName": "ml-IN-Wavenet-C",
+      "languageCodes": [
+        "ml-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ml-IN:D",
+      "voiceName": "ml-IN-Wavenet-D",
+      "displayName": "ml-IN-Wavenet-D",
+      "languageCodes": [
+        "ml-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:mr-IN:A",
+      "voiceName": "mr-IN-Wavenet-A",
+      "displayName": "mr-IN-Wavenet-A",
+      "languageCodes": [
+        "mr-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:mr-IN:B",
+      "voiceName": "mr-IN-Wavenet-B",
+      "displayName": "mr-IN-Wavenet-B",
+      "languageCodes": [
+        "mr-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:mr-IN:C",
+      "voiceName": "mr-IN-Wavenet-C",
+      "displayName": "mr-IN-Wavenet-C",
+      "languageCodes": [
+        "mr-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ms-MY:A",
+      "voiceName": "ms-MY-Wavenet-A",
+      "displayName": "ms-MY-Wavenet-A",
+      "languageCodes": [
+        "ms-MY"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ms-MY:B",
+      "voiceName": "ms-MY-Wavenet-B",
+      "displayName": "ms-MY-Wavenet-B",
+      "languageCodes": [
+        "ms-MY"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ms-MY:C",
+      "voiceName": "ms-MY-Wavenet-C",
+      "displayName": "ms-MY-Wavenet-C",
+      "languageCodes": [
+        "ms-MY"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ms-MY:D",
+      "voiceName": "ms-MY-Wavenet-D",
+      "displayName": "ms-MY-Wavenet-D",
+      "languageCodes": [
+        "ms-MY"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:nb-NO:F",
+      "voiceName": "nb-NO-Wavenet-F",
+      "displayName": "nb-NO-Wavenet-F",
+      "languageCodes": [
+        "nb-NO"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:nb-NO:G",
+      "voiceName": "nb-NO-Wavenet-G",
+      "displayName": "nb-NO-Wavenet-G",
+      "languageCodes": [
+        "nb-NO"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:nl-BE:C",
+      "voiceName": "nl-BE-Wavenet-C",
+      "displayName": "nl-BE-Wavenet-C",
+      "languageCodes": [
+        "nl-BE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:nl-BE:D",
+      "voiceName": "nl-BE-Wavenet-D",
+      "displayName": "nl-BE-Wavenet-D",
+      "languageCodes": [
+        "nl-BE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:nl-NL:F",
+      "voiceName": "nl-NL-Wavenet-F",
+      "displayName": "nl-NL-Wavenet-F",
+      "languageCodes": [
+        "nl-NL"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:nl-NL:G",
+      "voiceName": "nl-NL-Wavenet-G",
+      "displayName": "nl-NL-Wavenet-G",
+      "languageCodes": [
+        "nl-NL"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pa-IN:A",
+      "voiceName": "pa-IN-Wavenet-A",
+      "displayName": "pa-IN-Wavenet-A",
+      "languageCodes": [
+        "pa-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pa-IN:B",
+      "voiceName": "pa-IN-Wavenet-B",
+      "displayName": "pa-IN-Wavenet-B",
+      "languageCodes": [
+        "pa-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pa-IN:C",
+      "voiceName": "pa-IN-Wavenet-C",
+      "displayName": "pa-IN-Wavenet-C",
+      "languageCodes": [
+        "pa-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pa-IN:D",
+      "voiceName": "pa-IN-Wavenet-D",
+      "displayName": "pa-IN-Wavenet-D",
+      "languageCodes": [
+        "pa-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pl-PL:F",
+      "voiceName": "pl-PL-Wavenet-F",
+      "displayName": "pl-PL-Wavenet-F",
+      "languageCodes": [
+        "pl-PL"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pl-PL:G",
+      "voiceName": "pl-PL-Wavenet-G",
+      "displayName": "pl-PL-Wavenet-G",
+      "languageCodes": [
+        "pl-PL"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:A",
+      "voiceName": "pt-BR-Neural2-A",
+      "displayName": "pt-BR-Neural2-A",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:B",
+      "voiceName": "pt-BR-Neural2-B",
+      "displayName": "pt-BR-Neural2-B",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:C",
+      "voiceName": "pt-BR-Neural2-C",
+      "displayName": "pt-BR-Neural2-C",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:A",
+      "voiceName": "pt-BR-Wavenet-A",
+      "displayName": "pt-BR-Wavenet-A",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:B",
+      "voiceName": "pt-BR-Wavenet-B",
+      "displayName": "pt-BR-Wavenet-B",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:C",
+      "voiceName": "pt-BR-Wavenet-C",
+      "displayName": "pt-BR-Wavenet-C",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:D",
+      "voiceName": "pt-BR-Wavenet-D",
+      "displayName": "pt-BR-Wavenet-D",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-BR:E",
+      "voiceName": "pt-BR-Wavenet-E",
+      "displayName": "pt-BR-Wavenet-E",
+      "languageCodes": [
+        "pt-BR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-PT:E",
+      "voiceName": "pt-PT-Wavenet-E",
+      "displayName": "pt-PT-Wavenet-E",
+      "languageCodes": [
+        "pt-PT"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:pt-PT:F",
+      "voiceName": "pt-PT-Wavenet-F",
+      "displayName": "pt-PT-Wavenet-F",
+      "languageCodes": [
+        "pt-PT"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ro-RO:B",
+      "voiceName": "ro-RO-Wavenet-B",
+      "displayName": "ro-RO-Wavenet-B",
+      "languageCodes": [
+        "ro-RO"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ru-RU:A",
+      "voiceName": "ru-RU-Wavenet-A",
+      "displayName": "ru-RU-Wavenet-A",
+      "languageCodes": [
+        "ru-RU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ru-RU:B",
+      "voiceName": "ru-RU-Wavenet-B",
+      "displayName": "ru-RU-Wavenet-B",
+      "languageCodes": [
+        "ru-RU"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ru-RU:C",
+      "voiceName": "ru-RU-Wavenet-C",
+      "displayName": "ru-RU-Wavenet-C",
+      "languageCodes": [
+        "ru-RU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ru-RU:D",
+      "voiceName": "ru-RU-Wavenet-D",
+      "displayName": "ru-RU-Wavenet-D",
+      "languageCodes": [
+        "ru-RU"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ru-RU:E",
+      "voiceName": "ru-RU-Wavenet-E",
+      "displayName": "ru-RU-Wavenet-E",
+      "languageCodes": [
+        "ru-RU"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sk-SK:B",
+      "voiceName": "sk-SK-Wavenet-B",
+      "displayName": "sk-SK-Wavenet-B",
+      "languageCodes": [
+        "sk-SK"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sv-SE:A",
+      "voiceName": "sv-SE-Wavenet-A",
+      "displayName": "sv-SE-Wavenet-A",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sv-SE:B",
+      "voiceName": "sv-SE-Wavenet-B",
+      "displayName": "sv-SE-Wavenet-B",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sv-SE:C",
+      "voiceName": "sv-SE-Wavenet-C",
+      "displayName": "sv-SE-Wavenet-C",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sv-SE:D",
+      "voiceName": "sv-SE-Wavenet-D",
+      "displayName": "sv-SE-Wavenet-D",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sv-SE:E",
+      "voiceName": "sv-SE-Wavenet-E",
+      "displayName": "sv-SE-Wavenet-E",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sv-SE:F",
+      "voiceName": "sv-SE-Wavenet-F",
+      "displayName": "sv-SE-Wavenet-F",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:sv-SE:G",
+      "voiceName": "sv-SE-Wavenet-G",
+      "displayName": "sv-SE-Wavenet-G",
+      "languageCodes": [
+        "sv-SE"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ta-IN:A",
+      "voiceName": "ta-IN-Wavenet-A",
+      "displayName": "ta-IN-Wavenet-A",
+      "languageCodes": [
+        "ta-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ta-IN:B",
+      "voiceName": "ta-IN-Wavenet-B",
+      "displayName": "ta-IN-Wavenet-B",
+      "languageCodes": [
+        "ta-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ta-IN:C",
+      "voiceName": "ta-IN-Wavenet-C",
+      "displayName": "ta-IN-Wavenet-C",
+      "languageCodes": [
+        "ta-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ta-IN:D",
+      "voiceName": "ta-IN-Wavenet-D",
+      "displayName": "ta-IN-Wavenet-D",
+      "languageCodes": [
+        "ta-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:th-TH:C",
+      "voiceName": "th-TH-Neural2-C",
+      "displayName": "th-TH-Neural2-C",
+      "languageCodes": [
+        "th-TH"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:tr-TR:A",
+      "voiceName": "tr-TR-Wavenet-A",
+      "displayName": "tr-TR-Wavenet-A",
+      "languageCodes": [
+        "tr-TR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:tr-TR:B",
+      "voiceName": "tr-TR-Wavenet-B",
+      "displayName": "tr-TR-Wavenet-B",
+      "languageCodes": [
+        "tr-TR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:tr-TR:C",
+      "voiceName": "tr-TR-Wavenet-C",
+      "displayName": "tr-TR-Wavenet-C",
+      "languageCodes": [
+        "tr-TR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:tr-TR:D",
+      "voiceName": "tr-TR-Wavenet-D",
+      "displayName": "tr-TR-Wavenet-D",
+      "languageCodes": [
+        "tr-TR"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:tr-TR:E",
+      "voiceName": "tr-TR-Wavenet-E",
+      "displayName": "tr-TR-Wavenet-E",
+      "languageCodes": [
+        "tr-TR"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:uk-UA:B",
+      "voiceName": "uk-UA-Wavenet-B",
+      "displayName": "uk-UA-Wavenet-B",
+      "languageCodes": [
+        "uk-UA"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ur-IN:A",
+      "voiceName": "ur-IN-Wavenet-A",
+      "displayName": "ur-IN-Wavenet-A",
+      "languageCodes": [
+        "ur-IN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:ur-IN:B",
+      "voiceName": "ur-IN-Wavenet-B",
+      "displayName": "ur-IN-Wavenet-B",
+      "languageCodes": [
+        "ur-IN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:vi-VN:A",
+      "voiceName": "vi-VN-Neural2-A",
+      "displayName": "vi-VN-Neural2-A",
+      "languageCodes": [
+        "vi-VN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:vi-VN:D",
+      "voiceName": "vi-VN-Neural2-D",
+      "displayName": "vi-VN-Neural2-D",
+      "languageCodes": [
+        "vi-VN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:vi-VN:A",
+      "voiceName": "vi-VN-Wavenet-A",
+      "displayName": "vi-VN-Wavenet-A",
+      "languageCodes": [
+        "vi-VN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:vi-VN:B",
+      "voiceName": "vi-VN-Wavenet-B",
+      "displayName": "vi-VN-Wavenet-B",
+      "languageCodes": [
+        "vi-VN"
+      ],
+      "ssmlGender": "MALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:vi-VN:C",
+      "voiceName": "vi-VN-Wavenet-C",
+      "displayName": "vi-VN-Wavenet-C",
+      "languageCodes": [
+        "vi-VN"
+      ],
+      "ssmlGender": "FEMALE"
+    },
+    {
+      "voiceId": "google_cloud_tts:neural2:vi-VN:D",
+      "voiceName": "vi-VN-Wavenet-D",
+      "displayName": "vi-VN-Wavenet-D",
+      "languageCodes": [
+        "vi-VN"
+      ],
+      "ssmlGender": "MALE"
     }
   ]
 }

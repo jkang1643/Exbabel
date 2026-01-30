@@ -3984,6 +3984,33 @@ export async function handleHostConnection(clientWs, sessionId) {
           }
           break;
 
+        case 'end_session':
+          // Explicit session end from host (End Session button)
+          console.log('[HostMode] 🔴 Host clicked End Session');
+
+          // Clean up speech stream
+          if (speechStream) {
+            speechStream.destroy();
+            speechStream = null;
+          }
+
+          // Reset core engine
+          coreEngine.reset();
+
+          // End session immediately with explicit reason
+          await sessionStore.endSession(currentSessionId, 'host_clicked_end');
+
+          // Close the WebSocket
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'session_ended',
+              reason: 'host_clicked_end',
+              message: 'Session ended successfully'
+            }));
+            clientWs.close(1000, 'Session ended by host');
+          }
+          break;
+
         case 'force_commit':
           // Force commit current transcript (if any)
           console.log('[HostMode] Force commit requested');
@@ -4040,6 +4067,9 @@ export async function handleHostConnection(clientWs, sessionId) {
     }
     // Reset core engine state
     coreEngine.reset();
+
+    // Start grace timer - session ends after 30s if host doesn't reconnect
+    sessionStore.scheduleSessionEnd(currentSessionId);
 
     // AGGREGATE STT USAGE METERING: Record total transcription usage at session end
     if (totalTranscribedCharacters > 0 && clientWs.churchId) {

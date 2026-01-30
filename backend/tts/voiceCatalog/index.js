@@ -31,20 +31,22 @@ export function normalizeLanguageCode(languageCode) {
     // Handle special cases
     const normalized = languageCode.toLowerCase();
 
-    // Chinese variants
-    if (normalized === 'zh' || normalized === 'zh-cn' || normalized === 'cmn') {
-        return { full: 'cmn-CN', base: 'cmn' };
-    }
-    if (normalized === 'zh-tw' || normalized === 'cmn-tw') {
-        return { full: 'cmn-TW', base: 'cmn' };
-    }
-    if (normalized === 'yue' || normalized === 'yue-hk') {
-        return { full: 'yue-HK', base: 'yue' };
-    }
+    // Standard BCP-47 format: xx-YY
+
 
     // Filipino
     if (normalized === 'fil' || normalized === 'fil-ph') {
         return { full: 'fil-PH', base: 'fil' };
+    }
+
+    // Chinese Variants (Explicit handling to ensure Google/ElevenLabs compatibility)
+    // ElevenLabs uses 'zh'. Google uses 'cmn-CN' or 'cmn-TW'.
+    if (normalized.startsWith('zh') || normalized.startsWith('cmn')) {
+        if (normalized.includes('tw') || normalized.includes('hk')) {
+            return { full: 'cmn-TW', base: 'zh' }; // Map zh-TW/HK to cmn-TW
+        }
+        // Default to Simplified/Mainland for all other zh (zh, zh-CN, zh-ZH, etc.)
+        return { full: 'cmn-CN', base: 'zh' };
     }
 
     // Standard BCP-47 format: xx-YY
@@ -52,33 +54,83 @@ export function normalizeLanguageCode(languageCode) {
     if (parts.length >= 2) {
         const base = parts[0].toLowerCase();
         const region = parts[1].toUpperCase();
+        // Special case: cmn-CN -> base: zh? No, allow cmn as base if explicit
         return { full: `${base}-${region}`, base };
     }
 
     // Just base language code
     const base = parts[0].toLowerCase();
-    // Try to infer full code (default to primary region)
+
+    // Primary region defaults (Google TTS Specific)
+    // Source: LANGUAGE SUPPORT AND SCRIPT FROM GOOGLETTS.md
     const primaryRegions = {
+        'af': 'af-ZA',
+        'am': 'am-ET',
+        'ar': 'ar-XA',
+        'az': 'az-AZ',
+        'bg': 'bg-BG',
+        'bn': 'bn-IN', // Standard/Chirp prioritized
+        'ca': 'ca-ES',
+        'cs': 'cs-CZ',
+        'da': 'da-DK',
+        'de': 'de-DE',
+        'el': 'el-GR',
         'en': 'en-US',
         'es': 'es-ES',
+        'et': 'et-EE',
+        'eu': 'eu-ES',
+        'fi': 'fi-FI',
+        'fil': 'fil-PH',
         'fr': 'fr-FR',
-        'de': 'de-DE',
-        'it': 'it-IT',
-        'pt': 'pt-BR',
-        'ja': 'ja-JP',
-        'ko': 'ko-KR',
-        'ar': 'ar-XA',
+        'gl': 'gl-ES',
+        'gu': 'gu-IN',
+        'he': 'he-IL',
         'hi': 'hi-IN',
+        'hu': 'hu-HU',
+        'id': 'id-ID',
+        'is': 'is-IS',
+        'it': 'it-IT',
+        'ja': 'ja-JP',
+        'kn': 'kn-IN',
+        'ko': 'ko-KR',
+        'lt': 'lt-LT',
+        'lv': 'lv-LV',
+        'ml': 'ml-IN',
+        'mr': 'mr-IN',
+        'ms': 'ms-MY',
+        'nb': 'nb-NO',
+        'ne': 'ne-NP',
+        'nl': 'nl-NL',
+        'pa': 'pa-IN',
+        'pl': 'pl-PL',
+        'pt': 'pt-BR', // Brazil is primary for Google TTS usually
+        'ro': 'ro-RO',
         'ru': 'ru-RU',
+        'sk': 'sk-SK',
+        'sq': 'sq-AL',
+        'sr': 'sr-RS',
+        'sv': 'sv-SE',
+        'sw': 'sw-KE',
+        'ta': 'ta-IN',
+        'te': 'te-IN',
         'th': 'th-TH',
         'tr': 'tr-TR',
+        'uk': 'uk-UA',
+        'ur': 'ur-PK',
         'vi': 'vi-VN',
-        'id': 'id-ID',
-        'nl': 'nl-NL',
-        'pl': 'pl-PL'
+        'yue': 'yue-HK',
+        'zh': 'cmn-CN', // Maps to Mandarin CN
+        'cmn': 'cmn-CN'
     };
 
-    return { full: primaryRegions[base] || `${base}-${base.toUpperCase()}`, base };
+    const full = primaryRegions[base] || `${base}-${base.toUpperCase()}`;
+
+    // SPECIAL HANDLING: Base code for filtering
+    // 'zh' needs to filter 'cmn-CN' (Google) AND 'zh' (ElevenLabs)
+    // If we return base 'zh', we catch 'zh'. And full 'cmn-CN' catches Google.
+    if (base === 'zh') return { full: 'cmn-CN', base: 'zh' }; // Hybrid
+
+    return { full, base };
 }
 
 // ==========================================
@@ -120,18 +172,15 @@ export async function getVoicesFor({ languageCode, allowedTiers }) {
         );
     });
 
-    if (matches.length > 0) {
-        return matches;
+    // Return matches (may be empty if language not supported)
+    // NO English fallback - if a language has no voices, it has no voices
+    if (matches.length === 0) {
+        console.log(`[VoiceCatalog] No voices found for ${languageCode} (${full}/${base}) with tiers [${allowedTiers.join(', ')}]`);
     }
 
-    // Fallback to English
-    console.warn(`[VoiceCatalog] No voices found for ${languageCode}, falling back to English`);
-    return allVoices.filter(voice => {
-        if (!allowedTiers.includes(voice.tier)) return false;
-        // Check for 'en' or 'en-US'
-        return voice.languageCodes.includes('en') || voice.languageCodes.includes('en-US');
-    });
+    return matches;
 }
+
 
 /**
  * Check if a voice is valid for given language and tier

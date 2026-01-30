@@ -70,6 +70,7 @@ export class PartialTranslationWorker {
 
     try {
       console.log(`[PartialWorker] ⚡ Streaming translation: "${text.substring(0, 40)}..." (${sourceLangName} → ${targetLangName})`);
+      console.log(`[PartialWorker] 🔍 VERIFICATION: System Prompt Target Language = "${targetLangName}" (derived from code "${targetLang}")`);
 
       const response = await fetchWithRateLimit('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -731,6 +732,7 @@ export class FinalTranslationWorker {
     }
 
     console.log(`[FinalWorker] 🎯 High-quality translating final: "${text.substring(0, 50)}..." (${sourceLangName} → ${targetLangName})`);
+    console.log(`[FinalWorker] 🔍 VERIFICATION: System Prompt Target Language = "${targetLangName}" (derived from code "${targetLang}")`);
 
     try {
       // Use GPT-4o for high-quality final translations
