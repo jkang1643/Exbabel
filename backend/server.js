@@ -241,6 +241,7 @@ wss.on("connection", async (clientWs, req) => {
   if (role === 'host' && sessionId) {
     // Load entitlements for host mode (same as solo mode)
     const authToken = urlObj.searchParams.get('token');
+    console.log(`[Backend] Host connection: token=${authToken ? 'provided' : 'MISSING'} sessionId=${sessionId}`);
     if (authToken) {
       try {
         const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(authToken);
@@ -257,7 +258,7 @@ wss.on("connection", async (clientWs, req) => {
             clientWs.churchId = profile.church_id;
             // Propagate to session so listeners inherit the host's plan
             sessionStore.setChurchId(sessionId, profile.church_id);
-            console.log(`[Backend] ✓ Host entitlements loaded for church ${profile.church_id}: plan=${entitlements.subscription.planCode}`);
+            console.log(`[Backend] ✓ Host entitlements loaded for church ${profile.church_id}: plan=${entitlements.subscription.planCode} ttsTier=${entitlements.limits.ttsTier}`);
           }
         }
       } catch (entError) {

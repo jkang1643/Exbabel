@@ -576,46 +576,45 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
 
             try {
               const { getVoicesFor } = await import('./tts/voiceCatalog.js');
-              const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
+              const { getAllowedTtsTiers } = await import('./entitlements/index.js');
 
-              // Use cached churchId from socket (set during connection)
-              const churchId = clientWs.churchId;
-              if (!churchId) {
-                console.error(`[Listener] ❌ No churchId cached on socket for voice list`);
-                if (clientWs.readyState === WebSocket.OPEN) {
-                  clientWs.send(JSON.stringify({
-                    type: 'tts/error',
-                    code: 'SESSION_NOT_READY',
-                    message: 'Session not initialized'
-                  }));
-                }
-                return;
-              }
-              const allowedTiers = getAllowedTiers(churchId);
+              // Get entitlements from socket (set during connection)
+              const entitlements = clientWs.entitlements;
+              const planCode = entitlements?.subscription?.planCode || 'starter';
+              const ttsTier = entitlements?.limits?.ttsTier || 'starter';
 
-              // Get voices filtered by language and allowed tiers
+              // Get allowed tiers from entitlements (with fallback)
+              const allowedTiers = getAllowedTtsTiers(ttsTier) || ['standard', 'neural2', 'studio'];
+              console.log(`[Listener] Voice list: plan=${planCode} ttsTier=${ttsTier} allowedTiers=[${allowedTiers.join(', ')}]`);
+
+              // Get ALL voices for language by passing all possible tiers
+              // The frontend handles locked display based on isAllowed flag
+              const ALL_TIERS = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash'];
               const voices = await getVoicesFor({
                 languageCode: message.languageCode,
-                allowedTiers
+                allowedTiers: ALL_TIERS  // Get ALL voices, we'll mark isAllowed per-voice below
               });
 
-              // Transform to client format (hide tier info for disallowed voices)
+              // Transform to client format with isAllowed flag
               const clientVoices = voices.map(v => ({
                 tier: v.tier,
                 voiceId: v.voiceId,
                 voiceName: v.voiceName,
-                displayName: v.displayName
+                displayName: v.displayName,
+                isAllowed: allowedTiers.includes(v.tier)
               }));
 
               if (clientWs.readyState === WebSocket.OPEN) {
                 clientWs.send(JSON.stringify({
                   type: 'tts/voices',
                   languageCode: message.languageCode,
-                  voices: clientVoices
+                  voices: clientVoices,
+                  allowedTiers: allowedTiers, // Frontend uses this for tier-level locking UI
+                  planCode: planCode           // Frontend can show plan info
                 }));
               }
 
-              console.log(`[Listener] Sent ${clientVoices.length} voices for ${message.languageCode}`);
+              console.log(`[Listener] Sent ${clientVoices.length} voices for ${message.languageCode} (${allowedTiers.length} tiers unlocked)`);
             } catch (error) {
               console.error('[Listener] Failed to list voices:', error);
               if (clientWs.readyState === WebSocket.OPEN) {
@@ -940,13 +939,15 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
 
                 try {
                   const { resolveVoice } = await import('./tts/voiceResolver.js');
-                  const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
+                  const { getAllowedTtsTiers } = await import('./entitlements/index.js');
 
-                  const orgId = 'default'; // TODO: Get from session/auth
-                  const allowedTiers = getAllowedTiers(orgId);
+                  // Use entitlements for tier gating
+                  const allowedTiers = clientWs.entitlements
+                    ? getAllowedTtsTiers(clientWs.entitlements.limits.ttsTier)
+                    : ['standard', 'neural2', 'studio']; // Default to starter tiers
 
                   resolvedVoice = await resolveVoice({
-                    orgId,
+                    orgId: clientWs.churchId || 'default',
                     userPref: hasVoiceId || hasTierAndName ? {
                       voiceId: message.voiceId,
                       tier: message.tier,
@@ -970,10 +971,14 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                 // Validate provided voice
                 try {
                   const { isVoiceValid } = await import('./tts/voiceCatalog.js');
-                  const { getAllowedTiers } = await import('./tts/ttsTierHelper.js');
+                  const { getAllowedTtsTiers } = await import('./entitlements/index.js');
 
-                  const orgId = 'default';
-                  const allowedTiers = getAllowedTiers(orgId);
+                  // Use entitlements for tier gating
+                  const allowedTiers = clientWs.entitlements
+                    ? getAllowedTtsTiers(clientWs.entitlements.limits.ttsTier)
+                    : ['standard', 'neural2', 'studio']; // Default to starter tiers
+
+                  console.log(`[Listener] Voice validation: requested tier=${message.tier} allowedTiers=[${allowedTiers.join(', ')}]`);
 
                   const valid = await isVoiceValid({
                     voiceId: message.voiceId,
@@ -990,7 +995,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
                     const { resolveVoice } = await import('./tts/voiceResolver.js');
 
                     resolvedVoice = await resolveVoice({
-                      orgId,
+                      orgId: clientWs.churchId || 'default',
                       userPref: null, // Don't use invalid preference
                       languageCode: message.languageCode,
                       allowedTiers

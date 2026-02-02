@@ -610,7 +610,8 @@ export class TtsPlayerController {
                     label: v.displayName,
                     tier: v.tier,
                     voiceId: v.voiceId,
-                    voiceName: v.voiceName
+                    voiceName: v.voiceName,
+                    isAllowed: v.isAllowed  // Pass through server's tier gating decision
                 }));
                 if (this.onVoicesUpdate) {
                     this.onVoicesUpdate(this.voices);

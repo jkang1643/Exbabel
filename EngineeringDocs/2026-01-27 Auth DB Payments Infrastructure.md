@@ -783,3 +783,17 @@ backend/
 - ✅ **Verification**: Backend now correctly receives `init`, initializes `speechStream`, and transcription works as expected.
 - ✅ **Env Fix**: Also corrected `.env.local` ports from `3000` to `3001` (`VITE_API_URL`, `VITE_WS_URL`)
 
+### 2026-02-02 - Bug Fix: TTS Tier Gating Regression
+- ✅ **Root Cause 1**: `getVoicesFor()` in `websocketHandler.js` was called without `allowedTiers` parameter, causing crash on `allowedTiers.includes()`.
+- ✅ **Root Cause 2**: `TtsPlayerController.js` was not passing `isAllowed` flag when mapping voices to frontend.
+- ✅ **Root Cause 3**: `ListenerPage.jsx` had hardcoded tier logic instead of using server's `isAllowed` flag.
+- ✅ **Fixes Applied**:
+    - **Backend** (`websocketHandler.js`): Pass `ALL_TIERS` to `getVoicesFor()` to fetch all voices, then mark each voice with `isAllowed: true/false` based on user's plan entitlements.
+    - **Frontend** (`TtsPlayerController.js`): Added `isAllowed: v.isAllowed` to voice mapping.
+    - **Frontend** (`ListenerPage.jsx`): Removed hardcoded `STARTER_TIERS`/`PRO_TIERS` logic; now uses server-provided `isAllowed` flag.
+- ✅ **Result**: Voice dropdown now correctly shows locked/unlocked voices based on user's subscription tier:
+    - **Starter**: `standard`, `neural2`, `studio` unlocked
+    - **Pro**: Above + `chirp3_hd` unlocked
+    - **Unlimited**: All voices unlocked (including `gemini`, `elevenlabs_*`)
+
+

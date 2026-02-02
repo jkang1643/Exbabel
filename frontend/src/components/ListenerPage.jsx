@@ -624,68 +624,42 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       return;
     }
 
-    // Helper to check if tier is allowed
-    // Starter: standard, neural2, studio
-    // Pro: All of Starter + chirp3_hd, gemini (NOT ElevenLabs)
-    // Unlimited: All tiers
-    const STARTER_TIERS = ['standard', 'neural2', 'studio'];
-    const PRO_TIERS = [...STARTER_TIERS, 'chirp3_hd', 'gemini'];
-    const ELEVENLABS_TIERS = ['elevenlabs', 'elevenlabs_flash', 'elevenlabs_turbo', 'elevenlabs_v3'];
-
-    const isTierAllowed = (tier) => {
-      if (userPlan === 'starter') return STARTER_TIERS.includes(tier);
-      if (userPlan === 'pro') return PRO_TIERS.includes(tier);
-      if (userPlan === 'unlimited') return true; // All allowed
-      return STARTER_TIERS.includes(tier); // Unknown plan, restrictive default
-    };
+    // Helper to check if voice is allowed - uses server-sent isAllowed flag
+    const isVoiceAllowed = (voice) => voice.isAllowed !== undefined ? voice.isAllowed : true;
 
     // 1. Check if voice exists strictly in list
     const voiceExists = availableVoices.some(v => v.voiceId === selectedVoice);
 
-    // 2. Check if voice is ALLOWED by plan
+    // 2. Check if voice is ALLOWED by plan (using server's isAllowed flag)
     const currentVoiceObj = availableVoices.find(v => v.voiceId === selectedVoice);
-    const currentTier = currentVoiceObj?.tier || 'standard';
-    const isAllowed = isTierAllowed(currentTier);
+    const isAllowed = currentVoiceObj ? isVoiceAllowed(currentVoiceObj) : false;
 
     // If invalid or disallowed, we must pick a new default
     if (!voiceExists || !isAllowed) {
-      console.log(`[ListenerPage] Selecting default voice (Plan: ${userPlan || 'unknown'}, Current: ${selectedVoice}, Allowed: ${isAllowed})`);
+      console.log(`[ListenerPage] Selecting default voice (Plan: ${userPlan || 'unknown'}, Current: ${selectedVoice}, isAllowed: ${isAllowed})`);
 
       let defaultVoiceId = null;
 
-      // Plan-based defaults
-      if (userPlan === 'starter') {
-        // Default to Standard
-        const standard = availableVoices.find(v => v.tier === 'standard');
-        if (standard) defaultVoiceId = standard.voiceId;
-      } else if (userPlan === 'pro') {
-        // Default to Chirp 3 (Kore preferred)
-        const chirpKore = availableVoices.find(v => v.voiceId.includes('chirp3_hd') && v.voiceName.includes('Kore'));
-        const anyChirp = availableVoices.find(v => v.tier === 'chirp3_hd');
+      // Priority 1: Find the highest-quality allowed voice based on plan
+      // Use tier priority ordering to select the best available allowed voice
+      const tierPriority = ['elevenlabs_flash', 'elevenlabs_turbo', 'elevenlabs_v3', 'elevenlabs', 'gemini', 'chirp3_hd', 'neural2', 'studio', 'standard'];
 
-        if (chirpKore) defaultVoiceId = chirpKore.voiceId;
-        else if (anyChirp) defaultVoiceId = anyChirp.voiceId;
-      } else if (userPlan === 'unlimited') {
-        // Default to ElevenLabs
-        const elevenLabs = availableVoices.find(v => v.tier === 'elevenlabs' || v.voiceId.startsWith('elevenlabs'));
-        if (elevenLabs) {
-          defaultVoiceId = elevenLabs.voiceId;
-        } else {
-          // Fallback to Pro default
-          const chirpKore = availableVoices.find(v => v.voiceId.includes('chirp3_hd') && v.voiceName.includes('Kore'));
-          if (chirpKore) defaultVoiceId = chirpKore.voiceId;
+      for (const tier of tierPriority) {
+        const allowedVoice = availableVoices.find(v => v.tier === tier && isVoiceAllowed(v));
+        if (allowedVoice) {
+          defaultVoiceId = allowedVoice.voiceId;
+          break;
         }
       }
 
       // Universal Fallback
       if (!defaultVoiceId) {
-        // If we are here, it means plan specific defaults failed. 
-        // Try to find ANY allowed voice.
-        const firstAllowed = availableVoices.find(v => isTierAllowed(v.tier));
+        // Find any allowed voice
+        const firstAllowed = availableVoices.find(v => isVoiceAllowed(v));
         if (firstAllowed) {
           defaultVoiceId = firstAllowed.voiceId;
         } else {
-          // Priority 3: Just pick the first one (even if technically disallowed, better than crash)
+          // Last resort: Just pick the first one (even if technically disallowed, better than crash)
           defaultVoiceId = availableVoices[0]?.voiceId;
         }
       }
@@ -1764,18 +1738,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   ).map(([group, voices]) => (
                     <optgroup key={group} label={group}>
                       {voices.map(v => {
-                        // Check if tier is allowed
-                        // Starter: standard, neural2, studio
-                        // Pro: All of Starter + chirp3_hd, gemini (NOT ElevenLabs)
-                        // Unlimited: All tiers
-                        const tier = v.tier || 'standard';
-                        const STARTER_TIERS = ['standard', 'neural2', 'studio'];
-                        const PRO_TIERS = [...STARTER_TIERS, 'chirp3_hd', 'gemini'];
-
-                        let isAllowed = true;
-                        if (userPlan === 'starter' || !userPlan) isAllowed = STARTER_TIERS.includes(tier);
-                        else if (userPlan === 'pro') isAllowed = PRO_TIERS.includes(tier);
-                        // unlimited = all allowed
+                        // Use isAllowed from server (set based on user's plan entitlements)
+                        const isAllowed = v.isAllowed !== undefined ? v.isAllowed : true;
 
                         return (
                           <option
