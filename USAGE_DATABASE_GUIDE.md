@@ -110,3 +110,26 @@ The "Live Counter" is powered by the `public.get_session_quota_status` RPC, whic
 
 The schema is managed via Supabase CLI migrations located in `supabase/migrations/`. 
 - **Latest Baseline**: All spans and monthly aggregation tables were formalized in `20260202_add_spans_and_usage_monthly_formalized.sql`.
+
+---
+
+## 8. Session Lifecycle & Reliability
+
+To ensure accurate billing and system stability, we have implemented a canonical session lifecycle managed by `backend/storage/sessionStore.js`.
+
+### A. Canonical `endSession`
+We have a single point of truth function `endSession(sessionId, reason)` that:
+1.  **Updates DB**: Sets `status='ended'` and `ended_at=now()` (idempotent).
+2.  **Cleans Memory**: Removes the session from the in-memory `Map`.
+3.  **Notifies Clients**: Broadcasts `session_ended` event to all listeners.
+4.  **Closes Sockets**: Forcibly closes all WebSocket connections.
+
+### B. Graceful Disconnects
+When a host disconnects (e.g., wifi drop), we do **not** end the session immediately.
+-   **Grace Period**: The session enters a "pending end" state for **30 seconds**.
+-   **Reconnection**: If the host reconnects within 30s, the timer is cancelled and metering continues seamlessly.
+-   **Timeout**: If 30s elapse, the session is formally ended with reason `host_disconnected`.
+
+### C. Safety Nets
+-   **Startup Cleanup**: On backend restart, `cleanupAbandonedSessions()` marks all `active` sessions as `ended` to prevent "zombie" billing.
+-   **Inactivity Timeout**: A cron job runs every 10 minutes to close sessions with no activity for >1 hour.
