@@ -14,6 +14,7 @@ import { LanguageSelector } from './LanguageSelector';
 import { SentenceSegmenter } from '@jkang1643/caption-engine';
 import { TRANSCRIPTION_LANGUAGES } from '../config/languages.js';
 import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -64,6 +65,9 @@ const fp = (s) => {
 };
 
 export function HostPage({ onBackToHome }) {
+  // Auth context for token
+  const { getAccessToken, profile } = useAuth();
+
   // Track seen raw messages for invariant checking
   const seenRawInFpsRef = useRef(new Set());
 
@@ -326,9 +330,17 @@ export function HostPage({ onBackToHome }) {
     sessionCreatedRef.current = true;
 
     try {
+      const token = getAccessToken();
+      const headers = {
+        'Content-Type': 'application/json'
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const response = await fetch(`${API_URL}/session/start`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
+        headers
       });
 
       const data = await response.json();
@@ -387,7 +399,13 @@ export function HostPage({ onBackToHome }) {
       ? websocketUrl
       : (websocketUrl.endsWith('/') ? `${websocketUrl}translate` : `${websocketUrl}/translate`);
 
-    const ws = new WebSocket(`${finalWsUrl}?role=host&sessionId=${sessionId}`);
+    // Add auth token to WebSocket URL
+    const token = getAccessToken();
+    const wsUrlWithAuth = token
+      ? `${finalWsUrl}?role=host&sessionId=${sessionId}&token=${encodeURIComponent(token)}`
+      : `${finalWsUrl}?role=host&sessionId=${sessionId}`;
+
+    const ws = new WebSocket(wsUrlWithAuth);
 
     ws.onopen = () => {
       console.log('[Host] WebSocket connected');

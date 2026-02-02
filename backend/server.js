@@ -173,6 +173,7 @@ import inputValidator from './inputValidator.js';
 import { meRouter } from './routes/me.js';
 import { entitlementsRouter } from './routes/entitlements.js';
 import usageRouter from './routes/usage.js';
+import { churchRouter } from './routes/churches.js';
 
 // Reload API keys now that dotenv has loaded the .env file
 // (apiAuth is instantiated when imported, but dotenv.config runs after imports)
@@ -346,6 +347,7 @@ wss.on("connection", async (clientWs, req) => {
 app.use('/api', meRouter);
 app.use('/api', entitlementsRouter);
 app.use('/api', usageRouter);
+app.use('/api', churchRouter);
 
 // ========================================
 // SESSION MANAGEMENT ENDPOINTS
@@ -390,6 +392,8 @@ app.post('/session/start', async (req, res) => {
 /**
  * POST /session/join
  * Allows a listener to join an existing session
+ * 
+ * Auto-links signed-in users to the session's church if they don't have a profile
  */
 app.post('/session/join', async (req, res) => {
   try {
@@ -466,13 +470,44 @@ app.post('/session/join', async (req, res) => {
     const sanitizedTargetLang = targetLang || 'en';
     const sanitizedUserName = userName ? inputValidator.validateString(userName, { maxLength: 50 }).sanitized || 'Anonymous' : 'Anonymous';
 
+    // AUTO-LINK: If user is signed in but has no profile, create one linked to this church
+    let autoLinked = false;
+    let churchName = null;
+    const authHeader = req.headers.authorization || '';
+    if (authHeader.startsWith('Bearer ') && session.churchId) {
+      const token = authHeader.slice('Bearer '.length).trim();
+      try {
+        const { data: userData, error: authErr } = await supabaseAdmin.auth.getUser(token);
+        if (!authErr && userData?.user) {
+          const { autoLinkToChurch } = await import('./membership/autoLink.js');
+          const linkResult = await autoLinkToChurch(userData.user.id, session.churchId);
+          autoLinked = linkResult.linked;
+          if (autoLinked) {
+            // Get church name for frontend toast
+            const { data: church } = await supabaseAdmin
+              .from('churches')
+              .select('name')
+              .eq('id', session.churchId)
+              .single();
+            churchName = church?.name || null;
+          }
+        }
+      } catch (linkErr) {
+        console.warn('[Backend] Auto-link failed (non-blocking):', linkErr.message);
+        // Continue - auto-link is best-effort
+      }
+    }
+
     res.json({
       success: true,
       sessionId: session.sessionId,
       sessionCode: session.sessionCode,
       sourceLang: session.sourceLang,
       targetLang: sanitizedTargetLang,
-      wsUrl: `/translate?role=listener&sessionId=${session.sessionId}&targetLang=${sanitizedTargetLang}&userName=${encodeURIComponent(sanitizedUserName)}`
+      wsUrl: `/translate?role=listener&sessionId=${session.sessionId}&targetLang=${sanitizedTargetLang}&userName=${encodeURIComponent(sanitizedUserName)}`,
+      // Auto-link info for frontend
+      autoLinked,
+      churchName
     });
   } catch (error) {
     console.error('[Backend] Error joining session:', error);

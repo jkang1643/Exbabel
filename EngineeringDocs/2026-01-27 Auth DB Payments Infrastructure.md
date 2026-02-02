@@ -705,4 +705,81 @@ backend/
 - ✅ **Manual Verification**: Created `manual-test-session-quota.js` and verified full flow (start → heartbeat → stop → aggregate) on PROD.
 - ✅ **Final Result**: February MTD and Live Counter verified working with plan-aware subtraction.
 
+### 2026-02-02 - PR Next-1: Frontend Auth + Session Entry
+- ✅ **Frontend Auth**: Implemented Supabase Auth (Email + Google) via `AuthContext.jsx`.
+- ✅ **UI Components**: Setup shadcn/ui and created modern `LoginPage` and `NoProfilePage`.
+- ✅ **App Shell Gating**: Secured `App.jsx` to block unauthorized access to Host/Solo modes.
+- ✅ **Host Token Injection**: Updated `HostPage.jsx` to pass JWT via `sec-websocket-protocol` (header) or query param for `ws` connection.
+- ✅ **Session API**: Secured `/api/session/start` with Bearer token authentication from frontend.
+
+### 2026-02-02 - PR2: Auth + Membership UX Rewrite
+- ✅ **Middleware Refactor**: Split `requireAuthContext.js` into:
+    - `requireAuth`: Verifies JWT but allows `profile: null` (visitors)
+    - `requireChurchMember`: Requires profile with `church_id`
+    - `requireAdmin`: Requires `role: 'admin'`
+- ✅ **Visitor-First Flow**: 
+    - New `JoinPage.jsx` as default entry point for all users
+    - Users can join sessions without logging in
+    - `/api/me` returns `{ profile: null, isVisitor: true }` for profileless users
+- ✅ **Auth Context Updates**: Added computed props `isVisitor`, `isMember`, `isAdmin`, `hasChurch`
+- ✅ **Auto-Link on Session Join**:
+    - Created `backend/membership/autoLink.js` with `autoLinkToChurch()` function
+    - `/session/join` now auto-creates profile when signed-in visitor joins
+    - Returns `autoLinked: true, churchName: "..."` for frontend toast
+    - `ListenerPage.jsx` shows welcome message after auto-link
+- ✅ **Build Verification**: Frontend builds successfully (1.1 MB bundle)
+
+### 2026-02-02 - PR3: State-Based Home Pages
+- ✅ **VisitorHome**: New home page for visitors (anonymous + signed-in without profile):
+    - Primary: Join session by code
+    - Secondary: Join a church, Create a church (placeholders for PR4)
+- ✅ **MemberHome**: Home page for church members:
+    - Solo mode access
+    - Join session by code
+- ✅ **AdminHome**: Home page for church administrators:
+    - Host session (primary, prominent)
+    - Solo mode, Join session
+    - Future: Analytics placeholder
+- ✅ **App.jsx Routing**: Routes to appropriate home based on `isAdmin`, `isMember`, `isVisitor`
+- ✅ **Build Verification**: Frontend builds successfully (776 KB, 7.2s)
+
+### 2026-02-02 - PR4: Church Search/Join
+- ✅ **Backend Routes** (`backend/routes/churches.js`):
+    - `GET /api/churches/search` - Search churches by name (public)
+    - `POST /api/churches/join` - Join a church (requires auth)
+    - `GET /api/churches/:id` - Get church details
+- ✅ **Frontend Component** (`frontend/src/components/JoinChurchPage.jsx`):
+    - Debounced search with live results
+    - Join button with loading state
+    - Success message and profile reload after joining
+- ✅ **App Integration**: Wired `join-church` mode into `App.jsx` navigation
+- ✅ **Build Verification**: Frontend builds successfully (780 KB, 56s)
+
+### 2026-02-02 - Bug Fix: Solo Mode Init Race Condition
+- ✅ **Root Cause**: `init` message sent in WebSocket `onopen` was arriving at backend BEFORE message handler was fully attached by `handleSoloMode()`. This caused audio to be received before `speechStream` was initialized.
+- ✅ **Symptoms**:
+    - `[SoloMode] Received audio before stream initialization` flooding backend logs
+    - No transcription events in Solo Mode
+    - Backend never logged `RAW MSG RECEIVED: init`
+- ✅ **Fix Applied** (`frontend/src/components/solo/SoloPage.jsx`):
+    - Moved `init` message sending from `socket.onopen` to after receiving `info` message from backend
+    - This ensures the backend's message handler is fully attached before sending `init`
+    - The `info` message ("Connected to Google Speech + OpenAI Translation") now acts as a handshake confirmation
+- ✅ **Code Change**:
+    ```javascript
+    // BEFORE: Sent init immediately on open (race condition)
+    socket.onopen = () => {
+        socket.send(JSON.stringify({ type: 'init', ... }));
+    };
+    
+    // AFTER: Wait for 'info' from backend (ensures handler ready)
+    case 'info':
+        if (!isServerReady && socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'init', ... }));
+            setIsServerReady(true);
+        }
+        break;
+    ```
+- ✅ **Verification**: Backend now correctly receives `init`, initializes `speechStream`, and transcription works as expected.
+- ✅ **Env Fix**: Also corrected `.env.local` ports from `3000` to `3001` (`VITE_API_URL`, `VITE_WS_URL`)
 

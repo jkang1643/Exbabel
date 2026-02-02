@@ -14,6 +14,10 @@
 
 import { supabaseAdmin } from './supabaseAdmin.js';
 
+// DEBUG: Gate high-frequency broadcast logging to prevent I/O overhead
+// Set DEBUG_BROADCAST=1 to enable verbose broadcast logs
+const DEBUG_BROADCAST = process.env.DEBUG_BROADCAST === '1';
+
 // Grace period before ending session after host disconnects (allows reconnection)
 const HOST_DISCONNECT_GRACE_MS = 30000; // 30 seconds
 
@@ -366,7 +370,7 @@ class SessionStore {
           sentCount++;
 
           // TEMP DEBUG: Log exact payload sent to ES listeners for "Y grito"
-          if (targetLang === 'es' && message?.hasTranslation && (message?.translatedText || '').includes('Y grito')) {
+          if (DEBUG_BROADCAST && targetLang === 'es' && message?.hasTranslation && (message?.translatedText || '').includes('Y grito')) {
             console.log('[ES_PAYLOAD_TO_LISTENER]', JSON.stringify(message));
           }
         } catch (error) {
@@ -375,7 +379,7 @@ class SessionStore {
       }
     });
 
-    console.log(`[SessionStore] Broadcast to ${sentCount}/${listeners.length} listeners${targetLang ? ` (${targetLang})` : ''}`);
+    if (DEBUG_BROADCAST) console.log(`[SessionStore] Broadcast to ${sentCount}/${listeners.length} listeners${targetLang ? ` (${targetLang})` : ''}`);
   }
 
   updateSourceLanguage(sessionId, sourceLang) {

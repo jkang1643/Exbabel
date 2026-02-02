@@ -1,0 +1,341 @@
+Nice — with those answers, the “upfront design” becomes very clear:
+
+* **Tenant = church** (pays, owns transcripts, controls pay-as-you-go policy)
+* **User belongs to exactly one church**
+* **All church members can view transcripts**
+* **Billing = monthly included seconds + optional PAYG extra seconds if church enables**
+* **Stripe is source of truth for money, Postgres is source of truth for entitlements + metering**
+
+Below is what I’d lock in **now** (hard to change later), plus what to keep as “later tables” / JSONB.
+
+---
+
+## 1) Entity boundaries (final)
+
+**Core**
+
+* **User** = Supabase auth user + profile
+* **Church** = tenant/billing owner
+* **Membership** = “user belongs to church” (1 church per user enforced)
+* **Session** = a live stream event (1 hour typical)
+* **Transcript** = output of a session (church-owned)
+* **Usage** = metered seconds + feature-tier metrics
+* **Subscription** = current plan snapshot for church + Stripe linkage
+* **Topups/PAYG policy** = church settings + purchases
+
+**Later feature tables (don’t stuff nullable columns)**
+
+* `transcript_summaries`
+* `transcript_notes`
+* `transcript_exports`
+* `phrase_banks` / `glossaries`
+* `audit_log` (optional but recommended)
+
+---
+
+## 2) IDs + relationships + cascade rules (set this upfront)
+
+* Use **UUID PKs** everywhere.
+* **No cascading deletes** on billing/usage. You want auditability.
+
+  * Prefer soft-delete (`deleted_at`) on user-generated objects like transcripts if needed.
+* Relationship rules:
+
+  * `profiles.user_id` references `auth.users(id)`
+  * `profiles.church_id` references `churches(id)` (**enforces 1 church per user**)
+  * `sessions.church_id` -> churches
+  * `transcripts.church_id` -> churches
+  * `transcripts.session_id` -> sessions (optional but recommended)
+  * `usage_events.church_id` -> churches
+  * `subscriptions.church_id` -> churches (unique)
+
+---
+
+## 3) Multi-tenancy model + RLS (Supabase-friendly)
+
+Since every user belongs to exactly one church, your RLS becomes simple and fast:
+
+### Key rule
+
+**All church-owned data has `church_id`** and RLS checks the user’s church.
+
+Practical approach:
+
+* Put `church_id` directly on `profiles`
+* RLS predicate becomes: `row.church_id = (select church_id from profiles where user_id = auth.uid())`
+
+### Roles
+
+* Member vs admin: store `profiles.role` (`member|admin`) OR a `church_memberships` table.
+
+  * Since it’s **1 church per user**, simplest is `profiles.role` + `profiles.church_id`.
+
+**Upfront recommendation:** use `profiles` only (simpler), unless you expect changing churches frequently or invitations soon.
+
+---
+
+## 4) Core tables (what to create first)
+
+### A) Tenant + users
+
+**churches**
+
+* `id, name, slug`
+* `created_at`
+
+**profiles**
+
+* `user_id pk`
+* `church_id not null`
+* `role ('admin','member')`
+* `display_name`
+* `created_at`, `updated_at`
+
+✅ This is the spine of your RLS + multi-tenancy.
+
+---
+
+### B) Billing & entitlements (Stripe-aligned)
+
+You want *just enough* stored to:
+
+* gate access instantly
+* reconcile Stripe webhooks reliably
+* avoid breaking when Stripe objects change
+
+**plans** (versioned)
+
+* `id, code unique`
+* `included_seconds_per_month int`
+* `max_languages int`
+* `stt_tier text`
+* `tts_tier text`
+* `created_at`
+
+**subscriptions** (current snapshot)
+
+* `id`
+* `church_id unique`
+* `plan_id`
+* `status ('trialing','active','past_due','canceled','paused')`
+* `current_period_start`, `current_period_end`
+* **Stripe linkage (add upfront):**
+
+  * `stripe_customer_id text`
+  * `stripe_subscription_id text`
+  * `stripe_price_id text` (optional but helpful)
+* `created_at`, `updated_at`
+
+**church_billing_settings** (PAYG controls)
+
+* `church_id pk`
+* `payg_enabled boolean`
+* `payg_rate_cents_per_hour int` *(or cents per second)*
+* `payg_hard_cap_seconds int null` *(optional safety)*
+* `allow_overage_while_live boolean` *(if true, you can continue live + bill later)*
+
+**topups** (if you do “prepay hours”)
+
+* `id`
+* `church_id`
+* `purchased_seconds`
+* `remaining_seconds`
+* `stripe_payment_intent_id text` (or checkout session id)
+* `created_at`
+
+**Why store Stripe IDs now?**
+Because webhook reconciliation later is painful without them.
+
+---
+
+### C) Sessions + transcripts
+
+**sessions**
+
+* `id`
+* `church_id`
+* `host_user_id`
+* `started_at`, `ended_at`
+* `status`
+* `languages_emitted_peak int` (cheap, useful, queryable)
+* `created_at`
+
+**transcripts**
+
+* `id`
+* `church_id`
+* `session_id`
+* `title`
+* `occurred_at`
+* `created_at`
+
+**transcript_segments** *(recommended for your “segments” UI + future FTS)*
+
+* `id`
+* `transcript_id`
+* `seq int`
+* `source_lang`
+* `source_text`
+* `target_lang`
+* `target_text`
+* `created_at`
+
+Indexes you should add **immediately**:
+
+* `transcripts (church_id, occurred_at desc)`
+* `transcript_segments (transcript_id, seq)`
+* `transcript_segments (transcript_id, target_lang, seq)`
+
+---
+
+## 5) Transcript “per word” search (FTS plan)
+
+You said “indexes for per word”. In Postgres, that usually means **full-text search**:
+
+Best shape for Exbabel:
+
+* Search primarily **within a church**
+* Return matching **segments** (since you display segments)
+
+Add later (but design now):
+
+* a generated `tsvector` for `source_text` and `target_text`
+* a **GIN** index on it
+
+Example design choice:
+
+* `transcript_segments.search_vector` = `to_tsvector('english', source_text) || to_tsvector('simple', target_text)`
+* GIN index on `search_vector`
+* Query filters by church via join transcript → church_id
+
+This will scale far better than trying to “index every word” manually.
+
+---
+
+## 6) Usage tracking (seconds + tiered features) — designed for enforcement
+
+This is the part you really want “right” up front.
+
+### Append-only events (audit)
+
+**usage_events**
+
+* `id`
+* `church_id`
+* `session_id`
+* `occurred_at`
+* `metric text` (ex: `live_audio_seconds`, `stt_seconds_premium`, `tts_chars_chirp3`)
+* `quantity bigint`
+* `idempotency_key text unique`
+* `provider`, `model` (optional)
+* `metadata jsonb` (optional for provider quirks)
+
+### Aggregates (fast dashboards & month-to-date)
+
+**usage_daily**
+
+* `(church_id, date, metric)` PK
+* `quantity bigint`
+
+Indexes now:
+
+* `usage_events (church_id, occurred_at desc)`
+* `usage_daily (church_id, date desc)`
+
+### Enforcement with Redis (stateless-friendly)
+
+* Redis key: `quota:{church_id}:{YYYYMM}` = remaining seconds
+* On session start:
+
+  * backend loads subscription + included seconds + month usage + topups remaining
+  * seeds Redis if missing
+* During session:
+
+  * decrement Redis on a fixed cadence
+* On session end:
+
+  * write one event (or few) + update daily aggregate
+
+### PAYG rule (your requirement)
+
+If quota hits 0:
+
+* If `payg_enabled = false`: **lock**
+* If `payg_enabled = true`:
+
+  * either **auto-continue** while accruing “overage_seconds” (tracked as a metric), then invoice later
+  * or **require immediate topup purchase** to continue (simpler product-wise)
+
+Pick one upfront, because it affects flow + tables.
+
+* **Simpler MVP:** require topup purchase to continue.
+
+---
+
+## 7) Auditability fields (add these everywhere it matters)
+
+Add these columns to most tables:
+
+* `created_at timestamptz default now()`
+* `updated_at timestamptz` (maintained by trigger)
+* `created_by uuid null` (helpful on transcripts/sessions if you want)
+
+Add `deleted_at` only where you truly need soft delete (transcripts).
+
+---
+
+## 8) Columns now vs tables later vs JSONB (your rule-of-thumb applied)
+
+### Columns NOW (core + queried soon)
+
+* `church_id` on all tenant-owned rows
+* `occurred_at`, `created_at`
+* `session started_at/ended_at/status`
+* subscription `status`, `current_period_end`
+* plan entitlements: `included_seconds_per_month`, `max_languages`, `stt_tier`, `tts_tier`
+* payg flag + rate
+
+### Tables LATER (optional features)
+
+* summaries/notes/exports
+* phrase bank / glossary management
+* user notification prefs
+* transcript sharing links
+
+### JSONB (only for integration/provider extras)
+
+* `usage_events.metadata`
+* maybe `subscriptions.metadata` for Stripe oddities
+* do **not** put core filter/sort fields into JSONB
+
+---
+
+## 9) Final “design upfront” checklist for Exbabel
+
+If you do only one thing before coding: implement these invariants:
+
+1. **User belongs to exactly one church** (`profiles.church_id not null`)
+2. Every church-owned row has **church_id** and RLS enforces it
+3. Usage metering uses **events + daily aggregates**
+4. Subscription table stores **Stripe IDs + period window + status**
+5. Quota enforcement is **Redis** (hot path) + Postgres reconciliation (truth)
+6. Transcript search uses **FTS (tsvector + GIN)** on segments
+
+---
+
+## 10) Two final product decisions (you should choose now)
+
+These decide a couple columns/tables:
+
+1. When quota is out and PAYG is enabled, do you want:
+
+   * **Topup-required to continue** (MVP-simple), or
+   * **Auto-overage and invoice end-of-month** (more enterprise-like)?
+
+2. Do you want **admins-only** ability to start live hosting, or can any member host?
+
+Reply with your choice for those two, and I’ll give you:
+
+* a concrete table list + recommended indexes,
+* exact RLS policy patterns for Supabase,
+* and the Redis key/flow for live quota enforcement (including idempotency strategy for “seconds counted” so you never double-bill).

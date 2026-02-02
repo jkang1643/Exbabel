@@ -133,3 +133,26 @@ When a host disconnects (e.g., wifi drop), we do **not** end the session immedia
 ### C. Safety Nets
 -   **Startup Cleanup**: On backend restart, `cleanupAbandonedSessions()` marks all `active` sessions as `ended` to prevent "zombie" billing.
 -   **Inactivity Timeout**: A cron job runs every 10 minutes to close sessions with no activity for >1 hour.
+
+---
+
+## 9. Verification & Testing
+
+We have verified the session lifecycle and billing logic with the following scenarios (Test: `backend/tests/integration/test-lifecycle-correctness.js`):
+
+### ✅ Test 1: Explicit Admin End
+*   **Action**: Host clicks "End Session".
+*   **Result**: Session status updates to `ended` immediately.
+*   **Billing**: Stops counting hours at that exact second.
+
+### ✅ Test 2: Listener Independence
+*   **Action**: All listeners leave the session.
+*   **Result**: Session remains `active`.
+*   **Rationale**: The host is still broadcasting (even to an empty room), so metering continues until the host explicitly stops.
+
+### ✅ Test 3: Inactive Admin (Timeout)
+*   **Action**: Host disconnects (e.g., closes tab/browser crash).
+*   **Result**:
+    1.  Enters **grace period** (30s) - keeps expecting reconnect.
+    2.  If no reconnect, session is `ended` with reason `host_disconnected`.
+    3.  Billing stops at the disconnect time + grace period (safety cap).

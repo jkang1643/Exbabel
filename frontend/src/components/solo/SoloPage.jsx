@@ -164,24 +164,14 @@ export function SoloPage({ onBackToHome }) {
             console.log('[SoloPage] Connected');
             setIsConnected(true);
             setWs(socket);
-
-            // Initialize session
-            socket.send(JSON.stringify({
-                type: 'init',
-                sourceLang,
-                targetLang,
-                tier: 'basic',
-                sessionId: streamingSessionIdRef.current,
-                voiceId: selectedVoice?.voiceId || null
-            }));
-
-
+            // NOTE: Don't send init here - wait for 'info' from backend
+            // This ensures the backend message handler is fully set up
         };
 
         socket.onmessage = (event) => {
             try {
                 const message = JSON.parse(event.data);
-                handleMessage(message);
+                handleMessage(message, socket);
             } catch (e) {
                 console.error('[SoloPage] Parse error:', e);
             }
@@ -199,7 +189,7 @@ export function SoloPage({ onBackToHome }) {
     }, [sourceLang, targetLang]);
 
     // Handle incoming messages
-    const handleMessage = useCallback((message) => {
+    const handleMessage = useCallback((message, socket) => {
         // TTS messages
         if (message.type?.startsWith('tts/')) {
             // Handle voice list response
@@ -265,9 +255,22 @@ export function SoloPage({ onBackToHome }) {
             case 'info':
                 console.log('[SoloPage] Info:', message.message);
                 // The first info message confirms the backend handler is attached and ready
-                if (!isServerReady) {
+                // NOW we can safely send init
+                if (!isServerReady && socket && socket.readyState === WebSocket.OPEN) {
+                    // Send init message now that backend handler is ready
+                    const initMessage = {
+                        type: 'init',
+                        sourceLang,
+                        targetLang,
+                        tier: 'basic',
+                        sessionId: streamingSessionIdRef.current,
+                        voiceId: selectedVoice?.voiceId || null
+                    };
+                    console.log('[SoloPage] 📤 SENDING INIT (after info):', initMessage);
+                    socket.send(JSON.stringify(initMessage));
+
                     setIsServerReady(true);
-                    console.log('[SoloPage] Server ready - Requesting voices...');
+                    console.log('[SoloPage] Server ready');
                 }
                 break;
             case 'warning':
@@ -279,7 +282,7 @@ export function SoloPage({ onBackToHome }) {
             default:
                 console.log('[SoloPage] Message:', message.type);
         }
-    }, [session, ttsQueue]);
+    }, [session, ttsQueue, sourceLang, targetLang, selectedVoice, isServerReady]);
 
     // Start auto-listening
     const handleStart = useCallback(async () => {

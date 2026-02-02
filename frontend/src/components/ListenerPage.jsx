@@ -53,12 +53,16 @@ const LANGUAGES = TRANSLATION_LANGUAGES; // Listeners choose their language - ca
 // TRACE: Frontend tracing helper
 const TRACE = import.meta.env.VITE_TRACE_REALTIME === '1';
 
+// DEBUG: Gate high-frequency logging to prevent event loop blocking
+// Set VITE_DEBUG_LISTENER=1 to enable verbose logging for debugging
+const DEBUG = import.meta.env.VITE_DEBUG_LISTENER === '1';
+
 // TTS UI feature flag
 const TTS_UI_ENABLED = import.meta.env.VITE_TTS_UI_ENABLED === 'true';
-console.log('[ListenerPage] TTS_UI_ENABLED:', TTS_UI_ENABLED, 'raw env:', import.meta.env.VITE_TTS_UI_ENABLED);
+if (DEBUG) console.log('[ListenerPage] TTS_UI_ENABLED:', TTS_UI_ENABLED, 'raw env:', import.meta.env.VITE_TTS_UI_ENABLED);
 
 const USE_SHARED_ENGINE = import.meta.env.VITE_USE_SHARED_ENGINE === 'true';
-console.log('[ListenerPage] USE_SHARED_ENGINE:', USE_SHARED_ENGINE);
+if (DEBUG) console.log('[ListenerPage] USE_SHARED_ENGINE:', USE_SHARED_ENGINE);
 
 // Fingerprint helper for debugging ghost sentences
 const fp = (s) => {
@@ -390,7 +394,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
                 // LOG ONLY THE NEW/CHANGED ROW(S)
                 const added = newHistory.length - prev.length;
-                if (added > 0) {
+                if (DEBUG && added > 0) {
                   const last = newHistory[newHistory.length - 1];
                   console.log('[COMMIT]', {
                     page: 'LISTENER',
@@ -405,7 +409,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                       t: (last.translated || '').slice(0, 140),
                     }
                   });
-                } else {
+                } else if (DEBUG) {
                   // also log replaces where length unchanged but last row text changed
                   const pLast = prev[prev.length - 1];
                   const nLast = newHistory[newHistory.length - 1];
@@ -420,20 +424,22 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 }
 
                 // COMMIT filter print for history commits only
-                const last = newHistory[newHistory.length - 1];
-                const blob = `${last?.original || ''} ${last?.translated || ''}`;
-                if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
-                  console.log('[LISTENER_COMMIT_MATCH]', {
-                    path: 'SEGMENTER_ONFLUSH',
-                    last: {
-                      seqId: last.seqId,
-                      sourceSeqId: last.sourceSeqId,
-                      isPartial: last.isPartial,
-                      isSegmented: last.isSegmented,
-                      original: (last.original || '').slice(0, 220),
-                      translated: (last.translated || '').slice(0, 220),
-                    }
-                  });
+                if (DEBUG) {
+                  const last = newHistory[newHistory.length - 1];
+                  const blob = `${last?.original || ''} ${last?.translated || ''}`;
+                  if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
+                    console.log('[LISTENER_COMMIT_MATCH]', {
+                      path: 'SEGMENTER_ONFLUSH',
+                      last: {
+                        seqId: last.seqId,
+                        sourceSeqId: last.sourceSeqId,
+                        isPartial: last.isPartial,
+                        isSegmented: last.isSegmented,
+                        original: (last.original || '').slice(0, 220),
+                        translated: (last.translated || '').slice(0, 220),
+                      }
+                    });
+                  }
                 }
 
                 return newHistory;
@@ -794,9 +800,22 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     setError('');
 
     try {
+      // Get auth token if available (for auto-linking)
+      let headers = { 'Content-Type': 'application/json' };
+      try {
+        const { supabase } = await import('@/lib/supabase');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.access_token) {
+          headers['Authorization'] = `Bearer ${session.access_token}`;
+        }
+      } catch (authErr) {
+        // No auth available - continue as anonymous
+        console.log('[ListenerPage] No auth token available (anonymous join)');
+      }
+
       const response = await fetch(`${API_URL}/session/join`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           sessionCode: sessionCode.toUpperCase(),
           targetLang: targetLang,
@@ -809,6 +828,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       if (data.success) {
         setSessionInfo(data);
         setIsJoined(true);
+
+        // Show auto-link toast if user was just linked to a church
+        if (data.autoLinked && data.churchName) {
+          console.log(`[ListenerPage] ✅ Auto-linked to church: ${data.churchName}`);
+          // Simple alert for now - can be replaced with toast library later
+          setTimeout(() => {
+            alert(`Welcome! You've joined ${data.churchName}. You now have full member access.`);
+          }, 500);
+        }
 
         // Connect WebSocket
         connectWebSocket(data.sessionId, targetLang, userName || 'Anonymous');
@@ -889,7 +917,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         traceUI('WS_IN', message);
 
         // RAW_IN logging: canonical ingestion truth for ghost bug debugging
-        console.log('[RAW_IN]', {
+        if (DEBUG) console.log('[RAW_IN]', {
           page: 'LISTENER',
           type: message.type,
           updateType: message.updateType,
@@ -907,17 +935,19 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         });
 
         // RAW_IN filter print for the exact escaped phrase
-        const s = `${message?.originalText || ''} ${message?.translatedText || ''} ${message?.correctedText || ''}`;
-        if (s.includes('Own self-centered desires cordoned') || s.includes('Centered desires cordoned')) {
-          console.log('[LISTENER_RAW_IN_MATCH]', {
-            seqId: message.seqId,
-            sourceSeqId: message.sourceSeqId,
-            isPartial: message.isPartial,
-            forceFinal: message.forceFinal,
-            targetLang: message.targetLang,
-            o: (message.originalText || '').slice(0, 180),
-            t: (message.translatedText || '').slice(0, 180),
-          });
+        if (DEBUG) {
+          const s = `${message?.originalText || ''} ${message?.translatedText || ''} ${message?.correctedText || ''}`;
+          if (s.includes('Own self-centered desires cordoned') || s.includes('Centered desires cordoned')) {
+            console.log('[LISTENER_RAW_IN_MATCH]', {
+              seqId: message.seqId,
+              sourceSeqId: message.sourceSeqId,
+              isPartial: message.isPartial,
+              forceFinal: message.forceFinal,
+              targetLang: message.targetLang,
+              o: (message.originalText || '').slice(0, 180),
+              t: (message.translatedText || '').slice(0, 180),
+            });
+          }
         }
 
         // Track seen fingerprints for invariant checking
@@ -929,7 +959,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         }
 
         // A) LISTENER_IN logging: how listener receives messages
-        console.log('[LISTENER_IN]', {
+        if (DEBUG) console.log('[LISTENER_IN]', {
           seqId: message.seqId,
           sourceSeqId: message.sourceSeqId,
           hasTranslation: message.hasTranslation,
@@ -959,7 +989,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         if (message?.isPartial && message?.sourceSeqId != null && message?.seqId != null) {
           const last = lastPartialSeqBySourceRef.current.get(message.sourceSeqId) || 0;
           if (message.seqId <= last) {
-            console.log('[DROP_OOO_PARTIAL]', {
+            if (DEBUG) console.log('[DROP_OOO_PARTIAL]', {
               sourceSeqId: message.sourceSeqId,
               seqId: message.seqId,
               last,
@@ -980,7 +1010,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             break;
 
           case 'translation':
-            console.log('[LISTENER_CASE_TRANSLATION]', { type: message.type, isPartial: message.isPartial });
+            if (DEBUG) console.log('[LISTENER_CASE_TRANSLATION]', { type: message.type, isPartial: message.isPartial });
             // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
             if (message.isPartial) {
               // Use correctedText if available, otherwise use originalText (raw STT)
@@ -1022,7 +1052,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const shouldUpdateTranslation = isForMyLanguage || isTranscriptionMode;
 
               // DEBUG: Log decision logic
-              console.log('[LISTENER_DECISION]', {
+              if (DEBUG) console.log('[LISTENER_DECISION]', {
                 listenerTargetLang: targetLangRef.current,
                 messageTargetLang: message.targetLang,
                 messageSourceLang: message.sourceLang,
@@ -1051,7 +1081,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 traceUI('APPLY', message);
 
                 // DEBUG: Log translation processing
-                console.log('[LISTENER_TRANSLATION_PROCESSING]', {
+                if (DEBUG) console.log('[LISTENER_TRANSLATION_PROCESSING]', {
                   targetLang: targetLang,
                   messageTargetLang: message.targetLang,
                   isForMyLanguage,
@@ -1090,7 +1120,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   timeSinceLastRender >= THROTTLE_MS; // Enough time passed
 
                 if (shouldRender) {
-                  console.log('[LISTENER_RENDER_TRIGGER]', {
+                  if (DEBUG) console.log('[LISTENER_RENDER_TRIGGER]', {
                     liveText: liveText.substring(0, 50),
                     shouldRender,
                     charDelta,
@@ -1119,14 +1149,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     lowerText.includes('lamentablemente');
 
                   if (isSuspiciousEnglish && targetLangRef.current !== 'en') {
-                    console.log('[SKIP_ENGLISH_TRANSLATION]', { translatedText: translatedText?.slice(0, 50) });
+                    if (DEBUG) console.log('[SKIP_ENGLISH_TRANSLATION]', { translatedText: translatedText?.slice(0, 50) });
                     // Don't update translation display - keep previous content
                   } else if (isAIRefusal) {
-                    console.log('[SKIP_AI_REFUSAL]', { text: lowerText.slice(0, 60) });
+                    if (DEBUG) console.log('[SKIP_AI_REFUSAL]', { text: lowerText.slice(0, 60) });
                     // Don't update translation display - AI is refusing to translate
                   } else {
                     // Use imperative painter for flicker-free updates (replaces flushSync)
-                    console.log('[LISTENER_UI_UPDATE]', { liveText: liveText.substring(0, 30) });
+                    if (DEBUG) console.log('[LISTENER_UI_UPDATE]', { liveText: liveText.substring(0, 30) });
                     updateTranslationText(liveText);
                     setCurrentTranslation(liveText); // Keep state for UI conditionals
                   }
@@ -1156,7 +1186,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const isTranscriptionMode = targetLangRef.current === message.sourceLang;
 
               // DEBUG: Log final translation decision
-              console.log('[LISTENER_FINAL_DECISION]', {
+              if (DEBUG) console.log('[LISTENER_FINAL_DECISION]', {
                 listenerTargetLang: targetLangRef.current,
                 messageTargetLang: message.targetLang,
                 messageSourceLang: message.sourceLang,
@@ -1169,7 +1199,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
               // Skip if not for this listener's language and not transcription mode
               if (!isForMyLanguage && !isTranscriptionMode) {
-                console.log('[LISTENER_FINAL_SKIP]', {
+                if (DEBUG) console.log('[LISTENER_FINAL_SKIP]', {
                   reason: 'not for this language',
                   listenerLang: targetLangRef.current,
                   messageLang: message.targetLang
@@ -1179,7 +1209,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
               // Skip if no translation and not transcription mode
               if (!finalText && !isTranscriptionMode) {
-                console.warn('[ListenerPage] ⚠️ Final received without translation, skipping (not transcription mode)');
+                if (DEBUG) console.warn('[ListenerPage] ⚠️ Final received without translation, skipping (not transcription mode)');
                 return;
               }
 
@@ -1187,7 +1217,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               const textToDisplay = finalText || (isTranscriptionMode ? correctedOriginalText : undefined);
 
               if (!textToDisplay) {
-                console.warn('[ListenerPage] ⚠️ Final received with no displayable text, skipping');
+                if (DEBUG) console.warn('[ListenerPage] ⚠️ Final received with no displayable text, skipping');
                 return;
               }
 
@@ -1196,7 +1226,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
               // CRITICAL: Use flushSync for final updates to ensure immediate UI feedback
               // This prevents flicker when clearing currentTranslation right after adding to history
               flushSync(() => {
-                console.log('[LISTENER_FINAL_ADD_TO_HISTORY]', {
+                if (DEBUG) console.log('[LISTENER_FINAL_ADD_TO_HISTORY]', {
                   text: textToDisplay?.substring(0, 50),
                   targetLang: message.targetLang,
                   isTranscriptionMode
@@ -1231,7 +1261,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   const safeOriginalFinal = msgOriginal || safeOriginal;
 
                   // Diagnostic logging: log correlation info if original was missing
-                  if (!correctedOriginalText || !correctedOriginalText.trim()) {
+                  if (DEBUG && (!correctedOriginalText || !correctedOriginalText.trim())) {
                     console.log(`[ListenerPage] 🔗 Filled missing original: seqId=${message.seqId}, cachedFromSeqId=${!!cachedFromKey}, fallbackLen=${fallbackOriginal.length}, safeOriginalLen=${safeOriginalFinal.length}`);
                   }
 
@@ -1246,13 +1276,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
                   // B) LISTENER_ROW_KEY logging: how rows are keyed
                   const rowKey = message.sourceSeqId ?? message.seqId ?? 'none';
-                  console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
+                  if (DEBUG) console.log('[LISTENER_ROW_KEY]', { rowKey, seqId: message.seqId, sourceSeqId: message.sourceSeqId });
 
                   const next = [...prev, newEntry].slice(-50);
 
                   // LOG ONLY THE NEW/CHANGED ROW(S)
                   const added = next.length - prev.length;
-                  if (added > 0) {
+                  if (DEBUG && added > 0) {
                     const last = next[next.length - 1];
                     console.log('[COMMIT]', {
                       page: 'LISTENER',
@@ -1270,20 +1300,22 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                   }
 
                   // COMMIT filter print for history commits only
-                  const last = next[next.length - 1];
-                  const blob = `${last?.original || ''} ${last?.translated || ''}`;
-                  if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
-                    console.log('[LISTENER_COMMIT_MATCH]', {
-                      path: 'PARTIAL_FINAL',
-                      last: {
-                        seqId: last.seqId,
-                        sourceSeqId: last.sourceSeqId,
-                        isPartial: last.isPartial,
-                        isSegmented: last.isSegmented,
-                        original: (last.original || '').slice(0, 220),
-                        translated: (last.translated || '').slice(0, 220),
-                      }
-                    });
+                  if (DEBUG) {
+                    const last = next[next.length - 1];
+                    const blob = `${last?.original || ''} ${last?.translated || ''}`;
+                    if (blob.includes('Own self-centered desires cordoned') || blob.includes('Centered desires cordoned')) {
+                      console.log('[LISTENER_COMMIT_MATCH]', {
+                        path: 'PARTIAL_FINAL',
+                        last: {
+                          seqId: last.seqId,
+                          sourceSeqId: last.sourceSeqId,
+                          isPartial: last.isPartial,
+                          isSegmented: last.isSegmented,
+                          original: (last.original || '').slice(0, 220),
+                          translated: (last.translated || '').slice(0, 220),
+                        }
+                      });
+                    }
                   }
 
                   return next;

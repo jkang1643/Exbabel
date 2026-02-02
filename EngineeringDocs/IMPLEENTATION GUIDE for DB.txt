@@ -1,0 +1,771 @@
+IMPLEENTATION GUIDE for DB
+
+# PR #4 — Entitlements Truth Schema (DB-only): Plans, Subscriptions, Billing Settings, Model Routing
+
+## Goal
+
+Create the **entitlements truth layer** in Supabase as the **source of truth** for subscription tiers and routing decisions.
+
+This PR intentionally contains **no Stripe integration** and **no usage tracking**. It only establishes the DB foundation so that:
+
+* **tiers define the entire app experience**
+* **routing decisions are deterministic** (which provider/model/route based on plan + capability)
+* the system is secure by default (server-only access)
+
+---
+
+## Scope (DB-only)
+
+Created / finalized the following truth tables:
+
+1. `plans`
+2. `subscriptions`
+3. `church_billing_settings`
+4. `plan_model_routing`
+
+These tables are treated as **system tables** and are not directly accessible from clients.
+
+---
+
+## What we implemented
+
+### 1) `plans` — plan catalog + entitlements
+
+Represents subscription tiers and the entitlements that drive product behavior.
+
+**Core columns (examples, actual columns may vary):**
+
+* `id (uuid pk)`
+* `code (text unique)` — stable identifier like `free`, `starter`, `pro`, `enterprise`
+* `name (text)`
+* `included_seconds_per_month (int4)` — quota (monthly included usage time)
+* `max_session_seconds (int4)` — per-session continuous cap (optional but supported)
+* `max_simultaneous_languages (int4)`
+* `stt_tier (text)` / `tts_tier (text)` — defines allowed model tiers
+* `feature_flags (jsonb)` — optional feature gating
+* `created_at`, `updated_at`
+
+**Why:** this is the single truth source for tier constraints and entitlement enforcement.
+
+---
+
+### 2) `subscriptions` — church → plan mapping (billing truth)
+
+Represents the church’s current subscription state and billing provider identifiers.
+
+**Core columns:**
+
+* `id (uuid pk)`
+* `church_id (uuid fk → churches.id)`
+* `plan_id (uuid fk → plans.id)`
+* `status (text)` — e.g. `active`, `trialing`, `canceled`
+* `current_period_start (timestamptz)`
+* `current_period_end (timestamptz)`
+* `stripe_customer_id (text nullable)`
+* `stripe_subscription_id (text nullable)`
+* `stripe_price_id (text nullable)`
+* `created_at`, `updated_at`
+
+**Why:** all entitlement checks start with “what plan is this church on?”
+Stripe IDs exist but are not used yet (no Stripe logic in this PR).
+
+---
+
+### 3) `church_billing_settings` — per-church billing configuration
+
+Stores billing behavior / payg knobs per church.
+
+**Core columns (from schema):**
+
+* `church_id (uuid pk / fk → churches.id)`
+* `payg_enabled (bool)`
+* `payg_rate_cents_per_… (int4)`
+* `payg_hard_cap_seconds (int4)`
+* `allow_overage_while_… (bool)`
+* `created_at`, `updated_at`
+
+**Why:** separates subscription tier truth from billing policy knobs that may differ per tenant.
+
+---
+
+### 4) `plan_model_routing` — deterministic capability → provider/model routing
+
+Defines allowed routing per plan, per “capability”, used for low-level runtime decisions.
+
+**Core columns:**
+
+* `id (uuid pk)`
+* `plan_id (uuid fk → plans.id)`
+* `capability (text)` — e.g. `stt`, `tts`, `translate`, `chat`
+* `provider (text)` — e.g. `openai`, `google`, etc.
+* `model (text)` — concrete model name for that provider
+* `params (jsonb)` — any extra knobs for the route
+* `created_at`, `updated_at`
+
+**Why:** routing should not be scattered in code paths.
+This table is the truth so the app can choose provider/model based on plan in a consistent way.
+
+---
+
+## Security posture (critical)
+
+### Principle
+
+These four tables are **truth layer system tables**:
+
+* **client cannot read them**
+* **client cannot write them**
+* only backend/service can access them
+
+### 1) Enable RLS on all four tables
+
+Row Level Security was enabled on:
+
+* `plans`
+* `plan_model_routing`
+* `subscriptions`
+* `church_billing_settings`
+
+No policies were added in this PR (deny-by-default).
+
+### 2) Revoke privileges from client roles
+
+All privileges were revoked from:
+
+* `anon`
+* `authenticated`
+
+This ensures:
+
+* even if a permissive RLS policy is accidentally added later, **client roles still have no table privileges**
+* these tables remain server-only
+
+---
+
+## Validation performed (Supabase “quick checks”)
+
+### A) Table Editor checks
+
+Confirmed in Supabase Table Editor:
+
+* all four tables exist
+* RLS is enabled on all four tables
+
+### B) One-shot audit query (proof)
+
+Ran a one-shot query confirming:
+
+* RLS enabled
+* no policies
+* no grants for anon/authenticated
+
+Result:
+
+| schema_name | table_name              | rls_enabled | policy_count | anon_grants | auth_grants |
+| ----------- | ----------------------- | ----------- | ------------ | ----------- | ----------- |
+| public      | church_billing_settings | true        | 0            | 0           | 0           |
+| public      | plan_model_routing      | true        | 0            | 0           | 0           |
+| public      | plans                   | true        | 0            | 0           | 0           |
+| public      | subscriptions           | true        | 0            | 0           | 0           |
+
+This is the intended invariant:
+
+> “Deny-by-default truth tables, server-only.”
+
+### C) SQL Editor sanity queries (as service/admin via dashboard)
+
+Executed:
+
+```sql
+select * from public.plans;
+select * from public.plan_model_routing;
+```
+
+Both succeed (no permission errors), proving:
+
+* backend/service access is intact
+* tables are usable for seeding + routing logic
+
+---
+
+## Resulting system guarantees
+
+After this PR:
+
+* Subscription tiers and routing rules are stored in DB as **truth**
+* The “tier defines the app experience” foundation exists
+* No client can bypass entitlements by reading plan tables or editing subscription rows
+* Routing logic can be implemented server-side using these tables
+* Stripe integration and usage tracking can be layered in safely later
+
+---
+
+## Explicit non-goals (intentionally out of scope)
+
+This PR does **not** include:
+
+* Stripe checkout, customer creation, or subscription lifecycle syncing
+* usage tracking schema (`usage_events`, `usage_daily`)
+* usage metering or enforcement code
+* client-accessible policy design for these tables (they remain server-only)
+
+---
+
+## Next steps (after merge)
+
+1. **Seed tiers cleanly**
+
+   * insert canonical `plans`
+   * insert `plan_model_routing` rows per plan/capability
+
+2. Wire backend “create church + create profile” path to also create:
+
+   * default `subscriptions` row
+   * default `church_billing_settings` row
+     (single transaction, idempotent)
+
+3. Only after this is merged + seeded:
+
+   * implement Usage Truth Layer (`usage_events` + `usage_daily`)
+
+---
+### PR4 wrap-up (PROD): Entitlements + Model Routing truth tables
+
+**Goal of PR4:** put the *tier contract* and *model routing* in Postgres as the source of truth (no Stripe yet, no usage metering code yet).
+
+---
+
+## What we did in PROD (exactly)
+
+### 1) Created 4 “truth” tables (DB-only)
+
+We added the entitlements + routing backbone:
+
+* `public.plans`
+
+  * Defines the tier contract:
+
+    * `included_seconds_per_month` (your monthly hours/quota)
+    * `max_simultaneous_languages`
+    * `stt_tier`, `tts_tier`
+    * optional: `max_session_seconds`
+    * optional: `feature_flags`
+
+* `public.subscriptions`
+
+  * One row per church (`church_id UNIQUE`)
+  * Stores current entitlement state:
+
+    * `plan_id`, `status`, `current_period_start/end`
+    * Stripe linkage columns present (unused yet)
+
+* `public.church_billing_settings`
+
+  * PAYG controls and caps:
+
+    * `payg_enabled`
+    * `payg_rate_cents_per_hour`
+    * optional: `payg_hard_cap_seconds`
+    * optional: `allow_overage_while_live`
+
+* `public.plan_model_routing`
+
+  * Tier → capability → provider/model mapping:
+
+    * `capability` (e.g. `chat`, `tts`, later `translate`, etc.)
+    * `provider`, `model`, `params`
+  * Uniqueness enforced: `(plan_id, capability)` is unique
+
+We also added the key indexes (subscriptions by church/status; routing by plan).
+
+---
+
+### 2) Added `updated_at` trigger everywhere
+
+We created `public.set_updated_at()` and attached triggers to:
+
+* `plans`
+* `subscriptions`
+* `church_billing_settings`
+* `plan_model_routing`
+
+So `updated_at` is always correct without relying on app code.
+
+---
+
+### 3) Enabled RLS + locked these tables down
+
+We enabled RLS on all four tables and **revoked privileges from `anon` and `authenticated`** for them.
+
+**Result:** these tables are **backend/service-role only** for now, which is correct for “billing truth tables” until you intentionally expose read APIs.
+
+---
+
+### 4) Seeded initial tier + routing in PROD
+
+We inserted the initial plan:
+
+* `plans.code = 'starter'`
+
+And seeded model routing for that plan:
+
+* `starter → chat → openai / gpt-4o-mini`
+* `starter → tts → openai / tts-basic-1`
+
+You verified this with the join query and got:
+
+* `starter | chat | openai | gpt-4o-mini`
+* `starter | tts  | openai | tts-basic-1`
+
+✅ That confirms the routing table is correctly linked to the plan.
+
+---
+
+## What PR4 gives you now (in PROD)
+
+* A single source of truth for:
+
+  * plan limits (hours/month, max languages, tier knobs)
+  * model routing decisions per capability
+* A stable foundation to implement `getEntitlements(church_id)` next without redesign
+* Locked-down posture so the client can’t mutate billing truth
+
+---
+
+## What we did NOT do (intentionally)
+
+* No Stripe checkout/webhooks
+* No usage tables yet (`usage_events`, `usage_daily`)
+* No session/transcript tables
+* No client read policies for these truth tables (they’re backend-only right now)
+
+---
+
+If you want, I can draft the exact PR4 “Definition of Done” checklist text you can paste into GitHub (schema, triggers, RLS, seed verification queries).
+
+### PR5 — Usage Schema (Reference Summary)
+
+**Purpose**
+Create the **usage truth layer** in Postgres *before* any usage tracking code or Stripe logic exists. This guarantees correct metering, idempotency, and auditability.
+
+---
+
+## What PR5 adds
+
+### Tables
+
+1. **`usage_events`** (append-only truth log)
+
+   * One row per metered event
+   * Core columns:
+
+     * `church_id`
+     * `metric` (e.g. `transcription_seconds`, `translation_seconds`, `tts_seconds`)
+     * `quantity`
+     * `occurred_at`
+     * `idempotency_key` **UNIQUE** (prevents double counting)
+     * optional: `session_id`, `provider`, `model`, `metadata`
+   * Indexed for fast month-to-date queries
+
+2. **`usage_daily`** (aggregates)
+
+   * Primary key: `(church_id, date, metric)`
+   * Stores daily totals derived from events
+   * Used for dashboards, quota checks, and enforcement
+
+---
+
+## Security posture
+
+* **RLS enabled** on both tables
+* **All privileges revoked** from `anon` and `authenticated`
+* Tables are **service-role / backend-only**
+* No client reads or writes yet (intentional)
+
+---
+
+## Guarantees PR5 provides
+
+* **Idempotent metering** (safe against retries, reconnects, webhook duplicates)
+* **Full audit trail** for disputes and reconciliation
+* **Schema-first usage design** (no rewrites when Stripe or enforcement is added)
+* Clean separation:
+
+  * Postgres = usage truth
+  * Code = instrumentation (later)
+
+---
+
+## What PR5 does *not* do (by design)
+
+* ❌ No usage tracking code
+* ❌ No Redis counters
+* ❌ No Stripe integration
+* ❌ No entitlement enforcement yet
+
+---
+
+## Current system state after PR5
+
+* ✅ PR4: tiers + routing truth live
+* ✅ PR5: usage truth layer live (DEV + PROD)
+* ⏭️ Next: **PR6 — Entitlement enforcement in code**
+
+  * `getEntitlements(church_id)`
+  * `resolveModel(capability)`
+  * plan-based gating (usage = 0 initially)
+
+---
+
+**TL;DR:**
+PR5 makes usage **correct forever** before it’s even used.
+
+PR6: Entitlement Enforcement - Walkthrough
+Summary
+Implemented backend entitlement enforcement so every request can look up plan limits, billing settings, and routing configuration by church_id. All DEV steps complete.
+
+Files Created
+File	Purpose
+getEntitlements.js
+Fetches subscription+plan+billing+routing, 60s TTL cache
+resolveModel.js
+Resolves model by capability (no silent defaults)
+assertEntitled.js
+Enforcement helpers with custom error classes
+index.js
+Module re-exports
+requireEntitlements.js
+Middleware: requireEntitlements, requireActiveSubscription, requireAdmin
+routes/entitlements.js
+Debug endpoint /api/debug/entitlements
+entitlements.test.js
+12 unit tests
+Modified Files
+File	Changes
+server.js
+Added import + mount for entitlements debug route
+Key Features
+Status 'none' for missing subscription (not 'canceled') per feedback
+planId included in subscription object
+60-second TTL cache with 
+clearEntitlementsCache()
+ function
+Custom error classes with HTTP status codes (402 for past_due, 403 for others)
+Test Results (12/12 Pass)
+✓ resolveModel returns correct routing
+✓ resolveModel throws on missing capability
+✓ assertSubscriptionActive allows active
+✓ assertSubscriptionActive blocks canceled
+✓ assertSubscriptionActive blocks 'none' (missing subscription)
+✓ assertSubscriptionActive blocks past_due (HTTP 402)
+✓ assertLanguageLimit allows within limit
+✓ assertLanguageLimit blocks over limit
+✓ assertFeatureEnabled allows enabled feature
+✓ assertFeatureEnabled blocks disabled feature
+✓ assertRole allows admin
+✓ assertRole blocks member when admin required
+Usage Examples
+// Load entitlements + enforce active subscription
+import { requireEntitlements, requireActiveSubscription } from './middleware/requireEntitlements.js';
+app.post('/session/start', requireEntitlements, requireActiveSubscription, (req, res) => {
+    // req.auth = { user_id, church_id, role }
+    // req.entitlements = { subscription, limits, billing, routing }
+});
+// Resolve model for capability
+import { resolveModel } from './entitlements/index.js';
+const { provider, model } = resolveModel(req.entitlements, 'tts');
+PROD Next Steps
+✅ Add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY to production env
+Deploy code changes
+Verify with /api/debug/entitlements endpoint
+Wire enforcement into real routes (session/start, TTS, etc.)
+
+Comment
+Ctrl+Alt+M
+
+PR6: Entitlement Enforcement - Walkthrough
+Summary
+Implemented backend entitlement enforcement. DEV + PROD verified.
+
+Files Created
+File	Purpose
+getEntitlements.js
+Fetcher + 60s cache
+resolveModel.js
+Model resolver (no silent defaults)
+assertEntitled.js
+Enforcement helpers
+requireEntitlements.js
+Middleware trio
+routes/entitlements.js
+Debug endpoint
+prod-backfill.js
+DB invariant backfill
+test-entitlements-prod.js
+PROD verification script
+PROD Verification ✓
+{
+  "churchId": "29df4716-8e1f-4d09-917a-73444da9fbc7",
+  "planCode": "starter",
+  "status": "trialing",
+  "limits": {
+    "includedSecondsPerMonth": 36000,
+    "maxSimultaneousLanguages": 2,
+    "sttTier": "basic",
+    "ttsTier": "basic"
+  },
+  "routing": {
+    "chat": { "provider": "openai", "model": "gpt-4o-mini" },
+    "tts": { "provider": "openai", "model": "tts-basic-1" }
+  }
+}
+Next Steps
+ Wire requireEntitlements + requireActiveSubscription into real routes
+ Wire 
+resolveModel
+ into model selection paths
+
+PR 7 : Entitlements & Usage Tracking
+Summary
+Completed Phase 1: Wire Entitlements and PR7: Usage Tracking implementation.
+
+Phase 1: Wire Entitlements
+Changes Made
+Translation Workers Made Configurable (
+translationWorkers.js
+)
+
+PartialTranslationWorker
+ and 
+FinalTranslationWorker
+ now accept options.model in constructor
+translateFinal()
+ accepts per-call model override via options.model parameter
+Hardcoded gpt-4o-mini replaced with configurable default
+WS Handshake Loads Entitlements (
+server.js
+)
+
+Extracts 
+token
+ from URL params on WS connection
+Verifies token with Supabase, loads user profile
+Calls 
+getEntitlements(church_id)
+ and attaches to clientWs.entitlements
+SoloModeHandler Uses Resolved Model (
+soloModeHandler.js
+)
+
+Imports 
+resolveModel
+ from entitlements module
+Extracts entitlements from clientWs.entitlements
+Resolves 
+translate
+ model and passes to 
+translateFinal
+ calls
+PR7: Usage Tracking
+New Files Created
+File	Purpose
+20260128_record_usage_event.sql
+Postgres RPC for atomic usage recording
+backend/usage/recordUsage.js
+recordUsageEvent()
+ function
+backend/usage/getUsage.js
+getMonthToDateUsage()
+, 
+getTodayUsage()
+backend/usage/index.js
+Module exports
+backend/routes/usage.js
+Debug endpoints for testing
+Features
+Atomic recording: Single Postgres RPC handles event + daily aggregation
+Idempotency: idempotency_key UNIQUE constraint prevents duplicates
+Window-based keys: 
+generateIdempotencyKey()
+ creates deterministic keys per 30s window
+Endpoints
+POST /api/debug/usage - Record test usage event
+GET /api/debug/usage - View month-to-date and today's usage
+Verification
+ Migration applied to PROD: 
+20260128_record_usage_event.sql
+ Dev server running with no compilation errors
+ Test debug endpoint with real auth token
+
+PR7 & PR7.1: Usage Tracking - Implementation & Verification ✅
+Summary
+Successfully implemented, refined, and verified the complete usage tracking pipeline on both DEV and PROD environments. The system provides atomic, idempotent usage event recording with daily aggregation, secured by admin role enforcement in production.
+
+What Was Implemented
+1. Database Layer (Postgres RPC)
+File: 
+supabase/migrations/20260128_record_usage_event.sql
+
+Implemented the record_usage_event function which:
+
+Ensures Atomicity: Single transaction for event insert + daily aggregation update.
+Enforces Idempotency: Uses a UNIQUE constraint on idempotency_key to prevent double-counting.
+Returns Status: {inserted: boolean, event_id: uuid} to indicate if the event was new or a duplicate.
+2. Backend Usage Service
+Directory: backend/usage/
+
+recordUsage.js: Core service for calling the DB RPC.
+getUsage.js: Data retrieval for Month-to-Date (MTD) and Today's totals.
+index.js: Clean module interface.
+3. Debug API Endpoints
+File: backend/routes/usage.js
+
+POST /api/debug/usage: Secure endpoint for manual usage recording.
+Requires admin role in production.
+Supports client-provided idempotency_key for testing.
+GET /api/debug/usage: Returns usage summaries for the authenticated church.
+Verification Results
+1. DEV Environment (Verified ✅)
+POST: Recorded 30s transcription event.
+GET: Verified totals reflected the recorded events correctly.
+Idempotency: Verified duplicate keys were rejected (inserted: false).
+2. PROD Environment (Verified ✅)
+POST: Recorded 45s transcription event.
+GET: Verified MTD and daily totals updated correctly.
+Idempotency: Verified strict deduplication on production.
+Authorization: Confirmed non-admin users are blocked from recording usage.
+Critical Refinements (PR 7.1)
+1. Supabase Admin Lazy Initialization
+Problem: ES module hoisting caused supabaseAdmin to initialize before dotenv could load environment variables.
+
+Solution: Converted supabaseAdmin to a lazy-initialized Proxy. The client is now instantiated only when first used, ensuring process.env is fully populated.
+
+2. Admin Check Correction
+Problem: Endpoint was checking req.profile.role but the middleware attaches context to req.auth.
+
+Solution: Standardized all admin enforcement to use req.auth.role.
+
+Database Status
+DEV Database (pmxfuofokccifbiqxhpp)
+✅ record_usage_event RPC function applied.
+✅ Verification complete.
+PROD Database (fjkysulfacbgfmsbuyvv)
+✅ record_usage_event RPC function applied.
+✅ Verification complete.
+Next Steps
+Wire Usage Recording into Real Flows
+Transcription: Record transcription_seconds at the end of audio processing.
+TTS: Record tts_characters per generation.
+Implement TTS Tier Gating
+Enforce limits.ttsTier in the voice catalog to restrict access to premium voices (ElevenLabs, etc.) based on plan.
+
+Comment
+Ctrl+Alt+M
+
+Walkthrough
+less than a minute ago
+
+Review
+
+PR7.2 & PR7.3 Implementation Walkthrough
+Summary
+Implemented TTS tier gating and wired real usage events for metering.
+
+PR7.2 — TTS Tier Gating ✓
+Tier Mapping
+ttsTier	Allowed voice tiers
+starter	neural2, studio, standard
+pro
+chirp3_hd + all Starter tiers
+unlimited	gemini, elevenlabs (v3/turbo/flash) + all Pro tiers
+Files Changed
+assertEntitled.js
+ — 
+TtsTierNotAllowedError
+, 
+getAllowedTtsTiers()
+soloModeHandler.js
+ — Tier gating in 
+triggerTtsStreaming()
+host/adapter.js
+ — Same for host mode
+server.js
+ — Load entitlements for host connections
+
+PR7.3 — Usage Events ✓
+TTS Metering (tts_characters)
+File: 
+TtsStreamingOrchestrator.js
+Hook: After successful segment streaming
+Key: tts:${sessionId}:${segmentId}:${textHash}
+STT Metering (transcription_seconds)
+Files: 
+soloModeHandler.js
+, 
+host/adapter.js
+Hook: Session close (aggregate)
+Key: stt:${churchId}:${sessionId}:${sessionHash}
+Validation ✓
+✓ node --check soloModeHandler.js
+✓ node --check host/adapter.js  
+✓ node --check tts/TtsStreamingOrchestrator.js
+✓ node --check entitlements/assertEntitled.js
+✓ node --check server.js
+Next Steps
+Run integration test with real session
+Verify usage_daily table increments
+
+Listening Time Metering - Implementation Walkthrough
+Overview
+Implemented wall-clock listening time tracking for quota enforcement and billing.
+
+Files Created
+SQL Migration
+20260130_update_record_usage_event.sql
+ - Adds usage_monthly upsert for O(1) quota lookups
+Backend Services
+listeningSpans.js
+ - Span lifecycle: 
+startListening
+, 
+heartbeat
+, 
+stopListening
+getListeningQuota.js
+ - RPC wrapper for quota status
+Integration
+websocketHandler.js
+ - Added listening span tracking to listener connections with 30s heartbeat
+Test Results
+==================================================
+Listening Spans Integration Test
+==================================================
+✓ Test session ready
+✓ Cleaned up test data
+--- Test 1: Start Listening ---
+✓ Span created: 3702f6ef-17b8-417a-9568-2695d9cc438d
+✓ Idempotency check passed (detected already active)
+--- Test 2: Heartbeat ---
+✓ Heartbeat updated last_seen_at
+--- Test 3: Stop Listening ---
+✓ Span stopped: 2s
+  Event recorded: true
+✓ DB verified: ended_at=2026-01-30T21:15:39.535+00:00, reason=test_stop
+--- Test 4: Stop Nonexistent Span ---
+✓ Gracefully handled nonexistent span
+--- Test 5: Quota Status ---
+⚠ Quota RPC not available (pending DB deployment)
+==================================================
+✅ All tests passed!
+==================================================
+Pending
+Deploy get_listening_quota_status RPC function to Supabase (from implementation_plan.md)
+
+Comment
+Ctrl+Alt+M
+
+
+
+
+
+

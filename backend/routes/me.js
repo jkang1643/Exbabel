@@ -1,12 +1,12 @@
 /**
  * User Context Endpoint
  * 
- * Provides authenticated user's context (user_id, church_id, role).
- * Serves as a health check for the authentication flow.
+ * Provides authenticated user's context.
+ * Returns profile info if it exists, or indicates visitor status.
  */
 
 import express from "express";
-import { requireAuthContext } from "../middleware/requireAuthContext.js";
+import { requireAuth } from "../middleware/requireAuthContext.js";
 
 export const meRouter = express.Router();
 
@@ -14,11 +14,19 @@ export const meRouter = express.Router();
  * GET /api/me
  * 
  * Returns the authenticated user's context.
- * Requires valid JWT token in Authorization header.
- * 
- * Response: { user_id, church_id, role }
+ * For visitors (no profile): { user_id, email, profile: null, isVisitor: true }
+ * For members: { user_id, email, profile: { church_id, role }, isVisitor: false }
  */
-meRouter.get("/me", requireAuthContext, (req, res) => {
-    // req.auth is guaranteed to exist here (set by requireAuthContext middleware)
-    res.json(req.auth);
+meRouter.get("/me", requireAuth, (req, res) => {
+    const { user_id, email, profile } = req.auth;
+
+    res.json({
+        user_id,
+        email,
+        profile,
+        isVisitor: !profile,
+        // Legacy fields for backwards compatibility
+        church_id: profile?.church_id || null,
+        role: profile?.role || null,
+    });
 });
