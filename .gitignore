@@ -70,3 +70,9 @@ backend/*-service-account.json
 .gcp/*.json
 *.json:Zone.Identifier
 
+
+# Database Backups
+db/backups/data_*.sql
+db/backups/full_backup_*.sql
+# Allow schema.sql to be committed
+!db/backups/schema.sql

@@ -233,6 +233,100 @@ app.use('/api', meRouter);
 
 ---
 
+## Part 7: Listening Time Metering (PR7.4)
+
+**Context:** To enable quota enforcement and billing for listener usage, we implemented wall-clock listening time tracking with accurate span management.
+
+### 1. Enhanced Usage Recording RPC
+
+**Migration:** `supabase/migrations/20260130_update_record_usage_event.sql`
+
+- **Addition**: Upserts into `usage_monthly` table alongside `usage_daily`
+- **Benefit**: O(1) quota remaining lookups without scanning `usage_events`
+
+### 2. Listening Spans Service
+
+**Module:** `backend/usage/listeningSpans.js`
+
+**Functions:**
+- `startListening(sessionId, userId, churchId)` - Creates span row, idempotent (unique constraint)
+- `heartbeat(sessionId, userId)` - Updates `last_seen_at` timestamp (30s interval)
+- `stopListening(sessionId, userId, reason)` - Computes duration, records usage event
+- `stopAllListeningForSession(sessionId)` - Bulk cleanup when session ends
+
+**Duration Calculation:**
+```javascript
+// ended_at_effective = min(now, last_seen_at + 45s)
+// Prevents "left tab open all day" from counting toward usage
+const maxEndTime = new Date(lastSeen.getTime() + 45000);
+const endedAtEffective = now < maxEndTime ? now : maxEndTime;
+```
+
+### 3. Quota Status Wrapper
+
+**Module:** `backend/usage/getListeningQuota.js`
+
+- `getListeningQuotaStatus(churchId)` - RPC wrapper for instant quota remaining
+- Includes month-to-date usage AND active listening spans (in-flight)
+
+### 4. WebSocket Integration
+
+**File:** `backend/websocketHandler.js`
+
+**Changes:**
+- Listener connection starts a listening span automatically
+- 30-second heartbeat interval keeps span active while connected
+- Disconnect triggers `stopListening` with reason `'ws_disconnect'`
+- UUID generated per listener connection for `listening_spans.user_id`
+
+### 5. Integration Test
+
+**File:** `backend/tests/integration/test-listening-spans.js`
+
+**Coverage:**
+- ✅ Start listening (span creation, idempotency)
+- ✅ Heartbeat (timestamp updates)
+- ✅ Stop listening (duration calculation, event recording)
+- ✅ Nonexistent span handling (graceful no-op)
+- ✅ Quota status (Verified on PROD)
+
+---
+
+## Part 8: Session-Based Metering (Host Time) (PR7.5)
+
+**Context:** While listening time tracks individual listener consumption, we needed a way to meter the **host's active streaming time** for organization-level quotas (e.g., 60 minutes of translation per month).
+
+### 1. Session Spans Service
+
+**Module:** `backend/usage/sessionSpans.js`
+
+**Logic:** Similar to listening spans, but tracked at the session level rather than per-user.
+- **Trigger**: Starts on the **first audio packet** (precise metering).
+- **Heartbeat**: Updates `last_seen_at` every 30s during active streaming.
+- **Stop**: Ends when host stops recording (`audio_end`) or session ends.
+
+### 2. Precise Triggering (adapter.js)
+
+**File:** `backend/host/adapter.js`
+
+We moved the metering trigger from the session `init` to the first `audio` message. This ensures churches are only billed for seconds they are **actually recording audio**, not just for holding the session open.
+
+### 3. Session Quota RPC
+
+**Migration:** `supabase/migrations/20260130_get_session_quota_status.sql`
+
+Implemented `get_session_quota_status(church_id)` which provides **O(1) live counting**:
+- **Historical**: Sums `usage_monthly` (completed sessions).
+- **Live**: Sums the duration of any **currently active** session spans.
+- **Total**: Provides an instant "Running Counter" for the UI.
+
+### 4. Verification (PROD)
+- ✅ **Aggregation**: Verified that multiple 10-15s segments correctly aggregate into the monthly total.
+- ✅ **Live Counter**: Verified that the RPC correctly includes "in-flight" seconds before the span is finalized.
+- ✅ **Foreign Key Safety**: Verified that spans correctly link to the `sessions` table ID.
+
+---
+
 ### 4. Environment Configuration
 
 **File:** `backend/.env`
@@ -393,15 +487,23 @@ We use the Supabase CLI for version-controlled migrations:
 - `backend/entitlements/getEntitlements.js` - Fetcher & Cache
 - `backend/entitlements/resolveModel.js` - Model resolver
 - `backend/entitlements/assertEntitled.js` - Enforcement helpers
-- `backend/usage/index.js` - Usage service entry [NEW]
-- `backend/usage/recordUsage.js` - Idempotent recorder [NEW]
-- `backend/usage/getUsage.js` - Usage reporting [NEW]
+- `backend/usage/index.js` - Usage service entry
+- `backend/usage/recordUsage.js` - Idempotent recorder
+- `backend/usage/getUsage.js` - Usage reporting
+- `backend/usage/listeningSpans.js` - Listener span tracking
+- `backend/usage/getListeningQuota.js` - Quota status RPC wrapper
+- `backend/usage/sessionSpans.js` - Host session span tracking [NEW]
+- `backend/usage/getSessionQuota.js` - Session quota status wrapper [NEW]
 - `backend/routes/me.js` - User context endpoint
 - `backend/routes/entitlements.js` - Entitlements debug endpoint
-- `backend/routes/usage.js` - Usage debug endpoint [NEW]
+- `backend/routes/usage.js` - Usage debug endpoint
 - `backend/tests/manual/entitlements.test.js` - Unit tests (12 pass)
+- `backend/tests/integration/test-listening-spans.js` - Listening span tests
+- `backend/tests/manual-test-session-quota.js` - End-to-end session quota verification [NEW]
 - `backend/AUTH_TESTING.md` - Testing guide
-- `supabase/migrations/20260128_record_usage_event.sql` - Usage RPC [NEW]
+- `supabase/migrations/20260128_record_usage_event.sql` - Usage RPC
+- `supabase/migrations/20260130_update_record_usage_event.sql` - Adds usage_monthly upsert
+- `supabase/migrations/20260130_get_session_quota_status.sql` - Session quota live counter RPC [NEW]
 
 ### Modified Files
 - `backend/.env` - Added `SUPABASE_SERVICE_ROLE_KEY`
@@ -417,9 +519,13 @@ backend/
 │   ├── resolveModel.js
 │   ├── assertEntitled.js
 │   └── index.js
-├── usage/                    [NEW]
+├── usage/
 │   ├── recordUsage.js
 │   ├── getUsage.js
+│   ├── listeningSpans.js
+│   ├── getListeningQuota.js
+│   ├── sessionSpans.js            [NEW]
+│   ├── getSessionQuota.js         [NEW]
 │   └── index.js
 ├── middleware/
 │   ├── requireAuthContext.js
@@ -591,4 +697,12 @@ backend/
     - **Startup Cleanup**: `cleanupAbandonedSessions` runs on server start to mark zombie sessions as ended.
 - ✅ **Frontend**: Added distinct "End Session" button with confirmation dialog in `HostPage.jsx`.
 - ✅ **Host Adapter**: Wired `end_session` and grace timer logic into the active `adapter.js`.
+
+### 2026-02-02 - PR 7.5 - Session-Based Metering (Host Time)
+- ✅ **Host Spans**: Implemented `sessionSpans.js` to track active streaming duration.
+- ✅ **Precise Metering Trigger**: Refactored `adapter.js` to start metering on **first audio**, not session start.
+- ✅ **Live Counter RPC**: Deployed `get_session_quota_status` to PROD for O(1) running total calculation.
+- ✅ **Manual Verification**: Created `manual-test-session-quota.js` and verified full flow (start → heartbeat → stop → aggregate) on PROD.
+- ✅ **Final Result**: February MTD and Live Counter verified working with plan-aware subtraction.
+
 

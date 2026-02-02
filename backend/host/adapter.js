@@ -55,6 +55,7 @@ import { onCommittedSegment, cleanupSession } from '../tts/TtsStreamingOrchestra
 import { resolveVoice } from '../tts/voiceResolver.js';
 import { getAllowedTtsTiers } from '../entitlements/index.js';
 import { recordUsageEvent } from '../usage/recordUsage.js';
+import { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from '../usage/sessionSpans.js';
 import crypto from 'crypto';
 
 /**
@@ -136,6 +137,11 @@ export async function handleHostConnection(clientWs, sessionId) {
   const sessionStartTime = Date.now();
   let currentTargetLang = 'es'; // Default to Spanish (consistent with solo mode)
   let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
+
+  // SESSION SPAN TRACKING: Heartbeat interval for metering
+  let sessionSpanHeartbeatInterval = null;
+  let sessionSpanStarted = false; // Track if span has been started for this streaming session
+  const SESSION_SPAN_HEARTBEAT_MS = 30000; // 30 seconds
 
   // PHASE 8: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (same as solo mode)
@@ -266,6 +272,9 @@ export async function handleHostConnection(clientWs, sessionId) {
           }
 
           console.log(`[HostMode] Session ${currentSessionId} initialized with source language: ${currentSourceLang}`);
+
+          // NOTE: Session span metering starts on FIRST AUDIO PACKET, not here
+          // This ensures we only bill for active streaming time, not session duration
 
           // Initialize Google Speech stream
           if (!speechStream) {
@@ -3927,6 +3936,39 @@ export async function handleHostConnection(clientWs, sessionId) {
         case 'audio':
           // Process audio through Google Speech stream
           if (speechStream) {
+            // START SESSION SPAN on first audio (active streaming time only)
+            if (!sessionSpanStarted) {
+              const meteringChurchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
+              if (meteringChurchId) {
+                try {
+                  const spanResult = await startSessionSpan({
+                    sessionId: currentSessionId,
+                    churchId: meteringChurchId,
+                    metadata: { sourceLang: currentSourceLang }
+                  });
+                  sessionSpanStarted = true;
+                  if (spanResult.alreadyActive) {
+                    console.log(`[HostMode] 🎙️ Session span already active (resuming)`);
+                  } else {
+                    console.log(`[HostMode] 🎙️ Started session span on first audio (church: ${meteringChurchId})`);
+                  }
+
+                  // Start heartbeat interval
+                  if (!sessionSpanHeartbeatInterval) {
+                    sessionSpanHeartbeatInterval = setInterval(async () => {
+                      try {
+                        await heartbeatSessionSpan({ sessionId: currentSessionId });
+                      } catch (err) {
+                        // Silent heartbeat failures
+                      }
+                    }, SESSION_SPAN_HEARTBEAT_MS);
+                  }
+                } catch (spanErr) {
+                  console.warn(`[HostMode] ⚠️ Failed to start session span:`, spanErr.message);
+                }
+              }
+            }
+
             // Measure RTT if client sent timestamp
             if (message.clientTimestamp) {
               const rtt = measureRTT(message.clientTimestamp);
@@ -3952,7 +3994,24 @@ export async function handleHostConnection(clientWs, sessionId) {
           break;
 
         case 'audio_end':
-          console.log('[HostMode] Audio stream ended');
+          console.log('[HostMode] 🛑 Audio stream ended');
+
+          // STOP SESSION SPAN - user stopped recording
+          if (sessionSpanStarted) {
+            if (sessionSpanHeartbeatInterval) {
+              clearInterval(sessionSpanHeartbeatInterval);
+              sessionSpanHeartbeatInterval = null;
+            }
+            stopSessionSpan({
+              sessionId: currentSessionId,
+              reason: 'audio_end'
+            }).then(result => {
+              console.log(`[HostMode] ✓ Session span stopped (audio_end): ${result.durationSeconds}s`);
+            }).catch(err => {
+              console.warn(`[HostMode] ⚠️ Failed to stop session span:`, err.message);
+            });
+            sessionSpanStarted = false; // Reset so next recording starts a new span
+          }
 
           // CRITICAL: If there's a forced final buffer waiting for recovery, commit it immediately
           // The audio buffer will be empty, so recovery won't work anyway
@@ -3999,6 +4058,21 @@ export async function handleHostConnection(clientWs, sessionId) {
 
           // End session immediately with explicit reason
           await sessionStore.endSession(currentSessionId, 'host_clicked_end');
+
+          // STOP SESSION SPAN for billing
+          if (sessionSpanHeartbeatInterval) {
+            clearInterval(sessionSpanHeartbeatInterval);
+            sessionSpanHeartbeatInterval = null;
+          }
+          try {
+            const spanResult = await stopSessionSpan({
+              sessionId: currentSessionId,
+              reason: 'host_clicked_end'
+            });
+            console.log(`[HostMode] ✓ Session span stopped: ${spanResult.durationSeconds}s`);
+          } catch (spanErr) {
+            console.warn(`[HostMode] ⚠️ Failed to stop session span:`, spanErr.message);
+          }
 
           // Close the WebSocket
           if (clientWs.readyState === WebSocket.OPEN) {
@@ -4070,6 +4144,20 @@ export async function handleHostConnection(clientWs, sessionId) {
 
     // Start grace timer - session ends after 30s if host doesn't reconnect
     sessionStore.scheduleSessionEnd(currentSessionId);
+
+    // STOP SESSION SPAN for billing (on disconnect)
+    if (sessionSpanHeartbeatInterval) {
+      clearInterval(sessionSpanHeartbeatInterval);
+      sessionSpanHeartbeatInterval = null;
+    }
+    stopSessionSpan({
+      sessionId: currentSessionId,
+      reason: 'host_disconnect'
+    }).then(result => {
+      console.log(`[HostMode] ✓ Session span stopped on disconnect: ${result.durationSeconds}s`);
+    }).catch(err => {
+      console.warn(`[HostMode] ⚠️ Failed to stop session span on disconnect:`, err.message);
+    });
 
     // AGGREGATE STT USAGE METERING: Record total transcription usage at session end
     if (totalTranscribedCharacters > 0 && clientWs.churchId) {

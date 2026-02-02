@@ -7,6 +7,7 @@ import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
 import { normalizePunctuation } from './transcriptionCleanup.js';
 import { getEntitlements } from './entitlements/index.js';
+import { startListening, heartbeat, stopListening } from './usage/index.js';
 
 /**
  * Handle host connection
@@ -378,6 +379,9 @@ export async function handleHostConnection(clientWs, sessionId) {
 const TTS_PLAYING_LEASE_SECONDS = 300; // 5 minutes
 const TTS_PAUSED_LEASE_SECONDS = 60; // 1 minute
 
+// Listening Span Tracking
+const LISTENING_HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds
+
 /**
  * Handle listener connection
  */
@@ -394,8 +398,11 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
     return;
   }
 
-  // Generate socket ID
+  // Generate socket ID for session store
   const socketId = `listener_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+  // Generate UUID for listening span tracking (listening_spans.user_id must be UUID)
+  const listenerSpanUserId = crypto.randomUUID();
 
   try {
     // Add listener to session
@@ -447,6 +454,9 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             message: `Connected to session ${session.sessionCode}`
           }));
         }
+
+        // Start listening span for metering (async, non-blocking)
+        startListeningSpan(session.sessionId, socketId, churchId);
       })
       .catch(err => {
         console.error(`[Listener] ❌ Failed to fetch entitlements for churchId=${churchId}:`, err.message);
@@ -463,7 +473,25 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             message: `Connected to session ${session.sessionCode}`
           }));
         }
+        // Start listening span even without entitlements (we still have churchId)
+        startListeningSpan(session.sessionId, listenerSpanUserId, churchId);
       });
+
+    // Helper function to start listening span (after churchId is confirmed)
+    const startListeningSpan = async (dbSessionId, listenerId, listenerChurchId) => {
+      try {
+        await startListening({
+          sessionId: dbSessionId,
+          userId: listenerId, // Using socketId as pseudo-userId until listener auth is added
+          churchId: listenerChurchId
+        });
+        clientWs.listeningSpanActive = true;
+        console.log(`[Listener] ✓ Started listening span for ${userName} (${listenerId})`);
+      } catch (err) {
+        console.error(`[Listener] ⚠ Failed to start listening span:`, err.message);
+        // Non-fatal - continue without metering
+      }
+    };
 
     // Send session stats periodically
     const statsInterval = setInterval(() => {
@@ -476,11 +504,40 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       }
     }, 10000); // Every 10 seconds
 
+    // Heartbeat interval for listening span (30s)
+    const heartbeatInterval = setInterval(async () => {
+      if (clientWs.readyState === WebSocket.OPEN && clientWs.listeningSpanActive) {
+        try {
+          await heartbeat({
+            sessionId: session.sessionId,
+            userId: listenerSpanUserId
+          });
+        } catch (err) {
+          // Silent heartbeat failures - span will still be closed on disconnect
+        }
+      }
+    }, LISTENING_HEARTBEAT_INTERVAL_MS);
+
     // Handle listener disconnect
-    clientWs.on('close', () => {
+    clientWs.on('close', async () => {
       console.log(`[Listener] ${userName} disconnected`);
       clearInterval(statsInterval);
+      clearInterval(heartbeatInterval);
       sessionStore.removeListener(sessionId, socketId);
+
+      // Stop listening span (records usage event)
+      if (clientWs.listeningSpanActive) {
+        try {
+          const result = await stopListening({
+            sessionId: session.sessionId,
+            userId: listenerSpanUserId,
+            reason: 'ws_disconnect'
+          });
+          console.log(`[Listener] ✓ Stopped listening span: ${result.durationSeconds}s`);
+        } catch (err) {
+          console.error(`[Listener] ⚠ Failed to stop listening span:`, err.message);
+        }
+      }
 
       // Notify host about listener leaving
       const updatedSession = sessionStore.getSession(sessionId);
