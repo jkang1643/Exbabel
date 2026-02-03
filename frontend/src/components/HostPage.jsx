@@ -15,6 +15,8 @@ import { SentenceSegmenter } from '@jkang1643/caption-engine';
 import { TRANSCRIPTION_LANGUAGES } from '../config/languages.js';
 import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection';
 import { useAuth } from '@/contexts/AuthContext';
+import { useQuotaWarning } from '../hooks/useQuotaWarning';
+import { UsageLimitModal, QuotaWarningToast } from './ui/UsageLimitModal';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -67,6 +69,9 @@ const fp = (s) => {
 export function HostPage({ onBackToHome }) {
   // Auth context for token
   const { getAccessToken, profile } = useAuth();
+
+  // Quota warning state
+  const quotaWarning = useQuotaWarning();
 
   // Track seen raw messages for invariant checking
   const seenRawInFpsRef = useRef(new Set());
@@ -1021,6 +1026,12 @@ export function HostPage({ onBackToHome }) {
             console.error('[Host] Error:', message.message);
             setError(message.message);
             break;
+
+          case 'quota_warning':
+          case 'quota_exceeded':
+            console.log(`[Host] Quota event: ${message.type}`, message);
+            quotaWarning.handleMessage(message);
+            break;
         }
       } catch (err) {
         console.error('[Host] Failed to parse message:', err);
@@ -1722,6 +1733,24 @@ export function HostPage({ onBackToHome }) {
           </div>
         )}
       </div>
+
+      {/* Quota Warning Toast */}
+      {quotaWarning.showToast && (
+        <QuotaWarningToast
+          quotaEvent={quotaWarning.quotaEvent}
+          onDismiss={quotaWarning.dismiss}
+          onShowModal={quotaWarning.openModal}
+        />
+      )}
+
+      {/* Quota Limit Modal */}
+      {quotaWarning.showModal && (
+        <UsageLimitModal
+          quotaEvent={quotaWarning.quotaEvent}
+          onDismiss={quotaWarning.dismiss}
+          onAction={quotaWarning.handleAction}
+        />
+      )}
     </div>
   );
 }
