@@ -4,6 +4,9 @@
  * Checks usage limits and determines if sessions should be locked or warned.
  * Supports both solo and host modes with separate quotas.
  * 
+ * TESTING: Set DEBUG_QUOTA_SECONDS=60 to override all quotas to 60 seconds
+ *          for fast testing of warning and exceeded states.
+ * 
  * @module usage/quotaEnforcement
  */
 
@@ -12,6 +15,15 @@ import { supabaseAdmin } from "../supabaseAdmin.js";
 // Thresholds
 const WARNING_THRESHOLD = 0.80;  // 80% - show warning
 const EXCEEDED_THRESHOLD = 1.00; // 100% - lock session
+
+// Debug override for testing (e.g., DEBUG_QUOTA_SECONDS=60 = 1 minute quota)
+const DEBUG_QUOTA_SECONDS = process.env.DEBUG_QUOTA_SECONDS
+    ? parseInt(process.env.DEBUG_QUOTA_SECONDS, 10)
+    : null;
+
+if (DEBUG_QUOTA_SECONDS) {
+    console.log(`[QuotaEnforcement] ⚠️ DEBUG MODE: All quotas overridden to ${DEBUG_QUOTA_SECONDS} seconds`);
+}
 
 /**
  * Get detailed quota status with mode-specific breakdowns.
@@ -50,35 +62,47 @@ export async function getQuotaStatus(churchId) {
             };
         }
 
-        // Calculate percentages
-        const combinedPercent = result.included_seconds_per_month > 0
-            ? (result.used_seconds_mtd + result.active_seconds_now) / result.included_seconds_per_month
+        // DEBUG OVERRIDE: Replace real quotas with test value
+        let includedCombined = result.included_seconds_per_month;
+        let includedSolo = result.included_solo_seconds;
+        let includedHost = result.included_host_seconds;
+
+        if (DEBUG_QUOTA_SECONDS) {
+            includedCombined = DEBUG_QUOTA_SECONDS;
+            includedSolo = DEBUG_QUOTA_SECONDS;
+            includedHost = DEBUG_QUOTA_SECONDS;
+            console.log(`[QuotaEnforcement] DEBUG: Overriding quotas to ${DEBUG_QUOTA_SECONDS}s (actual used: solo=${result.used_solo_seconds_mtd}s, host=${result.used_host_seconds_mtd}s)`);
+        }
+
+        // Calculate percentages using (potentially overridden) included values
+        const combinedPercent = includedCombined > 0
+            ? (result.used_seconds_mtd + result.active_seconds_now) / includedCombined
             : 0;
-        const soloPercent = result.included_solo_seconds > 0
-            ? result.used_solo_seconds_mtd / result.included_solo_seconds
+        const soloPercent = includedSolo > 0
+            ? result.used_solo_seconds_mtd / includedSolo
             : 0;
-        const hostPercent = result.included_host_seconds > 0
-            ? result.used_host_seconds_mtd / result.included_host_seconds
+        const hostPercent = includedHost > 0
+            ? result.used_host_seconds_mtd / includedHost
             : 0;
 
         const status = {
             hasQuota: true,
             combined: {
-                included: result.included_seconds_per_month,
+                included: includedCombined,
                 used: Number(result.used_seconds_mtd),
-                remaining: Number(result.remaining_seconds),
+                remaining: Math.max(0, includedCombined - result.used_seconds_mtd - result.active_seconds_now),
                 percentUsed: combinedPercent
             },
             solo: {
-                included: result.included_solo_seconds,
+                included: includedSolo,
                 used: Number(result.used_solo_seconds_mtd),
-                remaining: Number(result.remaining_solo_seconds),
+                remaining: Math.max(0, includedSolo - result.used_solo_seconds_mtd),
                 percentUsed: soloPercent
             },
             host: {
-                included: result.included_host_seconds,
+                included: includedHost,
                 used: Number(result.used_host_seconds_mtd),
-                remaining: Number(result.remaining_host_seconds),
+                remaining: Math.max(0, includedHost - result.used_host_seconds_mtd),
                 percentUsed: hostPercent
             },
             activeSeconds: result.active_seconds_now,
