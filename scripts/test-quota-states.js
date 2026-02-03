@@ -6,26 +6,37 @@
  * different quota states for testing the warning and exceeded UI.
  * 
  * Usage:
- *   node scripts/test-quota-states.js [command] [church-id]
- * 
- * Commands:
- *   reset     - Clear all test usage for this month
- *   warning   - Set usage to 85% (trigger warning)
- *   exceeded  - Set usage to 105% (trigger exceeded)
- *   status    - Show current quota status
+ *   npm run test:quota:status    - Show current quota status
+ *   npm run test:quota:warning   - Set usage to 85% (trigger warning)
+ *   npm run test:quota:exceeded  - Set usage to 105% (trigger exceeded)
+ *   npm run test:quota:reset     - Clear all test usage for this month
  * 
  * Environment:
- *   Requires .env with SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
- * 
- * Example:
- *   node scripts/test-quota-states.js status
- *   node scripts/test-quota-states.js warning
- *   node scripts/test-quota-states.js exceeded
- *   node scripts/test-quota-states.js reset
+ *   Uses backend/.env for SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY
  */
 
-import dotenv from 'dotenv';
-dotenv.config({ path: './backend/.env' });
+// Load dotenv from backend folder where it's installed
+import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Manually load .env from backend folder
+import { readFileSync } from 'fs';
+const envPath = join(__dirname, '../backend/.env');
+try {
+    const envContent = readFileSync(envPath, 'utf8');
+    envContent.split('\n').forEach(line => {
+        const [key, ...valueParts] = line.split('=');
+        if (key && valueParts.length) {
+            process.env[key.trim()] = valueParts.join('=').trim();
+        }
+    });
+} catch (e) {
+    console.error('Could not load backend/.env:', e.message);
+}
 
 import { supabaseAdmin } from '../backend/supabaseAdmin.js';
 import { getQuotaStatus, checkQuotaLimit } from '../backend/usage/quotaEnforcement.js';

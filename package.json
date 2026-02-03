@@ -6,12 +6,18 @@
   "main": "backend/server.js",
   "scripts": {
     "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:dev\"",
+    "dev:debug-quota": "DEBUG_QUOTA_SECONDS=60 concurrently \"npm run backend:dev\" \"npm run frontend:dev\"",
     "backend:dev": "cd backend && npm run dev",
     "frontend:dev": "node scripts/waitForBackend.js && cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
     "start": "cd backend && npm start",
     "lint": "eslint .",
     "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "test:quota": "node scripts/test-quota-states.js",
+    "test:quota:status": "node scripts/test-quota-states.js status",
+    "test:quota:warning": "node scripts/test-quota-states.js warning",
+    "test:quota:exceeded": "node scripts/test-quota-states.js exceeded",
+    "test:quota:reset": "node scripts/test-quota-states.js reset",
     "tts:snapshot": "node scripts/fetchGoogleTtsVoicesSnapshot.js",
     "tts:diff": "node scripts/diffTtsLanguages.js",
     "tts:update": "npm run tts:snapshot && npm run tts:diff"
