@@ -110,10 +110,10 @@ export async function stopSessionSpan({ sessionId, reason = 'unknown' }) {
     }
 
     try {
-        // Find the active span
+        // Find the active span (include metadata for mode detection)
         const { data: span, error: findError } = await supabaseAdmin
             .from('session_spans')
-            .select('id, church_id, started_at, last_seen_at')
+            .select('id, church_id, started_at, last_seen_at, metadata')
             .eq('session_id', sessionId)
             .is('ended_at', null)
             .single();
@@ -125,6 +125,17 @@ export async function stopSessionSpan({ sessionId, reason = 'unknown' }) {
             }
             throw findError;
         }
+
+        // Determine metric based on mode in metadata
+        // Mode should be 'solo' or 'host', defaults to 'session_seconds' for backwards compatibility
+        const mode = span.metadata?.mode;
+        let usageMetric = 'session_seconds'; // backwards compatibility
+        if (mode === 'solo') {
+            usageMetric = 'solo_seconds';
+        } else if (mode === 'host') {
+            usageMetric = 'host_seconds';
+        }
+        console.log(`[SessionSpans] 📊 Mode: ${mode || 'unknown'} → Metric: ${usageMetric}`);
 
         // Compute ended_at_effective: least(now, last_seen_at + 45s)
         const now = new Date();
@@ -159,14 +170,15 @@ export async function stopSessionSpan({ sessionId, reason = 'unknown' }) {
             try {
                 const result = await recordUsageEvent({
                     church_id: span.church_id,
-                    metric: 'session_seconds',
+                    metric: usageMetric,
                     quantity: durationSeconds,
                     occurred_at: endedAtEffective,
                     idempotency_key: idempotencyKey,
                     metadata: {
                         session_id: sessionId,
                         reason: reason,
-                        span_id: span.id
+                        span_id: span.id,
+                        mode: mode || 'unknown'
                     }
                 });
                 eventRecorded = result.inserted;
@@ -175,8 +187,10 @@ export async function stopSessionSpan({ sessionId, reason = 'unknown' }) {
                 if (eventRecorded) {
                     console.log(`\n========================================`);
                     console.log(`📊 SESSION METERING RECORDED`);
+                    console.log(`   Metric: ${usageMetric}`);
                     console.log(`   Duration: ${durationSeconds} seconds`);
                     console.log(`   Church: ${span.church_id}`);
+                    console.log(`   Mode: ${mode || 'unknown'}`);
                     console.log(`   Reason: ${reason}`);
                     console.log(`   Key: ${idempotencyKey}`);
                     console.log(`========================================\n`);

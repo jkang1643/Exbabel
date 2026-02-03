@@ -134,6 +134,10 @@ export async function getEntitlements(churchId) {
     // Handle no subscription: return basic entitlements (starter tier fallback)
     // NOTE: We use 'starter' fallback so anonymous/unsubscribed users get basic voice access
     if (subError || !subscriptionData) {
+        console.warn(`[Entitlements] ⚠️ Lookup failed for church="${churchId}"`);
+        if (subError) console.warn(`[Entitlements]   DB Error:`, subError);
+        if (!subscriptionData) console.warn(`[Entitlements]   No subscription row found`);
+
         console.warn(`[Entitlements] No subscription found for church=${churchId}, using starter fallback`);
         const fallbackEntitlements = {
             churchId,

@@ -890,6 +890,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         // TRACE: Log WebSocket message received
         traceUI('WS_IN', message);
 
+        // LATENCY MEASUREMENT: Always log if message seems delayed
+        const msgTimestamp = message.timestamp;
+        if (msgTimestamp && message.type === 'translation') {
+          const latencyMs = Date.now() - msgTimestamp;
+          if (latencyMs > 100) {
+            console.log(`[LISTENER_LATENCY] seqId=${message.seqId} latency=${latencyMs}ms isPartial=${message.isPartial}`);
+          }
+        }
+
         // RAW_IN logging: canonical ingestion truth for ghost bug debugging
         if (DEBUG) console.log('[RAW_IN]', {
           page: 'LISTENER',
@@ -984,6 +993,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             break;
 
           case 'translation':
+            // UNCONDITIONAL DEBUG: Count all messages received
+            console.log(`[MSG_${message.isPartial ? 'PARTIAL' : 'FINAL'}] seqId=${message.seqId} hasTranslation=${message.hasTranslation} targetLang=${message.targetLang}`);
             if (DEBUG) console.log('[LISTENER_CASE_TRANSLATION]', { type: message.type, isPartial: message.isPartial });
             // ✨ REAL-TIME STREAMING: Sentence segmented, immediate display
             if (message.isPartial) {

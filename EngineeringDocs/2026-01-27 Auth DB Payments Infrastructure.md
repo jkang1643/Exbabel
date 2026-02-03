@@ -327,6 +327,95 @@ Implemented `get_session_quota_status(church_id)` which provides **O(1) live cou
 
 ---
 
+## Part 9: Usage Limits & Quota Enforcement (PR7.6)
+
+**Context:** To enable plan-based restrictions and provide warnings before users exhaust their monthly quota, we implemented a complete quota enforcement system with separate tracking for solo and host modes.
+
+### 1. Mode-Specific Quotas (Database)
+
+**Migration:** `supabase/migrations/20260203_add_solo_host_quotas.sql`
+
+Added separate quota columns to the `plans` table:
+- `included_solo_seconds_per_month` - Quota for solo mode usage
+- `included_host_seconds_per_month` - Quota for host mode usage
+
+This enables different quotas per mode (e.g., Pro: 3hr solo + 3hr host vs. combined 6hr).
+
+### 2. Updated Quota RPC
+
+**Migration:** `supabase/migrations/20260203_update_quota_rpc_with_modes.sql`
+
+Updated `get_session_quota_status(church_id)` to return mode-specific breakdown:
+```javascript
+{
+  // Combined (backwards compatible)
+  included_seconds_per_month,
+  used_seconds_mtd,
+  remaining_seconds,
+  // Solo breakdown
+  included_solo_seconds, used_solo_seconds_mtd, remaining_solo_seconds,
+  // Host breakdown
+  included_host_seconds, used_host_seconds_mtd, remaining_host_seconds
+}
+```
+
+### 3. Quota Enforcement Module
+
+**Module:** `backend/usage/quotaEnforcement.js`
+
+**Functions:**
+- `getQuotaStatus(churchId)` - Returns comprehensive quota status with mode-specific and combined breakdowns
+- `checkQuotaLimit(churchId, mode)` - Returns action: `allow`, `warn` (80%), or `lock` (100%)
+- `createQuotaEvent(checkResult)` - Generates WebSocket payload for frontend
+
+**Warning Threshold Logic:**
+```javascript
+const WARNING_THRESHOLD = 0.80;  // 80% = show warning
+const EXCEEDED_THRESHOLD = 1.0; // 100% = lock session
+```
+
+### 4. Backend Integration (Solo & Host)
+
+**Files Modified:**
+- `backend/soloModeHandler.js` - Added quota check on heartbeat interval
+- `backend/host/adapter.js` - Added quota check on heartbeat interval
+
+**Behavior:**
+- **Every 30s heartbeat**: Calls `checkQuotaLimit(churchId, mode)` alongside duration tracking
+- **At 80%**: Sends `quota_warning` WebSocket event (once per session)
+- **At 100%**: Sends `quota_exceeded` event, sets `quotaExceeded = true` to block further audio
+
+### 5. Frontend Components
+
+**New Files:**
+- `frontend/src/components/ui/UsageLimitModal.jsx` - Modal for exceeded/warning display
+- `frontend/src/components/ui/UsageLimitModal.css` - Modern dark theme styling
+- `frontend/src/hooks/useQuotaWarning.js` - Hook for handling quota WebSocket events
+
+**UI Features:**
+- **Warning Toast**: Dismissible toast at 80% usage with "Details" button
+- **Exceeded Modal**: Full-screen modal with usage bar, "Upgrade Plan" and "Add Hours" buttons ("Coming Soon")
+- **Blocked Start**: Start button disabled and shows "Quota Exceeded" when limit reached
+
+**SoloPage Integration:**
+- Added `useQuotaWarning()` hook
+- WebSocket message handler calls `quotaWarning.handleMessage(message)`
+- Modal/Toast rendered conditionally based on hook state
+- Start button respects `quotaWarning.isRecordingBlocked`
+
+### 6. Files Created
+
+| File | Purpose |
+|------|---------|
+| `backend/usage/quotaEnforcement.js` | Quota checking and event generation |
+| `frontend/src/hooks/useQuotaWarning.js` | WebSocket quota event handling |
+| `frontend/src/components/ui/UsageLimitModal.jsx` | Modal/Toast components |
+| `frontend/src/components/ui/UsageLimitModal.css` | Styling for quota UI |
+| `supabase/migrations/20260203_add_solo_host_quotas.sql` | Schema migration |
+| `supabase/migrations/20260203_update_quota_rpc_with_modes.sql` | RPC migration |
+
+---
+
 ### 4. Environment Configuration
 
 **File:** `backend/.env`
@@ -796,4 +885,20 @@ backend/
     - **Pro**: Above + `chirp3_hd` unlocked
     - **Unlimited**: All voices unlocked (including `gemini`, `elevenlabs_*`)
 
+### 2026-02-03 - PR 7.6: Usage Limits & Quota Enforcement
+- ✅ **Schema Update**: Added `included_solo_seconds_per_month` and `included_host_seconds_per_month` columns to `plans` table
+- ✅ **RPC Update**: Modified `get_session_quota_status` to return mode-specific quotas (solo/host) with backwards compatibility
+- ✅ **Quota Enforcement Module**: Created `backend/usage/quotaEnforcement.js` with:
+    - `getQuotaStatus()` - Fetches detailed quota breakdown
+    - `checkQuotaLimit()` - Returns action (`allow`, `warn`, `lock`) based on thresholds
+    - `createQuotaEvent()` - Generates WebSocket payload for frontend
+- ✅ **Backend Integration**: Both `soloModeHandler.js` and `host/adapter.js` now:
+    - Track mode-specific usage (`solo_seconds`, `host_seconds`)
+    - Send `quota_warning` event at 80% usage
+    - Send `quota_exceeded` event at 100% and block audio processing
+- ✅ **Frontend Components**: 
+    - `UsageLimitModal.jsx` - Modal with usage bar and action buttons (Upgrade Plan, Add Hours = "Coming Soon")
+    - `useQuotaWarning.js` - Hook for handling WebSocket quota events
+    - Toast variant for 80% warning, full modal for 100% exceeded
+    - Start button disabled when quota exceeded
 

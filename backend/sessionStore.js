@@ -396,6 +396,7 @@ class SessionStore {
   updateSessionVoice(sessionId, targetLang, voiceId) {
     const session = this.sessions.get(sessionId);
     if (session && targetLang && voiceId) {
+      // Store using EXACT language code (supports dialects like es-MX distinct from es-ES)
       session.voicePreferences.set(targetLang, voiceId);
       session.lastActivity = Date.now();
       console.log(`[SessionStore] Voice updated for session ${session.sessionCode} (${targetLang}): ${voiceId}`);
@@ -404,11 +405,28 @@ class SessionStore {
 
   /**
    * Get voice preference for a session language
+   * Supports fallback from specific locale (es-MX) to base language (es)
    */
   getSessionVoice(sessionId, targetLang) {
     const session = this.sessions.get(sessionId);
     if (!session || !targetLang) return null;
-    return session.voicePreferences.get(targetLang);
+
+    // 1. Try exact match (e.g., "es-MX")
+    const exactMatch = session.voicePreferences.get(targetLang);
+    if (exactMatch) return exactMatch;
+
+    // 2. Try base language fallback (e.g., "es-MX" -> "es")
+    if (targetLang.includes('-')) {
+      const baseLang = targetLang.split('-')[0];
+      const baseMatch = session.voicePreferences.get(baseLang);
+      if (baseMatch) {
+        // Only log fallback in debug mode to avoid noise
+        // console.log(`[SessionStore] Voice fallback ${targetLang} -> ${baseLang}`);
+        return baseMatch;
+      }
+    }
+
+    return null;
   }
 
   /**

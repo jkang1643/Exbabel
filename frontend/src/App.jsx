@@ -157,6 +157,7 @@ function AppContent() {
           onSoloMode={() => setMode('solo')}
           onJoinSession={handleJoinSession}
           onSignOut={handleSignOut}
+          onJoinChurch={handleJoinChurch}
         />
       )
     }

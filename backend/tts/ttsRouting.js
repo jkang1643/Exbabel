@@ -14,6 +14,17 @@
 import { TtsEngine, TtsEncoding } from './tts.types.js';
 import { getAllowedTtsTiers } from '../entitlements/index.js';
 
+// All Gemini TTS persona voice names
+// Used for tier inference and voice resolution
+const GEMINI_VOICES = [
+  'Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
+  'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam',
+  'Autonoe', 'Callirrhoe', 'Despina', 'Enceladus', 'Erinome',
+  'Gacrux', 'Iapetus', 'Laomedeia', 'Orus', 'Pulcherrima',
+  'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar', 'Sulafat',
+  'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
+];
+
 // Global voice cache - will be populated by dynamic discovery
 let VOICE_CACHE = new Map();
 let VOICE_CACHE_TIMESTAMP = null;
@@ -1175,7 +1186,7 @@ export async function resolveTtsRoute({
     } else if (voiceLower.includes('studio')) {
       effectiveTier = 'studio';
       console.log(`[TTS Routing]   ✅ Inferred tier: studio`);
-    } else if (['Kore', 'Fenrir', 'Puck', 'Charon'].some(n => requestedVoice.includes(n))) {
+    } else if (GEMINI_VOICES.some(n => requestedVoice.includes(n))) {
       effectiveTier = 'gemini';
       console.log(`[TTS Routing]   ✅ Inferred tier: gemini (matched Gemini persona)`);
     }

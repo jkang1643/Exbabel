@@ -20,13 +20,21 @@ export const meRouter = express.Router();
 meRouter.get("/me", requireAuth, (req, res) => {
     const { user_id, email, profile } = req.auth;
 
+    // DEV OVERRIDE: Inject ENV CHURCH_ID if set, to match server.js logic (DEV ONLY)
+    const isDev = process.env.NODE_ENV !== 'production';
+    let effectiveProfile = profile;
+    if (isDev && (process.env.CHURCH_ID || process.env.TEST_CHURCH_ID) && profile) {
+        effectiveProfile = { ...profile, church_id: process.env.CHURCH_ID || process.env.TEST_CHURCH_ID };
+    }
+
     res.json({
         user_id,
         email,
-        profile,
-        isVisitor: !profile,
+        profile: effectiveProfile,
+        isVisitor: !effectiveProfile,
         // Legacy fields for backwards compatibility
-        church_id: profile?.church_id || null,
-        role: profile?.role || null,
+        church_id: effectiveProfile?.church_id || null,
+        church_name: effectiveProfile?.church_name || null,
+        role: effectiveProfile?.role || null,
     });
 });

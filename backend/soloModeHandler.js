@@ -24,6 +24,8 @@ import { resolveVoice } from './tts/voiceResolver.js';
 import { isStreamingEnabled } from './tts/ttsStreamingConfig.js';
 import { resolveModel, getAllowedTtsTiers } from './entitlements/index.js';
 import { recordUsageEvent } from './usage/recordUsage.js';
+import { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from './usage/sessionSpans.js';
+import { checkQuotaLimit, createQuotaEvent } from './usage/quotaEnforcement.js';
 import crypto from 'crypto';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
@@ -45,6 +47,15 @@ export async function handleSoloMode(clientWs) {
   // SESSION-LEVEL USAGE TRACKING: Count total transcribed characters for aggregate STT metering
   let totalTranscribedCharacters = 0;
   const sessionStartTime = Date.now();
+
+  // SESSION SPAN TRACKING: Track streaming time for quota enforcement (solo mode)
+  let sessionSpanStarted = false;
+  let sessionSpanHeartbeatInterval = null;
+  const SESSION_SPAN_HEARTBEAT_MS = 30000; // 30 seconds
+
+  // QUOTA ENFORCEMENT: Track if warning has been sent this session
+  let quotaWarningSent = false;
+  let quotaExceeded = false;
 
   // PHASE 1: Extract entitlements from WS connection (attached by server.js)
   const entitlements = clientWs.entitlements || null;
@@ -871,6 +882,15 @@ export async function handleSoloMode(clientWs) {
                               const finalWorker = usePremiumTier
                                 ? realtimeFinalTranslationWorker
                                 : finalTranslationWorker;
+
+                              // CRITICAL FIX: Ensure model compatibility with worker type
+                              // If using Basic tier (Chat API) but plan has Realtime model, fallback to chat model
+                              let effectiveModel = translateModel;
+                              if (!usePremiumTier && translateModel.includes('realtime')) {
+                                console.log(`[SoloMode] ⚠️ Model '${translateModel}' incompatible with Basic/Chat tier. Fallback to 'gpt-4o-mini'`);
+                                effectiveModel = 'gpt-4o-mini';
+                              }
+
                               console.log(`[SoloMode] 🔀 Using ${workerType} API for forced final translation (async, ${correctedText.length} chars)`);
                               const translatedText = await finalWorker.translateFinal(
                                 correctedText,
@@ -878,7 +898,7 @@ export async function handleSoloMode(clientWs) {
                                 currentTargetLang,
                                 process.env.OPENAI_API_KEY,
                                 sessionId,
-                                { model: translateModel } // Use resolved model from entitlements
+                                { model: effectiveModel } // Use resolved model from entitlements
                               );
 
                               // Send translation update with same seqId
@@ -1066,6 +1086,15 @@ export async function handleSoloMode(clientWs) {
                           const finalWorker = usePremiumTier
                             ? realtimeFinalTranslationWorker
                             : finalTranslationWorker;
+
+                          // CRITICAL FIX: Ensure model compatibility with worker type
+                          // If using Basic tier (Chat API) but plan has Realtime model, fallback to chat model
+                          let effectiveModel = translateModel;
+                          if (!usePremiumTier && translateModel.includes('realtime')) {
+                            console.log(`[SoloMode] ⚠️ Model '${translateModel}' incompatible with Basic/Chat tier. Fallback to 'gpt-4o-mini'`);
+                            effectiveModel = 'gpt-4o-mini';
+                          }
+
                           console.log(`[SoloMode] 🔀 Using ${workerType} API for final translation (${correctedText.length} chars)`);
                           translatedText = await finalWorker.translateFinal(
                             correctedText, // Use corrected text for translation
@@ -1073,7 +1102,7 @@ export async function handleSoloMode(clientWs) {
                             currentTargetLang,
                             process.env.OPENAI_API_KEY,
                             sessionId, // MULTI-SESSION: Pass sessionId for fair-share allocation
-                            { model: translateModel } // Use resolved model from entitlements
+                            { model: effectiveModel } // Use resolved model from entitlements
                           );
                         } catch (translationError) {
                           // If it's a skip request error (rate limited), use original text silently
@@ -3169,6 +3198,62 @@ export async function handleSoloMode(clientWs) {
         case 'audio':
           // Process audio through Google Speech stream
           if (speechStream) {
+            // START SESSION SPAN on first audio (active streaming time only)
+            // CRITICAL: Fire-and-forget pattern - DO NOT BLOCK audio processing
+            if (!sessionSpanStarted) {
+              sessionSpanStarted = true; // Mark as started immediately to prevent duplicate calls
+              const meteringChurchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
+              if (meteringChurchId) {
+                // Non-blocking: start span in background
+                startSessionSpan({
+                  sessionId: sessionId,
+                  churchId: meteringChurchId,
+                  metadata: { sourceLang: currentSourceLang, targetLang: currentTargetLang, mode: 'solo' }
+                }).then(spanResult => {
+                  if (spanResult.alreadyActive) {
+                    console.log(`[SoloMode] 🎙️ Session span already active (resuming)`);
+                  } else {
+                    console.log(`[SoloMode] 🎙️ Started session span on first audio (church: ${meteringChurchId})`);
+                  }
+
+                  // Start heartbeat interval (only after successful span start)
+                  if (!sessionSpanHeartbeatInterval) {
+                    sessionSpanHeartbeatInterval = setInterval(async () => {
+                      try {
+                        await heartbeatSessionSpan({ sessionId: sessionId });
+
+                        // Check quota limits alongside heartbeat
+                        const churchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
+                        if (churchId && !quotaExceeded) {
+                          const quotaResult = await checkQuotaLimit(churchId, 'solo');
+
+                          if (quotaResult.action === 'lock') {
+                            quotaExceeded = true;
+                            const event = createQuotaEvent(quotaResult);
+                            if (clientWs.readyState === WebSocket.OPEN && event) {
+                              clientWs.send(JSON.stringify(event));
+                              console.log(`[SoloMode] 🚫 QUOTA EXCEEDED - sent quota_exceeded event`);
+                            }
+                          } else if (quotaResult.action === 'warn' && !quotaWarningSent) {
+                            quotaWarningSent = true;
+                            const event = createQuotaEvent(quotaResult);
+                            if (clientWs.readyState === WebSocket.OPEN && event) {
+                              clientWs.send(JSON.stringify(event));
+                              console.log(`[SoloMode] ⚠️ Quota warning sent: ${quotaResult.message}`);
+                            }
+                          }
+                        }
+                      } catch (err) {
+                        // Silent heartbeat/quota check failures
+                      }
+                    }, SESSION_SPAN_HEARTBEAT_MS);
+                  }
+                }).catch(spanErr => {
+                  console.warn(`[SoloMode] ⚠️ Failed to start session span:`, spanErr.message);
+                });
+              }
+            }
+
             // Measure RTT if client sent timestamp
             if (message.clientTimestamp) {
               const rtt = measureRTT(message.clientTimestamp);
@@ -3195,7 +3280,24 @@ export async function handleSoloMode(clientWs) {
           break;
 
         case 'audio_end':
-          console.log('[SoloMode] Audio stream ended');
+          console.log('[SoloMode] 🛑 Audio stream ended');
+
+          // STOP SESSION SPAN - user stopped recording
+          if (sessionSpanStarted) {
+            if (sessionSpanHeartbeatInterval) {
+              clearInterval(sessionSpanHeartbeatInterval);
+              sessionSpanHeartbeatInterval = null;
+            }
+            stopSessionSpan({
+              sessionId: sessionId,
+              reason: 'audio_end'
+            }).then(result => {
+              console.log(`[SoloMode] ✓ Session span stopped (audio_end): ${result.durationSeconds}s`);
+            }).catch(err => {
+              console.warn(`[SoloMode] ⚠️ Failed to stop session span:`, err.message);
+            });
+            sessionSpanStarted = false; // Reset so next recording starts a new span
+          }
 
           // CRITICAL: If there's a forced final buffer waiting for recovery, commit it immediately
           // The audio buffer will be empty, so recovery won't work anyway
@@ -3722,6 +3824,23 @@ export async function handleSoloMode(clientWs) {
   // Handle client disconnect
   clientWs.on("close", () => {
     console.log("[SoloMode] Client disconnected");
+
+    // STOP SESSION SPAN for billing (on disconnect)
+    if (sessionSpanHeartbeatInterval) {
+      clearInterval(sessionSpanHeartbeatInterval);
+      sessionSpanHeartbeatInterval = null;
+    }
+    if (sessionSpanStarted) {
+      stopSessionSpan({
+        sessionId: sessionId,
+        reason: 'client_disconnect'
+      }).then(result => {
+        console.log(`[SoloMode] ✓ Session span stopped on disconnect: ${result.durationSeconds}s`);
+      }).catch(err => {
+        console.warn(`[SoloMode] ⚠️ Failed to stop session span on disconnect:`, err.message);
+      });
+      sessionSpanStarted = false;
+    }
 
     // CRITICAL: If there's a forced final buffer waiting for recovery, commit it immediately
     // The audio buffer will be cleared, so recovery won't work anyway

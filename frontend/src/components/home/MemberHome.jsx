@@ -5,23 +5,78 @@
  * - Join active sessions from their church
  * - Solo mode for personal translation
  * - Quick join by code
+ * - Display current church and leave/join functionality
  */
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Header } from '../Header';
 import { JoinSessionModal } from '@/components/JoinSessionModal';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
-export function MemberHome({ onSoloMode, onJoinSession, onSignOut }) {
-    const { profile, user } = useAuth();
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
+export function MemberHome({ onSoloMode, onJoinSession, onSignOut, onJoinChurch }) {
+    const { profile, user, reloadProfile, getAccessToken } = useAuth();
     const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
+    const [isLeaving, setIsLeaving] = useState(false);
+    const [error, setError] = useState('');
+    const [showChurchMenu, setShowChurchMenu] = useState(false);
+    const menuRef = useRef(null);
+
+    // Close menu when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (menuRef.current && !menuRef.current.contains(event.target)) {
+                setShowChurchMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     const handleJoin = (code) => {
         if (code && code.trim()) {
             onJoinSession(code.toUpperCase());
             setIsJoinModalOpen(false);
+        }
+    };
+
+    const handleLeaveChurch = async () => {
+        if (!confirm('Are you sure you want to leave this church?')) {
+            return;
+        }
+
+        setIsLeaving(true);
+        setError('');
+        setShowChurchMenu(false);
+
+        try {
+            const token = getAccessToken();
+            const response = await fetch(`${API_URL}/api/churches/leave`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                if (reloadProfile) {
+                    await reloadProfile();
+                }
+            } else {
+                setError(data.error || 'Failed to leave church');
+            }
+        } catch (err) {
+            console.error('Leave church error:', err);
+            setError('Failed to connect to server');
+        } finally {
+            setIsLeaving(false);
         }
     };
 
@@ -39,7 +94,54 @@ export function MemberHome({ onSoloMode, onJoinSession, onSignOut }) {
                         <p className="text-gray-600">
                             {user?.email} • Member
                         </p>
+                        {/* Church Name with Dropdown */}
+                        {profile?.church_name ? (
+                            <div className="relative inline-block mt-2" ref={menuRef}>
+                                <button
+                                    onClick={() => setShowChurchMenu(!showChurchMenu)}
+                                    className="inline-flex items-center gap-1 text-lg text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
+                                >
+                                    ⛪ {profile.church_name}
+                                    <svg
+                                        className={`w-4 h-4 transition-transform ${showChurchMenu ? 'rotate-180' : ''}`}
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                    </svg>
+                                </button>
+                                {showChurchMenu && (
+                                    <div className="absolute left-1/2 transform -translate-x-1/2 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10">
+                                        <button
+                                            onClick={handleLeaveChurch}
+                                            disabled={isLeaving}
+                                            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                                        >
+                                            {isLeaving ? 'Leaving...' : 'Leave Church'}
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <button
+                                onClick={onJoinChurch}
+                                className="inline-flex items-center gap-1 mt-2 text-lg text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
+                            >
+                                ⛪ Join a Church
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                </svg>
+                            </button>
+                        )}
                     </div>
+
+                    {/* Error Alert */}
+                    {error && (
+                        <Alert variant="destructive" className="mb-4">
+                            <AlertDescription>{error}</AlertDescription>
+                        </Alert>
+                    )}
 
                     {/* Main Actions */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -109,3 +211,4 @@ export function MemberHome({ onSoloMode, onJoinSession, onSignOut }) {
         </div>
     );
 }
+

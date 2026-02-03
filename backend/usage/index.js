@@ -14,3 +14,6 @@ export { getListeningQuotaStatus, formatQuotaForDisplay } from './getListeningQu
 // Session spans (billing, quota enforcement)
 export { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from './sessionSpans.js';
 export { getSessionQuotaStatus, formatQuotaStatus } from './getSessionQuota.js';
+
+// Quota enforcement
+export { getQuotaStatus, checkQuotaLimit, createQuotaEvent } from './quotaEnforcement.js';

@@ -56,23 +56,31 @@ export async function requireAuth(req, res, next) {
 
         const user = userData.user;
 
-        // Step 3: Load profile (may not exist - that's OK for visitors)
+        // Step 3: Load profile with church name (may not exist - that's OK for visitors)
         const { data: profile, error: profErr } = await supabaseAdmin
             .from("profiles")
-            .select("user_id, church_id, role")
+            .select("user_id, church_id, role, churches(name)")
             .eq("user_id", user.id)
             .single();
+
+        // Flatten church name into profile if exists
+        const flatProfile = profile ? {
+            user_id: profile.user_id,
+            church_id: profile.church_id,
+            role: profile.role,
+            church_name: profile.churches?.name || null
+        } : null;
 
         // Step 4: Attach auth context to request
         // Profile can be null for visitors who haven't joined a church
         req.auth = {
             user_id: user.id,
             email: user.email,
-            profile: profile || null, // null if no profile
+            profile: flatProfile, // null if no profile
         };
 
-        if (profile) {
-            console.log(`[Auth] ✓ Member: user=${profile.user_id} church=${profile.church_id} role=${profile.role}`);
+        if (flatProfile) {
+            console.log(`[Auth] ✓ Member: user=${flatProfile.user_id} church=${flatProfile.church_id} role=${flatProfile.role}`);
         } else {
             console.log(`[Auth] ✓ Visitor: user=${user.id} (no profile)`);
         }

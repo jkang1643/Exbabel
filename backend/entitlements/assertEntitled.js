@@ -103,7 +103,7 @@ export class TtsTierNotAllowedError extends Error {
 export function getAllowedTtsTiers(ttsTier) {
     // Base tiers for each plan level
     const STARTER_TIERS = ['standard', 'neural2', 'studio'];
-    const PRO_TIERS = ['chirp3_hd', ...STARTER_TIERS];
+    const PRO_TIERS = ['chirp3_hd', 'gemini', ...STARTER_TIERS];
     const UNLIMITED_TIERS = ['gemini', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash', ...PRO_TIERS];
 
     switch (ttsTier) {

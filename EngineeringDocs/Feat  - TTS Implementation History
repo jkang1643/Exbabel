@@ -1867,3 +1867,46 @@ Addressed the issue where regional language variants (e.g., Mexican Spanish `es-
 #### ✅ No Accent Bleeding
 - Verified that selecting "Spanish (Mexico)" shows **zero** "Spanish (Spain)" voices in the dropdown.
 - This forces the TTS engine to use the correct region or a true polyglot model.
+
+## Critical Fix: Local Subscription Gating & Pipeline Hardcoding
+**Date:** 2026-02-03
+
+### The Issues
+Development environments using `TEST_CHURCH_ID` (Pro Plan) were incorrectly falling back to "Starter" plans, blocking premium TTS voices (Gemini/Chirp3).
+
+1. **Local Override Logic Phase**: The backend `server.js` was prioritizing authenticated user profiles (Starter) over the local `.env` configuration (`TEST_CHURCH_ID`).
+2. **Hardcoded Pipeline Failure**: Even when the Session was correctly configured with the Pro Plan ID, `websocketHandler.js` contained a hardcoded line `getEntitlements('default')`, causing the actual TTS synthesis request to fail entitlement checks.
+
+### The Fixes
+
+#### Backend: Secure Local Override
+Updated `server.js` and `routes/me.js` to strictly prioritize local environment variables in development mode:
+
+```javascript
+// server.js
+const isDev = process.env.NODE_ENV !== 'production';
+
+// Prioritize ENV over Auth in Dev
+if (isDev && (process.env.CHURCH_ID || process.env.TEST_CHURCH_ID)) {
+    const envChurchId = process.env.CHURCH_ID || process.env.TEST_CHURCH_ID;
+    sessionStore.setChurchId(sessionId, envChurchId); 
+}
+```
+
+#### Backend: Pipeline Data Flow
+Fixed `websocketHandler.js` to use the actual connected client's configuration instead of a hardcoded default:
+
+```javascript
+// websocketHandler.js
+// OLD: userSubscription = await getEntitlements('default'); 
+// NEW:
+userSubscription = await getEntitlements(clientWs.churchId || 'default');
+```
+
+#### Backend: Voice Routing & Dialects
+Fixed voice routing to support specific dialects (e.g., `es-MX`) falling back correctly to base languages (`es`) without aggressive normalization that erased regional preferences.
+
+### Verification
+- **Log Verification:** Confirmed `clientWs.churchId` is populated with the Pro Plan ID.
+- **Pipeline Verification:** Confirmed `TTS_USAGE` logs show `resolvedTier: gemini` and matching `orgId`.
+- **UI:** Confirmed frontend correctly unlocks premium voices.

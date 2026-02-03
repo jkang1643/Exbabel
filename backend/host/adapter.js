@@ -56,6 +56,7 @@ import { resolveVoice } from '../tts/voiceResolver.js';
 import { getAllowedTtsTiers } from '../entitlements/index.js';
 import { recordUsageEvent } from '../usage/recordUsage.js';
 import { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from '../usage/sessionSpans.js';
+import { checkQuotaLimit, createQuotaEvent } from '../usage/quotaEnforcement.js';
 import crypto from 'crypto';
 
 /**
@@ -142,6 +143,10 @@ export async function handleHostConnection(clientWs, sessionId) {
   let sessionSpanHeartbeatInterval = null;
   let sessionSpanStarted = false; // Track if span has been started for this streaming session
   const SESSION_SPAN_HEARTBEAT_MS = 30000; // 30 seconds
+
+  // QUOTA ENFORCEMENT: Track if warning has been sent this session
+  let quotaWarningSent = false;
+  let quotaExceeded = false;
 
   // PHASE 8: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (same as solo mode)
@@ -286,7 +291,7 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Provide defaults for audio configuration if not specified
               await speechStream.initialize(currentSourceLang, {
                 encoding: message.encoding || 'LINEAR16',
-                sampleRateHertz: message.sampleRateHertz || 48000,
+                sampleRateHertz: message.sampleRateHertz || 24000, // Must match frontend useAudioCapture (24kHz)
                 disablePunctuation: message.disablePunctuation,
                 enableMultiLanguage: message.enableMultiLanguage,
                 alternativeLanguageCodes: message.alternativeLanguageCodes,
@@ -652,36 +657,32 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }
 
                 // Get user voice preference from session or local state
-                const userVoiceId = sessionStore.getSessionVoice(currentSessionId, safeLang) || targetVoiceIds.get(safeLang) || voiceId;
+                // PRIORITY: User selected voice (from SessionStore shared state) -> passed voiceId -> Default Chirp 3
+                const sessionVoice = sessionStore.getSessionVoice(currentSessionId, safeLang);
+                const localVoice = targetVoiceIds.get(safeLang);
+                const userVoiceId = sessionVoice || localVoice || voiceId;
 
-                // Extract tier from voiceId if present
-                let tierToUse = null;
-                if (userVoiceId) {
-                  if (userVoiceId.includes(':')) {
-                    const parts = userVoiceId.split(':');
-                    if (parts.length >= 2) {
-                      tierToUse = parts[1] === 'gemini_tts' ? 'gemini' : parts[1];
-                    }
-                  } else if (userVoiceId.startsWith('elevenlabs')) {
-                    tierToUse = 'elevenlabs';
-                  }
-                }
+                console.log(`[HostMode] 🔍 Voice lookup: safeLang=${safeLang}, sessionVoice=${sessionVoice || 'null'}, localVoice=${localVoice || 'null'}, paramVoice=${voiceId || 'null'}, final=${userVoiceId || 'null'}`);
 
-                // Resolve voice using authoritative catalog with tier filtering
-                const resolved = await resolveVoice({
-                  orgId: currentSessionId,
-                  userPref: userVoiceId ? { voiceId: userVoiceId, tier: tierToUse } : null,
-                  languageCode: safeLang,
-                  allowedTiers
-                });
+                // Map short codes to full locales for Google TTS
+                const langPrefix = safeLang.split('-')[0].toLowerCase();
+                const fullLocales = {
+                  'en': 'en-US', 'es': 'es-ES', 'fr': 'fr-FR', 'de': 'de-DE',
+                  'it': 'it-IT', 'pt': 'pt-BR', 'ja': 'ja-JP', 'ko': 'ko-KR',
+                  'zh': 'cmn-CN', 'hi': 'hi-IN'
+                };
+                const locale = fullLocales[langPrefix] || 'en-US';
 
-                console.log(`[HostMode] Triggering TTS: voiceId=${resolved.voiceId}, tier=${resolved.tier}, reason=${resolved.reason}`);
+                // Use user's voice preference directly, or fall back to default Chirp3 voice
+                const defaultVoiceId = userVoiceId || `google-${locale}-Chirp3-HD-Puck`;
+
+                console.log(`[HostMode] Triggering TTS: voiceId=${defaultVoiceId}, userPref=${!!userVoiceId}`);
 
                 onCommittedSegment(currentSessionId, {
                   seqId,
                   text: text.trim(),
                   lang: safeLang,
-                  voiceId: resolved.voiceId,
+                  voiceId: defaultVoiceId,
                   isFinal: true
                 }, clientWs.churchId);
               };
@@ -3937,35 +3938,58 @@ export async function handleHostConnection(clientWs, sessionId) {
           // Process audio through Google Speech stream
           if (speechStream) {
             // START SESSION SPAN on first audio (active streaming time only)
+            // CRITICAL: Fire-and-forget pattern - DO NOT BLOCK audio processing
             if (!sessionSpanStarted) {
+              sessionSpanStarted = true; // Mark as started immediately to prevent duplicate calls
               const meteringChurchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
               if (meteringChurchId) {
-                try {
-                  const spanResult = await startSessionSpan({
-                    sessionId: currentSessionId,
-                    churchId: meteringChurchId,
-                    metadata: { sourceLang: currentSourceLang }
-                  });
-                  sessionSpanStarted = true;
+                // Non-blocking: start span in background
+                startSessionSpan({
+                  sessionId: currentSessionId,
+                  churchId: meteringChurchId,
+                  metadata: { sourceLang: currentSourceLang, mode: 'host' }
+                }).then(spanResult => {
                   if (spanResult.alreadyActive) {
                     console.log(`[HostMode] 🎙️ Session span already active (resuming)`);
                   } else {
                     console.log(`[HostMode] 🎙️ Started session span on first audio (church: ${meteringChurchId})`);
                   }
 
-                  // Start heartbeat interval
+                  // Start heartbeat interval (only after successful span start)
                   if (!sessionSpanHeartbeatInterval) {
                     sessionSpanHeartbeatInterval = setInterval(async () => {
                       try {
                         await heartbeatSessionSpan({ sessionId: currentSessionId });
+
+                        // Check quota limits alongside heartbeat
+                        const churchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
+                        if (churchId && !quotaExceeded) {
+                          const quotaResult = await checkQuotaLimit(churchId, 'host');
+
+                          if (quotaResult.action === 'lock') {
+                            quotaExceeded = true;
+                            const event = createQuotaEvent(quotaResult);
+                            if (clientWs.readyState === WebSocket.OPEN && event) {
+                              clientWs.send(JSON.stringify(event));
+                              console.log(`[HostMode] 🚫 QUOTA EXCEEDED - sent quota_exceeded event`);
+                            }
+                          } else if (quotaResult.action === 'warn' && !quotaWarningSent) {
+                            quotaWarningSent = true;
+                            const event = createQuotaEvent(quotaResult);
+                            if (clientWs.readyState === WebSocket.OPEN && event) {
+                              clientWs.send(JSON.stringify(event));
+                              console.log(`[HostMode] ⚠️ Quota warning sent: ${quotaResult.message}`);
+                            }
+                          }
+                        }
                       } catch (err) {
-                        // Silent heartbeat failures
+                        // Silent heartbeat/quota check failures
                       }
                     }, SESSION_SPAN_HEARTBEAT_MS);
                   }
-                } catch (spanErr) {
+                }).catch(spanErr => {
                   console.warn(`[HostMode] ⚠️ Failed to start session span:`, spanErr.message);
-                }
+                });
               }
             }
 

@@ -102,14 +102,25 @@ export class GoogleStreamingProvider {
         const encoding = audioEncoding || 'MP3';
 
         // Handle Gemini voice mapping for valid streaming
-        // "Kore" Gemini voice doesn't support streaming directly yet, fallback to Chirp 3 HD version
+        // Gemini persona voices need to be mapped to Chirp3-HD variants for streaming support
         let targetVoiceName = voiceName;
         let targetModelName = modelName;
 
-        if (voiceName === 'Kore') {
-            targetVoiceName = 'en-US-Chirp3-HD-Kore';
+        // All known Gemini persona names
+        const GEMINI_PERSONAS = [
+            'Kore', 'Charon', 'Leda', 'Puck', 'Aoede', 'Fenrir',
+            'Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam',
+            'Autonoe', 'Callirrhoe', 'Despina', 'Enceladus', 'Erinome',
+            'Gacrux', 'Iapetus', 'Laomedeia', 'Orus', 'Pulcherrima',
+            'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar', 'Sulafat',
+            'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'
+        ];
+
+        // Check if this is a bare Gemini persona name that needs Chirp3 mapping
+        if (GEMINI_PERSONAS.includes(voiceName)) {
+            targetVoiceName = `${languageCode}-Chirp3-HD-${voiceName}`;
             targetModelName = undefined; // Chirp voices don't use modelName param
-            console.log('[Google-Stream] Mapped "Kore" to "en-US-Chirp3-HD-Kore" for streaming support');
+            console.log(`[Google-Stream] Mapped Gemini persona "${voiceName}" to "${targetVoiceName}" for streaming support`);
         }
 
         // Create async iterator for chunks

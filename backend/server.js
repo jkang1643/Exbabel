@@ -242,7 +242,33 @@ wss.on("connection", async (clientWs, req) => {
     // Load entitlements for host mode (same as solo mode)
     const authToken = urlObj.searchParams.get('token');
     console.log(`[Backend] Host connection: token=${authToken ? 'provided' : 'MISSING'} sessionId=${sessionId}`);
-    if (authToken) {
+
+    // CONFIG PRIORITY:
+    // 1. Environment Variable (CHURCH_ID) - For local dev/overrides (DEV ONLY)
+    // 2. Auth Token (User Profile) - For production/normal use
+    // 3. Environment Variable (TEST_CHURCH_ID) - Legacy test fallback
+
+    const isDev = process.env.NODE_ENV !== 'production';
+
+    // 1. Check for explicit Environment Override (Higher priority than Auth for Dev)
+    if (isDev && (process.env.CHURCH_ID || process.env.TEST_CHURCH_ID)) {
+      try {
+        const envChurchId = process.env.CHURCH_ID || process.env.TEST_CHURCH_ID;
+        console.log(`[Backend] 🔧 DEV ENV OVERRIDE: Using CHURCH_ID=${envChurchId} (Ignoring Auth Profile)`);
+
+        const entitlements = await getEntitlements(envChurchId);
+        clientWs.entitlements = entitlements;
+        clientWs.churchId = envChurchId;
+
+        // Propagate to session so listeners inherit the host's plan
+        sessionStore.setChurchId(sessionId, envChurchId);
+        console.log(`[Backend] ✓ Host entitlements loaded for church ${envChurchId}: plan=${entitlements.subscription.planCode} ttsTier=${entitlements.limits.ttsTier}`);
+      } catch (envErr) {
+        console.error(`[Backend] CHURCH_ID env load failed:`, envErr.message);
+      }
+    }
+    // 2. Check Auth Token
+    else if (authToken) {
       try {
         const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(authToken);
         if (!authError && user) {
@@ -264,18 +290,18 @@ wss.on("connection", async (clientWs, req) => {
       } catch (entError) {
         console.error(`[Backend] Host entitlements load error:`, entError.message);
       }
-    } else if (process.env.TEST_CHURCH_ID) {
+    } else if (process.env.CHURCH_ID || process.env.TEST_CHURCH_ID) {
       // TEMPORARY: For testing tier gating without frontend auth integration
       try {
-        const testChurchId = process.env.TEST_CHURCH_ID;
+        const testChurchId = process.env.CHURCH_ID || process.env.TEST_CHURCH_ID;
         const entitlements = await getEntitlements(testChurchId);
         clientWs.entitlements = entitlements;
         clientWs.churchId = testChurchId;
         // Propagate to session so listeners inherit the host's plan
         sessionStore.setChurchId(sessionId, testChurchId);
-        console.log(`[Backend] ⚠️ TEST MODE (Host): Using TEST_CHURCH_ID=${testChurchId}, plan=${entitlements.subscription.planCode}`);
+        console.log(`[Backend] ⚠️ TEST MODE (Host): Using CHURCH_ID=${testChurchId}, plan=${entitlements.subscription.planCode}`);
       } catch (testErr) {
-        console.error(`[Backend] TEST_CHURCH_ID load failed (Host):`, testErr.message);
+        console.error(`[Backend] CHURCH_ID load failed (Host):`, testErr.message);
       }
     }
     handleHostConnection(clientWs, sessionId);
@@ -324,15 +350,15 @@ wss.on("connection", async (clientWs, req) => {
     console.log(`[Backend] No auth token provided - using default behavior`);
 
     // TEMPORARY: For testing tier gating without frontend auth integration
-    if (process.env.TEST_CHURCH_ID) {
+    if (process.env.CHURCH_ID || process.env.TEST_CHURCH_ID) {
       try {
-        const testChurchId = process.env.TEST_CHURCH_ID;
+        const testChurchId = process.env.CHURCH_ID || process.env.TEST_CHURCH_ID;
         const entitlements = await getEntitlements(testChurchId);
         clientWs.entitlements = entitlements;
         clientWs.churchId = testChurchId;
-        console.log(`[Backend] ⚠️ TEST MODE: Using TEST_CHURCH_ID=${testChurchId}, plan=${entitlements.subscription.planCode}`);
+        console.log(`[Backend] ⚠️ TEST MODE: Using CHURCH_ID=${testChurchId}, plan=${entitlements.subscription.planCode}`);
       } catch (testErr) {
-        console.error(`[Backend] TEST_CHURCH_ID load failed:`, testErr.message);
+        console.error(`[Backend] CHURCH_ID load failed:`, testErr.message);
       }
     }
   }

@@ -158,3 +158,48 @@ churchRouter.get('/churches/:id', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+
+/**
+ * POST /api/churches/leave
+ * Leave current church (requires authentication)
+ * Deletes the user's profile record
+ */
+churchRouter.post('/churches/leave', requireAuth, async (req, res) => {
+    try {
+        const userId = req.auth.user_id;
+        const profile = req.auth.profile;
+
+        if (!profile || !profile.church_id) {
+            return res.status(400).json({ error: 'You are not a member of any church' });
+        }
+
+        // Prevent admins from leaving (they should transfer ownership first)
+        if (profile.role === 'admin') {
+            return res.status(400).json({
+                error: 'Admins cannot leave their church. Transfer admin role first.',
+                code: 'ADMIN_CANNOT_LEAVE'
+            });
+        }
+
+        // Delete the profile
+        const { error: deleteErr } = await supabaseAdmin
+            .from('profiles')
+            .delete()
+            .eq('user_id', userId);
+
+        if (deleteErr) {
+            console.error('[Churches] Leave error:', deleteErr.message);
+            return res.status(500).json({ error: 'Failed to leave church' });
+        }
+
+        console.log(`[Churches] ✅ User ${userId} left church ${profile.church_id}`);
+
+        res.json({
+            success: true,
+            message: 'You have left the church'
+        });
+    } catch (err) {
+        console.error('[Churches] Unexpected error:', err.message);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});

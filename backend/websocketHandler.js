@@ -432,57 +432,44 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       return;
     }
 
-    // Fetch entitlements using the session's churchId (inherited from host)
+    // Cache churchId on socket immediately (needed for later operations)
+    clientWs.churchId = churchId;
+
+    // PERFORMANCE FIX: Send session_joined IMMEDIATELY (no waiting for DB)
+    // This eliminates 300-500ms lag caused by waiting for getEntitlements()
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({
+        type: 'session_joined',
+        sessionId: session.sessionId,
+        sessionCode: session.sessionCode,
+        role: 'listener',
+        targetLang: targetLang,
+        sourceLang: session.sourceLang,
+        message: `Connected to session ${session.sessionCode}`
+      }));
+    }
+    console.log(`[Listener] ✓ Instant join response sent for sessionId=${sessionId}`);
+
+    // THEN fetch entitlements in background (non-blocking, fire-and-forget)
+    // Entitlements are only needed for TTS tier gating (fetched lazily when voice list is requested)
     getEntitlements(churchId)
       .then(entitlements => {
-        // Cache on socket for later use (e.g., getAllowedTiers)
+        // Cache on socket for later use (e.g., getAllowedTiers in tts/list_voices)
         clientWs.entitlements = entitlements;
-        clientWs.churchId = churchId;
-
         const plan = entitlements.subscription.planCode;
-        console.log(`[Listener] ✓ Join sessionId=${sessionId} churchId=${churchId} plan=${plan}`);
-
-        if (clientWs.readyState === WebSocket.OPEN) {
-          clientWs.send(JSON.stringify({
-            type: 'session_joined',
-            sessionId: session.sessionId,
-            sessionCode: session.sessionCode,
-            role: 'listener',
-            targetLang: targetLang,
-            sourceLang: session.sourceLang,
-            plan: plan, // Send plan info to frontend (informational only)
-            message: `Connected to session ${session.sessionCode}`
-          }));
-        }
-
-        // Start listening span for metering (async, non-blocking)
-        startListeningSpan(session.sessionId, socketId, churchId);
+        console.log(`[Listener] ✓ Entitlements loaded: churchId=${churchId} plan=${plan}`);
       })
       .catch(err => {
-        console.error(`[Listener] ❌ Failed to fetch entitlements for churchId=${churchId}:`, err.message);
-        // Still allow connection but log the error - this is a backend issue, not user's fault
-        if (clientWs.readyState === WebSocket.OPEN) {
-          clientWs.send(JSON.stringify({
-            type: 'session_joined',
-            sessionId: session.sessionId,
-            sessionCode: session.sessionCode,
-            role: 'listener',
-            targetLang: targetLang,
-            sourceLang: session.sourceLang,
-            plan: 'unknown', // Indicate error state
-            message: `Connected to session ${session.sessionCode}`
-          }));
-        }
-        // Start listening span even without entitlements (we still have churchId)
-        startListeningSpan(session.sessionId, listenerSpanUserId, churchId);
+        console.error(`[Listener] ⚠ Failed to fetch entitlements (non-blocking):`, err.message);
+        // Not fatal - listener can still receive translations, just won't have tier info for TTS
       });
 
-    // Helper function to start listening span (after churchId is confirmed)
+    // Helper function to start listening span (defined before use)
     const startListeningSpan = async (dbSessionId, listenerId, listenerChurchId) => {
       try {
         await startListening({
           sessionId: dbSessionId,
-          userId: listenerId, // Using socketId as pseudo-userId until listener auth is added
+          userId: listenerId,
           churchId: listenerChurchId
         });
         clientWs.listeningSpanActive = true;
@@ -492,6 +479,9 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
         // Non-fatal - continue without metering
       }
     };
+
+    // Start listening span for metering in background (non-blocking, fire-and-forget)
+    startListeningSpan(session.sessionId, listenerSpanUserId, churchId);
 
     // Send session stats periodically
     const statsInterval = setInterval(() => {
@@ -741,7 +731,9 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
 
           // VOICE ROUTING: Update session store with preferred voice
           if (message.voiceId) {
-            sessionStore.updateSessionVoice(sessionId, message.languageCode || targetLang, message.voiceId);
+            // Strictly use the session's target language as the key, NOT the voice's locale code
+            // This prevents mismatch where efficient host loops iterate 'es' but voice stored at 'es-ES'
+            sessionStore.updateSessionVoice(sessionId, targetLang, message.voiceId);
             clientWs.ttsState.voiceId = message.voiceId;
           }
 
@@ -1020,7 +1012,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             // Get entitlements for the org
             let userSubscription = {};
             try {
-              userSubscription = await getEntitlements('default'); // TODO: Use actual orgId
+              userSubscription = await getEntitlements(clientWs.churchId || 'default'); // Fixed TODO
             } catch (err) {
               console.warn(`[Listener] Failed to fetch entitlements: ${err.message}`);
             }
@@ -1040,7 +1032,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
             const ttsRequest = {
               sessionId: sessionId,
               userId: userName || 'anonymous',
-              orgId: 'default', // TODO: Get from session/auth
+              orgId: clientWs.churchId || 'default',
               text: message.text,
               segmentId: message.segmentId,
               profile: {

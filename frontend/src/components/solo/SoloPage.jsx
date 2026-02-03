@@ -4,6 +4,7 @@ import { useSoloSession, SessionState, SoloMode } from '../../hooks/useSoloSessi
 import { useTtsQueue } from '../../hooks/useTtsQueue';
 import { useTtsStreaming } from '../../hooks/useTtsStreaming';
 import { useAudioCapture } from '../../hooks/useAudioCapture';
+import { useQuotaWarning } from '../../hooks/useQuotaWarning';
 import ModeSelector from './ModeSelector';
 import LanguageSelector from './LanguageSelector';
 import StatusIndicator from './StatusIndicator';
@@ -13,6 +14,7 @@ import PlaybackQueueBadge from './PlaybackQueueBadge';
 import TtsStreamingControl from '../tts/TtsStreamingControl';
 import TtsRoutingOverlay from '../tts/TtsRoutingOverlay';
 import AdvancedSettingsDrawer from './AdvancedSettingsDrawer';
+import { UsageLimitModal, QuotaWarningToast } from '../ui/UsageLimitModal';
 
 /**
  * SoloPage - Main Solo Mode Experience
@@ -140,6 +142,9 @@ export function SoloPage({ onBackToHome }) {
 
     // Audio capture
     const audioCapture = useAudioCapture();
+
+    // Quota warning/exceeded handling
+    const quotaWarning = useQuotaWarning();
 
     // WebSocket URL
     const getWebSocketUrl = () => {
@@ -282,7 +287,10 @@ export function SoloPage({ onBackToHome }) {
             default:
                 console.log('[SoloPage] Message:', message.type);
         }
-    }, [session, ttsQueue, sourceLang, targetLang, selectedVoice, isServerReady]);
+
+        // Handle quota events (warning/exceeded)
+        quotaWarning.handleMessage(message);
+    }, [session, ttsQueue, sourceLang, targetLang, selectedVoice, isServerReady, quotaWarning]);
 
     // Start auto-listening
     const handleStart = useCallback(async () => {
@@ -555,10 +563,10 @@ export function SoloPage({ onBackToHome }) {
                     <button
                         className="control-button start"
                         onClick={handleStart}
-                        disabled={!isConnected}
+                        disabled={!isConnected || quotaWarning.isRecordingBlocked}
                     >
                         <Mic size={32} />
-                        <span>Start Listening</span>
+                        <span>{quotaWarning.isRecordingBlocked ? 'Quota Exceeded' : 'Start Listening'}</span>
                     </button>
                 ) : (
                     <button
@@ -586,6 +594,24 @@ export function SoloPage({ onBackToHome }) {
                     selectedVoice={selectedVoice}
                     onVoiceChange={handleVoiceChange}
                     planCode={planCode}
+                />
+            )}
+
+            {/* Quota Warning Toast */}
+            {quotaWarning.showToast && (
+                <QuotaWarningToast
+                    quotaEvent={quotaWarning.quotaEvent}
+                    onDismiss={quotaWarning.dismiss}
+                    onShowModal={quotaWarning.openModal}
+                />
+            )}
+
+            {/* Quota Limit Modal */}
+            {quotaWarning.showModal && (
+                <UsageLimitModal
+                    quotaEvent={quotaWarning.quotaEvent}
+                    onDismiss={quotaWarning.dismiss}
+                    onAction={quotaWarning.handleAction}
                 />
             )}
 

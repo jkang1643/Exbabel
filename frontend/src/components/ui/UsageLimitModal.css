@@ -1,0 +1,237 @@
+/**
+ * Usage Limit Modal & Toast Styles
+ * 
+ * Styles for quota warning and exceeded UI components.
+ */
+
+/* ====== Modal Overlay ====== */
+.usage-limit-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ====== Modal Container ====== */
+.usage-limit-modal {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border-radius: 20px;
+  padding: 32px;
+  max-width: 420px;
+  width: 90%;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.usage-limit-modal.exceeded {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.usage-limit-modal.warning {
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+/* ====== Icon ====== */
+.usage-limit-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+}
+
+/* ====== Title ====== */
+.usage-limit-title {
+  color: #ffffff;
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 8px 0;
+}
+
+/* ====== Message ====== */
+.usage-limit-message {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.95rem;
+  margin: 0 0 24px 0;
+  line-height: 1.5;
+}
+
+/* ====== Progress Bar ====== */
+.usage-limit-bar-container {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  height: 12px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.usage-limit-bar {
+  height: 100%;
+  border-radius: 8px;
+  transition: width 0.5s ease-out;
+}
+
+.usage-limit-bar.warning {
+  background: linear-gradient(90deg, #fbbf24 0%, #f59e0b 100%);
+}
+
+.usage-limit-bar.exceeded {
+  background: linear-gradient(90deg, #ef4444 0%, #dc2626 100%);
+}
+
+.usage-limit-percent {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.85rem;
+  margin: 0 0 24px 0;
+}
+
+/* ====== Action Buttons ====== */
+.usage-limit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.usage-limit-btn {
+  padding: 14px 24px;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  position: relative;
+}
+
+.usage-limit-btn.primary {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: white;
+}
+
+.usage-limit-btn.primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(99, 102, 241, 0.4);
+}
+
+.usage-limit-btn.secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.usage-limit-btn.secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.usage-limit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.coming-soon-badge {
+  display: block;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 2px;
+}
+
+/* ====== Info Text ====== */
+.usage-limit-info {
+  color: rgba(239, 68, 68, 0.8);
+  font-size: 0.85rem;
+  margin: 16px 0 0 0;
+  padding: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 8px;
+}
+
+/* ====== Warning Toast ====== */
+.quota-warning-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.95) 0%, rgba(245, 158, 11, 0.95) 100%);
+  color: #1a1a1a;
+  padding: 12px 20px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+  z-index: 9998;
+  animation: slideInUp 0.3s ease-out;
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.quota-warning-icon {
+  font-size: 1.2rem;
+}
+
+.quota-warning-text {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.quota-warning-details {
+  background: rgba(0, 0, 0, 0.2);
+  border: none;
+  color: #1a1a1a;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.quota-warning-details:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.quota-warning-close {
+  background: none;
+  border: none;
+  color: rgba(0, 0, 0, 0.5);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+.quota-warning-close:hover {
+  color: rgba(0, 0, 0, 0.8);
+}
