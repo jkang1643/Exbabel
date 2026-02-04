@@ -480,13 +480,15 @@ const LISTENING_HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds
 /**
  * Handle listener connection
  */
-export function handleListenerConnection(clientWs, sessionId, targetLang, userName) {
-  console.log(`[WebSocket] Listener connecting: ${userName} (${targetLang})`);
+export async function handleListenerConnection(clientWs, sessionId, targetLang, userName) {
+  console.log(`[Listener] 🎧 Handling connection for ${userName} (Lang: ${targetLang}, Session: ${sessionId}) - Code Version: StaticImports+NoFlag`);
+
+  // Start OpenTelemetry span
+  const span = trace.getTracer('exbabel-backend').startSpan('listener_connection');
 
   const session = sessionStore.getSession(sessionId);
   if (!session) {
     clientWs.send(JSON.stringify({
-      type: 'error',
       message: 'Session not found'
     }));
     clientWs.close();
@@ -1015,8 +1017,8 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
               message.tier = 'chirp3_hd';
             }
 
-            // PR4: Server-side voice resolution (feature-flagged)
-            const VOICE_CATALOG_ENABLED = process.env.TTS_VOICE_CATALOG_ENABLED === 'true';
+            // Server-side voice resolution (Permanently enabled)
+            const VOICE_CATALOG_ENABLED = true; // process.env.TTS_VOICE_CATALOG_ENABLED === 'true';
             let resolvedVoice = null;
 
             if (VOICE_CATALOG_ENABLED) {
