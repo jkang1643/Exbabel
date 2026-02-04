@@ -333,7 +333,7 @@ export function HostPage({ onBackToHome }) {
 
   // Fetch voices when connection is established and language changes
   useEffect(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN && sourceLang && connectionState === 'connected') {
+    if (wsRef.current?.readyState === WebSocket.OPEN && sourceLang && connectionState === 'open') {
       console.log('[Host] Fetching voices for:', sourceLang);
       wsRef.current.send(JSON.stringify({
         type: 'tts/list_voices',
