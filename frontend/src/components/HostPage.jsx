@@ -95,6 +95,12 @@ export function HostPage({ onBackToHome }) {
   const [languageStats, setLanguageStats] = useState({});
   const [error, setError] = useState('');
 
+  // Voice selection state (for TTS)
+  const [availableVoices, setAvailableVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState(null);
+  const [allowedTiers, setAllowedTiers] = useState([]);
+  const [planCode, setPlanCode] = useState('starter');
+
   const wsRef = useRef(null);
   const isInitializedRef = useRef(false); // Prevent duplicate initialization in Strict Mode
   const sessionCreatedRef = useRef(false); // Prevent duplicate session creation
@@ -325,6 +331,17 @@ export function HostPage({ onBackToHome }) {
     };
   }, []);
 
+  // Fetch voices when connection is established and language changes
+  useEffect(() => {
+    if (wsRef.current?.readyState === WebSocket.OPEN && sourceLang && connectionState === 'connected') {
+      console.log('[Host] Fetching voices for:', sourceLang);
+      wsRef.current.send(JSON.stringify({
+        type: 'tts/list_voices',
+        languageCode: sourceLang
+      }));
+    }
+  }, [sourceLang, connectionState]);
+
   const createSession = async () => {
     // Guard against duplicate session creation
     if (sessionCreatedRef.current) {
@@ -481,6 +498,20 @@ export function HostPage({ onBackToHome }) {
             return;
           }
           lastPartialSeqBySourceRef.current.set(message.sourceSeqId, message.seqId);
+        }
+
+        // Handle TTS voice list response
+        if (message.type === 'tts/voices') {
+          console.log('[Host] Received voices:', message.voices?.length, 'allowedTiers:', message.allowedTiers, 'plan:', message.planCode);
+          setAvailableVoices(message.voices || []);
+          setAllowedTiers(message.allowedTiers || []);
+          setPlanCode(message.planCode || 'starter');
+          // Auto-select first allowed voice if none selected
+          if (message.voices?.length > 0 && !selectedVoice) {
+            const firstAllowed = message.voices.find(v => v.isAllowed);
+            setSelectedVoice(firstAllowed || message.voices[0]);
+          }
+          return;
         }
 
         switch (message.type) {
