@@ -97,7 +97,7 @@ export async function loadAllCatalogs() {
         return _catalogCache;
     }
 
-    console.log('[CatalogLoader] Loading voice catalogs...');
+    console.log(`[CatalogLoader] Loading voice catalogs from: ${CATALOGS_DIR}`);
 
     const catalogs = {};
 
@@ -120,8 +120,8 @@ export async function loadAllCatalogs() {
             catalogs[key] = catalog;
             console.log(`[CatalogLoader] Loaded ${catalog.voices.length} voices from ${file}`);
         } catch (error) {
-            console.error(`[CatalogLoader] Failed to load ${file}:`, error.message);
-            throw error;
+            console.error(`[CatalogLoader] Failed to load ${file} (skipping):`, error.message);
+            // Do NOT re-throw, just skip this catalog
         }
     }
 
