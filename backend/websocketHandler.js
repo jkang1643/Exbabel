@@ -321,6 +321,98 @@ export async function handleHostConnection(clientWs, sessionId) {
           }
           sendAudioStreamEnd();
           break;
+
+        // TTS Handlers for Host
+        case 'tts/list_voices': {
+          console.log(`[Host] Requesting voice list for ${message.languageCode}`);
+          if (!message.languageCode) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'INVALID_REQUEST',
+                message: 'Missing required field: languageCode'
+              }));
+            }
+            return;
+          }
+
+          try {
+            const { getVoicesFor } = await import('./tts/voiceCatalog.js');
+            // Host gets all tiers by default
+            const ALL_TIERS = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash'];
+            const allowedTiers = ALL_TIERS;
+
+            const voices = await getVoicesFor({
+              languageCode: message.languageCode,
+              allowedTiers: ALL_TIERS
+            });
+
+            const clientVoices = voices.map(v => ({
+              tier: v.tier,
+              voiceId: v.voiceId,
+              voiceName: v.voiceName,
+              displayName: v.displayName,
+              isAllowed: true // Hosts are allowed everything
+            }));
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/voices',
+                languageCode: message.languageCode,
+                voices: clientVoices,
+                allowedTiers: allowedTiers,
+                planCode: 'host'
+              }));
+            }
+          } catch (error) {
+            console.error('[Host] Failed to list voices:', error);
+          }
+          break;
+        }
+
+        case 'tts/get_defaults': {
+          try {
+            const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
+            const orgId = 'default';
+            const defaults = await getOrgVoiceDefaults(orgId);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/defaults',
+                defaultsByLanguage: defaults
+              }));
+            }
+          } catch (error) {
+            console.error('[Host] Failed to get defaults:', error);
+          }
+          break;
+        }
+
+        case 'tts/set_default': {
+          // Assume Host implies admin for now, or check session.churchId ownership
+          // For simplicity, just allow it if authenticated
+          try {
+            const { setOrgVoiceDefault } = await import('./tts/defaults/defaultsStore.js');
+            const orgId = 'default';
+            await setOrgVoiceDefault(orgId, message.languageCode, message.tier, message.voiceName);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/ack',
+                action: 'set_default',
+                success: true
+              }));
+            }
+          } catch (error) {
+            console.error('[Host] Failed to set default:', error);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'SET_DEFAULT_FAILED',
+                message: error.message
+              }));
+            }
+          }
+          break;
+        }
       }
     } catch (error) {
       console.error('[Host] Error processing message:', error);
@@ -545,172 +637,167 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
       try {
         const message = JSON.parse(msg.toString());
 
-        // Voice Catalog Commands (PR4) - Feature-flagged
-        const VOICE_CATALOG_ENABLED = process.env.TTS_VOICE_CATALOG_ENABLED === 'true';
+        // tts/list_voices: Get available voices for a language
+        if (message.type === 'tts/list_voices') {
+          console.log(`[Listener] ${userName} requesting voice list for ${message.languageCode}`);
 
-        if (VOICE_CATALOG_ENABLED) {
-          // tts/list_voices: Get available voices for a language
-          if (message.type === 'tts/list_voices') {
-            console.log(`[Listener] ${userName} requesting voice list for ${message.languageCode}`);
-
-            if (!message.languageCode) {
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({
-                  type: 'tts/error',
-                  code: 'INVALID_REQUEST',
-                  message: 'Missing required field: languageCode'
-                }));
-              }
-              return;
-            }
-
-            try {
-              const { getVoicesFor } = await import('./tts/voiceCatalog.js');
-              const { getAllowedTtsTiers } = await import('./entitlements/index.js');
-
-              // Get entitlements from socket (set during connection)
-              const entitlements = clientWs.entitlements;
-              const planCode = entitlements?.subscription?.planCode || 'starter';
-              const ttsTier = entitlements?.limits?.ttsTier || 'starter';
-
-              // Get allowed tiers from entitlements (with fallback)
-              const allowedTiers = getAllowedTtsTiers(ttsTier) || ['standard', 'neural2', 'studio'];
-              console.log(`[Listener] Voice list: plan=${planCode} ttsTier=${ttsTier} allowedTiers=[${allowedTiers.join(', ')}]`);
-
-              // Get ALL voices for language by passing all possible tiers
-              // The frontend handles locked display based on isAllowed flag
-              const ALL_TIERS = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash'];
-              const voices = await getVoicesFor({
-                languageCode: message.languageCode,
-                allowedTiers: ALL_TIERS  // Get ALL voices, we'll mark isAllowed per-voice below
-              });
-
-              // Transform to client format with isAllowed flag
-              const clientVoices = voices.map(v => ({
-                tier: v.tier,
-                voiceId: v.voiceId,
-                voiceName: v.voiceName,
-                displayName: v.displayName,
-                isAllowed: allowedTiers.includes(v.tier)
+          if (!message.languageCode) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'INVALID_REQUEST',
+                message: 'Missing required field: languageCode'
               }));
-
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({
-                  type: 'tts/voices',
-                  languageCode: message.languageCode,
-                  voices: clientVoices,
-                  allowedTiers: allowedTiers, // Frontend uses this for tier-level locking UI
-                  planCode: planCode           // Frontend can show plan info
-                }));
-              }
-
-              console.log(`[Listener] Sent ${clientVoices.length} voices for ${message.languageCode} (${allowedTiers.length} tiers unlocked)`);
-            } catch (error) {
-              console.error('[Listener] Failed to list voices:', error);
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({
-                  type: 'tts/error',
-                  code: 'VOICE_LIST_FAILED',
-                  message: `Failed to list voices: ${error.message}`
-                }));
-              }
             }
             return;
           }
 
-          // tts/get_defaults: Get org voice defaults
-          if (message.type === 'tts/get_defaults') {
-            console.log(`[Listener] ${userName} requesting voice defaults`);
+          try {
+            const { getVoicesFor } = await import('./tts/voiceCatalog.js');
+            const { getAllowedTtsTiers } = await import('./entitlements/index.js');
 
-            try {
-              const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
+            // Get entitlements from socket (set during connection)
+            const entitlements = clientWs.entitlements;
+            const planCode = entitlements?.subscription?.planCode || 'starter';
+            const ttsTier = entitlements?.limits?.ttsTier || 'starter';
 
-              const orgId = 'default'; // TODO: Get from session/auth
-              const defaults = await getOrgVoiceDefaults(orgId);
+            // Get allowed tiers from entitlements (with fallback)
+            const allowedTiers = getAllowedTtsTiers(ttsTier) || ['standard', 'neural2', 'studio'];
+            console.log(`[Listener] Voice list: plan=${planCode} ttsTier=${ttsTier} allowedTiers=[${allowedTiers.join(', ')}]`);
 
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({
-                  type: 'tts/defaults',
-                  defaultsByLanguage: defaults
-                }));
-              }
+            // Get ALL voices for language by passing all possible tiers
+            // The frontend handles locked display based on isAllowed flag
+            const ALL_TIERS = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash'];
+            const voices = await getVoicesFor({
+              languageCode: message.languageCode,
+              allowedTiers: ALL_TIERS  // Get ALL voices, we'll mark isAllowed per-voice below
+            });
 
-              console.log(`[Listener] Sent voice defaults for ${Object.keys(defaults).length} languages`);
-            } catch (error) {
-              console.error('[Listener] Failed to get defaults:', error);
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({
-                  type: 'tts/error',
-                  code: 'GET_DEFAULTS_FAILED',
-                  message: `Failed to get defaults: ${error.message}`
-                }));
-              }
+            // Transform to client format with isAllowed flag
+            const clientVoices = voices.map(v => ({
+              tier: v.tier,
+              voiceId: v.voiceId,
+              voiceName: v.voiceName,
+              displayName: v.displayName,
+              isAllowed: allowedTiers.includes(v.tier)
+            }));
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/voices',
+                languageCode: message.languageCode,
+                voices: clientVoices,
+                allowedTiers: allowedTiers, // Frontend uses this for tier-level locking UI
+                planCode: planCode           // Frontend can show plan info
+              }));
+            }
+
+            console.log(`[Listener] Sent ${clientVoices.length} voices for ${message.languageCode} (${allowedTiers.length} tiers unlocked)`);
+          } catch (error) {
+            console.error('[Listener] Failed to list voices:', error);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'VOICE_LIST_FAILED',
+                message: `Failed to list voices: ${error.message}`
+              }));
+            }
+          }
+          return;
+        }
+
+        // tts/get_defaults: Get org voice defaults
+        if (message.type === 'tts/get_defaults') {
+          console.log(`[Listener] ${userName} requesting voice defaults`);
+
+          try {
+            const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
+
+            const orgId = 'default'; // TODO: Get from session/auth
+            const defaults = await getOrgVoiceDefaults(orgId);
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/defaults',
+                defaultsByLanguage: defaults
+              }));
+            }
+
+            console.log(`[Listener] Sent voice defaults for ${Object.keys(defaults).length} languages`);
+          } catch (error) {
+            console.error('[Listener] Failed to get defaults:', error);
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'GET_DEFAULTS_FAILED',
+                message: `Failed to get defaults: ${error.message}`
+              }));
+            }
+          }
+          return;
+        }
+
+        // tts/set_default: Set org voice default (admin only)
+        if (message.type === 'tts/set_default') {
+          console.log(`[Listener] ${userName} setting voice default`);
+
+          // Validate required fields
+          if (!message.languageCode || !message.tier || !message.voiceName) {
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: 'INVALID_REQUEST',
+                message: 'Missing required fields: languageCode, tier, voiceName'
+              }));
             }
             return;
           }
 
-          // tts/set_default: Set org voice default (admin only)
-          if (message.type === 'tts/set_default') {
-            console.log(`[Listener] ${userName} setting voice default`);
+          try {
+            const { isOrgAdmin } = await import('./tts/ttsTierHelper.js');
+            const { setOrgVoiceDefault } = await import('./tts/defaults/defaultsStore.js');
 
-            // Validate required fields
-            if (!message.languageCode || !message.tier || !message.voiceName) {
+            const orgId = 'default'; // TODO: Get from session/auth
+            const userId = userName || 'anonymous';
+
+            // Check admin permissions
+            if (!isOrgAdmin(orgId, userId)) {
               if (clientWs.readyState === WebSocket.OPEN) {
                 clientWs.send(JSON.stringify({
                   type: 'tts/error',
-                  code: 'INVALID_REQUEST',
-                  message: 'Missing required fields: languageCode, tier, voiceName'
+                  code: 'NOT_AUTHORIZED',
+                  message: 'Admin permissions required to set voice defaults'
                 }));
               }
               return;
             }
 
-            try {
-              const { isOrgAdmin } = await import('./tts/ttsTierHelper.js');
-              const { setOrgVoiceDefault } = await import('./tts/defaults/defaultsStore.js');
+            // Set the default (validation happens inside setOrgVoiceDefault)
+            await setOrgVoiceDefault(orgId, message.languageCode, message.tier, message.voiceName);
 
-              const orgId = 'default'; // TODO: Get from session/auth
-              const userId = userName || 'anonymous';
-
-              // Check admin permissions
-              if (!isOrgAdmin(orgId, userId)) {
-                if (clientWs.readyState === WebSocket.OPEN) {
-                  clientWs.send(JSON.stringify({
-                    type: 'tts/error',
-                    code: 'NOT_AUTHORIZED',
-                    message: 'Admin permissions required to set voice defaults'
-                  }));
-                }
-                return;
-              }
-
-              // Set the default (validation happens inside setOrgVoiceDefault)
-              await setOrgVoiceDefault(orgId, message.languageCode, message.tier, message.voiceName);
-
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({
-                  type: 'tts/ack',
-                  action: 'set_default',
-                  success: true
-                }));
-              }
-
-              console.log(`[Listener] Set voice default for ${message.languageCode}: ${message.tier}/${message.voiceName}`);
-            } catch (error) {
-              console.error('[Listener] Failed to set default:', error);
-
-              const errorCode = error.message.includes('Invalid voice') ? 'INVALID_VOICE' : 'SET_DEFAULT_FAILED';
-
-              if (clientWs.readyState === WebSocket.OPEN) {
-                clientWs.send(JSON.stringify({
-                  type: 'tts/error',
-                  code: errorCode,
-                  message: error.message
-                }));
-              }
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/ack',
+                action: 'set_default',
+                success: true
+              }));
             }
-            return;
+
+            console.log(`[Listener] Set voice default for ${message.languageCode}: ${message.tier}/${message.voiceName}`);
+          } catch (error) {
+            console.error('[Listener] Failed to set default:', error);
+
+            const errorCode = error.message.includes('Invalid voice') ? 'INVALID_VOICE' : 'SET_DEFAULT_FAILED';
+
+            if (clientWs.readyState === WebSocket.OPEN) {
+              clientWs.send(JSON.stringify({
+                type: 'tts/error',
+                code: errorCode,
+                message: error.message
+              }));
+            }
           }
+          return;
         }
 
         // TTS command handlers
