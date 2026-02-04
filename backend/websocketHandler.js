@@ -263,7 +263,7 @@ export async function handleHostConnection(clientWs, sessionId) {
   };
 
   // Handle client messages
-  clientWs.on('message', (msg) => {
+  clientWs.on('message', async (msg) => {
     try {
       const message = JSON.parse(msg.toString());
 
