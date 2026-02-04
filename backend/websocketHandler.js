@@ -3,6 +3,9 @@
  */
 
 import WebSocket from 'ws';
+import { GoogleSpeechStream } from './googleSpeechStream.js';
+import { getVoicesFor } from './tts/voiceCatalog.js';
+import { getOrgVoiceDefaults, setOrgVoiceDefault } from './tts/defaults/defaultsStore.js';
 import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
 import { normalizePunctuation } from './transcriptionCleanup.js';
@@ -337,7 +340,7 @@ export async function handleHostConnection(clientWs, sessionId) {
           }
 
           try {
-            const { getVoicesFor } = await import('./tts/voiceCatalog.js');
+            // const { getVoicesFor } = await import('./tts/voiceCatalog.js');
             // Host gets all tiers by default
             const ALL_TIERS = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash'];
             const allowedTiers = ALL_TIERS;
@@ -372,7 +375,7 @@ export async function handleHostConnection(clientWs, sessionId) {
 
         case 'tts/get_defaults': {
           try {
-            const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
+            // const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
             const orgId = 'default';
             const defaults = await getOrgVoiceDefaults(orgId);
             if (clientWs.readyState === WebSocket.OPEN) {
@@ -391,7 +394,7 @@ export async function handleHostConnection(clientWs, sessionId) {
           // Assume Host implies admin for now, or check session.churchId ownership
           // For simplicity, just allow it if authenticated
           try {
-            const { setOrgVoiceDefault } = await import('./tts/defaults/defaultsStore.js');
+            // const { setOrgVoiceDefault } = await import('./tts/defaults/defaultsStore.js');
             const orgId = 'default';
             await setOrgVoiceDefault(orgId, message.languageCode, message.tier, message.voiceName);
             if (clientWs.readyState === WebSocket.OPEN) {
@@ -653,7 +656,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           }
 
           try {
-            const { getVoicesFor } = await import('./tts/voiceCatalog.js');
+            // const { getVoicesFor } = await import('./tts/voiceCatalog.js');
 
             // REMOVED: Dynamic import of entitlements (potential failure point)
             // const { getAllowedTtsTiers } = await import('./entitlements/index.js');
@@ -720,7 +723,7 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
           console.log(`[Listener] ${userName} requesting voice defaults`);
 
           try {
-            const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
+            // const { getOrgVoiceDefaults } = await import('./tts/defaults/defaultsStore.js');
 
             const orgId = 'default'; // TODO: Get from session/auth
             const defaults = await getOrgVoiceDefaults(orgId);
