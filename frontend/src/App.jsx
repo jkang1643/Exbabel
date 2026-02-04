@@ -13,6 +13,7 @@ import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { LoginPage } from '@/components/auth/LoginPage'
 import { JoinPage } from '@/components/JoinPage'
 import { JoinChurchPage } from '@/components/JoinChurchPage'
+import { CreateChurchPage } from '@/components/CreateChurchPage'
 import { VisitorHome } from '@/components/home/VisitorHome'
 import { MemberHome } from '@/components/home/MemberHome'
 import { AdminHome } from '@/components/home/AdminHome'
@@ -22,7 +23,7 @@ import { ListenerPage } from './components/ListenerPage'
 import DemoPage from './components/DemoPage'
 
 function AppContent() {
-  const { user, profile, loading, isAuthenticated, isVisitor, isMember, isAdmin, signOut } = useAuth()
+  const { user, profile, loading, isAuthenticated, isVisitor, isMember, isAdmin, hasChurch, signOut } = useAuth()
   const [mode, setMode] = useState('home') // Default to home (will resolve to correct home based on state)
   const [sessionCode, setSessionCode] = useState('')
 
@@ -76,8 +77,12 @@ function AppContent() {
   }
 
   const handleCreateChurch = () => {
-    // TODO: Future - Navigate to church creation flow
-    alert('Church creation coming soon!')
+    // If not authenticated, route to login first
+    if (!isAuthenticated) {
+      setMode('login')
+    } else {
+      setMode('create-church')
+    }
   }
 
   const handleChurchJoinSuccess = () => {
@@ -119,6 +124,16 @@ function AppContent() {
     )
   }
 
+  // Create church page - SaaS-style onboarding for new admins
+  if (mode === 'create-church') {
+    return (
+      <CreateChurchPage
+        onBack={handleBackToHome}
+        onSuccess={handleChurchJoinSuccess}
+      />
+    )
+  }
+
   // Solo mode - requires church membership
   if (mode === 'solo') {
     if (!isAuthenticated || isVisitor) {
@@ -138,9 +153,19 @@ function AppContent() {
   }
 
   // Home page - route to appropriate home based on user state
-  // Priority: Admin > Member > Visitor
+  // Priority: Admin with church > Admin without church (onboarding) > Member > Visitor
   if (mode === 'home' || mode === 'join') {
     if (isAdmin) {
+      // Admin without a church -> redirect to onboarding
+      if (!hasChurch) {
+        return (
+          <CreateChurchPage
+            onBack={handleSignOut}
+            onSuccess={handleChurchJoinSuccess}
+          />
+        )
+      }
+      // Admin with a church -> show dashboard
       return (
         <AdminHome
           onHostSession={() => setMode('host')}

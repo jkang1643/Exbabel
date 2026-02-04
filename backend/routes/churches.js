@@ -107,7 +107,7 @@ churchRouter.post('/churches/join', requireAuth, async (req, res) => {
             .insert({
                 user_id: userId,
                 church_id: churchId,
-                role: 'member'
+                role: 'admin'  // Default to admin for all new users
             })
             .select('user_id, church_id, role')
             .single();
@@ -200,6 +200,152 @@ churchRouter.post('/churches/leave', requireAuth, async (req, res) => {
         });
     } catch (err) {
         console.error('[Churches] Unexpected error:', err.message);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+/**
+ * POST /api/churches/create
+ * Create a new church (requires authentication)
+ * 
+ * Creates the church and sets up the user as admin with:
+ * - Profile with role='admin'
+ * - Subscription with 'starter' plan 
+ * - Church billing settings with defaults
+ * 
+ * Body:
+ * - name: Church name (required, 2-100 characters)
+ * 
+ * Enforces DB Invariants:
+ * - Every profile has exactly one church (Invariant #2)
+ * - One subscription per church, never missing (Invariant #8)
+ * - One billing_settings row per church, never missing (Invariant #9)
+ */
+churchRouter.post('/churches/create', requireAuth, async (req, res) => {
+    try {
+        const { name } = req.body;
+        const userId = req.auth.user_id;
+
+        // Validate church name
+        if (!name || typeof name !== 'string') {
+            return res.status(400).json({ error: 'Church name is required' });
+        }
+
+        const trimmedName = name.trim();
+        if (trimmedName.length < 2 || trimmedName.length > 100) {
+            return res.status(400).json({
+                error: 'Church name must be between 2 and 100 characters'
+            });
+        }
+
+        // Check if user already has a profile (Invariant: one church per user)
+        const { data: existingProfile } = await supabaseAdmin
+            .from('profiles')
+            .select('user_id, church_id')
+            .eq('user_id', userId)
+            .single();
+
+        if (existingProfile) {
+            return res.status(400).json({
+                error: 'You are already a member of a church. Each user can only belong to one church.',
+                code: 'ALREADY_HAS_CHURCH',
+                currentChurchId: existingProfile.church_id
+            });
+        }
+
+        // Get the starter plan ID
+        const { data: starterPlan, error: planErr } = await supabaseAdmin
+            .from('plans')
+            .select('id')
+            .eq('code', 'starter')
+            .single();
+
+        if (planErr || !starterPlan) {
+            console.error('[Churches] Starter plan not found:', planErr?.message);
+            return res.status(500).json({ error: 'System configuration error' });
+        }
+
+        // Step 1: Create the church
+        const { data: newChurch, error: churchErr } = await supabaseAdmin
+            .from('churches')
+            .insert({ name: trimmedName })
+            .select('id, name, created_at')
+            .single();
+
+        if (churchErr) {
+            console.error('[Churches] Create church error:', churchErr.message);
+            return res.status(500).json({ error: 'Failed to create church' });
+        }
+
+        const churchId = newChurch.id;
+        console.log(`[Churches] Created church: ${trimmedName} (${churchId})`);
+
+        // Step 2: Create admin profile (Invariant #2: profile -> church)
+        const { data: newProfile, error: profileErr } = await supabaseAdmin
+            .from('profiles')
+            .insert({
+                user_id: userId,
+                church_id: churchId,
+                role: 'admin'
+            })
+            .select('user_id, church_id, role')
+            .single();
+
+        if (profileErr) {
+            console.error('[Churches] Create profile error:', profileErr.message);
+            // Rollback: delete the church since profile failed
+            await supabaseAdmin.from('churches').delete().eq('id', churchId);
+            return res.status(500).json({ error: 'Failed to create admin profile' });
+        }
+
+        // Step 3: Create subscription with starter plan (Invariant #8: one subscription per church)
+        const { error: subErr } = await supabaseAdmin
+            .from('subscriptions')
+            .insert({
+                church_id: churchId,
+                plan_id: starterPlan.id,
+                status: 'active',
+                current_period_start: new Date().toISOString(),
+                current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+            });
+
+        if (subErr) {
+            console.error('[Churches] Create subscription error:', subErr.message);
+            // Rollback: delete profile and church
+            await supabaseAdmin.from('profiles').delete().eq('user_id', userId);
+            await supabaseAdmin.from('churches').delete().eq('id', churchId);
+            return res.status(500).json({ error: 'Failed to create subscription' });
+        }
+
+        // Step 4: Create billing settings with defaults (Invariant #9: one billing_settings per church)
+        const { error: billingErr } = await supabaseAdmin
+            .from('church_billing_settings')
+            .insert({
+                church_id: churchId,
+                payg_enabled: false,
+                payg_rate_cents_per_hour: 0,
+                allow_overage_while_live: false
+            });
+
+        if (billingErr) {
+            console.error('[Churches] Create billing settings error:', billingErr.message);
+            // Rollback: delete subscription, profile, and church
+            await supabaseAdmin.from('subscriptions').delete().eq('church_id', churchId);
+            await supabaseAdmin.from('profiles').delete().eq('user_id', userId);
+            await supabaseAdmin.from('churches').delete().eq('id', churchId);
+            return res.status(500).json({ error: 'Failed to create billing settings' });
+        }
+
+        console.log(`[Churches] ✅ User ${userId} created church "${trimmedName}" and is now admin`);
+
+        res.json({
+            success: true,
+            message: `Welcome to ${trimmedName}! You are now the administrator.`,
+            church: newChurch,
+            profile: newProfile
+        });
+    } catch (err) {
+        console.error('[Churches] Unexpected error in create:', err.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

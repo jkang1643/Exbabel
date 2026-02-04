@@ -57,10 +57,13 @@ node tts/inventory/cli.js report --provider=all
 
 ### ElevenLabs
 - **Authentication**: Requires `ELEVENLABS_API_KEY` in `backend/.env`.
+- **Voice Count**: 23 custom church-themed voices per model family.
 - **Tier Splitting**: Inventory is split by family/model to show accurate coverage:
-    - `elevenlabs_v3`: High-fidelity, 75+ languages.
-    - `elevenlabs_turbo` / `elevenlabs_flash`: Low-latency, 29 languages.
+    - `elevenlabs_v3`: High-fidelity, 75+ languages, 23 custom voices.
+    - `elevenlabs_turbo` / `elevenlabs_flash`: Low-latency, 29 languages, 23 custom voices each.
+    - `elevenlabs` (legacy): Multilingual model, 23 custom voices.
 - **Format**: Each physical voice is expanded into separate entries for each supported tier in the inventory.
+- **Note**: Pre-made ElevenLabs voices (Roger, Sarah, Laura, etc.) are excluded from catalogs.
 
 ---
 

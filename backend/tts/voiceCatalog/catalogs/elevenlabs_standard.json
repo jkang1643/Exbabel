@@ -4,33 +4,185 @@
     "tier": "elevenlabs",
     "voices": [
         {
-            "voiceId": "elevenlabs:elevenlabs:-:pNInz6obpgDQGcFmaJgB",
-            "voiceName": "pNInz6obpgDQGcFmaJgB",
-            "displayName": "Adam (Legacy)",
+            "voiceId": "elevenlabs:elevenlabs:-:3qAbeQHx5LFO5BGhoRFu",
+            "voiceName": "3qAbeQHx5LFO5BGhoRFu",
+            "displayName": "Megachurch Pastor (Non Denominal)",
             "languageCodes": [
                 "en"
             ]
         },
         {
-            "voiceId": "elevenlabs:elevenlabs:-:EXAVITQu4vr4xnSDxMaL",
-            "voiceName": "EXAVITQu4vr4xnSDxMaL",
-            "displayName": "Sarah (Legacy)",
+            "voiceId": "elevenlabs:elevenlabs:-:6ULBlFbiIcSfUTPDoCBr",
+            "voiceName": "6ULBlFbiIcSfUTPDoCBr",
+            "displayName": "Co Pastor Sarah Brown  ",
             "languageCodes": [
                 "en"
             ]
         },
         {
-            "voiceId": "elevenlabs:elevenlabs:-:CwhRBWXzGAHq8TQ4Fs17",
-            "voiceName": "CwhRBWXzGAHq8TQ4Fs17",
-            "displayName": "Roger (Legacy)",
+            "voiceId": "elevenlabs:elevenlabs:-:7Bifw1xrnHSCa7hFM3NL",
+            "voiceName": "7Bifw1xrnHSCa7hFM3NL",
+            "displayName": "Evangelist Matt Morgan",
             "languageCodes": [
                 "en"
             ]
         },
         {
-            "voiceId": "elevenlabs:elevenlabs:-:IKne3meq5aSn9XLyUdCD",
-            "voiceName": "IKne3meq5aSn9XLyUdCD",
-            "displayName": "Charlie (Legacy)",
+            "voiceId": "elevenlabs:elevenlabs:-:A4Z5pdlHEoTg9kcHqeTJ",
+            "voiceName": "A4Z5pdlHEoTg9kcHqeTJ",
+            "displayName": "The Calm Neutral Translator Michael Kent",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:DfCUQ0uJkSQyc3SLt6SR",
+            "voiceName": "DfCUQ0uJkSQyc3SLt6SR",
+            "displayName": "Bishop John Doe",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:DxGpBkqaqpY9InLDYdjU",
+            "voiceName": "DxGpBkqaqpY9InLDYdjU",
+            "displayName": "Ladies Ministry Leader Hailey Brown",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:G0Su1fHJJbOxBSsts7tz",
+            "voiceName": "G0Su1fHJJbOxBSsts7tz",
+            "displayName": "Default Preacher Voice Kent McMahon ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:GByWWQucXLQ4xu9rWt4a",
+            "voiceName": "GByWWQucXLQ4xu9rWt4a",
+            "displayName": "Father John Linsley ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:JbUYMgMtGIECH6cuiSNT",
+            "voiceName": "JbUYMgMtGIECH6cuiSNT",
+            "displayName": "Lead Women's Pastor Sarah Behringer ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:NFTiwwj75p1T4BMsMuoC",
+            "voiceName": "NFTiwwj75p1T4BMsMuoC",
+            "displayName": "Teacher Warren Davis",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:OD2yvQtROA7HbZrCdll4",
+            "voiceName": "OD2yvQtROA7HbZrCdll4",
+            "displayName": "Pastor John Doe ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:TTTdffYGKs3RjJcHKFXd",
+            "voiceName": "TTTdffYGKs3RjJcHKFXd",
+            "displayName": "Senior Pastor Kent Rhyne",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:Ug7tEihDyDSoPerGnzfe",
+            "voiceName": "Ug7tEihDyDSoPerGnzfe",
+            "displayName": "General Superintendent John Roosevelt ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:XieIuNv3xJy5XqXfzd4F",
+            "voiceName": "XieIuNv3xJy5XqXfzd4F",
+            "displayName": "Bishop Richard Peterson ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:YpL34qrLhzyGAuilcl80",
+            "voiceName": "YpL34qrLhzyGAuilcl80",
+            "displayName": "College Evangelist Arnold Schaffer",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:YrCexSnFvAZSCCK2eptB",
+            "voiceName": "YrCexSnFvAZSCCK2eptB",
+            "displayName": "Worship Leader Sadie Rawlingson",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:cMQZTXPJqY4fKNql36zx",
+            "voiceName": "cMQZTXPJqY4fKNql36zx",
+            "displayName": "Reverend Michael T. Jones ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:esmQ09pjyzsSL1LBQWfD",
+            "voiceName": "esmQ09pjyzsSL1LBQWfD",
+            "displayName": "Pastor Jim Arnold Sr. III",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:hGQwvCDDBfupQc9hCg6y",
+            "voiceName": "hGQwvCDDBfupQc9hCg6y",
+            "displayName": "Student Ministries Group Leader Evan Williams",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:lIgKxXSZQXt2IaGQPqQr",
+            "voiceName": "lIgKxXSZQXt2IaGQPqQr",
+            "displayName": "Missionary and Expert Translator Lincoln Allister",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:pUkzxh46hCMhYIE1juJL",
+            "voiceName": "pUkzxh46hCMhYIE1juJL",
+            "displayName": "Youth Pastor Anthony Dawkins",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:qG7UXc4278f4DT8B2SN3",
+            "voiceName": "qG7UXc4278f4DT8B2SN3",
+            "displayName": "Assistant Pastor Chad Holmes  ",
+            "languageCodes": [
+                "en"
+            ]
+        },
+        {
+            "voiceId": "elevenlabs:elevenlabs:-:tpNVqoyOdBhS7L6sDLTq",
+            "voiceName": "tpNVqoyOdBhS7L6sDLTq",
+            "displayName": "Evangelist Abraham Julius Johnson",
             "languageCodes": [
                 "en"
             ]

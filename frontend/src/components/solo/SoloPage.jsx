@@ -5,6 +5,7 @@ import { useTtsQueue } from '../../hooks/useTtsQueue';
 import { useTtsStreaming } from '../../hooks/useTtsStreaming';
 import { useAudioCapture } from '../../hooks/useAudioCapture';
 import { useQuotaWarning } from '../../hooks/useQuotaWarning';
+import { useAuth } from '@/contexts/AuthContext';
 import ModeSelector from './ModeSelector';
 import LanguageSelector from './LanguageSelector';
 import StatusIndicator from './StatusIndicator';
@@ -23,6 +24,9 @@ import { UsageLimitModal, QuotaWarningToast } from '../ui/UsageLimitModal';
  * No push-to-talk, no holding buttons.
  */
 export function SoloPage({ onBackToHome }) {
+    // Auth context for token
+    const { getAccessToken } = useAuth();
+
     // Connection state
     const [ws, setWs] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
@@ -150,7 +154,11 @@ export function SoloPage({ onBackToHome }) {
     const getWebSocketUrl = () => {
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = import.meta.env.VITE_WS_URL || `${wsProtocol}//${window.location.hostname}:3001`;
-        return `${host}/translate`;
+        const baseUrl = `${host}/translate`;
+
+        // Add auth token if available
+        const token = getAccessToken();
+        return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl;
     };
 
     // Connect to WebSocket

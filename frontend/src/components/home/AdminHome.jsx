@@ -37,6 +37,11 @@ export function AdminHome({ onHostSession, onSoloMode, onJoinSession, onSignOut 
                         <h1 className="text-3xl md:text-4xl font-bold text-gray-800 mb-2">
                             Admin Dashboard 👑
                         </h1>
+                        {profile?.church_name && (
+                            <p className="text-xl font-semibold text-amber-700 mb-1">
+                                ⛪ {profile.church_name}
+                            </p>
+                        )}
                         <p className="text-gray-600">
                             {user?.email} • Administrator
                         </p>
