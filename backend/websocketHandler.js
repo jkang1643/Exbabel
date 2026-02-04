@@ -12,7 +12,6 @@ import translationManager from './translationManager.js';
 import { normalizePunctuation } from './transcriptionCleanup.js';
 import { getEntitlements } from './entitlements/index.js';
 import { startListening, heartbeat, stopListening } from './usage/index.js';
-import { trace } from '@opentelemetry/api';
 
 /**
  * Handle host connection
@@ -486,7 +485,7 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
   console.log(`[Listener] 🎧 Handling connection for ${userName} (Lang: ${targetLang}, Session: ${sessionId}) - Code Version: VERIFIED_FIX_V2`);
 
   // Start OpenTelemetry span
-  const span = trace.getTracer('exbabel-backend').startSpan('listener_connection');
+  // const span = trace.getTracer('exbabel-backend').startSpan('listener_connection');
 
   const session = sessionStore.getSession(sessionId);
   if (!session) {
