@@ -654,19 +654,28 @@ export function handleListenerConnection(clientWs, sessionId, targetLang, userNa
 
           try {
             const { getVoicesFor } = await import('./tts/voiceCatalog.js');
-            const { getAllowedTtsTiers } = await import('./entitlements/index.js');
+
+            // REMOVED: Dynamic import of entitlements (potential failure point)
+            // const { getAllowedTtsTiers } = await import('./entitlements/index.js');
 
             // Get entitlements from socket (set during connection)
             const entitlements = clientWs.entitlements;
             const planCode = entitlements?.subscription?.planCode || 'starter';
             const ttsTier = entitlements?.limits?.ttsTier || 'starter';
 
-            // Get allowed tiers from entitlements (with fallback)
-            const allowedTiers = getAllowedTtsTiers(ttsTier) || ['standard', 'neural2', 'studio'];
+            // Inline getAllowedTtsTiers logic (Failsafe)
+            let allowedTiers = ['standard', 'neural2', 'studio'];
+            if (ttsTier === 'pro') {
+              allowedTiers = ['chirp3_hd', 'gemini', 'standard', 'neural2', 'studio'];
+            } else if (ttsTier === 'unlimited') {
+              allowedTiers = ['gemini', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash', 'chirp3_hd', 'standard', 'neural2', 'studio'];
+            } else if (ttsTier === 'none') {
+              allowedTiers = [];
+            }
+
             console.log(`[Listener] Voice list: plan=${planCode} ttsTier=${ttsTier} allowedTiers=[${allowedTiers.join(', ')}]`);
 
             // Get ALL voices for language by passing all possible tiers
-            // The frontend handles locked display based on isAllowed flag
             const ALL_TIERS = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard', 'elevenlabs', 'elevenlabs_v3', 'elevenlabs_turbo', 'elevenlabs_flash'];
             const voices = await getVoicesFor({
               languageCode: message.languageCode,
