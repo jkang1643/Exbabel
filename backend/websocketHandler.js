@@ -3,6 +3,7 @@
  */
 
 import WebSocket from 'ws';
+import crypto from 'crypto';
 import { GoogleSpeechStream } from './googleSpeechStream.js';
 import { getVoicesFor } from './tts/voiceCatalog.js';
 import { getOrgVoiceDefaults, setOrgVoiceDefault } from './tts/defaults/defaultsStore.js';
@@ -11,6 +12,7 @@ import translationManager from './translationManager.js';
 import { normalizePunctuation } from './transcriptionCleanup.js';
 import { getEntitlements } from './entitlements/index.js';
 import { startListening, heartbeat, stopListening } from './usage/index.js';
+import { trace } from '@opentelemetry/api';
 
 /**
  * Handle host connection
@@ -481,7 +483,7 @@ const LISTENING_HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds
  * Handle listener connection
  */
 export async function handleListenerConnection(clientWs, sessionId, targetLang, userName) {
-  console.log(`[Listener] 🎧 Handling connection for ${userName} (Lang: ${targetLang}, Session: ${sessionId}) - Code Version: StaticImports+NoFlag`);
+  console.log(`[Listener] 🎧 Handling connection for ${userName} (Lang: ${targetLang}, Session: ${sessionId}) - Code Version: VERIFIED_FIX_V2`);
 
   // Start OpenTelemetry span
   const span = trace.getTracer('exbabel-backend').startSpan('listener_connection');
