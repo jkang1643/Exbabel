@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { isSystemAudioSupported } from '../utils/deviceDetection'
 
 export function useAudioCapture() {
@@ -9,7 +9,7 @@ export function useAudioCapture() {
   const [audioSource, setAudioSource] = useState('microphone') // 'microphone' or 'system'
   const [currentDeviceLabel, setCurrentDeviceLabel] = useState('')
   const [deviceWarning, setDeviceWarning] = useState('')
-  
+
   const mediaRecorderRef = useRef(null)
   const audioContextRef = useRef(null)
   const analyserRef = useRef(null)
@@ -19,16 +19,32 @@ export function useAudioCapture() {
   const stopRecordingRef = useRef(null)
   const isRecordingActiveRef = useRef(false) // Flag to prevent messages after stopping
 
+  // Enumerate audio devices on mount so they're available in settings before broadcasting
+  useEffect(() => {
+    const enumerateAudioDevices = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        const audioInputs = devices.filter(device => device.kind === 'audioinput')
+        setAvailableDevices(audioInputs)
+        console.log('🎤 Pre-enumerated audio input devices:', audioInputs.length)
+      } catch (error) {
+        console.error('Failed to enumerate audio devices:', error)
+      }
+    }
+
+    enumerateAudioDevices()
+  }, [])
+
   const startRecording = useCallback(async (onAudioChunk, streaming = false) => {
     try {
       let stream
-      
+
       if (audioSource === 'system') {
         // System audio capture using getDisplayMedia
         if (!isSystemAudioSupported()) {
           throw new Error('System audio capture is not supported on this device')
         }
-        
+
         console.log('🔊 Requesting system audio capture...')
         // Note: Most browsers require video: true even for audio-only capture
         // We'll just use the audio tracks and ignore video tracks
@@ -42,7 +58,7 @@ export function useAudioCapture() {
             channelCount: 2 // System audio is usually stereo
           }
         })
-        
+
         // Check if we got audio tracks (user must check "Share audio" in browser prompt)
         const audioTracks = displayStream.getAudioTracks()
         if (audioTracks.length === 0) {
@@ -50,17 +66,17 @@ export function useAudioCapture() {
           displayStream.getVideoTracks().forEach(track => track.stop())
           throw new Error('No audio tracks available. Please make sure to select "Share audio" or check the audio option in the browser prompt.')
         }
-        
+
         // Stop video tracks immediately since we only need audio
         displayStream.getVideoTracks().forEach(track => {
           track.stop()
           displayStream.removeTrack(track)
         })
-        
+
         // Create a new stream with only audio tracks
         stream = new MediaStream(audioTracks)
         console.log('🔊 System audio capture started with', audioTracks.length, 'audio track(s)')
-        
+
         // Listen for when user stops sharing (browser's stop button)
         audioTracks.forEach(track => {
           track.onended = () => {
@@ -75,37 +91,37 @@ export function useAudioCapture() {
         // First, enumerate devices to see what's available
         const devices = await navigator.mediaDevices.enumerateDevices()
         const audioInputs = devices.filter(device => device.kind === 'audioinput')
-        
+
         setAvailableDevices(audioInputs)
-        
+
         console.log('🎤 Available audio input devices:')
         audioInputs.forEach((device, index) => {
           console.log(`  ${index}: ${device.label || 'Unknown Device'} (${device.deviceId})`)
         })
-        
+
         // Use selected device, or find the actual microphone (not system audio or loopback)
         let deviceId = selectedDeviceId
-        
+
         if (!deviceId) {
           // Auto-select: Prioritize devices with "microphone" or "mic" in the label
           // Avoid "Stereo Mix", "Wave Out", "System Audio", etc.
           const micDevice = audioInputs.find(device => {
             const label = device.label.toLowerCase()
             return (label.includes('microphone') || label.includes('mic')) &&
-                   !label.includes('stereo mix') &&
-                   !label.includes('wave out') &&
-                   !label.includes('system audio') &&
-                   !label.includes('loopback')
+              !label.includes('stereo mix') &&
+              !label.includes('wave out') &&
+              !label.includes('system audio') &&
+              !label.includes('loopback')
           }) || audioInputs[0]
-          
+
           deviceId = micDevice?.deviceId
           console.log(`🎤 Auto-selected device: ${micDevice?.label || 'Default'}`)
         } else {
           const device = audioInputs.find(d => d.deviceId === deviceId)
           console.log(`🎤 Using manually selected device: ${device?.label || 'Unknown'}`)
         }
-        
-        stream = await navigator.mediaDevices.getUserMedia({ 
+
+        stream = await navigator.mediaDevices.getUserMedia({
           audio: {
             deviceId: deviceId ? { exact: deviceId } : undefined,
             sampleRate: 24000,  // Higher quality for better transcription
@@ -116,12 +132,12 @@ export function useAudioCapture() {
             advanced: [
               { echoCancellation: { ideal: true } }
             ]
-          } 
+          }
         })
       }
-      
+
       streamRef.current = stream
-      
+
       // Log the actual track settings
       const audioTrack = stream.getAudioTracks()[0]
       const emoji = audioSource === 'system' ? '🔊' : '🎤'
@@ -141,13 +157,13 @@ export function useAudioCapture() {
       // Start level monitoring
       const monitorLevel = () => {
         if (!analyserRef.current) return
-        
+
         const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount)
         analyserRef.current.getByteFrequencyData(dataArray)
-        
+
         const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length
         setAudioLevel(average / 255)
-        
+
         animationFrameRef.current = requestAnimationFrame(monitorLevel)
       }
       monitorLevel()
@@ -157,14 +173,14 @@ export function useAudioCapture() {
         try {
           // Load the AudioWorklet module
           await audioContextRef.current.audioWorklet.addModule('/audio-stream-processor.js')
-          
+
           // Create AudioWorklet node
           const workletNode = new AudioWorkletNode(
             audioContextRef.current,
             'stream-processor'
           )
           audioProcessorRef.current = workletNode
-          
+
           // Listen for processed audio from worklet (runs on separate thread!)
           workletNode.port.onmessage = (event) => {
             // CRITICAL: Only process audio if recording is still active
@@ -172,7 +188,7 @@ export function useAudioCapture() {
             if (!isRecordingActiveRef.current) {
               return
             }
-            
+
             if (event.data.type === 'audio') {
               // Convert Int16Array to base64
               const pcmData = event.data.data
@@ -189,34 +205,34 @@ export function useAudioCapture() {
               })
             }
           }
-          
+
           // Connect audio graph
           source.connect(workletNode)
-          
+
           // Create silent output to satisfy browser
           const silentGain = audioContextRef.current.createGain()
           silentGain.gain.value = 0
           workletNode.connect(silentGain)
           silentGain.connect(audioContextRef.current.destination)
-          
+
           console.log('🎤 ✅ AudioWorklet initialized (audio processing OFF main thread)')
-          
+
         } catch (error) {
           console.error('❌ AudioWorklet failed, falling back to ScriptProcessor:', error)
-          
+
           // FALLBACK: Use deprecated ScriptProcessor if AudioWorklet not supported
           const bufferSize = 4096
           const processor = audioContextRef.current.createScriptProcessor(bufferSize, 1, 1)
           audioProcessorRef.current = processor
-          
+
           processor.onaudioprocess = (e) => {
             // CRITICAL: Only process audio if recording is still active
             if (!isRecordingActiveRef.current) {
               return
             }
-            
+
             const inputData = e.inputBuffer.getChannelData(0)
-            
+
             // Convert Float32Array to Int16Array (PCM format)
             const pcmData = new Int16Array(inputData.length)
             for (let i = 0; i < inputData.length; i++) {
@@ -224,20 +240,20 @@ export function useAudioCapture() {
               const s = Math.max(-1, Math.min(1, inputData[i]))
               pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
             }
-            
+
             // Convert to base64
             const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(pcmData.buffer)))
             onAudioChunk(base64)
           }
-          
+
           // Create a silent gain node to satisfy browser requirements
           const silentGain = audioContextRef.current.createGain()
           silentGain.gain.value = 0 // Mute completely
-          
+
           source.connect(processor)
           processor.connect(silentGain)
           silentGain.connect(audioContextRef.current.destination)
-          
+
           console.warn('⚠️ Using deprecated ScriptProcessor (may block UI rendering)')
         }
       } else {
@@ -245,9 +261,9 @@ export function useAudioCapture() {
         mediaRecorderRef.current = new MediaRecorder(stream, {
           mimeType: 'audio/webm;codecs=opus'
         })
-        
+
         const audioChunks = []
-        
+
         mediaRecorderRef.current.ondataavailable = (event) => {
           if (event.data.size > 0) {
             audioChunks.push(event.data)
@@ -256,7 +272,7 @@ export function useAudioCapture() {
 
         mediaRecorderRef.current.onstop = async () => {
           const audioBlob = new Blob(audioChunks, { type: 'audio/webm' })
-          
+
           // Convert to base64 for transmission
           const reader = new FileReader()
           reader.onloadend = () => {
@@ -268,7 +284,7 @@ export function useAudioCapture() {
 
         mediaRecorderRef.current.start(100)
       }
-      
+
       // Set recording active flag BEFORE setIsRecording to prevent race conditions
       isRecordingActiveRef.current = true
       setIsRecording(true)
@@ -282,7 +298,7 @@ export function useAudioCapture() {
   const stopRecording = useCallback(() => {
     // CRITICAL: Set flag FIRST to stop any pending audio messages
     isRecordingActiveRef.current = false
-    
+
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop()
       mediaRecorderRef.current = null
@@ -320,7 +336,7 @@ export function useAudioCapture() {
 
     setIsRecording(false)
   }, [isRecording])
-  
+
   // Store stopRecording in ref so it can be called from startRecording
   stopRecordingRef.current = stopRecording
 

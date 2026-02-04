@@ -1462,7 +1462,7 @@ export function HostPage({ onBackToHome }) {
                 </div>
 
                 {/* Microphone Selector - only show when microphone is selected */}
-                {audioSource === 'microphone' && availableDevices.length > 0 && (
+                {audioSource === 'microphone' && (
                   <div className="mb-4">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       🎤 Microphone Device
