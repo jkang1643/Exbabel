@@ -13,6 +13,9 @@ import { supabase } from '@/lib/supabase';
 
 const AuthContext = createContext(null);
 
+// Get API URL from environment variables
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
     const [session, setSession] = useState(null);
@@ -23,7 +26,7 @@ export function AuthProvider({ children }) {
     // Load profile from backend after auth
     const loadProfile = useCallback(async (accessToken) => {
         try {
-            const response = await fetch('/api/me', {
+            const response = await fetch(`${API_URL}/api/me`, {
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
                 },
