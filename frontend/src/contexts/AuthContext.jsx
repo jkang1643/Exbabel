@@ -133,6 +133,39 @@ export function AuthProvider({ children }) {
         }
     };
 
+    // Sign up with email (requires email confirmation)
+    const signUpWithEmail = async (email, password) => {
+        // Don't set global loading here, let the component handle its own loading state
+        // otherwise App.jsx unmounts the page because it listens to global loading
+        setError(null);
+
+        try {
+            console.log('[AuthContext] Signing up with email:', email);
+            const { data, error } = await supabase.auth.signUp({
+                email,
+                password,
+                options: {
+                    emailRedirectTo: window.location.origin,
+                },
+            });
+
+            console.log('[AuthContext] Sign up response:', { data, error });
+
+            if (error) {
+                console.error('[AuthContext] Sign up error:', error);
+                setError(error.message);
+                return { error };
+            }
+
+            console.log('[AuthContext] Sign up successful, user:', data.user?.id);
+            return { data };
+        } catch (err) {
+            console.error('[AuthContext] Unexpected sign up error:', err);
+            setError(err.message || 'An unexpected error occurred');
+            return { error: err };
+        }
+    };
+
     // Sign in with email
     const signInWithEmail = async (email, password) => {
         setLoading(true);
@@ -200,6 +233,7 @@ export function AuthProvider({ children }) {
         loading,
         error,
         // Auth methods
+        signUpWithEmail,
         signInWithEmail,
         signInWithGoogle,
         signOut,

@@ -30,7 +30,7 @@ export function HomePage({ onSelectMode }) {
   // Visitors shouldn't be on this page, redirect to join
   if (isVisitor || !profile) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white flex items-center justify-center">
         <div className="bg-white rounded-lg shadow-xl p-8 text-center max-w-md">
           <div className="text-5xl mb-4">🌍</div>
           <h2 className="text-2xl font-bold text-gray-800 mb-3">Join a Church to Continue</h2>
@@ -39,7 +39,7 @@ export function HomePage({ onSelectMode }) {
           </p>
           <button
             onClick={() => onSelectMode('join')}
-            className="w-full px-6 py-3 bg-purple-500 hover:bg-purple-600 text-white font-semibold rounded-lg transition-all"
+            className="w-full px-6 py-3 bg-primary hover:bg-primary/90 text-white font-semibold rounded-lg transition-all"
           >
             Join a Session
           </button>
@@ -49,7 +49,7 @@ export function HomePage({ onSelectMode }) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white">
       <Header />
 
       <div className="container mx-auto px-3 sm:px-4 py-6 sm:py-12">
@@ -80,7 +80,7 @@ export function HomePage({ onSelectMode }) {
               </p>
               <button
                 onClick={() => onSelectMode('solo')}
-                className="w-full px-4 sm:px-6 py-2 sm:py-3 bg-blue-500 hover:bg-blue-600 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg transition-all transform hover:scale-105"
+                className="w-full px-4 sm:px-6 py-2 sm:py-3 bg-primary hover:bg-primary/90 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg transition-all transform hover:scale-105"
               >
                 Start Solo Session
               </button>

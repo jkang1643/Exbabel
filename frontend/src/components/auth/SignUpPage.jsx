@@ -1,7 +1,8 @@
 /**
- * Login Page
+ * Sign Up Page
  * 
- * Email + Google OAuth login using shadcn/ui components.
+ * Email + Google OAuth sign up using shadcn/ui components.
+ * Requires email confirmation before access.
  */
 
 import React, { useState } from 'react';
@@ -12,42 +13,75 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
-    const { signInWithEmail, signInWithGoogle, loading, error } = useAuth();
+export function SignUpPage({ onSuccess, onBack, onSwitchToSignIn }) {
+    const { signUpWithEmail, signInWithGoogle, loading, error } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [localError, setLocalError] = useState(null);
+    const [showConfirmation, setShowConfirmation] = useState(false);
 
-    const handleEmailLogin = async (e) => {
+    const handleEmailSignUp = async (e) => {
         e.preventDefault();
         setLocalError(null);
         setIsSubmitting(true);
 
-        if (!email || !password) {
-            setLocalError('Please enter both email and password');
+        // Validation
+        if (!email || !password || !confirmPassword) {
+            setLocalError('Please fill in all fields');
             setIsSubmitting(false);
             return;
         }
 
-        const result = await signInWithEmail(email, password);
-
-        if (result.error) {
-            setLocalError(result.error.message || 'Login failed');
-        } else if (onSuccess) {
-            onSuccess();
+        if (password !== confirmPassword) {
+            setLocalError('Passwords do not match');
+            setIsSubmitting(false);
+            return;
         }
 
-        setIsSubmitting(false);
+        if (password.length < 6) {
+            setLocalError('Password must be at least 6 characters');
+            setIsSubmitting(false);
+            return;
+        }
+
+        console.log('[SignUp] Attempting sign up for:', email);
+
+        try {
+            const result = await signUpWithEmail(email, password);
+            console.log('[SignUp] Sign up result:', result);
+
+            if (result.error) {
+                console.error('[SignUp] Error:', result.error);
+                setLocalError(result.error.message || 'Sign up failed');
+                setIsSubmitting(false);
+            } else if (result.data) {
+                // Show confirmation message
+                console.log('[SignUp] Success! Showing confirmation screen');
+                setShowConfirmation(true);
+                setIsSubmitting(false);
+            } else {
+                console.error('[SignUp] Unexpected result - no error and no data');
+                setLocalError('Unexpected error during sign up');
+                setIsSubmitting(false);
+            }
+        } catch (e) {
+            console.error('[SignUp] Exception:', e);
+            setLocalError('An error occurred. Please try again.');
+            setIsSubmitting(false);
+        }
     };
 
-    const handleGoogleLogin = async () => {
+    const handleGoogleSignUp = async () => {
         setLocalError(null);
         const result = await signInWithGoogle();
 
         if (result.error) {
-            setLocalError(result.error.message || 'Google login failed');
+            setLocalError(result.error.message || 'Google sign up failed');
         }
+        // Note: Google OAuth handles both sign-in and sign-up automatically
+        // The redirect will be handled by Supabase
     };
 
     const displayError = localError || error;
@@ -60,14 +94,50 @@ export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
         );
     }
 
+    // Show confirmation message after successful sign-up
+    if (showConfirmation) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-100 p-4">
+                <Card className="w-full max-w-md">
+                    <CardHeader className="text-center">
+                        <div className="text-5xl mb-4">✉️</div>
+                        <CardTitle className="text-2xl">Check Your Email</CardTitle>
+                        <CardDescription>
+                            We've sent a confirmation link to <strong>{email}</strong>
+                        </CardDescription>
+                    </CardHeader>
+
+                    <CardContent className="space-y-4">
+                        <Alert>
+                            <AlertDescription>
+                                Please check your email and click the confirmation link to activate your account.
+                                You can close this page.
+                            </AlertDescription>
+                        </Alert>
+
+                        {onBack && (
+                            <Button
+                                variant="outline"
+                                className="w-full"
+                                onClick={onBack}
+                            >
+                                ← Back to Home
+                            </Button>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
     return (
         <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-100 p-4">
             <Card className="w-full max-w-md">
                 <CardHeader className="text-center">
                     <div className="text-5xl mb-4">🌍</div>
-                    <CardTitle className="text-2xl">Welcome to Exbabel</CardTitle>
+                    <CardTitle className="text-2xl">Create Your Account</CardTitle>
                     <CardDescription>
-                        Sign in to start translating
+                        Get started with Exbabel
                     </CardDescription>
                 </CardHeader>
 
@@ -82,7 +152,7 @@ export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
                     <Button
                         variant="outline"
                         className="w-full"
-                        onClick={handleGoogleLogin}
+                        onClick={handleGoogleSignUp}
                         disabled={isSubmitting}
                     >
                         <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
@@ -103,7 +173,7 @@ export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
                                 fill="#EA4335"
                             />
                         </svg>
-                        Sign in with Google
+                        Sign up with Google
                     </Button>
 
                     <div className="relative">
@@ -112,13 +182,13 @@ export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
                         </div>
                         <div className="relative flex justify-center text-xs uppercase">
                             <span className="bg-card px-2 text-muted-foreground">
-                                Or continue with email
+                                Or sign up with email
                             </span>
                         </div>
                     </div>
 
                     {/* Email/Password Form */}
-                    <form onSubmit={handleEmailLogin} className="space-y-4">
+                    <form onSubmit={handleEmailSignUp} className="space-y-4">
                         <div className="space-y-2">
                             <Label htmlFor="email">Email</Label>
                             <Input
@@ -143,12 +213,24 @@ export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
                             />
                         </div>
 
+                        <div className="space-y-2">
+                            <Label htmlFor="confirmPassword">Confirm Password</Label>
+                            <Input
+                                id="confirmPassword"
+                                type="password"
+                                placeholder="••••••••"
+                                value={confirmPassword}
+                                onChange={(e) => setConfirmPassword(e.target.value)}
+                                disabled={isSubmitting}
+                            />
+                        </div>
+
                         <Button
                             type="submit"
                             className="w-full"
                             disabled={isSubmitting}
                         >
-                            {isSubmitting ? 'Signing in...' : 'Sign In'}
+                            {isSubmitting ? 'Creating account...' : 'Create Account'}
                         </Button>
                     </form>
 
@@ -158,22 +240,18 @@ export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
                             className="w-full"
                             onClick={onBack}
                         >
-                            ← Back to Join
+                            ← Back to Home
                         </Button>
                     )}
 
                     <p className="text-center text-sm text-muted-foreground">
-                        Don't have an account?{' '}
+                        Already have an account?{' '}
                         <button
-                            onClick={onSwitchToSignUp}
+                            onClick={onSwitchToSignIn}
                             className="text-primary hover:underline font-medium"
                         >
-                            Sign up
+                            Sign in
                         </button>
-                    </p>
-
-                    <p className="text-center text-sm text-muted-foreground">
-                        You can join sessions without signing in
                     </p>
                 </CardContent>
             </Card>

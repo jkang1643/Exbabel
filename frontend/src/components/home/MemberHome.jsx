@@ -81,7 +81,7 @@ export function MemberHome({ onSoloMode, onJoinSession, onSignOut, onJoinChurch 
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white">
             <Header onSignOut={onSignOut} />
 
             <div className="container mx-auto px-4 py-8">
@@ -99,7 +99,7 @@ export function MemberHome({ onSoloMode, onJoinSession, onSignOut, onJoinChurch 
                             <div className="relative inline-block mt-2" ref={menuRef}>
                                 <button
                                     onClick={() => setShowChurchMenu(!showChurchMenu)}
-                                    className="inline-flex items-center gap-1 text-lg text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
+                                    className="inline-flex items-center gap-1 text-lg text-primary font-medium hover:text-primary/80 transition-colors"
                                 >
                                     ⛪ {profile.church_name}
                                     <svg
@@ -126,7 +126,7 @@ export function MemberHome({ onSoloMode, onJoinSession, onSignOut, onJoinChurch 
                         ) : (
                             <button
                                 onClick={onJoinChurch}
-                                className="inline-flex items-center gap-1 mt-2 text-lg text-indigo-600 font-medium hover:text-indigo-700 transition-colors"
+                                className="inline-flex items-center gap-1 mt-2 text-lg text-primary font-medium hover:text-primary/80 transition-colors"
                             >
                                 ⛪ Join a Church
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -156,7 +156,7 @@ export function MemberHome({ onSoloMode, onJoinSession, onSignOut, onJoinChurch 
                             </CardHeader>
                             <CardContent>
                                 <Button
-                                    className="w-full py-5 text-lg bg-blue-500 hover:bg-blue-600"
+                                    className="w-full py-5 text-lg bg-primary hover:bg-primary/90"
                                     onClick={onSoloMode}
                                 >
                                     Start Solo Session

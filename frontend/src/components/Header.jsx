@@ -10,7 +10,7 @@
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 
-export function Header({ onSignIn, onSignOut }) {
+export function Header({ onSignIn, onSignUp, onSignOut }) {
   const { user, isAuthenticated, isAdmin, isMember, isVisitor, signOut } = useAuth();
 
   const handleSignOut = async () => {
@@ -34,7 +34,7 @@ export function Header({ onSignIn, onSignOut }) {
         {/* Logo */}
         <div className="flex items-center gap-2">
           <span className="text-2xl">🌍</span>
-          <span className="font-bold text-xl text-gray-800">Exbabel</span>
+          <span className="font-bold text-xl text-primary">Exbabel</span>
         </div>
 
         {/* Auth Controls */}
@@ -54,13 +54,21 @@ export function Header({ onSignIn, onSignOut }) {
               </Button>
             </>
           ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onSignIn}
-            >
-              Sign In
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onSignIn}
+              >
+                Sign In
+              </Button>
+              <Button
+                size="sm"
+                onClick={onSignUp}
+              >
+                Sign Up
+              </Button>
+            </>
           )}
         </div>
       </div>

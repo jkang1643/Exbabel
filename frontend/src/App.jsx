@@ -11,6 +11,7 @@
 import React, { useState, useEffect } from 'react'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { LoginPage } from '@/components/auth/LoginPage'
+import { SignUpPage } from '@/components/auth/SignUpPage'
 import { JoinPage } from '@/components/JoinPage'
 import { JoinChurchPage } from '@/components/JoinChurchPage'
 import { CreateChurchPage } from '@/components/CreateChurchPage'
@@ -61,8 +62,17 @@ function AppContent() {
     setMode('login')
   }
 
+  const handleSwitchToSignUp = () => {
+    setMode('signup')
+  }
+
   const handleLoginSuccess = () => {
     // After login, go to home
+    setMode('home')
+  }
+
+  const handleSignUpSuccess = () => {
+    // After signup confirmation email sent, go to home
     setMode('home')
   }
 
@@ -77,9 +87,9 @@ function AppContent() {
   }
 
   const handleCreateChurch = () => {
-    // If not authenticated, route to login first
+    // If not authenticated, route to signup first
     if (!isAuthenticated) {
-      setMode('login')
+      setMode('signup')
     } else {
       setMode('create-church')
     }
@@ -101,7 +111,12 @@ function AppContent() {
 
   // Login page
   if (mode === 'login') {
-    return <LoginPage onSuccess={handleLoginSuccess} onBack={() => setMode('home')} />
+    return <LoginPage onSuccess={handleLoginSuccess} onBack={() => setMode('home')} onSwitchToSignUp={handleSwitchToSignUp} />
+  }
+
+  // Sign up page
+  if (mode === 'signup') {
+    return <SignUpPage onSuccess={handleSignUpSuccess} onBack={() => setMode('home')} onSwitchToSignIn={handleSwitchToLogin} />
   }
 
   // Listener page - available to everyone
@@ -194,6 +209,7 @@ function AppContent() {
         onJoinChurch={handleJoinChurch}
         onCreateChurch={handleCreateChurch}
         onSignIn={handleSwitchToLogin}
+        onSignUp={handleSwitchToSignUp}
         onSignOut={handleSignOut}
       />
     )
@@ -206,6 +222,7 @@ function AppContent() {
       onJoinChurch={handleJoinChurch}
       onCreateChurch={handleCreateChurch}
       onSignIn={handleSwitchToLogin}
+      onSignUp={handleSwitchToSignUp}
       onSignOut={handleSignOut}
     />
   )

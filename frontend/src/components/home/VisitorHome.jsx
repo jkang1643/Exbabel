@@ -7,16 +7,35 @@
  * - Create a church (small link)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Header } from '@/components/Header';
 import { JoinSessionModal } from '@/components/JoinSessionModal';
+import { EarlyAccessPopup } from '@/components/EarlyAccessPopup';
 
-export function VisitorHome({ onJoinSession, onJoinChurch, onCreateChurch, onSignIn, onSignOut }) {
+export function VisitorHome({ onJoinSession, onJoinChurch, onCreateChurch, onSignIn, onSignUp, onSignOut }) {
     const { user, isAuthenticated } = useAuth();
     const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
+    const [showEarlyAccess, setShowEarlyAccess] = useState(false);
+
+    useEffect(() => {
+        // Check if user has seen the early access popup
+        const hasSeenPopup = localStorage.getItem('exbabel_early_access_seen_v1');
+        if (!hasSeenPopup && !isAuthenticated) {
+            // Small delay to make it feel natural
+            const timer = setTimeout(() => {
+                setShowEarlyAccess(true);
+            }, 1000);
+            return () => clearTimeout(timer);
+        }
+    }, [isAuthenticated]);
+
+    const handleCloseEarlyAccess = () => {
+        setShowEarlyAccess(false);
+        localStorage.setItem('exbabel_early_access_seen_v1', 'true');
+    };
 
     const handleJoin = (code) => {
         if (code && code.trim()) {
@@ -26,8 +45,8 @@ export function VisitorHome({ onJoinSession, onJoinChurch, onCreateChurch, onSig
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100">
-            <Header onSignIn={onSignIn} onSignOut={onSignOut} />
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white">
+            <Header onSignIn={onSignIn} onSignUp={onSignUp} onSignOut={onSignOut} />
 
             <div className="container mx-auto px-4 py-8 md:py-16">
                 <div className="max-w-2xl mx-auto">
@@ -83,15 +102,7 @@ export function VisitorHome({ onJoinSession, onJoinChurch, onCreateChurch, onSig
                         </Card>
                     </div>
 
-                    {/* Sign in prompt for visitors */}
-                    {!isAuthenticated && (
-                        <p className="text-center text-gray-500 text-sm mt-8">
-                            Already have an account?{' '}
-                            <button onClick={onSignIn} className="text-purple-600 hover:underline font-medium">
-                                Sign in
-                            </button>
-                        </p>
-                    )}
+
 
                     {/* Signed in but no profile */}
                     {isAuthenticated && (
@@ -106,6 +117,15 @@ export function VisitorHome({ onJoinSession, onJoinChurch, onCreateChurch, onSig
                 isOpen={isJoinModalOpen}
                 onClose={() => setIsJoinModalOpen(false)}
                 onJoin={handleJoin}
+            />
+
+            <EarlyAccessPopup
+                isOpen={showEarlyAccess}
+                onClose={handleCloseEarlyAccess}
+                onSignUp={() => {
+                    handleCloseEarlyAccess();
+                    onSignUp();
+                }}
             />
         </div>
     );

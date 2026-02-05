@@ -1312,7 +1312,7 @@ export function HostPage({ onBackToHome }) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white">
       <Header />
 
       <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
@@ -1651,7 +1651,7 @@ export function HostPage({ onBackToHome }) {
         </div>
 
         {/* LIVE TRANSCRIPTION AREA - FIXED POSITION, INLINE UPDATES */}
-        <div className="bg-gradient-to-br from-blue-500 via-purple-500 to-indigo-600 rounded-lg sm:rounded-2xl p-3 sm:p-6 shadow-2xl mb-4 sm:mb-6 -mx-2 sm:mx-0">
+        <div className="bg-gradient-to-br from-primary via-blue-600 to-indigo-600 rounded-lg sm:rounded-2xl p-3 sm:p-6 shadow-2xl mb-4 sm:mb-6 -mx-2 sm:mx-0">
           <div className="flex items-center justify-between mb-3 sm:mb-4">
             <div className="flex items-center space-x-2 sm:space-x-3">
               {isStreaming && (

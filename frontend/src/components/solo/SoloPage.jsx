@@ -668,7 +668,7 @@ export function SoloPage({ onBackToHome }) {
           display: flex;
           flex-direction: column;
           min-height: 100vh;
-          background: linear-gradient(135deg, #fafafa 0%, #f5f5f5 50%, #fafafa 100%);
+          background: linear-gradient(135deg, #f8fafc 0%, #ffffff 50%, #f1f5f9 100%);
           color: #1f2937;
           font-family: 'Inter', -apple-system, sans-serif;
         }
@@ -680,24 +680,24 @@ export function SoloPage({ onBackToHome }) {
           padding: 1rem 1.5rem;
           background: rgba(255, 255, 255, 0.8);
           backdrop-filter: blur(10px);
-          border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+          border-bottom: 1px solid rgba(59, 91, 255, 0.1);
           box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         }
         
         .back-button,
         .settings-button {
-          background: rgba(16, 185, 129, 0.1);
-          border: 1px solid rgba(16, 185, 129, 0.3);
+          background: rgba(59, 91, 255, 0.05);
+          border: 1px solid rgba(59, 91, 255, 0.1);
           border-radius: 12px;
           padding: 0.75rem;
-          color: #059669;
+          color: #3B5BFF;
           cursor: pointer;
           transition: all 0.2s;
         }
         
         .back-button:hover,
         .settings-button:hover {
-          background: rgba(16, 185, 129, 0.2);
+          background: rgba(59, 91, 255, 0.1);
           transform: scale(1.05);
         }
         
@@ -705,7 +705,7 @@ export function SoloPage({ onBackToHome }) {
           font-size: 1.25rem;
           font-weight: 600;
           margin: 0;
-          background: linear-gradient(135deg, #059669, #10b981);
+          background: linear-gradient(135deg, #3B5BFF, #2563eb);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
           background-clip: text;
@@ -726,7 +726,7 @@ export function SoloPage({ onBackToHome }) {
           display: flex;
           justify-content: center;
           background: rgba(255, 255, 255, 0.7);
-          border-top: 1px solid rgba(16, 185, 129, 0.2);
+          border-top: 1px solid rgba(59, 91, 255, 0.1);
         }
         
         .control-button {
@@ -743,14 +743,14 @@ export function SoloPage({ onBackToHome }) {
         }
         
         .control-button.start {
-          background: linear-gradient(135deg, #10b981, #059669);
+          background: linear-gradient(135deg, #3B5BFF, #2563eb);
           color: #fff;
-          box-shadow: 0 4px 20px rgba(16, 185, 129, 0.4);
+          box-shadow: 0 4px 20px rgba(59, 91, 255, 0.3);
         }
         
         .control-button.start:hover:not(:disabled) {
           transform: scale(1.05);
-          box-shadow: 0 6px 30px rgba(16, 185, 129, 0.6);
+          box-shadow: 0 6px 30px rgba(59, 91, 255, 0.4);
         }
         
         .control-button.start:disabled {

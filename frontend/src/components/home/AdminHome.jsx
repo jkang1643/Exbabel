@@ -27,7 +27,7 @@ export function AdminHome({ onHostSession, onSoloMode, onJoinSession, onSignOut 
     };
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-100">
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white">
             <Header onSignOut={onSignOut} />
 
             <div className="container mx-auto px-4 py-8">
@@ -38,7 +38,7 @@ export function AdminHome({ onHostSession, onSoloMode, onJoinSession, onSignOut 
                             Admin Dashboard 👑
                         </h1>
                         {profile?.church_name && (
-                            <p className="text-xl font-semibold text-amber-700 mb-1">
+                            <p className="text-xl font-semibold text-primary mb-1">
                                 ⛪ {profile.church_name}
                             </p>
                         )}
@@ -48,7 +48,7 @@ export function AdminHome({ onHostSession, onSoloMode, onJoinSession, onSignOut 
                     </div>
 
                     {/* Primary: Host Session */}
-                    <Card className="mb-6 shadow-xl border-2 border-amber-200">
+                    <Card className="mb-6 shadow-xl border-2 border-primary/10">
                         <CardHeader className="text-center">
                             <div className="text-5xl mb-2">🎙️</div>
                             <CardTitle className="text-2xl">Host a Live Session</CardTitle>
@@ -82,7 +82,7 @@ export function AdminHome({ onHostSession, onSoloMode, onJoinSession, onSignOut 
                             </CardHeader>
                             <CardContent>
                                 <Button
-                                    className="w-full bg-blue-500 hover:bg-blue-600"
+                                    className="w-full bg-primary hover:bg-primary/90"
                                     onClick={onSoloMode}
                                 >
                                     Start Solo
