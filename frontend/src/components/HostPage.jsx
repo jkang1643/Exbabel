@@ -506,10 +506,12 @@ export function HostPage({ onBackToHome }) {
           setAvailableVoices(message.voices || []);
           setAllowedTiers(message.allowedTiers || []);
           setPlanCode(message.planCode || 'starter');
-          // Auto-select first allowed voice if none selected
+          // Auto-select default voice (marked by backend) if none selected
           if (message.voices?.length > 0 && !selectedVoice) {
+            const defaultVoice = message.voices.find(v => v.isDefault);
             const firstAllowed = message.voices.find(v => v.isAllowed);
-            setSelectedVoice(firstAllowed || message.voices[0]);
+            setSelectedVoice(defaultVoice || firstAllowed || message.voices[0]);
+            console.log('[Host] Auto-selected voice:', (defaultVoice || firstAllowed || message.voices[0])?.displayName);
           }
           return;
         }

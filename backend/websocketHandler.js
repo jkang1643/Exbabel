@@ -5,7 +5,7 @@
 import WebSocket from 'ws';
 import crypto from 'crypto';
 import { GoogleSpeechStream } from './googleSpeechStream.js';
-import { getVoicesFor } from './tts/voiceCatalog.js';
+import { getVoicesFor, getDefaultVoice } from './tts/voiceCatalog.js';
 import { getOrgVoiceDefaults, setOrgVoiceDefault } from './tts/defaults/defaultsStore.js';
 import sessionStore from './sessionStore.js';
 import translationManager from './translationManager.js';
@@ -351,13 +351,29 @@ export async function handleHostConnection(clientWs, sessionId) {
               allowedTiers: ALL_TIERS
             });
 
+            // Get default voice for this language and tier set
+            const defaultVoice = await getDefaultVoice({
+              languageCode: message.languageCode,
+              allowedTiers: ALL_TIERS
+            });
+
             const clientVoices = voices.map(v => ({
               tier: v.tier,
               voiceId: v.voiceId,
               voiceName: v.voiceName,
               displayName: v.displayName,
-              isAllowed: true // Hosts are allowed everything
+              isAllowed: true, // Hosts are allowed everything
+              isDefault: defaultVoice && v.voiceId === defaultVoice.voiceId
             }));
+
+            // Sort so default voice is first
+            clientVoices.sort((a, b) => {
+              if (a.isDefault && !b.isDefault) return -1;
+              if (!a.isDefault && b.isDefault) return 1;
+              return 0;
+            });
+
+            console.log(`[Host] Sending ${clientVoices.length} voices, default: ${defaultVoice?.voiceName || 'none'}`);
 
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
@@ -533,8 +549,51 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
     // Cache churchId on socket immediately (needed for later operations)
     clientWs.churchId = churchId;
 
-    // PERFORMANCE FIX: Send session_joined IMMEDIATELY (no waiting for DB)
-    // This eliminates 300-500ms lag caused by waiting for getEntitlements()
+    // CRITICAL FIX: Fetch entitlements BEFORE sending session_joined
+    // This ensures the plan is included in the initial message (fixes language switching bug)
+    // Use timeout to prevent blocking if entitlements fetch is slow
+    const ENTITLEMENTS_TIMEOUT_MS = 1000; // 1 second max wait
+
+    let entitlements = null;
+    let planCode = 'starter'; // Default fallback
+
+    try {
+      // Race between entitlements fetch and timeout
+      entitlements = await Promise.race([
+        getEntitlements(churchId),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Entitlements timeout')), ENTITLEMENTS_TIMEOUT_MS)
+        )
+      ]);
+
+      // Cache on socket for later use
+      clientWs.entitlements = entitlements;
+      planCode = entitlements?.subscription?.planCode || 'starter';
+      console.log(`[Listener] ✓ Entitlements loaded: churchId=${churchId} plan=${planCode}`);
+    } catch (err) {
+      console.warn(`[Listener] ⚠ Entitlements fetch failed or timed out (using fallback plan='starter'):`, err.message);
+
+      // Retry in background (non-blocking, fire-and-forget)
+      getEntitlements(churchId)
+        .then(ent => {
+          clientWs.entitlements = ent;
+          const plan = ent.subscription.planCode;
+          console.log(`[Listener] ✓ Entitlements loaded (retry): churchId=${churchId} plan=${plan}`);
+
+          // Send updated plan to frontend if it changed
+          if (plan !== planCode && clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: 'plan_updated',
+              plan: plan
+            }));
+          }
+        })
+        .catch(retryErr => {
+          console.error(`[Listener] ⚠ Failed to fetch entitlements (retry):`, retryErr.message);
+        });
+    }
+
+    // Send session_joined with plan included
     if (clientWs.readyState === WebSocket.OPEN) {
       clientWs.send(JSON.stringify({
         type: 'session_joined',
@@ -543,24 +602,11 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
         role: 'listener',
         targetLang: targetLang,
         sourceLang: session.sourceLang,
+        plan: planCode, // ✅ Include plan in initial message
         message: `Connected to session ${session.sessionCode}`
       }));
     }
-    console.log(`[Listener] ✓ Instant join response sent for sessionId=${sessionId}`);
-
-    // THEN fetch entitlements in background (non-blocking, fire-and-forget)
-    // Entitlements are only needed for TTS tier gating (fetched lazily when voice list is requested)
-    getEntitlements(churchId)
-      .then(entitlements => {
-        // Cache on socket for later use (e.g., getAllowedTiers in tts/list_voices)
-        clientWs.entitlements = entitlements;
-        const plan = entitlements.subscription.planCode;
-        console.log(`[Listener] ✓ Entitlements loaded: churchId=${churchId} plan=${plan}`);
-      })
-      .catch(err => {
-        console.error(`[Listener] ⚠ Failed to fetch entitlements (non-blocking):`, err.message);
-        // Not fatal - listener can still receive translations, just won't have tier info for TTS
-      });
+    console.log(`[Listener] ✓ Join response sent for sessionId=${sessionId} plan=${planCode}`);
 
     // Helper function to start listening span (defined before use)
     const startListeningSpan = async (dbSessionId, listenerId, listenerChurchId) => {
@@ -666,6 +712,12 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
 
             // Get entitlements from socket (set during connection)
             const entitlements = clientWs.entitlements;
+
+            // Defensive check: Warn if entitlements are missing (should have been set during connection)
+            if (!entitlements) {
+              console.warn(`[Listener] ⚠️ Entitlements not loaded for ${userName} - using fallback plan='starter'`);
+            }
+
             const planCode = entitlements?.subscription?.planCode || 'starter';
             const ttsTier = entitlements?.limits?.ttsTier || 'starter';
 
@@ -688,14 +740,30 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
               allowedTiers: ALL_TIERS  // Get ALL voices, we'll mark isAllowed per-voice below
             });
 
+            // Get default voice for this language and user's allowed tiers
+            const defaultVoice = await getDefaultVoice({
+              languageCode: message.languageCode,
+              allowedTiers: allowedTiers
+            });
+
             // Transform to client format with isAllowed flag
             const clientVoices = voices.map(v => ({
               tier: v.tier,
               voiceId: v.voiceId,
               voiceName: v.voiceName,
               displayName: v.displayName,
-              isAllowed: allowedTiers.includes(v.tier)
+              isAllowed: allowedTiers.includes(v.tier),
+              isDefault: defaultVoice && v.voiceId === defaultVoice.voiceId
             }));
+
+            // Sort so default voice is first (among allowed voices)
+            clientVoices.sort((a, b) => {
+              if (a.isDefault && !b.isDefault) return -1;
+              if (!a.isDefault && b.isDefault) return 1;
+              return 0;
+            });
+
+            console.log(`[Listener] Sending ${clientVoices.length} voices, default: ${defaultVoice?.voiceName || 'none'}`);
 
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
