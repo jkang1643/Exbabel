@@ -33,8 +33,9 @@ export function hasAlphaNumeric(text) {
   if (!text || typeof text !== 'string') {
     return false;
   }
-  // Check if text contains at least one alphanumeric character
-  return /[a-zA-Z0-9]/.test(text);
+  // Check if text contains at least one alphanumeric character (Unicode aware)
+  // \p{L} matches any Unicode letter, \p{N} matches any Unicode number
+  return /[\p{L}\p{N}]/u.test(text);
 }
 
 /**
@@ -84,7 +85,7 @@ export function clearLastEmittedText(segmentId) {
  */
 export function shouldEmitPartial(segmentId, nextText, options = {}) {
   const { allowCorrection = false, mode = 'UnknownMode' } = options;
-  
+
   // Rule 1: Skip if punctuation-only or empty
   if (!hasAlphaNumeric(nextText)) {
     return {
@@ -93,13 +94,13 @@ export function shouldEmitPartial(segmentId, nextText, options = {}) {
       skipReason: 'punctuation-only'
     };
   }
-  
+
   // Rule 2: Check for duplicate (normalized comparison)
   const lastEmitted = getLastEmittedText(segmentId);
   if (lastEmitted) {
     const normalizedNext = normalizeText(nextText);
     const normalizedLast = normalizeText(lastEmitted);
-    
+
     if (normalizedNext === normalizedLast) {
       return {
         shouldEmit: false,
@@ -107,7 +108,7 @@ export function shouldEmitPartial(segmentId, nextText, options = {}) {
         skipReason: 'duplicate'
       };
     }
-    
+
     // Rule 3: Skip if regression (shorter) unless correction type exists
     if (!allowCorrection && nextText.length < lastEmitted.length) {
       // Allow if normalized text is actually longer (might be formatting change)
@@ -122,7 +123,7 @@ export function shouldEmitPartial(segmentId, nextText, options = {}) {
       };
     }
   }
-  
+
   return { shouldEmit: true, reason: 'emit: passed all checks' };
 }
 
@@ -137,7 +138,7 @@ export function shouldEmitPartial(segmentId, nextText, options = {}) {
  */
 export function shouldEmitFinal(segmentId, nextText, options = {}) {
   const { allowCorrection = false, mode = 'UnknownMode' } = options;
-  
+
   // Rule 1: Skip if punctuation-only or empty
   if (!hasAlphaNumeric(nextText)) {
     return {
@@ -146,13 +147,13 @@ export function shouldEmitFinal(segmentId, nextText, options = {}) {
       skipReason: 'punctuation-only'
     };
   }
-  
+
   // Rule 2: Check for duplicate (normalized comparison)
   const lastEmitted = getLastEmittedText(segmentId);
   if (lastEmitted) {
     const normalizedNext = normalizeText(nextText);
     const normalizedLast = normalizeText(lastEmitted);
-    
+
     if (normalizedNext === normalizedLast) {
       return {
         shouldEmit: false,
@@ -160,7 +161,7 @@ export function shouldEmitFinal(segmentId, nextText, options = {}) {
         skipReason: 'duplicate'
       };
     }
-    
+
     // Rule 3: Skip if regression (shorter) unless correction type exists
     if (!allowCorrection && nextText.length < lastEmitted.length) {
       // Allow if normalized text is actually longer (might be formatting change)
@@ -175,7 +176,7 @@ export function shouldEmitFinal(segmentId, nextText, options = {}) {
       };
     }
   }
-  
+
   return { shouldEmit: true, reason: 'emit: passed all checks' };
 }
 
@@ -189,19 +190,19 @@ export function tokenDeltaHasNewAlpha(prevText, nextText) {
   if (!prevText || !nextText) {
     return hasAlphaNumeric(nextText);
   }
-  
+
   const prevNormalized = normalizeText(prevText);
   const nextNormalized = normalizeText(nextText);
-  
+
   // If next is longer, it likely has new tokens
   if (nextNormalized.length > prevNormalized.length) {
     return true;
   }
-  
+
   // Extract alphanumeric tokens
   const prevTokens = prevNormalized.split(/\s+/).filter(t => t.length > 0);
   const nextTokens = nextNormalized.split(/\s+/).filter(t => t.length > 0);
-  
+
   // Check if next has tokens not in prev
   const prevTokenSet = new Set(prevTokens);
   return nextTokens.some(token => !prevTokenSet.has(token));

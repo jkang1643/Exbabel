@@ -1910,3 +1910,33 @@ Fixed voice routing to support specific dialects (e.g., `es-MX`) falling back co
 - **Log Verification:** Confirmed `clientWs.churchId` is populated with the Pro Plan ID.
 - **Pipeline Verification:** Confirmed `TTS_USAGE` logs show `resolvedTier: gemini` and matching `orgId`.
 - **UI:** Confirmed frontend correctly unlocks premium voices.
+
+## Critical Fix: Global Language Support & Routing Repairs
+**Date:** 2026-02-04
+
+### The Issues
+1. **Routing Failures (`INVALID_ARGUMENT`)**:
+   - Google TTS API rejected specific language combinations like `es-MX` (expected `es-US` for Neural2) and `zh-CN` (expected `cmn-CN`).
+   - The fallback logic blindly generated voice names (e.g., `af-ZA-Neural2-A`) which often didn't exist, causing 500 errors.
+   - Specific tiers (like `neural2`) were requested for languages that didn't support them, with no fallback.
+
+2. **Silent Non-Latin Languages (Amharic/Chinese)**:
+   - Languages like Amharic (`am-ET`), Chinese (`zh-CN`), and Japanese (`ja-JP`) were silently failing to trigger TTS.
+   - Root cause: The `SoloMode` pipeline filters out "empty" or "punctuation-only" text. The check `/[a-zA-Z]/` failed for non-Latin scripts, discarding valid translations before they reached the TTS engine.
+
+### The Fixes
+
+#### Backend: Robust Routing Logic
+- **`ttsRouting.js`**:
+  - **Comprehensive Fallback Map**: Populated `FALLBACK_VOICES` with known-valid voice names for all 60+ supported languages and tiers.
+  - **Smart Normalization**: Updated `_normalizeLanguageCode` to correctly map regional variants (e.g., `zh-CN` → `cmn-CN`, `es-MX` → `es-US` for voice availability).
+  - **Cross-Tier Fallback**: Updated `_resolveVoice` to fallback to *any* available voice (e.g., `Standard`) if the requested tier (`Neural2`) is missing for that language.
+
+#### Backend: Unicode-Aware Emission Guards
+- **`detectAlphaNumeric` (emitGuards.js)**:
+  - Updated regex from `/[a-zA-Z0-9]/` to `/\p{L}|\p{N}/u` (Unicode Property Escapes).
+  - This correctly identifies Amharic (Ethiopic), Chinese (Han), Cyrillic, etc., as valid text, allowing them to pass through the pipeline.
+
+### Verification
+- **Automated Testing**: Created `backend/tests/test_all_languages_routing.js` which verified valid voice resolution for **all 61 supported languages**.
+- **Manual Verification**: Confirmed `am-ET` and `zh-CN` now trigger TTS audio generation successfully in the UI.

@@ -4,46 +4,31 @@ import { TRANSCRIPTION_LANGUAGES, TRANSLATION_LANGUAGES } from '../../config/lan
 import {
     isGeminiSupported,
     isElevenLabsSupported,
+    isGoogleTierSupported,
     LANGUAGE_TIER_AVAILABILITY
 } from '../../config/languageSupportData';
 
 /**
- * Get TTS support level for a language code
- * Returns: 'premium' (Gemini 87 or ElevenLabs 75), 'standard' (Google Standard 60), or null
- */
-const getTtsLevel = (code) => {
-    if (!code) return null;
-
-    // Premium tier: Gemini (87 languages) or ElevenLabs v3 (75 languages)
-    if (isGeminiSupported(code) || isElevenLabsSupported(code, 'elevenlabs_v3')) {
-        return 'premium';
-    }
-
-    // Check for Standard tier in LANGUAGE_TIER_AVAILABILITY
-    const localePatterns = [
-        code,
-        `${code}-${code.toUpperCase()}`,
-        `${code}-US`, `${code}-GB`, `${code}-IN`,
-        `${code}-ZA`, `${code}-XA`, `${code}-XX`
-    ];
-
-    for (const locale of localePatterns) {
-        const tiers = LANGUAGE_TIER_AVAILABILITY[locale];
-        if (tiers && (tiers.includes('standard') || tiers.includes('neural2') || tiers.includes('chirp3_hd'))) {
-            return 'standard';
-        }
-    }
-
-    return null;
-};
-
-/**
- * Get TTS indicator based on support level
+ * Get TTS indicator based on support level - MATCHES HOST MODE LOGIC
+ * 🔊 = Standard support available (60 languages)
+ * 🔊⭐ = Premium ONLY (Gemini/ElevenLabs only, no Standard voices) (27 languages)
  */
 const getTtsIndicator = (code) => {
-    const level = getTtsLevel(code);
-    if (level === 'premium') return '🔊⭐';
-    if (level === 'standard') return '🔊';
+    if (!code) return null;
+
+    // 1. Check for Standard tier support (Priority)
+    // If a language has standard voices, it gets the standard icon (no star)
+    // This prevents starring languages that have both Standard AND Premium
+    if (isGoogleTierSupported(code, 'standard')) {
+        return '🔊';
+    }
+
+    // 2. Check for Premium-only support
+    // If no standard voices but has Gemini/ElevenLabs, it gets the star
+    if (isGeminiSupported(code) || isElevenLabsSupported(code, 'elevenlabs_v3')) {
+        return '🔊⭐';
+    }
+
     return null;
 };
 /**
