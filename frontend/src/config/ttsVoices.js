@@ -98,15 +98,26 @@ const LOCALE_MAP = {
     'sr': 'sr-RS', 'af': 'af-ZA', 'bn': 'bn-IN', 'ca': 'ca-ES', 'eu': 'eu-ES',
     'fil': 'fil-PH', 'gl': 'gl-ES', 'gu': 'gu-IN', 'is': 'is-IS', 'kn': 'kn-IN',
     'ml': 'ml-IN', 'mr': 'mr-IN', 'pa': 'pa-IN', 'ta': 'ta-IN', 'te': 'te-IN',
-    'ur': 'ur-IN', 'cy': 'cy-GB', 'et': 'et-EE'
+    'ur': 'ur-IN', 'cy': 'cy-GB', 'et': 'et-EE',
+
+    // Regional Overrides (Process before generic dash check)
+    'zh-CN': 'cmn-CN',  // Mandarin (China)
+    'zh-SG': 'cmn-CN',  // Singapore uses Mandarin (Simplified)
+    'zh-TW': 'cmn-TW',  // Mandarin (Taiwan)
+    'zh-HK': 'yue-HK',  // Cantonese (Hong Kong)
 };
 
 export const normalizeLanguageCode = (languageCode) => {
     if (!languageCode) return null;
-    // If already full locale, return as-is
+
+    // 1. Check map FIRST (allows overriding explicit locales like ar-EG)
+    if (LOCALE_MAP[languageCode]) return LOCALE_MAP[languageCode];
+
+    // 2. If already full locale, return as-is
     if (languageCode.includes('-')) return languageCode;
-    // Map short code to full locale
-    return LOCALE_MAP[languageCode] || `${languageCode}-${languageCode.toUpperCase()}`;
+
+    // 3. Map short code to full locale (fallback)
+    return `${languageCode}-${languageCode.toUpperCase()}`;
 };
 
 /**

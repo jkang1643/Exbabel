@@ -1940,3 +1940,55 @@ Fixed voice routing to support specific dialects (e.g., `es-MX`) falling back co
 ### Verification
 - **Automated Testing**: Created `backend/tests/test_all_languages_routing.js` which verified valid voice resolution for **all 61 supported languages**.
 - **Manual Verification**: Confirmed `am-ET` and `zh-CN` now trigger TTS audio generation successfully in the UI.
+
+## Regional TTS Routing Fix (Solo + Host Mode)
+**Date:** 2026-02-04
+
+### The Problem
+Regional language variants (e.g., `ar-EG`, `zh-SG`, `en-GB`, `fr-CA`) were not being routed correctly in Solo Mode TTS:
+1. **Hard Frontend Normalization**: `ar-EG` was being forced to `ar-XA` on the frontend, preventing Gemini (which supports `ar-EG` natively) from using the Egyptian dialect.
+2. **Missing Fallback Logic**: When a provider didn't support a specific regional variant (e.g., Google doesn't have `ar-EG`), the system would fail instead of falling back to a standard variant.
+3. **No Prioritization**: When multiple voices matched (e.g., both `en-GB` and `en-AU` for an `en-GB` request), the system returned them in arbitrary order, potentially using the wrong accent.
+
+### The Fixes
+
+#### Frontend Configuration (`frontend/src/config/ttsVoices.js`)
+- **Removed `ar-EG` -> `ar-XA` hard override**: Allows `ar-EG` requests to reach the backend unchanged, enabling Gemini to use its native Egyptian Arabic support.
+- **Kept Chinese variant mappings**: `zh-SG` -> `cmn-CN`, `zh-HK` -> `yue-HK`, etc. remain because no provider supports `zh-SG` as a distinct code.
+
+#### Backend Voice Catalog (`backend/tts/voiceCatalog/index.js`)
+- **Smart Fallback Matching**: Updated `getVoicesFor` to match voices using three criteria:
+  1. **Exact locale match** (e.g., `ar-EG` voice for `ar-EG` request)
+  2. **Base language match** (e.g., `ar` voice for `ar` request)
+  3. **Regional fallback** (e.g., `ar-XA` voice for `ar-EG` request)
+  
+- **Result Prioritization**: Added sorting logic to prioritize exact matches over base matches over regional fallbacks. This ensures `en-GB` requests get `en-GB` voices first, not `en-AU`.
+
+- **Universal Fallback**: Removed provider exclusions from fallback logic. All providers (Gemini, Google, ElevenLabs) now benefit from smart fallback while still prioritizing exact matches.
+
+#### Solo Mode (`frontend/src/components/solo/SoloPage.jsx`)
+- **Already Fixed**: Uses `normalizeLanguageCode` for all TTS requests (applied in previous PR).
+
+#### Host Mode (`frontend/src/tts/TtsPlayerController.js`)
+- **Already Correct**: Uses `normalizeLanguageCode` in `fetchVoices()` method.
+
+### Verification
+Created and ran `backend/scripts/test_regional_routing.js` to verify 14 regional variants:
+
+| Language | Gemini | Google Neural2 | Result |
+|----------|--------|----------------|--------|
+| `ar-EG` | ✅ EXACT | ✅ FALLBACK (`ar-XA`) | Gemini uses Egyptian, Google uses Standard |
+| `zh-SG` | ✅ FALLBACK | ✅ EXACT (`cmn-CN`) | Frontend normalizes to Mandarin |
+| `en-GB` | ✅ EXACT | ✅ EXACT | Both use UK English (prioritized correctly) |
+| `es-MX` | ✅ EXACT | ✅ FALLBACK (`es-ES`) | Gemini uses Mexican, Google falls back |
+| `fr-CA` | ✅ EXACT | ✅ EXACT | Both support Canadian French |
+| `bn-BD` | ✅ EXACT | ✅ FALLBACK (`bn-IN`) | Gemini uses Bangladeshi, Google falls back |
+
+**Key Improvement**: Both Solo and Host modes now share identical routing logic via the backend catalog, ensuring consistent behavior across all modes.
+
+### Files Modified
+- `frontend/src/config/ttsVoices.js` - Removed `ar-EG` hard override
+- `backend/tts/voiceCatalog/index.js` - Smart fallback + prioritization
+- `frontend/src/components/solo/SoloPage.jsx` - Already using normalization
+- `frontend/src/tts/TtsPlayerController.js` - Already using normalization
+

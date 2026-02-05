@@ -3553,7 +3553,9 @@ export async function handleSoloMode(clientWs) {
           }
 
           // Check playback state
-          if (!clientWs.ttsState || clientWs.ttsState.playbackState !== 'PLAYING') {
+          // Relaxed check: If state is undefined (e.g. fresh connection/restart), assume PLAYING for Solo mode flexibility
+          const currentState = clientWs.ttsState?.playbackState;
+          if (clientWs.ttsState && currentState !== 'PLAYING') {
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'tts/error',
@@ -3569,7 +3571,7 @@ export async function handleSoloMode(clientWs) {
           }
 
           // Check lease expiry
-          if (clientWs.ttsState.ttsLeaseExpiresAt && Date.now() > clientWs.ttsState.ttsLeaseExpiresAt) {
+          if (clientWs.ttsState?.ttsLeaseExpiresAt && Date.now() > clientWs.ttsState.ttsLeaseExpiresAt) {
             if (clientWs.readyState === WebSocket.OPEN) {
               clientWs.send(JSON.stringify({
                 type: 'tts/error',
@@ -3586,7 +3588,7 @@ export async function handleSoloMode(clientWs) {
           }
 
           // Refresh lease on active synthesis
-          if (clientWs.ttsState.playbackState === 'PLAYING') {
+          if (clientWs.ttsState?.playbackState === 'PLAYING') {
             clientWs.ttsState.ttsLeaseExpiresAt = Date.now() + (300 * 1000);
           }
 

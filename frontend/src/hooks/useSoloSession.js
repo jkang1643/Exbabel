@@ -148,7 +148,10 @@ export function useSoloSession({
         setPartialText('');
 
         onFinal?.(text);
-        onTranslation?.(translatedText || text);
+
+        // BUG FIX: Pass both arguments (text, translatedText) so SoloPage receives them correctly.
+        // Previously: onTranslation?.(translatedText || text); -> This only passed one arg.
+        onTranslation?.(text, translatedText);
 
         // If not text-only mode, queue for TTS
         if (mode !== SoloMode.TEXT_ONLY && translatedText) {

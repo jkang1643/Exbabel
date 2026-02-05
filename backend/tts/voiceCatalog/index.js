@@ -168,15 +168,29 @@ export async function getVoicesFor({ languageCode, allowedTiers }) {
         // Check language codes
         return voice.languageCodes.some(lang =>
             lang === full || // Exact match (e.g. 'es-ES')
-            lang === base    // Generic match (e.g. 'es')
+            lang === base || // Generic match (e.g. 'es')
+            // Fallback: If voice shares base language (e.g. ar-XA for ar-EG request)
+            (lang.startsWith(base + '-'))
         );
     });
 
-    // Return matches (may be empty if language not supported)
-    // NO English fallback - if a language has no voices, it has no voices
-    if (matches.length === 0) {
-        console.log(`[VoiceCatalog] No voices found for ${languageCode} (${full}/${base}) with tiers [${allowedTiers.join(', ')}]`);
-    }
+    // Sort matches by relevance:
+    // 1. Exact locale match (e.g. 'en-GB' request matches 'en-GB' voice)
+    // 2. Base language match (e.g. 'es' request matches 'es' voice)
+    // 3. Fallback match (e.g. 'en-GB' request matches 'en-US' voice)
+    matches.sort((a, b) => {
+        const aExact = a.languageCodes.includes(full);
+        const bExact = b.languageCodes.includes(full);
+        if (aExact && !bExact) return -1;
+        if (!aExact && bExact) return 1;
+
+        const aBase = a.languageCodes.includes(base);
+        const bBase = b.languageCodes.includes(base);
+        if (aBase && !bBase) return -1;
+        if (!aBase && bBase) return 1;
+
+        return 0;
+    });
 
     return matches;
 }

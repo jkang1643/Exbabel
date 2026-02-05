@@ -189,6 +189,14 @@ export function useTtsQueue({
 
     // Play audio from base64
     const playAudio = useCallback(async (audioData, segmentId) => {
+        // Prevent re-entry if already playing (double safeguard)
+        if (isStartedRef.current === false) return;
+
+        // CRITICAL: Set playing state synchronously immediately to block the Player Loop
+        // from calling this again while we decode.
+        setIsPlaying(true);
+        setCurrentSegment(segmentId);
+
         const ctx = initAudioContext();
 
         try {
@@ -202,6 +210,12 @@ export function useTtsQueue({
 
             // Decode audio
             const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
+
+            // Double check if we should still play (user might have stopped)
+            if (!isStartedRef.current) {
+                setIsPlaying(false);
+                return;
+            }
 
             // Create source
             const source = ctx.createBufferSource();
@@ -227,7 +241,6 @@ export function useTtsQueue({
 
             // Start playback
             source.start(0);
-            setIsPlaying(true);
             onPlayStart?.();
 
             console.log('[useTtsQueue] Playing audio:', segmentId, `(${audioData.durationMs}ms)`);
@@ -246,20 +259,19 @@ export function useTtsQueue({
     // Handle incoming TTS messages
     const handleTtsMessage = useCallback((message) => {
         if (message.type === 'tts/audio') {
-            // Audio received - play it
+            // Audio received - attach to queue item but DO NOT PLAY yet
             const { segmentId, audio } = message;
 
-            // Update queue status
+            console.log('[useTtsQueue] Audio received for:', segmentId);
+
+            // Update queue item with audio data
             setQueue(prev => prev.map(item =>
                 item.id === segmentId
-                    ? { ...item, status: 'playing' }
+                    ? { ...item, status: 'audio_ready', audioData: audio }
                     : item
             ));
 
-            setCurrentSegment(segmentId);
-            playAudio(audio, segmentId);
-
-            // Remove from pending
+            // Remove from pending requests map
             pendingRequestsRef.current.delete(segmentId);
 
         } else if (message.type === 'tts/error') {
@@ -276,18 +288,37 @@ export function useTtsQueue({
         } else if (message.type === 'tts/ack') {
             console.log('[useTtsQueue] TTS ack:', message.action);
         }
-    }, [playAudio, onError]);
+    }, [onError]);
 
-    // Process queue - request synthesis for pending items
+    // Player Loop - Watches queue and plays next item if idle
+    useEffect(() => {
+        // If not started, paused, or already playing, do nothing
+        if (!isStarted || isPlaying || queue.length === 0) return;
+
+        const nextItem = queue[0];
+
+        // If 'audio_ready', play it!
+        if (nextItem.status === 'audio_ready' && nextItem.audioData) {
+            // Update status to prevent double-play triggers
+            // (Setting isPlaying=true happens in playAudio, but we also want to mark the item)
+
+            // NOTE: playAudio sets isPlaying=true synchronously
+            playAudio(nextItem.audioData, nextItem.id);
+        }
+    }, [queue, isPlaying, isStarted, playAudio]);
+
+    // Fetcher Loop - Request synthesis for pending items
+    // (Runs independently of playback to allow buffering)
     useEffect(() => {
         if (processingRef.current || !isStarted) return;
 
         // Find first pending item that hasn't been requested
+        // Limit concurrency if needed, but for now just fetch everything pending
         const pendingItem = queue.find(item =>
             item.status === 'pending' && !pendingRequestsRef.current.has(item.id)
         );
 
-        if (pendingItem && !isPlaying) {
+        if (pendingItem) {
             processingRef.current = true;
 
             // Update status
@@ -300,7 +331,7 @@ export function useTtsQueue({
             requestSynthesis(pendingItem);
             processingRef.current = false;
         }
-    }, [queue, isPlaying, isStarted, requestSynthesis]);
+    }, [queue, isStarted, requestSynthesis]);
 
     // Cleanup on unmount
     useEffect(() => {

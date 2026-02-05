@@ -16,6 +16,7 @@ import TtsStreamingControl from '../tts/TtsStreamingControl';
 import TtsRoutingOverlay from '../tts/TtsRoutingOverlay';
 import AdvancedSettingsDrawer from './AdvancedSettingsDrawer';
 import { UsageLimitModal, QuotaWarningToast } from '../ui/UsageLimitModal';
+import { normalizeLanguageCode } from '../../config/ttsVoices';
 
 /**
  * SoloPage - Main Solo Mode Experience
@@ -57,6 +58,9 @@ export function SoloPage({ onBackToHome }) {
     const [activeRouting, setActiveRouting] = useState(null);
     const routingTimeoutRef = useRef(null);
 
+    // Deduplication Ref
+    const lastQueuedTtsRef = useRef(null);
+
     // Keep refs in sync
     useEffect(() => {
         targetLangRef.current = targetLang;
@@ -90,13 +94,41 @@ export function SoloPage({ onBackToHome }) {
             // Auto-enqueue for TTS if not text-only mode
             // Use ref for closure-safe access to current targetLang
             if (session.mode !== SoloMode.TEXT_ONLY) {
+                // BUG FIX: If translating (source != target), DO NOT use original text as fallback.
+                // If translation is undefined/empty, we should simply NOT speak yet.
+                // Using 'text' (source) as fallback causes English to be spoken in Chinese mode.
+                if (sourceLang !== targetLangRef.current && !translatedText) {
+                    // console.log('[SoloPage] Skipping TTS - translation not ready yet');
+                    return;
+                }
+
                 const textToSpeak = translatedText || text;
 
                 if (textToSpeak && textToSpeak.trim().length > 0) {
+
+                    // DEDUPLICATION: Prevent speaking the exact same text twice in a row
+                    // (Backend sometimes sends duplicate "Final" correction events)
+                    const last = lastQueuedTtsRef.current;
+                    const now = Date.now();
+                    const isDuplicate = last &&
+                        last.text === textToSpeak &&
+                        (now - last.timestamp < 3000); // 3 second duplicate window
+
+                    if (isDuplicate) {
+                        console.log('[SoloPage] Skipping duplicate TTS:', textToSpeak);
+                        return;
+                    }
+
+                    // Update dedupe tracker
+                    lastQueuedTtsRef.current = {
+                        text: textToSpeak,
+                        timestamp: now
+                    };
+
                     ttsQueue.enqueue({
                         text: text, // Original
                         translatedText: textToSpeak, // Text to speak
-                        languageCode: targetLangRef.current, // Use ref instead of stale closure
+                        languageCode: normalizeLanguageCode(targetLangRef.current), // Use ref instead of stale closure
                         voiceId: selectedVoice?.voiceId // Pass selected voice explicitely
                     });
                 } else {
@@ -112,7 +144,7 @@ export function SoloPage({ onBackToHome }) {
     // TTS queue
     const ttsQueue = useTtsQueue({
         ws,
-        languageCode: targetLang,
+        languageCode: normalizeLanguageCode(targetLang),
         tier: 'gemini',
         onPlayStart: () => {
             console.log('[SoloPage] TTS playing');
@@ -214,9 +246,15 @@ export function SoloPage({ onBackToHome }) {
                 // Auto-select first ALLOWED voice if none selected
                 if (message.voices?.length > 0) {
                     setSelectedVoice(prev => {
-                        if (prev) return prev;  // Keep existing selection
-                        // Find first allowed voice
+                        // FIX: Only keep existing selection if it exists in the NEW list (and for the same tier if strict)
+                        // But mainly we care that the voiceId exists in the new options
+                        if (prev && message.voices.some(v => v.voiceId === prev.voiceId)) {
+                            return prev;
+                        }
+
+                        // Otherwise (or if invalid), find first allowed voice
                         const firstAllowed = message.voices.find(v => v.isAllowed);
+                        console.log(`[SoloPage] 🔄 Auto-selecting voice: ${firstAllowed?.voiceName || message.voices[0].voiceName}`);
                         return firstAllowed || message.voices[0];
                     });
                 }
@@ -464,10 +502,11 @@ export function SoloPage({ onBackToHome }) {
     // Re-fetch voices when target language changes AND server is ready
     useEffect(() => {
         if (isConnected && isServerReady && wsRef.current?.readyState === WebSocket.OPEN) {
-            console.log('[SoloPage] Fetching voices for:', targetLang);
+            const normalizedLang = normalizeLanguageCode(targetLang);
+            console.log('[SoloPage] Fetching voices for:', targetLang, `(normalized: ${normalizedLang})`);
             wsRef.current.send(JSON.stringify({
                 type: 'tts/list_voices',
-                languageCode: targetLang
+                languageCode: normalizedLang
             }));
         }
     }, [targetLang, isConnected, isServerReady]);

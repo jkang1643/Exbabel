@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --mode development",
     "build": "vite build",
     "lint": "eslint \"src/**/*.{js,jsx}\" --report-unused-disable-directives",
     "preview": "vite preview"
