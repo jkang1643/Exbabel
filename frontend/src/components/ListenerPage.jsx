@@ -1891,7 +1891,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         </div>
       )}
       {/* TTS Routing Debug Overlay */}
-      {routingDebug && (
+      {import.meta.env.VITE_ENABLE_DEBUG_ROUTING === 'true' && routingDebug && (
         <div className="fixed bottom-20 left-4 z-50 bg-black/80 text-white text-[10px] p-2 rounded-md border border-gray-600 font-mono pointer-events-none max-w-xs shadow-xl backdrop-blur-sm">
           <div className="flex justify-between items-center mb-1 pb-1 border-b border-gray-700">
             <span className="font-bold text-blue-400">TTS ROUTING DEBUG</span>

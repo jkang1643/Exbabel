@@ -315,7 +315,8 @@ export function SoloPage({ onBackToHome }) {
                         targetLang,
                         tier: 'basic',
                         sessionId: streamingSessionIdRef.current,
-                        voiceId: selectedVoice?.voiceId || null
+                        voiceId: selectedVoice?.voiceId || null,
+                        ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
                     };
                     console.log('[SoloPage] 📤 SENDING INIT (after info):', initMessage);
                     socket.send(JSON.stringify(initMessage));
@@ -415,7 +416,8 @@ export function SoloPage({ onBackToHome }) {
                 targetLang: newTargetLang,
                 tier: 'basic',
                 sessionId: streamingSessionIdRef.current,
-                voiceId: selectedVoice?.voiceId || null // Include current voice
+                voiceId: selectedVoice?.voiceId || null, // Include current voice
+                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
 
             console.log('[SoloPage] 📤 Sending init message:', initMessage);
@@ -441,7 +443,8 @@ export function SoloPage({ onBackToHome }) {
                 targetLang: targetLang,
                 tier: 'basic',
                 sessionId: streamingSessionIdRef.current,
-                voiceId: voice.voiceId
+                voiceId: voice.voiceId,
+                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
 
             console.log('[SoloPage] 📤 Sending init message (voice update):', initMessage);
@@ -466,7 +469,8 @@ export function SoloPage({ onBackToHome }) {
                 type: 'init',
                 sourceLang: newSourceLang,
                 targetLang: newTargetLang,
-                tier: 'basic'
+                tier: 'basic',
+                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
 
             console.log('[SoloPage] 📤 Sending init message (swap):', initMessage);
@@ -510,6 +514,23 @@ export function SoloPage({ onBackToHome }) {
             }));
         }
     }, [targetLang, isConnected, isServerReady]);
+
+    // Send updated init when streamingTts changes (so backend knows the TTS mode)
+    useEffect(() => {
+        if (isConnected && isServerReady && wsRef.current?.readyState === WebSocket.OPEN) {
+            const initMessage = {
+                type: 'init',
+                sourceLang,
+                targetLang,
+                tier: 'basic',
+                sessionId: streamingSessionIdRef.current,
+                voiceId: selectedVoice?.voiceId || null,
+                ttsMode: streamingTts ? 'streaming' : 'unary'
+            };
+            console.log('[SoloPage] 📤 Sending init (streamingTts changed):', initMessage);
+            wsRef.current.send(JSON.stringify(initMessage));
+        }
+    }, [streamingTts, isConnected, isServerReady, sourceLang, targetLang, selectedVoice]);
 
     // Get display state
     const getDisplayState = () => {
@@ -576,11 +597,13 @@ export function SoloPage({ onBackToHome }) {
                     />
                 )}
 
-                {/* RTS Routing Overlay */}
-                <TtsRoutingOverlay
-                    isActive={!!activeRouting}
-                    {...activeRouting}
-                />
+                {/* RTS Routing Overlay (Debug only) */}
+                {import.meta.env.VITE_ENABLE_DEBUG_ROUTING === 'true' && (
+                    <TtsRoutingOverlay
+                        isActive={!!activeRouting}
+                        {...activeRouting}
+                    />
+                )}
 
                 {/* Queue Badge */}
                 {ttsQueue.queueLength > 0 && (
