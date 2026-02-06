@@ -28,6 +28,9 @@ export function SoloPage({ onBackToHome }) {
     // Auth context for token
     const { getAccessToken } = useAuth();
 
+    // Stable session ID (created once, never changes)
+    const sessionIdRef = useRef(`solo_${Date.now()}`);
+
     // Connection state
     const [ws, setWs] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
@@ -158,12 +161,9 @@ export function SoloPage({ onBackToHome }) {
         }
     });
 
-    // Stable session ID for streaming (must not change on re-render)
-    const streamingSessionIdRef = useRef(`solo_${Date.now()}`);
-
-    // TTS streaming (real-time)
+    // TTS streaming (real-time) - uses same session ID as main WebSocket
     const ttsStreaming = useTtsStreaming({
-        sessionId: streamingSessionIdRef.current,
+        sessionId: sessionIdRef.current,
         enabled: streamingTts && session.mode !== SoloMode.TEXT_ONLY,
         onBufferUpdate: (ms) => {
             console.log('[SoloPage] Buffer:', ms, 'ms');
@@ -314,7 +314,7 @@ export function SoloPage({ onBackToHome }) {
                         sourceLang,
                         targetLang,
                         tier: 'basic',
-                        sessionId: streamingSessionIdRef.current,
+                        sessionId: sessionIdRef.current,
                         voiceId: selectedVoice?.voiceId || null,
                         ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
                     };
@@ -415,7 +415,7 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang: newSourceLang,
                 targetLang: newTargetLang,
                 tier: 'basic',
-                sessionId: streamingSessionIdRef.current,
+                sessionId: sessionIdRef.current,
                 voiceId: selectedVoice?.voiceId || null, // Include current voice
                 ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
@@ -442,7 +442,7 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang: sourceLang,
                 targetLang: targetLang,
                 tier: 'basic',
-                sessionId: streamingSessionIdRef.current,
+                sessionId: sessionIdRef.current,
                 voiceId: voice.voiceId,
                 ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
@@ -523,7 +523,7 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang,
                 targetLang,
                 tier: 'basic',
-                sessionId: streamingSessionIdRef.current,
+                sessionId: sessionIdRef.current,
                 voiceId: selectedVoice?.voiceId || null,
                 ttsMode: streamingTts ? 'streaming' : 'unary'
             };
