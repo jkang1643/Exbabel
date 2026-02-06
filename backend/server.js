@@ -217,7 +217,8 @@ wss.on("connection", async (clientWs, req) => {
   const url = req.url || '';
 
   // Route TTS streaming connections
-  if (url.startsWith("/ws/tts")) {
+  // Production: /translate/ws/tts, Local: /ws/tts (both supported)
+  if (url.startsWith("/translate/ws/tts") || url.startsWith("/ws/tts")) {
     console.log("[Backend] TTS Streaming WebSocket connection");
     handleTtsStreamingConnection(clientWs, req);
     return;
