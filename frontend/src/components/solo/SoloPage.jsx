@@ -802,3 +802,4 @@ export function SoloPage({ onBackToHome }) {
 }
 
 export default SoloPage;
+// Force rebuild Fri Feb  6 16:24:13 CST 2026
