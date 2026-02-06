@@ -39,6 +39,7 @@ import { fetchWithRateLimit } from "./openaiRateLimiter.js";
 import { loadAllCatalogs } from './tts/voiceCatalog/catalogLoader.js';
 import { supabaseAdmin } from "./supabaseAdmin.js";
 import { getEntitlements } from "./entitlements/index.js";
+import { startPeriodicReaper } from "./usage/abandonedSessionReaper.js";
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -145,6 +146,8 @@ const server = app.listen(port, '0.0.0.0', async () => {
   // Cleanup abandoned sessions from previous run
   try {
     await sessionStore.cleanupAbandonedSessions();
+    // Start periodic reaper for long-running servers
+    startPeriodicReaper();
   } catch (error) {
     console.error(`[Backend] ❌ Failed to cleanup abandoned sessions:`, error.message);
   }

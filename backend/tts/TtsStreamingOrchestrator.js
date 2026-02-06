@@ -142,10 +142,27 @@ class SessionOrchestrator {
             }
         }
 
+        // Parse voiceId to extract tier if present
+        // Format: provider:tier:model:voiceId (e.g., elevenlabs:elevenlabs_flash:-:3qAbeQHx5LFO5BGhoRFu)
+        let requestedTier = 'neural2'; // Default fallback
+        if (voiceId && voiceId.includes(':')) {
+            const parts = voiceId.split(':');
+            if (parts.length >= 2) {
+                const tierPart = parts[1];
+                // Validate it's a known tier
+                const knownTiers = ['elevenlabs', 'elevenlabs_v3', 'elevenlabs_v2_flash', 'elevenlabs_v2_turbo',
+                    'elevenlabs_turbo', 'elevenlabs_flash', 'gemini', 'chirp3_hd', 'neural2', 'standard', 'studio'];
+                if (knownTiers.includes(tierPart)) {
+                    requestedTier = tierPart;
+                    console.log(`[TTS-Orch] Extracted tier from voiceId: ${requestedTier}`);
+                }
+            }
+        }
+
         // Resolve Route (Provider, Tier, Engine, Voice)
         // This enforces tier gating via ttsRouting.js
         const route = await resolveTtsRoute({
-            requestedTier: 'neural2', // Default start tier, let inference upgrade it
+            requestedTier: requestedTier,
             requestedVoice: voiceId,
             languageCode: lang || 'en-US',
             mode: 'streaming',
@@ -224,7 +241,7 @@ class SessionOrchestrator {
                 if (firstChunkTime === null) {
                     firstChunkTime = Date.now();
                     const latency = firstChunkTime - startTime;
-                    console.log(`[TTS-Orch] TTFB: ${latency}ms`);
+                    // console.log(`[TTS-Orch] TTFB: ${latency}ms`);
                     recordFirstAudioLatency(segmentId, latency);
 
                     // Update overlay with actual latency
@@ -236,7 +253,7 @@ class SessionOrchestrator {
                     });
                 }
 
-                console.log(`[TTS-Orch] Broadcasting chunk ${chunkIndex} for segment ${segmentId}: ${chunk.length} bytes`);
+                // console.log(`[TTS-Orch] Broadcasting chunk ${chunkIndex} for segment ${segmentId}: ${chunk.length} bytes`);
 
                 // Encode and broadcast frame
                 const isLast = false; // We don't know until stream ends

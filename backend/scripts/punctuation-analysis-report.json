@@ -1,0 +1,166 @@
+{
+  "generatedAt": "2026-02-05T22:13:01.618Z",
+  "statistics": {
+    "totalLanguages": 79,
+    "quoteVariants": 0,
+    "commaVariants": 0,
+    "periodVariants": 2,
+    "otherPunctuation": 857
+  },
+  "characterMappings": {
+    "quotes": [],
+    "commas": [],
+    "periods": [
+      {
+        "char": "।",
+        "unicode": "U+0964",
+        "replacement": "."
+      },
+      {
+        "char": "።",
+        "unicode": "U+1362",
+        "replacement": "."
+      }
+    ]
+  },
+  "familyPatterns": {
+    "CJK": {
+      "quotes": {},
+      "commas": {},
+      "periods": {},
+      "other": {},
+      "examples": [
+        {
+          "code": "ja",
+          "name": "Japanese",
+          "text": "ペテロは彼らに言った. \"悔い改め,あなたがた一人一人がイエス・キリストの名によってバプテスマを受けなさい. \"彼は続けて言った. \"あなたがたは聖霊の賜物を受けるでしょう. \"..."
+        },
+        {
+          "code": "ko",
+          "name": "Korean",
+          "text": "베드로가 그들에게 말했습니다. \"회개하고, 여러분 각자가 예수 그리스도의 이름으로 세례를 받으십시오.\" 그는 계속해서 말했습니다. \"여러분은 성령의 선물을 받을 것입니다.\"..."
+        },
+        {
+          "code": "zh",
+          "name": "Chinese (Simplified)",
+          "text": "彼得对他们说: \"你们每一个人都要悔改, 奉耶稣基督的名受洗. \"他接着说: \"你们将会领受圣灵的恩赐. \"..."
+        }
+      ]
+    },
+    "Arabic": {
+      "quotes": {},
+      "commas": {},
+      "periods": {},
+      "other": {},
+      "examples": [
+        {
+          "code": "ar",
+          "name": "Arabic",
+          "text": "قال بطرس لهم: \"توبوا واعتمدوا, كل واحد منكم, باسم يسوع المسيح.\" واستمر قائلاً: \"ستنالون عطية الروح ا..."
+        },
+        {
+          "code": "ps",
+          "name": "Pashto",
+          "text": "پیټر هغوی ته وویل, \"توبه وکړئ او هر یو له تاسو په عیسی مسیح کې بپتسما ورکړئ.\" هغه ادامه ورکړه, \"تاسو..."
+        },
+        {
+          "code": "fa",
+          "name": "Persian",
+          "text": "پتر به آنها گفت: \"توبه کنید و هر یک از شما به نام عیسی مسیح تعمید بگیرید.\" او ادامه داد: \"شما هدیه ر..."
+        }
+      ]
+    },
+    "Indic": {
+      "quotes": {},
+      "commas": {},
+      "periods": {},
+      "other": {},
+      "examples": [
+        {
+          "code": "bn",
+          "name": "Bangla",
+          "text": "পিটার তাদের বললেন, \"তোমরা সবাই যীশু খ্রিস্টের নামে তাওবা করো এবং বাপ্তিস্ম গ্রহণ করো।\" তিনি আরও বললে..."
+        },
+        {
+          "code": "hi",
+          "name": "Hindi",
+          "text": "पेटर ने उनसे कहा, \"पश्चात्ताप करो और तुम में से प्रत्येक को यीशु मसीह के नाम पर बपतिस्मा लिया जाए।\" ..."
+        },
+        {
+          "code": "mr",
+          "name": "Marathi",
+          "text": "पीटरने त्यांना सांगितले, \"तुम्ही पश्चात्ताप करा आणि प्रत्येकाने येशू ख्रिस्ताच्या नावाने बाप्तिस्मा ..."
+        }
+      ]
+    },
+    "Cyrillic": {
+      "quotes": {},
+      "commas": {},
+      "periods": {},
+      "other": {},
+      "examples": [
+        {
+          "code": "ru",
+          "name": "Russian",
+          "text": "Пётр сказал им: \"Покайтесь и пусть каждый из вас крестится во имя Иисуса Христа.\" Он продолжал: \"Вы ..."
+        },
+        {
+          "code": "uk",
+          "name": "Ukrainian",
+          "text": "Петро сказав їм: \"Покайтеся і хай кожен з вас охреститься в ім'я Ісуса Христа.\" Він продовжив: \"Ви о..."
+        },
+        {
+          "code": "be",
+          "name": "Belarusian",
+          "text": "Пётр сказаў ім: \"Пакуйцеся і будзьце ахрышчаны, кожны з вас, у імя Ісуса Хрыста.\" Ён працягнуў: \"Вы ..."
+        }
+      ]
+    },
+    "European": {
+      "quotes": {},
+      "commas": {},
+      "periods": {},
+      "other": {},
+      "examples": [
+        {
+          "code": "nl",
+          "name": "Dutch",
+          "text": "Petrus zei tegen hen: \"Bekeer u en laat u dopen, ieder van u, in de naam van Jezus Christus.\" Hij ve..."
+        },
+        {
+          "code": "fr",
+          "name": "French",
+          "text": "Pierre leur dit : \"Repentez-vous et soyez baptisés, chacun de vous, au nom de Jésus-Christ.\" Il cont..."
+        },
+        {
+          "code": "de",
+          "name": "German",
+          "text": "Petrus sagte zu ihnen: \"Tut Buße und lasst euch taufen, jeder von euch, im Namen Jesu Christi.\" Er f..."
+        }
+      ]
+    },
+    "Other": {
+      "quotes": {},
+      "commas": {},
+      "periods": {},
+      "other": {},
+      "examples": [
+        {
+          "code": "en",
+          "name": "English",
+          "text": "Peter said to them, \"Repent and be baptized, every one of you, in the name of Jesus Christ.\" He cont..."
+        },
+        {
+          "code": "id",
+          "name": "Indonesian",
+          "text": "Petrus berkata kepada mereka, \"Bertobatlah dan hendaklah kamu masing-masing dibaptis dalam nama Yesu..."
+        },
+        {
+          "code": "th",
+          "name": "Thai",
+          "text": "เปโตรกล่าวกับพวกเขาว่า \"จงกลับใจใหม่และรับบัพติสมา ทุกคนในพวกท่านในนามของพระเยซูคริสต์\" เขายังกล่าวต..."
+        }
+      ]
+    }
+  }
+}

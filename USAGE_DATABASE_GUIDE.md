@@ -153,6 +153,64 @@ We have verified the session lifecycle and billing logic with the following scen
 ### ✅ Test 3: Inactive Admin (Timeout)
 *   **Action**: Host disconnects (e.g., closes tab/browser crash).
 *   **Result**:
-    1.  Enters **grace period** (30s) - keeps expecting reconnect.
     2.  If no reconnect, session is `ended` with reason `host_disconnected`.
     3.  Billing stops at the disconnect time + grace period (safety cap).
+
+---
+
+## 10. Quota Testing & Verification (Database Commands)
+
+For precise testing of quota limits, warnings, and locks, we recommend manipulating the database directly using SQL. This bypasses the need to "wait" for usage to accumulate.
+
+Run these commands in the Supabase SQL Editor.
+
+### Prerequisites
+*   **Target Church ID**: Replace `'YOUR_CHURCH_ID_HERE'` with your test church ID.
+*   **Current Month**: These commands affect the current month's usage (`date_trunc('month', now())`).
+*   **Assumptions**: Examples assume a **Starter Plan (60 minutes = 3600 seconds)** limit. Adjust quantities accordingly for Pro/Unlimited.
+
+### 1. Reset Usage (0%)
+Clear all usage for the current month to start fresh.
+```sql
+DELETE FROM public.usage_monthly 
+WHERE church_id = 'YOUR_CHURCH_ID_HERE' 
+AND month_start = date_trunc('month', now())::DATE;
+```
+
+### 2. Set Usage to 85% (Warning Threshold)
+Force usage to 85% (3,060 seconds) to test the warning popup.
+```sql
+INSERT INTO public.usage_monthly (church_id, month_start, metric, total_quantity)
+VALUES (
+    'YOUR_CHURCH_ID_HERE', 
+    date_trunc('month', now())::DATE, 
+    'solo_seconds', -- Or 'host_seconds'
+    3060 -- 85% of 3600
+)
+ON CONFLICT (church_id, month_start, metric) 
+DO UPDATE SET total_quantity = 3060;
+```
+*Verification*: Connect to Solo Mode. You should see a toast/warning immediately or on the next heartbeat (30s).
+
+### 3. Set Usage to 100% (Quota Lock)
+Force usage to 100% (3,600 seconds) to test the active block.
+```sql
+INSERT INTO public.usage_monthly (church_id, month_start, metric, total_quantity)
+VALUES (
+    'YOUR_CHURCH_ID_HERE', 
+    date_trunc('month', now())::DATE, 
+    'solo_seconds', -- Or 'host_seconds'
+    3600 -- 100% of 3600
+)
+ON CONFLICT (church_id, month_start, metric) 
+DO UPDATE SET total_quantity = 3600;
+```
+*Verification*: Solo Mode should prevent starting a new session (Start button disabled or error message).
+
+### 4. Verify Current State
+Check exactly what the database sees as your usage.
+```sql
+SELECT * FROM public.get_session_quota_status('YOUR_CHURCH_ID_HERE');
+```
+This RPC returns the live breakdown including `remaining_seconds`, `active_seconds_now`, and `used_seconds_mtd`.
+

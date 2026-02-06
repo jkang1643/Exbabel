@@ -1,0 +1,405 @@
+{
+  "metadata": {
+    "generatedAt": "2026-02-05T22:11:14.791Z",
+    "sourceText": "Peter said to them, \"Repent and be baptized, every one of you, in the name of Jesus Christ.\" He continued, \"You will receive the gift of the Holy Spirit.\"",
+    "totalLanguages": 79,
+    "sourceLang": "en"
+  },
+  "translations": {
+    "ar": {
+      "name": "Arabic",
+      "translation": "قال بطرس لهم: \"توبوا واعتمدوا, كل واحد منكم, باسم يسوع المسيح.\" واستمر قائلاً: \"ستنالون عطية الروح القدس.\"",
+      "length": 106
+    },
+    "bn": {
+      "name": "Bangla",
+      "translation": "পিটার তাদের বললেন, \"তোমরা সবাই যীশু খ্রিস্টের নামে তাওবা করো এবং বাপ্তিস্ম গ্রহণ করো।\" তিনি আরও বললেন, \"তোমরা পবিত্র আত্মার উপহার পাবে।\"",
+      "length": 136
+    },
+    "nl": {
+      "name": "Dutch",
+      "translation": "Petrus zei tegen hen: \"Bekeer u en laat u dopen, ieder van u, in de naam van Jezus Christus.\" Hij vervolgde: \"U zult de gave van de Heilige Geest ontvangen.\"",
+      "length": 157
+    },
+    "en": {
+      "name": "English",
+      "translation": "Peter said to them, \"Repent and be baptized, every one of you, in the name of Jesus Christ.\" He continued, \"You will receive the gift of the Holy Spirit.\"",
+      "length": 154
+    },
+    "fr": {
+      "name": "French",
+      "translation": "Pierre leur dit : \"Repentez-vous et soyez baptisés, chacun de vous, au nom de Jésus-Christ.\" Il continua : \"Vous recevrez le don du Saint-Esprit.\"",
+      "length": 146
+    },
+    "de": {
+      "name": "German",
+      "translation": "Petrus sagte zu ihnen: \"Tut Buße und lasst euch taufen, jeder von euch, im Namen Jesu Christi.\" Er fuhr fort: \"Ihr werdet die Gabe des Heiligen Geistes empfangen.\"",
+      "length": 163
+    },
+    "hi": {
+      "name": "Hindi",
+      "translation": "पेटर ने उनसे कहा, \"पश्चात्ताप करो और तुम में से प्रत्येक को यीशु मसीह के नाम पर बपतिस्मा लिया जाए।\" उसने आगे कहा, \"तुम पवित्र आत्मा का उपहार प्राप्त करोगे।\"",
+      "length": 156
+    },
+    "id": {
+      "name": "Indonesian",
+      "translation": "Petrus berkata kepada mereka, \"Bertobatlah dan hendaklah kamu masing-masing dibaptis dalam nama Yesus Kristus.\" Ia melanjutkan, \"Kamu akan menerima karunia Roh Kudus.\"",
+      "length": 167
+    },
+    "it": {
+      "name": "Italian",
+      "translation": "Pietro disse loro: \"Pentitevi e fatevi battezzare, ciascuno di voi, nel nome di Gesù Cristo.\" Continuò: \"Riceverete il dono dello Spirito Santo.\"",
+      "length": 145
+    },
+    "ja": {
+      "name": "Japanese",
+      "translation": "ペテロは彼らに言った. \"悔い改め,あなたがた一人一人がイエス・キリストの名によってバプテスマを受けなさい. \"彼は続けて言った. \"あなたがたは聖霊の賜物を受けるでしょう. \"",
+      "length": 89
+    },
+    "ko": {
+      "name": "Korean",
+      "translation": "베드로가 그들에게 말했습니다. \"회개하고, 여러분 각자가 예수 그리스도의 이름으로 세례를 받으십시오.\" 그는 계속해서 말했습니다. \"여러분은 성령의 선물을 받을 것입니다.\"",
+      "length": 96
+    },
+    "mr": {
+      "name": "Marathi",
+      "translation": "पीटरने त्यांना सांगितले, \"तुम्ही पश्चात्ताप करा आणि प्रत्येकाने येशू ख्रिस्ताच्या नावाने बाप्तिस्मा घ्या.\" त्याने पुढे सांगितले, \"तुम्हाला पवित्र आत्म्याचा उपहार मिळेल.\"",
+      "length": 169
+    },
+    "pl": {
+      "name": "Polish",
+      "translation": "Piotr powiedział do nich: \"Nawróćcie się i dajcie się ochrzcić, każdy z was, w imię Jezusa Chrystusa.\" Kontynuował: \"Otrzymacie dar Ducha Świętego.\"",
+      "length": 148
+    },
+    "pt": {
+      "name": "Portuguese",
+      "translation": "Pedro disse-lhes: \"Arrependei-vos e sede baptizados, cada um de vós, em nome de Jesus Cristo.\" Continuou: \"Recebereis o dom do Espírito Santo.\"",
+      "length": 143
+    },
+    "ro": {
+      "name": "Romanian",
+      "translation": "Petru le-a spus: \"Pocăiți-vă și fiecare dintre voi să fie botezat în numele lui Isus Hristos.\" A continuat: \"Veți primi darul Duhului Sfânt.\"",
+      "length": 141
+    },
+    "ru": {
+      "name": "Russian",
+      "translation": "Пётр сказал им: \"Покайтесь и пусть каждый из вас крестится во имя Иисуса Христа.\" Он продолжал: \"Вы получите дар Святого Духа.\"",
+      "length": 127
+    },
+    "es": {
+      "name": "Spanish",
+      "translation": "Pedro les dijo: \"Arrepentíos y sed bautizados, cada uno de vosotros, en el nombre de Jesucristo.\" Continuó: \"Recibiréis el don del Espíritu Santo.\"",
+      "length": 147
+    },
+    "ta": {
+      "name": "Tamil",
+      "translation": "பீட்டர் அவர்களுக்கு கூறினான், \"நீங்கள் அனைவரும், இயேசு கிறிஸ்துவின் பெயரில், மனமாற்றம் செய்து நீராடுங்கள்.\" அவர் தொடர்ந்தார், \"நீங்கள் பரிசுத்த ஆவியின் பரிசு பெறுவீர்கள்.\"",
+      "length": 171
+    },
+    "te": {
+      "name": "Telugu",
+      "translation": "పేతురు వారికి చెప్పాడు, \"మీరు పశ్చాత్తాపం చెందండి మరియు యేసు క్రీస్తు నామంలో ప్రతి ఒక్కరూ బాప్తిస్మం పొందండి.\" అతను కొనసాగించాడు, \"మీరు పవిత్ర ఆత్మ యొక్క బహుమతి పొందుతారు.\"",
+      "length": 172
+    },
+    "th": {
+      "name": "Thai",
+      "translation": "เปโตรกล่าวกับพวกเขาว่า \"จงกลับใจใหม่และรับบัพติสมา ทุกคนในพวกท่านในนามของพระเยซูคริสต์\" เขายังกล่าวต่อไปว่า \"พวกท่านจะได้รับของขวัญคือพระวิญญาณบริสุทธิ์\"",
+      "length": 153
+    },
+    "tr": {
+      "name": "Turkish",
+      "translation": "Petrus onlara, \"Tövbe edin ve her biriniz İsa Mesih'in adıyla vaftiz olun\" dedi. Devam etti, \"Kutsal Ruh'un armağanını alacaksınız.\"",
+      "length": 132
+    },
+    "uk": {
+      "name": "Ukrainian",
+      "translation": "Петро сказав їм: \"Покайтеся і хай кожен з вас охреститься в ім'я Ісуса Христа.\" Він продовжив: \"Ви отримаєте дар Святого Духа.\"",
+      "length": 127
+    },
+    "vi": {
+      "name": "Vietnamese",
+      "translation": "Petrus nói với họ, \"Hãy ăn năn và chịu phép báp têm, mỗi người trong các ngươi, nhân danh Chúa Giê-su Christ.\" Ông tiếp tục, \"Các ngươi sẽ nhận được món quà của Thánh Linh.\"",
+      "length": 173
+    },
+    "af": {
+      "name": "Afrikaans",
+      "translation": "Petrus het vir hulle gesê: \"Bekeer julle en laat elkeen van julle gedoop word in die naam van Jesus Christus.\" Hy het voortgegaan: \"Julle sal die gawe van die Heilige Gees ontvang.\"",
+      "length": 181
+    },
+    "sq": {
+      "name": "Albanian",
+      "translation": "Pjetri u tha atyre: \"Pendohuni dhe bëhuni të pagëzuar, secili prej jush, në emër të Jezu Krishtit.\" Ai vazhdoi: \"Do të merrni dhuratën e Shpirtit të Shenjtë.\"",
+      "length": 158
+    },
+    "am": {
+      "name": "Amharic",
+      "translation": "ፒተር እንደዚህ አለ፤ \"ይዘኑ እና በየአንዱ የኢየሱስ ክርስቶስ ስም ይታትሩ።\" ቀጥሎ አለ፤ \"የመውደድ መርሐግብር ይቀበሉ።\"",
+      "length": 78
+    },
+    "hy": {
+      "name": "Armenian",
+      "translation": "Պետրոսը նրանց ասաց. \"Հեռացեք և մկրտվեք, յուրաքանչյուրը ձեզանից, Հիսուս Քրիստոսի անունով\": Նա շարունակեց. \"Դուք կստանաք Սուրբ Հոգու նվերը\":",
+      "length": 138
+    },
+    "az": {
+      "name": "Azerbaijani",
+      "translation": "Petr onlara dedi: \"Tövbə edin və hər biriniz İsa Məsihin adı ilə vəftiz olun.\" O, davam etdi: \"Siz Müqəddəs Ruhun hədiyyəsini alacaqsınız.\"",
+      "length": 139
+    },
+    "eu": {
+      "name": "Basque",
+      "translation": "Petrik esan zien: \"Bihurtu eta bataiatu, zuen artean, Jesus Kristoren izenean.\" Jarraitu zuen: \"Espiritu Santua jasoko duzue.\"",
+      "length": 126
+    },
+    "be": {
+      "name": "Belarusian",
+      "translation": "Пётр сказаў ім: \"Пакуйцеся і будзьце ахрышчаны, кожны з вас, у імя Ісуса Хрыста.\" Ён працягнуў: \"Вы атрымаеце дар Святога Духа.\"",
+      "length": 128
+    },
+    "bg": {
+      "name": "Bulgarian",
+      "translation": "Петър им каза: \"Покайте се и се кръстете, всеки от вас, в името на Исус Христос.\" Той продължи: \"Ще получите дара на Святия Дух.\"",
+      "length": 129
+    },
+    "my": {
+      "name": "Burmese",
+      "translation": "Peter berkata kepada mereka, \"Bertobatlah dan dibaptislah, setiap orang dari kamu, dalam nama Yesus Kristus.\" Ia melanjutkan, \"Kamu akan menerima karunia Roh Kudus.\"",
+      "length": 165
+    },
+    "ca": {
+      "name": "Catalan",
+      "translation": "Petrus els va dir: \"Arrepenteu-vos i feu-vos batejar, cadascun de vosaltres, en el nom de Jesucrist.\" Va continuar: \"Rebreu el do de l'Esperit Sant.\"",
+      "length": 149
+    },
+    "ceb": {
+      "name": "Cebuano",
+      "translation": "Si Pedro miingon kanila, \"Maghinulsol kamo ug magpabautismo, ang matag usa kaninyo, sa ngalan ni Jesu-Cristo.\" Nagpadayon siya, \"Makadawat kamo sa gasa sa Espiritu Santo.\"",
+      "length": 171
+    },
+    "zh": {
+      "name": "Chinese (Simplified)",
+      "translation": "彼得对他们说: \"你们每一个人都要悔改, 奉耶稣基督的名受洗. \"他接着说: \"你们将会领受圣灵的恩赐. \"",
+      "length": 54
+    },
+    "zh-TW": {
+      "name": "Chinese (Traditional)",
+      "translation": "彼得對他們說: \"你們各人要悔改, 奉耶穌基督的名受洗. \"他接著說: \"你們必定會領受聖靈的恩賜. \"",
+      "length": 52
+    },
+    "hr": {
+      "name": "Croatian",
+      "translation": "Petar im reče: \"Pokajte se i neka se krsti svaki od vas u ime Isusa Krista.\" Nastavio je: \"Primiti ćete dar Duha Svetoga.\"",
+      "length": 122
+    },
+    "cs": {
+      "name": "Czech",
+      "translation": "Petr jim řekl: \"Čiňte pokání a nechte se pokřtít, každý z vás, ve jménu Ježíše Krista.\" Pokračoval: \"Obdržíte dar Ducha svatého.\"",
+      "length": 129
+    },
+    "da": {
+      "name": "Danish",
+      "translation": "Peter sagde til dem: \"Omvend jer og lad jer døbe, hver eneste af jer, i Jesu Kristi navn.\" Han fortsatte: \"I vil modtage Helligåndens gave.\"",
+      "length": 140
+    },
+    "et": {
+      "name": "Estonian",
+      "translation": "Peetrus ütles neile: \"Pöörduge ja laske end igaühel ristida Jeesuse Kristuse nimel.\" Ta jätkas: \"Te saate püha vaimu kingituse.\"",
+      "length": 128
+    },
+    "fil": {
+      "name": "Filipino",
+      "translation": "Sinabi ni Pedro sa kanila, \"Magsisi at magpabautismo, ang bawat isa sa inyo, sa pangalan ni Jesucristo.\" Nagpatuloy siya, \"Tatanggapin ninyo ang kaloob ng Espiritu Santo.\"",
+      "length": 171
+    },
+    "fi": {
+      "name": "Finnish",
+      "translation": "Pietari sanoi heille: \"Kääntykää ja kastakaa itsenne, jokainen teistä, Jeesuksen Kristuksen nimeen.\" Hän jatkoi: \"Te saatte Pyhän Hengen lahjan.\"",
+      "length": 145
+    },
+    "gl": {
+      "name": "Galician",
+      "translation": "Pedro díxolles: \"Arrepentídevos e sodes bautizados, cada un de vós, en nome de Xesús Cristo.\" Continuou: \"Recibiredes o don do Espírito Santo.\"",
+      "length": 143
+    },
+    "ka": {
+      "name": "Georgian",
+      "translation": "პეტრემ მათ უთხრა: \"მოინანიეთ და მოინათლეთ, თითოეულმა თქვენგანმა, იესო ქრისტეს სახელით.\" მან გააგრძელა: \"თქვენ მიიღებთ წმინდა სულის ნიჭს.\"",
+      "length": 137
+    },
+    "el": {
+      "name": "Greek",
+      "translation": "Ο Πέτρος τους είπε: \"Μετανοήστε και ας βαπτιστεί ο καθένας σας στο όνομα του Ιησού Χριστού.\" Συνέχισε: \"Θα λάβετε το δώρο του Αγίου Πνεύματος.\"",
+      "length": 143
+    },
+    "gu": {
+      "name": "Gujarati",
+      "translation": "પેટરએ તેમને કહ્યું, \"પશ્ચાત્તાપ કરો અને દરેકને યેશુ ખ્રિસ્તના નામે બાપ્તિઝમ લો.\" તેણે ચાલુ રાખ્યું, \"તમે પવિત્ર આત્માનો ભેટ પ્રાપ્ત કરશો.\"",
+      "length": 138
+    },
+    "ht": {
+      "name": "Haitian Creole",
+      "translation": "Pètr di yo, \"Repanti e batize, chak nan nou, nan non Jezikri.\" Li kontinye, \"Nou pral resevwa kado Sentespri a.\"",
+      "length": 112
+    },
+    "he": {
+      "name": "Hebrew",
+      "translation": "פטרוס אמר להם, \"חזרו בתשובה וטבלו, כל אחד מכם, בשם ישו המשיח.\" הוא המשיך, \"אתם תקבלו את מתנת רוח הקודש.\"",
+      "length": 104
+    },
+    "hu": {
+      "name": "Hungarian",
+      "translation": "Péter így szólt hozzájuk: \"Térjetek meg, és keresztelkedjetek meg mindnyájan Jézus Krisztus nevében.\" Folytatta: \"Megkapjátok a Szentlélek ajándékát.\"",
+      "length": 150
+    },
+    "is": {
+      "name": "Icelandic",
+      "translation": "Pétur sagði við þá: \"Snúið við og látið skírast, hver og einn ykkar, í nafni Jesú Krists.\" Hann hélt áfram: \"Þið munuð fá gjöf heilags anda.\"",
+      "length": 141
+    },
+    "jv": {
+      "name": "Javanese",
+      "translation": "Petrus ngandika marang dheweke, \"Bertobatlah lan dibaptis, saben-saben saka sampeyan, ing jeneng Yesus Kristus.\" Dheweke nerusake, \"Sampeyan bakal nampa hadiah Roh Suci.\"",
+      "length": 170
+    },
+    "kn": {
+      "name": "Kannada",
+      "translation": "ಪೀಟರ್ ಅವರಿಗೆ ಹೇಳಿದರು, \"ನೀವು ಪ್ರತಿವರ್ಷವೂ ಯೇಸು ಕ್ರಿಸ್ತನ ಹೆಸರಿನಲ್ಲಿ ಪಶ್ಚಾತ್ತಾಪ ಮಾಡಿ ಮತ್ತು ಬಾಪ್ಟಿಸ್ಮ್ ಪಡೆಯಿರಿ.\" ಅವರು ಮುಂದುವರಿಸಿದರು, \"ನೀವು ಪವಿತ್ರ ಆತ್ಮದ ಉಡುಗೊರೆಯನ್ನು ಪಡೆಯುತ್ತೀರಿ.\"",
+      "length": 173
+    },
+    "kok": {
+      "name": "Konkani",
+      "translation": "पीटर त्यांना म्हणाला, \"तुम्ही सर्वांनी, येशू ख्रिस्ताच्या नावाने, पश्चात्ताप करा आणि बाप्तिस्मा घ्या.\" तो पुढे म्हणाला, \"तुम्हाला पवित्र आत्म्याचा उपहार मिळेल.\"",
+      "length": 160
+    },
+    "lo": {
+      "name": "Lao",
+      "translation": "ປີເຕີໄດ້ກ່າວກັບເຂົ້າ, \"ຈິງແລ້ວສຽງຂໍແລະຖືກບັດທິດ, ທຸກຄົນຂອງເຂົ້າ, ໃນຊື່ຂອງໂຈຊັດຄຣິດ.\" ເຂົ້າເພີ່ມເຕີມ, \"ເຈົ້າຈະໄດ້ຮັບຂອງຂອງຂອງພຣະອົງສະບັດ.\"",
+      "length": 137
+    },
+    "la": {
+      "name": "Latin",
+      "translation": "Petrus dixit ad eos, \"Poenitentiam agite et baptizetur unusquisque vestrum in nomine Iesu Christi.\" Continuavit, \"Accipietis donum Spiritus Sancti.\"",
+      "length": 148
+    },
+    "lv": {
+      "name": "Latvian",
+      "translation": "Pēteris viņiem teica: \"Grēkojiet un ļaujiet kristīties katram no jums Jēzus Kristus vārdā.\" Viņš turpināja: \"Jūs saņemsiet Svētā Gara dāvanu.\"",
+      "length": 142
+    },
+    "lt": {
+      "name": "Lithuanian",
+      "translation": "Petras jiems tarė: \"Atsiprašykite ir būkite pakrikštyti, kiekvienas iš jūsų, Jėzaus Kristaus vardu.\" Jis tęsė: \"Jūs gausite Šventosios Dvasios dovaną.\"",
+      "length": 151
+    },
+    "lb": {
+      "name": "Luxembourgish",
+      "translation": "Peter huet zu hinnen gesot: \"Buss a gëtt getauft, all eenzel vun Iech, am Numm vum Jesus Christus.\" Hien huet weidergesot: \"Dir wäert den Don vum Hellege Geescht kréien.\"",
+      "length": 170
+    },
+    "mk": {
+      "name": "Macedonian",
+      "translation": "Петар им рече: \"Обратете се и да се крстите, секој од вас, во името на Исус Христос.\" Продолжи: \"Ќе ја добиете дарот на Светиот Дух.\"",
+      "length": 133
+    },
+    "mai": {
+      "name": "Maithili",
+      "translation": "पीटर उनकर कहले, \"तू सब लोग पाप के छोड़ के, यीशु मसीह के नाम पर बपतिस्मा लेहू।\" ऊ आगे कहलन, \"तू सब लोग पवित्र आत्मा के उपहार पाओगे।\"",
+      "length": 131
+    },
+    "mg": {
+      "name": "Malagasy",
+      "translation": "Petra hoy izy ireo, \"Mibebaha ary manaova batisa, ianareo rehetra, amin'ny anaran'i Jesoa Kristy.\" Nohazavainy, \"Hahazo ny fanomezana ny Fanahy Masina ianareo.\"",
+      "length": 160
+    },
+    "ms": {
+      "name": "Malay",
+      "translation": "Petrus berkata kepada mereka, \"Bertobatlah dan dibaptislah, setiap seorang daripada kamu, dalam nama Yesus Kristus.\" Dia meneruskan, \"Kamu akan menerima anugerah Roh Kudus.\"",
+      "length": 173
+    },
+    "ml": {
+      "name": "Malayalam",
+      "translation": "പീറ്റർ അവരോട് പറഞ്ഞു, \"നിങ്ങളെല്ലാവരും യേശുക്രിസ്തുവിന്റെ നാമത്തിൽ പാപമൊഴിഞ്ഞു ബാപ്റ്റിസം സ്വീകരിക്കണം.\" അദ്ദേഹം തുടർന്നു, \"നിങ്ങൾ പരിശുദ്ധാത്മാവിന്റെ സമ്മാനം ലഭിക്കും.\"",
+      "length": 169
+    },
+    "mn": {
+      "name": "Mongolian",
+      "translation": "Петр тэдэнд хэлэв: \"Та нар бүгдээрээ Иисус Христийн нэрээр нүглээ уучлуулж, усанд хумсалж, дахин төр.\" Тэр үргэлжлүүлэн хэлэв: \"Та нар Ариун Сүнсний бэлгийг хүлээн авах болно.\"",
+      "length": 176
+    },
+    "ne": {
+      "name": "Nepali",
+      "translation": "पिटरले उनीहरूलाई भने, \"तपाईंहरू सबैले, येशू ख्रीष्टको नाममा, पछुताउनुहोस् र बप्तिस्मा लिनुहोस्।\" उनले जारी राख्दै भने, \"तपाईंहरूले पवित्र आत्माको उपहार प्राप्त गर्नुहुनेछ।\"",
+      "length": 172
+    },
+    "no": {
+      "name": "Norwegian",
+      "translation": "Peter sa til dem: \"Omvend dere og bli døpt, hver og en av dere, i Jesu Kristi navn.\" Han fortsatte: \"Dere vil motta den Hellige Ånds gave.\"",
+      "length": 139
+    },
+    "nn": {
+      "name": "Norwegian Nynorsk",
+      "translation": "Peter sa til dei: \"Omvend dykk og lat dykk bli døypt, kvar og ein av dykk, i namnet til Jesus Kristus.\" Han heldt fram: \"De vil motta gåva frå Den Heilage Ande.\"",
+      "length": 161
+    },
+    "or": {
+      "name": "Odia",
+      "translation": "ପୀତର ତାଙ୍କୁ କହିଲେ, \"ପଶ୍ଚାତ୍ତାପ କରନ୍ତୁ ଏବଂ ଯୀଶୁ କ୍ରୀଷ୍ଟଙ୍କ ନାମରେ ପ୍ରତିଷ୍ଠା କରନ୍ତୁ, ପ୍ରତ୍ୟେକ ଜଣେ।\" ସେ ଆଗକୁ କହିଲେ, \"ତୁମେ ପବିତ୍ର ଆତ୍ମାର ଉପହାର ପାଇବେ।\"",
+      "length": 145
+    },
+    "ps": {
+      "name": "Pashto",
+      "translation": "پیټر هغوی ته وویل, \"توبه وکړئ او هر یو له تاسو په عیسی مسیح کې بپتسما ورکړئ.\" هغه ادامه ورکړه, \"تاسو د روح القدس تحفه ترلاسه کوئ.\"",
+      "length": 130
+    },
+    "fa": {
+      "name": "Persian",
+      "translation": "پتر به آنها گفت: \"توبه کنید و هر یک از شما به نام عیسی مسیح تعمید بگیرید.\" او ادامه داد: \"شما هدیه روح‌القدس را دریافت خواهید کرد.\"",
+      "length": 131
+    },
+    "pa": {
+      "name": "Punjabi",
+      "translation": "ਪੀਟਰ ਨੇ ਉਨ੍ਹਾਂ ਨੂੰ ਕਿਹਾ, \"ਤੁਸੀਂ ਸਭ ਆਪਣੇ ਆਪਣੇ ਪਾਪਾਂ ਲਈ ਪਛਤਾਓ ਅਤੇ ਯਿਸੂ ਮਸੀਹ ਦੇ ਨਾਮ ਵਿੱਚ ਬਾਪਤਿਸਮਾ ਲਓ।\" ਉਸਨੇ ਜਾਰੀ ਰੱਖਿਆ, \"ਤੁਸੀਂ ਪਵਿੱਤਰ ਆਤਮਾ ਦਾ ਉਪਹਾਰ ਪ੍ਰਾਪਤ ਕਰੋਗੇ।\"",
+      "length": 159
+    },
+    "sr": {
+      "name": "Serbian",
+      "translation": "Petar im reče: \"Pokajte se i neka se krsti svaki od vas u ime Isusa Hrista.\" Nastavio je: \"Primićete dar Svetog Duha.\"",
+      "length": 118
+    },
+    "sd": {
+      "name": "Sindhi",
+      "translation": "پطرس انهن کي چيو, \"توبه ڪريو ۽ هر هڪ توهان مان عيسى مسيح جي نالي ۾ غسل وٺو.\" هن جاري رکيو, \"توهان روح القدس جو تحفو حاصل ڪندا.\"",
+      "length": 127
+    },
+    "si": {
+      "name": "Sinhala",
+      "translation": "පීටර් ඔවුන්ට කිව්වා, \"ඔබ හැමෝම යේසුස් ක්‍රිස්තුස්ගේ නාමයෙන් පරිවර්තනය වී බප්තිසමය ගන්න.\" ඔහු තවදුරටත් කිව්වා, \"ඔබට පවිත්‍ර ආත්මයගේ දානය ලැබෙනු ඇත.\"",
+      "length": 147
+    },
+    "sk": {
+      "name": "Slovak",
+      "translation": "Peter im povedal: \"Kajajte sa a dajte sa pokrstiť, každý z vás, v mene Ježiša Krista.\" Pokračoval: \"Dostanete dar Ducha Svätého.\"",
+      "length": 129
+    },
+    "sl": {
+      "name": "Slovenian",
+      "translation": "Peter je rekel: \"Obrnite se in se dajte krstiti, vsak od vas, v imenu Jezusa Kristusa.\" Nadaljeval je: \"Prejeli boste dar Svetega Duha.\"",
+      "length": 136
+    },
+    "sw": {
+      "name": "Swahili",
+      "translation": "Petro aliwaambia, \"Tubuni na mbatizwe, kila mmoja wenu, kwa jina la Yesu Kristo.\" Aliendelea, \"Mtapokea kipawa cha Roho Mtakatifu.\"",
+      "length": 131
+    },
+    "sv": {
+      "name": "Swedish",
+      "translation": "Petrus sade till dem: \"Omvänd er och låt er döpas, var och en av er, i Jesu Kristi namn.\" Han fortsatte: \"Ni skall få den helige Andens gåva.\"",
+      "length": 142
+    },
+    "ur": {
+      "name": "Urdu",
+      "translation": "پطرس نے ان سے کہا, \"توبہ کرو اور ہر ایک تم میں سے یسوع مسیح کے نام پر بپتسمہ لو۔\" اس نے جاری رکھا, \"تم روح القدس کا تحفہ پاؤ گے۔\"",
+      "length": 130
+    }
+  }
+}

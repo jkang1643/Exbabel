@@ -615,6 +615,7 @@ backend/
 │   ├── getListeningQuota.js
 │   ├── sessionSpans.js            [NEW]
 │   ├── getSessionQuota.js         [NEW]
+│   ├── abandonedSessionReaper.js  [NEW]
 │   └── index.js
 ├── middleware/
 │   ├── requireAuthContext.js
@@ -784,6 +785,7 @@ backend/
     - **Explicit End**: "End Session" button in Host UI triggers `end_session` message.
     - **Graceful End**: Host disconnect triggers 30s grace timer (`scheduleSessionEnd`) before closing.
     - **Startup Cleanup**: `cleanupAbandonedSessions` runs on server start to mark zombie sessions as ended.
+    - **Periodic Reaper**: `abandonedSessionReaper` runs every 5 minutes to clean up stale sessions (last heartbeat > 5 min ago) on long-running servers.
 - ✅ **Frontend**: Added distinct "End Session" button with confirmation dialog in `HostPage.jsx`.
 - ✅ **Host Adapter**: Wired `end_session` and grace timer logic into the active `adapter.js`.
 
@@ -798,6 +800,12 @@ backend/
 - ✅ **Frontend Auth**: Implemented Supabase Auth (Email + Google) via `AuthContext.jsx`.
 - ✅ **UI Components**: Setup shadcn/ui and created modern `LoginPage` and `NoProfilePage`.
 - ✅ **App Shell Gating**: Secured `App.jsx` to block unauthorized access to Host/Solo modes.
+
+### 2026-02-06 - Bug Fix: Solo Mode Session Constraint
+- ✅ **Fix: Foreign Key Violation**: Updated `ensureTrackingSession` to await DB insert before allowing `startSessionSpan`, preventing race conditions.
+- ✅ **Fix: Silent Failure Retry**: Added `.catch()` block to `ensureSessionActive` to reset `sessionSpanStarted` flag on failure, allowing instant retries.
+- ✅ **Fix: Session Code Constraint**: Changed Solo Mode session ID generation from `SOLO-XXXX` (9 chars) to `SXXXXX` (6 chars alphanumeric) to satisfy `sessions_session_code_check1` database constraint.
+
 - ✅ **Host Token Injection**: Updated `HostPage.jsx` to pass JWT via `sec-websocket-protocol` (header) or query param for `ws` connection.
 - ✅ **Session API**: Secured `/api/session/start` with Bearer token authentication from frontend.
 
@@ -901,4 +909,18 @@ backend/
     - `useQuotaWarning.js` - Hook for handling WebSocket quota events
     - Toast variant for 80% warning, full modal for 100% exceeded
     - Start button disabled when quota exceeded
+
+### 2026-02-06 - Abandoned Session Reaper
+- ✅ **Periodic Reaper**: Created `backend/usage/abandonedSessionReaper.js` to clean up abandoned sessions on long-running servers
+- ✅ **Heartbeat-Based Detection**: Reaper identifies stale spans by checking if `last_seen_at` is older than 5 minutes (300 seconds)
+- ✅ **Functions**:
+    - `reapAbandonedSessionSpans()` - Finds and stops stale spans via `stopSessionSpan()` with reason `'abandoned_reaper'`
+    - `reapAbandonedSessions()` - Ends session records with no in-memory presence or active spans
+    - `startPeriodicReaper()` - Starts 5-minute interval, runs immediately on startup
+- ✅ **Server Integration**: `server.js` now starts the reaper automatically after `cleanupAbandonedSessions()`
+- ✅ **Integration Test**: Added `backend/tests/integration/test-abandoned-reaper.js` covering:
+    - Stale span reaping
+    - Recent span preservation (active recording is NOT reaped)
+    - Abandoned session cleanup
+- ✅ **Use Cases**: Handles users who forget to end sessions, close laptops while recording, or experience network drops
 

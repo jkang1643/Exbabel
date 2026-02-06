@@ -1078,8 +1078,13 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
           const { validateTtsRequest } = await import('./tts/ttsPolicy.js');
           const { canSynthesize } = await import('./tts/ttsQuota.js');
           const { recordUsage } = await import('./tts/ttsUsage.js');
+          const { normalizePunctuation } = await import('./transcriptionCleanup.js');
 
           try {
+
+            // CRITICAL: Normalize punctuation before TTS to prevent artifacts
+            // This removes Chinese quotes, full-width punctuation, etc.
+            const normalizedText = normalizePunctuation(message.text);
 
             // Fix for typo in tier name if it comes from frontend/config
             if (message.tier === 'chirp_hd') {
@@ -1203,7 +1208,7 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
               sessionId: sessionId,
               userId: userName || 'anonymous',
               orgId: clientWs.churchId || 'default',
-              text: message.text,
+              text: normalizedText,  // CRITICAL: Use normalized text to prevent TTS artifacts
               segmentId: message.segmentId,
               profile: {
                 engine: route.engine,

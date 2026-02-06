@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict Pujzct3oc7XD0oM34ETcNXrtsxR1laZUAhZqBWl5ZyJaLo7aKKOrWUDULj1J25I
+\restrict zuzkiXrEWyuTZXC60Xce6QZ9QKoBz8h9dxPGGnbNSXTen20Vb1OK1WroPYHzfUa
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.7 (Ubuntu 17.7-3.pgdg24.04+1)
@@ -86,7 +86,7 @@ DROP INDEX IF EXISTS storage.idx_multipart_uploads_list;
 DROP INDEX IF EXISTS storage.buckets_analytics_unique_name_idx;
 DROP INDEX IF EXISTS storage.bucketid_objname;
 DROP INDEX IF EXISTS storage.bname;
-DROP INDEX IF EXISTS realtime.subscription_subscription_id_entity_filters_key;
+DROP INDEX IF EXISTS realtime.subscription_subscription_id_entity_filters_action_filter_key;
 DROP INDEX IF EXISTS realtime.messages_inserted_at_topic_index;
 DROP INDEX IF EXISTS realtime.ix_realtime_subscription_entity;
 DROP INDEX IF EXISTS public.usage_monthly_church_month_idx;
@@ -113,6 +113,8 @@ DROP INDEX IF EXISTS public.listening_spans_active_by_church_idx;
 DROP INDEX IF EXISTS public.idx_sessions_code;
 DROP INDEX IF EXISTS public.idx_sessions_church_recent;
 DROP INDEX IF EXISTS public.idx_sessions_church_id;
+DROP INDEX IF EXISTS public.idx_sessions_active_status;
+DROP INDEX IF EXISTS public.idx_session_spans_mode;
 DROP INDEX IF EXISTS auth.users_is_anonymous_idx;
 DROP INDEX IF EXISTS auth.users_instance_id_idx;
 DROP INDEX IF EXISTS auth.users_instance_id_email_idx;
@@ -1060,18 +1062,41 @@ CREATE FUNCTION pgbouncer.get_auth(p_usename text) RETURNS TABLE(username text, 
 -- Name: get_session_quota_status(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_session_quota_status(p_church_id uuid) RETURNS TABLE(included_seconds_per_month integer, used_seconds_mtd bigint, active_seconds_now integer, remaining_seconds bigint)
+CREATE FUNCTION public.get_session_quota_status(p_church_id uuid) RETURNS TABLE(included_seconds_per_month integer, used_seconds_mtd bigint, active_seconds_now integer, remaining_seconds bigint, included_solo_seconds integer, used_solo_seconds_mtd bigint, remaining_solo_seconds bigint, included_host_seconds integer, used_host_seconds_mtd bigint, remaining_host_seconds bigint)
     LANGUAGE sql STABLE SECURITY DEFINER
     AS $$
 WITH plan_limits AS (
-  SELECT p.included_seconds_per_month::INT AS included
+  SELECT 
+    -- Get separate quotas (new columns)
+    COALESCE(p.included_solo_seconds_per_month, p.included_seconds_per_month / 2)::INT AS solo_included,
+    COALESCE(p.included_host_seconds_per_month, p.included_seconds_per_month / 2)::INT AS host_included,
+    -- Combined for backwards compatibility
+    (COALESCE(p.included_solo_seconds_per_month, p.included_seconds_per_month / 2) + 
+     COALESCE(p.included_host_seconds_per_month, p.included_seconds_per_month / 2))::INT AS total_included
   FROM public.subscriptions s
   JOIN public.plans p ON p.id = s.plan_id
   WHERE s.church_id = p_church_id
     AND s.status IN ('active', 'trialing')
   LIMIT 1
 ),
-mtd AS (
+solo_mtd AS (
+  -- Solo mode usage (new metric)
+  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used
+  FROM public.usage_monthly um
+  WHERE um.church_id = p_church_id
+    AND um.month_start = date_trunc('month', now())::DATE
+    AND um.metric = 'solo_seconds'
+),
+host_mtd AS (
+  -- Host mode usage (new metric)
+  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used
+  FROM public.usage_monthly um
+  WHERE um.church_id = p_church_id
+    AND um.month_start = date_trunc('month', now())::DATE
+    AND um.metric = 'host_seconds'
+),
+legacy_mtd AS (
+  -- Legacy session_seconds for backwards compatibility
   SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used
   FROM public.usage_monthly um
   WHERE um.church_id = p_church_id
@@ -1095,12 +1120,29 @@ active AS (
     AND ended_at IS NULL
 )
 SELECT
-  COALESCE(pl.included, 0) AS included_seconds_per_month,
-  COALESCE(m.used, 0) AS used_seconds_mtd,
+  -- Combined (backwards compatible) - includes legacy session_seconds
+  COALESCE(pl.total_included, 0) AS included_seconds_per_month,
+  (COALESCE(sm.used, 0) + COALESCE(hm.used, 0) + COALESCE(lm.used, 0)) AS used_seconds_mtd,
   COALESCE(a.active_now, 0) AS active_seconds_now,
-  GREATEST(0, COALESCE(pl.included, 0)::BIGINT - COALESCE(m.used, 0) - COALESCE(a.active_now, 0)::BIGINT) AS remaining_seconds
+  GREATEST(0, 
+    COALESCE(pl.total_included, 0)::BIGINT 
+    - COALESCE(sm.used, 0) 
+    - COALESCE(hm.used, 0) 
+    - COALESCE(lm.used, 0) 
+    - COALESCE(a.active_now, 0)::BIGINT
+  ) AS remaining_seconds,
+  -- Solo breakdown
+  COALESCE(pl.solo_included, 0) AS included_solo_seconds,
+  COALESCE(sm.used, 0) AS used_solo_seconds_mtd,
+  GREATEST(0, COALESCE(pl.solo_included, 0)::BIGINT - COALESCE(sm.used, 0)) AS remaining_solo_seconds,
+  -- Host breakdown
+  COALESCE(pl.host_included, 0) AS included_host_seconds,
+  COALESCE(hm.used, 0) AS used_host_seconds_mtd,
+  GREATEST(0, COALESCE(pl.host_included, 0)::BIGINT - COALESCE(hm.used, 0)) AS remaining_host_seconds
 FROM plan_limits pl
-FULL OUTER JOIN mtd m ON TRUE
+FULL OUTER JOIN solo_mtd sm ON TRUE
+FULL OUTER JOIN host_mtd hm ON TRUE
+FULL OUTER JOIN legacy_mtd lm ON TRUE
 FULL OUTER JOIN active a ON TRUE;
 $$;
 
@@ -1109,7 +1151,7 @@ $$;
 -- Name: FUNCTION get_session_quota_status(p_church_id uuid); Type: COMMENT; Schema: public; Owner: -
 --
 
-COMMENT ON FUNCTION public.get_session_quota_status(p_church_id uuid) IS 'Returns instant quota status for session-based metering. O(1) reads from usage_monthly + active session_spans.';
+COMMENT ON FUNCTION public.get_session_quota_status(p_church_id uuid) IS 'Returns instant quota status with separate solo/host breakdowns. O(1) reads from usage_monthly + active session_spans.';
 
 
 --
@@ -1245,7 +1287,10 @@ subscriptions realtime.subscription[] = array_agg(subs)
     from
         realtime.subscription subs
     where
-        subs.entity = entity_;
+        subs.entity = entity_
+        -- Filter by action early - only get subscriptions interested in this action
+        -- action_filter column can be: '*' (all), 'INSERT', 'UPDATE', or 'DELETE'
+        and (subs.action_filter = '*' or subs.action_filter = action::text);
 
 -- Subscription vars
 roles regrole[] = array_agg(distinct us.claims_role::text)
@@ -2880,16 +2925,21 @@ COMMENT ON TABLE auth.audit_log_entries IS 'Auth: Audit trail for user actions.'
 CREATE TABLE auth.flow_state (
     id uuid NOT NULL,
     user_id uuid,
-    auth_code text NOT NULL,
-    code_challenge_method auth.code_challenge_method NOT NULL,
-    code_challenge text NOT NULL,
+    auth_code text,
+    code_challenge_method auth.code_challenge_method,
+    code_challenge text,
     provider_type text NOT NULL,
     provider_access_token text,
     provider_refresh_token text,
     created_at timestamp with time zone,
     updated_at timestamp with time zone,
     authentication_method text NOT NULL,
-    auth_code_issued_at timestamp with time zone
+    auth_code_issued_at timestamp with time zone,
+    invite_token text,
+    referrer text,
+    oauth_client_state_id uuid,
+    linking_target_id uuid,
+    email_optional boolean DEFAULT false NOT NULL
 );
 
 
@@ -2897,7 +2947,7 @@ CREATE TABLE auth.flow_state (
 -- Name: TABLE flow_state; Type: COMMENT; Schema: auth; Owner: -
 --
 
-COMMENT ON TABLE auth.flow_state IS 'stores metadata for pkce logins';
+COMMENT ON TABLE auth.flow_state IS 'Stores metadata for all OAuth/SSO login flows';
 
 
 --
@@ -3097,9 +3147,11 @@ CREATE TABLE auth.oauth_clients (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     deleted_at timestamp with time zone,
     client_type auth.oauth_client_type DEFAULT 'confidential'::auth.oauth_client_type NOT NULL,
+    token_endpoint_auth_method text NOT NULL,
     CONSTRAINT oauth_clients_client_name_length CHECK ((char_length(client_name) <= 1024)),
     CONSTRAINT oauth_clients_client_uri_length CHECK ((char_length(client_uri) <= 2048)),
-    CONSTRAINT oauth_clients_logo_uri_length CHECK ((char_length(logo_uri) <= 2048))
+    CONSTRAINT oauth_clients_logo_uri_length CHECK ((char_length(logo_uri) <= 2048)),
+    CONSTRAINT oauth_clients_token_endpoint_auth_method_check CHECK ((token_endpoint_auth_method = ANY (ARRAY['client_secret_basic'::text, 'client_secret_post'::text, 'none'::text])))
 );
 
 
@@ -3483,10 +3535,28 @@ CREATE TABLE public.plans (
     feature_flags jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    included_solo_seconds_per_month integer DEFAULT 0 NOT NULL,
+    included_host_seconds_per_month integer DEFAULT 0 NOT NULL,
+    CONSTRAINT plans_included_host_seconds_per_month_check CHECK ((included_host_seconds_per_month >= 0)),
     CONSTRAINT plans_included_seconds_per_month_check CHECK ((included_seconds_per_month >= 0)),
+    CONSTRAINT plans_included_solo_seconds_per_month_check CHECK ((included_solo_seconds_per_month >= 0)),
     CONSTRAINT plans_max_session_seconds_check CHECK (((max_session_seconds IS NULL) OR (max_session_seconds > 0))),
     CONSTRAINT plans_max_simultaneous_languages_check CHECK ((max_simultaneous_languages > 0))
 );
+
+
+--
+-- Name: COLUMN plans.included_solo_seconds_per_month; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.plans.included_solo_seconds_per_month IS 'Monthly quota for solo mode (individual practice)';
+
+
+--
+-- Name: COLUMN plans.included_host_seconds_per_month; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.plans.included_host_seconds_per_month IS 'Monthly quota for host mode (church broadcasts)';
 
 
 --
@@ -3648,7 +3718,9 @@ CREATE TABLE realtime.subscription (
     filters realtime.user_defined_filter[] DEFAULT '{}'::realtime.user_defined_filter[] NOT NULL,
     claims jsonb NOT NULL,
     claims_role regrole GENERATED ALWAYS AS (realtime.to_regrole((claims ->> 'role'::text))) STORED NOT NULL,
-    created_at timestamp without time zone DEFAULT timezone('utc'::text, now()) NOT NULL
+    created_at timestamp without time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    action_filter text DEFAULT '*'::text,
+    CONSTRAINT subscription_action_filter_check CHECK ((action_filter = ANY (ARRAY['*'::text, 'INSERT'::text, 'UPDATE'::text, 'DELETE'::text])))
 );
 
 
@@ -4659,6 +4731,27 @@ CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 
 --
+-- Name: idx_session_spans_mode; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_session_spans_mode ON public.session_spans USING btree (((metadata ->> 'mode'::text)));
+
+
+--
+-- Name: idx_sessions_active_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_sessions_active_status ON public.sessions USING btree (status) WHERE (status = 'active'::text);
+
+
+--
+-- Name: INDEX idx_sessions_active_status; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON INDEX public.idx_sessions_active_status IS 'Optimizes startup recovery and active session lookups';
+
+
+--
 -- Name: idx_sessions_church_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4841,10 +4934,10 @@ CREATE INDEX messages_inserted_at_topic_index ON ONLY realtime.messages USING bt
 
 
 --
--- Name: subscription_subscription_id_entity_filters_key; Type: INDEX; Schema: realtime; Owner: -
+-- Name: subscription_subscription_id_entity_filters_action_filter_key; Type: INDEX; Schema: realtime; Owner: -
 --
 
-CREATE UNIQUE INDEX subscription_subscription_id_entity_filters_key ON realtime.subscription USING btree (subscription_id, entity, filters);
+CREATE UNIQUE INDEX subscription_subscription_id_entity_filters_action_filter_key ON realtime.subscription USING btree (subscription_id, entity, filters, action_filter);
 
 
 --
@@ -5594,5 +5687,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict Pujzct3oc7XD0oM34ETcNXrtsxR1laZUAhZqBWl5ZyJaLo7aKKOrWUDULj1J25I
+\unrestrict zuzkiXrEWyuTZXC60Xce6QZ9QKoBz8h9dxPGGnbNSXTen20Vb1OK1WroPYHzfUa
 
