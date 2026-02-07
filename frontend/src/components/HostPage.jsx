@@ -373,7 +373,7 @@ export function HostPage({ onBackToHome }) {
 
         // Generate QR code with join URL using configured app URL
         // This ensures QR codes work on mobile devices by using the production domain
-        const joinUrl = `${APP_URL}?join=${data.sessionCode}`;
+        const joinUrl = `${APP_URL}/listener?code=${data.sessionCode}`;
         console.log('[HostPage] Generated QR code URL:', joinUrl);
         const qrUrl = await QRCode.toDataURL(joinUrl, {
           width: 300,
@@ -1194,7 +1194,7 @@ export function HostPage({ onBackToHome }) {
     if (!sessionCode) return;
 
     try {
-      const joinUrl = `${APP_URL}?join=${sessionCode}`;
+      const joinUrl = `${APP_URL}/listener?code=${sessionCode}`;
       const svgString = await QRCode.toString(joinUrl, {
         type: 'svg',
         width: 300,
