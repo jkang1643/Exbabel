@@ -7,7 +7,7 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ---
 
 ## 0) BUG FIXES (Resolved Issues)
-**Most recent at the top.**
+**Most recent at the top**
 
 ### BUG 40: FIXED — Production Streaming WebSocket Routing (URL Prefix Mismatch)
 **Status:** ✅ RESOLVED (2026-02-06)
