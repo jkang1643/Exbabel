@@ -9,6 +9,33 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top.**
 
+### BUG 40: FIXED — Production Streaming WebSocket Routing (URL Prefix Mismatch)
+**Status:** ✅ RESOLVED (2026-02-06)
+
+Resolved critical production issue where streaming TTS WebSocket connections were not reaching the handler, causing 0 audio chunks to be delivered to clients despite backend successfully streaming them.
+
+#### Root Cause:
+1. **URL Path Mismatch**: Production CloudFront/reverse proxy adds `/translate` prefix to WebSocket URLs (`wss://api.exbabel.com/translate/ws/tts`), but backend only checked for `/ws/tts`.
+2. **Handler Never Called**: Connection fell through to Solo Mode handler instead of TTS streaming handler, preventing client registration.
+3. **No Chunk Delivery**: `getClients(sessionId)` returned empty array because `registerClient()` was never called, so `broadcastAudioFrame()` sent chunks to 0 clients.
+4. **Local vs Production Difference**: Local development connects directly (`ws://localhost:3001/ws/tts`) without prefix, so it worked locally but failed in production.
+
+#### Key Fix:
+**WebSocket Routing** ([server.js](file:///\\wsl.localhost\Ubuntu\home\jkang1643\projects\realtimetranslationapp\backend\server.js#L220)):
+1. **Dual Path Support**: Changed route check from `url.startsWith("/ws/tts")` to `url.startsWith("/translate/ws/tts") || url.startsWith("/ws/tts")` to support both production and local environments.
+2. **Handler Registration**: Now properly calls `handleTtsStreamingConnection()`, which registers clients via `registerClient()`.
+
+#### Impact:
+- ✅ **Production Streaming Works**: Clients now receive all audio chunks in production
+- ✅ **All Modes Fixed**: Solo Mode, Host Mode, and Listener Mode streaming TTS all work
+- ✅ **Local Still Works**: Dual path check maintains local development compatibility
+- ✅ **Proper Logging**: `[TTS-WS]` logs now appear, confirming handler is called
+
+#### Files Modified:
+- `backend/server.js` - WebSocket routing logic (line 220)
+
+---
+
 ### BUG 39: FIXED — TTS Hallucinations from Quotes & Duplicate TTS Requests (Host + Solo Modes)
 **Status:** ✅ RESOLVED (2026-02-06)
 

@@ -924,3 +924,24 @@ backend/
     - Abandoned session cleanup
 - ✅ **Use Cases**: Handles users who forget to end sessions, close laptops while recording, or experience network drops
 
+### 2026-02-07 - URL Routing & OAuth Fixes
+- ✅ **URL-Based Routing**: Migrated from state-based routing to React Router for proper URL navigation
+    - **Package**: Installed `react-router-dom` for URL-based routing
+    - **Routes**: Created route mappings for all pages (`/signin`, `/signup`, `/solo`, `/host`, `/listener`, etc.)
+    - **Protected Routes**: Implemented `ProtectedRoute` component for authentication guards
+    - **Navigation**: Replaced all `setMode()` calls with `navigate()` from `useNavigate` hook
+    - **Browser Support**: Added support for browser back/forward buttons and direct URL access
+- ✅ **OAuth Redirect Fix**: Fixed Google OAuth callback flow
+    - **Problem**: After Google OAuth, users stayed on `/signin#` instead of being redirected home
+    - **Solution**: Added `useEffect` hooks to `LoginRoute` and `SignUpRoute` to detect authenticated users and auto-redirect to home page
+    - **Files Modified**: `frontend/src/App.jsx` (LoginRoute, SignUpRoute)
+- ✅ **Session Code Persistence**: Fixed session code display issues in listener page
+    - **Fix 1**: Changed session code display from `sessionInfo?.sessionCode` to `sessionCode || sessionInfo?.sessionCode`
+    - **Fix 2**: Added `useEffect` to sync `sessionCodeProp` with `sessionCode` state for URL parameters
+    - **Result**: Session codes now persist correctly when entered manually or loaded from URL (`/listener?code=ABC123`)
+    - **Files Modified**: `frontend/src/components/ListenerPage.jsx`
+- ✅ **Auth Context Updates**: Updated OAuth redirect URLs
+    - `signInWithGoogle`: Changed redirect from `window.location.origin` to `${window.location.origin}/signin`
+    - `signUpWithEmail`: Changed redirect from `window.location.origin` to `${window.location.origin}/signup`
+    - **Files Modified**: `frontend/src/contexts/AuthContext.jsx`
+

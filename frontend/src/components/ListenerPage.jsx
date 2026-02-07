@@ -115,6 +115,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const targetLangRef = useRef('es'); // Ref to avoid closure issues in WebSocket handler
   const [userPlan, setUserPlan] = useState(null); // Track user plan for voice defaults
 
+  // Sync sessionCodeProp with sessionCode state (for URL parameters)
+  useEffect(() => {
+    if (sessionCodeProp && sessionCodeProp !== sessionCode) {
+      setSessionCode(sessionCodeProp);
+    }
+  }, [sessionCodeProp]);
+
   // Keep ref in sync with state
   useEffect(() => {
     targetLangRef.current = targetLang;
@@ -1741,7 +1748,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             {/* Session Code */}
             <div className="flex-shrink-0 flex items-center gap-1">
               <span className="text-[10px] uppercase font-bold text-gray-400 sm:text-gray-600 sm:font-normal sm:capitalize sm:block hidden">Code:</span>
-              <p className="text-sm sm:text-xl font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{sessionInfo?.sessionCode}</p>
+              <p className="text-sm sm:text-xl font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{sessionCode || sessionInfo?.sessionCode}</p>
             </div>
 
             {/* Voice Model */}
