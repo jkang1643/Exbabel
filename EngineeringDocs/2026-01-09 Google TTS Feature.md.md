@@ -7,7 +7,7 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ---
 
 ## 0) BUG FIXES (Resolved Issues)
-**Most recent at the top.**
+**Most recent at the top**
 
 ### BUG 37: FIXED — Missing Message Routing for TTS Catalog (Listener Page)
 **Status:** ✅ RESOLVED (2026-01-25)
