@@ -615,8 +615,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       });
     }
 
-    // Trigger voice fetch if changed
-    ttsControllerRef.current.fetchVoices(targetLang);
+    // CRITICAL FIX: Only fetch voices if WebSocket is connected
+    // Without this check, fetchVoices silently fails when called before connection
+    if (connectionState === 'open') {
+      console.log('[ListenerPage] Fetching voices for:', targetLang);
+      ttsControllerRef.current.fetchVoices(targetLang);
+    } else {
+      console.warn('[ListenerPage] Skipping fetchVoices - WebSocket not ready:', connectionState);
+    }
 
   }, [targetLang, selectedVoice, ttsSettings, connectionState]);
 
