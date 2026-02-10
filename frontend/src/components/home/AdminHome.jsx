@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Header } from '../Header';
 import { JoinSessionModal } from '@/components/JoinSessionModal';
+import AdminAnalytics from './AdminAnalytics';
 
 export function AdminHome({ onHostSession, onSoloMode, onJoinSession, onSignOut }) {
     const { profile, user } = useAuth();
@@ -110,15 +111,8 @@ export function AdminHome({ onHostSession, onSoloMode, onJoinSession, onSignOut 
                         </Card>
                     </div>
 
-                    {/* Future: Analytics Card */}
-                    <Card className="bg-white/50 border-dashed">
-                        <CardHeader className="text-center py-4">
-                            <CardTitle className="text-gray-400 text-sm">📊 Analytics Coming Soon</CardTitle>
-                            <CardDescription className="text-xs">
-                                View session history, listener counts, and usage stats
-                            </CardDescription>
-                        </CardHeader>
-                    </Card>
+                    {/* Analytics Dashboard */}
+                    <AdminAnalytics />
 
                     {/* Sign Out */}
                     <div className="mt-8 text-center">

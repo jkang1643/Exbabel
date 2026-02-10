@@ -1,0 +1,437 @@
+/* =============================================
+   AdminAnalytics.css — Analytics Dashboard Styles
+   ============================================= */
+
+.analytics-section {
+    margin-top: 1.5rem;
+    animation: fadeInUp 0.5s ease-out;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.analytics-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+
+.analytics-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #1e293b;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.plan-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+}
+
+.refresh-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.5rem;
+    background: white;
+    color: #64748b;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.refresh-btn:hover {
+    border-color: #6366f1;
+    color: #6366f1;
+    background: #f8fafc;
+}
+
+.refresh-btn.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.refresh-icon {
+    display: inline-block;
+    transition: transform 0.3s ease;
+}
+
+.refresh-btn.loading .refresh-icon {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ---- Usage Gauges ---- */
+.usage-gauges {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.gauge-card {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    padding: 1rem;
+    transition: box-shadow 0.2s ease;
+}
+
+.gauge-card:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+
+.gauge-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.gauge-mode {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #334155;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.gauge-percent {
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+}
+
+.gauge-percent.green {
+    background: #dcfce7;
+    color: #166534;
+}
+.gauge-percent.amber {
+    background: #fef3c7;
+    color: #92400e;
+}
+.gauge-percent.red {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.gauge-bar-bg {
+    width: 100%;
+    height: 8px;
+    background: #f1f5f9;
+    border-radius: 999px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.gauge-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.8s ease-out, background 0.3s ease;
+    min-width: 2px;
+}
+
+.gauge-bar-fill.green {
+    background: linear-gradient(90deg, #22c55e, #4ade80);
+}
+.gauge-bar-fill.amber {
+    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+.gauge-bar-fill.red {
+    background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+.gauge-details {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: #64748b;
+}
+
+.gauge-used {
+    font-weight: 600;
+    color: #334155;
+}
+
+/* ---- Stats Cards ---- */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+@media (max-width: 600px) {
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .usage-gauges {
+        grid-template-columns: 1fr;
+    }
+}
+
+.stat-card {
+    text-align: center;
+    padding: 0.6rem 0.4rem;
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.6rem;
+    transition: transform 0.15s ease;
+}
+
+.stat-card:hover {
+    transform: translateY(-2px);
+}
+
+.stat-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #1e293b;
+    line-height: 1.2;
+}
+
+.stat-label {
+    font-size: 0.65rem;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.15rem;
+}
+
+/* ---- Daily Bar Chart ---- */
+.chart-section {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.75rem;
+    padding: 1rem;
+}
+
+.chart-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #334155;
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.chart-container {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 120px;
+    padding-bottom: 1.5rem;
+    position: relative;
+    overflow-x: auto;
+}
+
+.chart-bar-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 1;
+    min-width: 18px;
+    position: relative;
+}
+
+.chart-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 1px;
+    width: 100%;
+    height: 100px;
+}
+
+.chart-bar {
+    flex: 1;
+    border-radius: 2px 2px 0 0;
+    min-height: 1px;
+    transition: height 0.5s ease-out;
+    position: relative;
+}
+
+.chart-bar.solo {
+    background: linear-gradient(to top, #6366f1, #818cf8);
+}
+
+.chart-bar.host {
+    background: linear-gradient(to top, #06b6d4, #22d3ee);
+}
+
+.chart-bar:hover {
+    opacity: 0.8;
+}
+
+.chart-bar-group:hover .chart-tooltip {
+    display: block;
+}
+
+.chart-tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1e293b;
+    color: white;
+    padding: 0.3rem 0.5rem;
+    border-radius: 0.3rem;
+    font-size: 0.6rem;
+    white-space: nowrap;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.chart-date-label {
+    font-size: 0.55rem;
+    color: #94a3b8;
+    margin-top: 0.3rem;
+    position: absolute;
+    bottom: -1.2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+.chart-legend {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 1.5rem;
+    font-size: 0.7rem;
+    color: #64748b;
+}
+
+.legend-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 0.3rem;
+}
+
+.legend-dot.solo {
+    background: #6366f1;
+}
+
+.legend-dot.host {
+    background: #06b6d4;
+}
+
+/* ---- Loading & Error ---- */
+.analytics-loading {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: #94a3b8;
+    font-size: 0.85rem;
+}
+
+.analytics-loading .spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #e2e8f0;
+    border-top-color: #6366f1;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 0.5rem;
+}
+
+.analytics-error {
+    text-align: center;
+    padding: 1.5rem 1rem;
+    color: #ef4444;
+    font-size: 0.8rem;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 0.75rem;
+}
+
+.analytics-empty {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: #94a3b8;
+    font-size: 0.8rem;
+}
+
+/* ---- Session Timer Bar (Solo/Host pages) ---- */
+.session-timer-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(139, 92, 246, 0.08));
+    border: 1px solid rgba(99, 102, 241, 0.15);
+    border-radius: 0.6rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.8rem;
+    animation: fadeInUp 0.3s ease-out;
+}
+
+.timer-icon {
+    font-size: 1rem;
+}
+
+.timer-elapsed {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: #1e293b;
+    min-width: 50px;
+}
+
+.timer-separator {
+    color: #cbd5e1;
+}
+
+.timer-remaining {
+    color: #64748b;
+    font-size: 0.75rem;
+}
+
+.timer-remaining .remaining-value {
+    font-weight: 600;
+}
+
+.timer-progress-mini {
+    flex: 1;
+    max-width: 120px;
+    height: 4px;
+    background: #e2e8f0;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.timer-progress-mini-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 1s linear, background 0.3s ease;
+}

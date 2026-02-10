@@ -6,8 +6,12 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useAuth } from '../contexts/AuthContext';
 
 export function useQuotaWarning() {
+    // Auth context for pre-connect quota check
+    const { getAccessToken } = useAuth();
+
     // Current quota event from server
     const [quotaEvent, setQuotaEvent] = useState(null);
 
@@ -49,15 +53,10 @@ export function useQuotaWarning() {
      * Dismiss the warning toast or modal
      */
     const dismiss = useCallback(() => {
-        if (quotaEvent?.type === 'quota_exceeded') {
-            // For exceeded, dismiss modal but keep blocked state
-            setShowModal(false);
-            // Recording stays blocked
-        } else {
-            // For warning, dismiss toast
-            setShowToast(false);
-        }
-    }, [quotaEvent]);
+        console.log('[useQuotaWarning] Dismissing UI');
+        setShowModal(false);
+        setShowToast(false);
+    }, []);
 
     /**
      * Show the modal (e.g., from toast "Details" button)
@@ -92,6 +91,65 @@ export function useQuotaWarning() {
         setIsRecordingBlocked(false);
     }, []);
 
+    /**
+     * Pre-connect quota check
+     * Calls the REST API on mount to check quota status BEFORE WebSocket connection.
+     * This prevents bypassing by refreshing the page or clearing browser cache.
+     * 
+     * @param {'solo' | 'host'} mode - Which mode to check quota for
+     */
+    const checkQuotaOnMount = useCallback(async (mode = 'solo') => {
+        try {
+            const apiUrl = import.meta.env.VITE_API_URL || `${window.location.protocol}//${window.location.hostname}:3001`;
+            const token = getAccessToken();
+            if (!token) return; // Not authenticated yet
+
+            const res = await fetch(`${apiUrl}/api/quota-check`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!res.ok) return; // Fail-open
+
+            const data = await res.json();
+            if (!data.hasQuota) return; // No quota defined, allow access
+
+            const modeData = data[mode];
+            const combinedData = data.combined;
+
+            // Check both mode-specific and combined quotas
+            if (modeData?.isExceeded || combinedData?.isExceeded) {
+                console.log(`[useQuotaWarning] 🚫 Pre-connect check: quota exceeded for ${mode} mode`);
+                setIsRecordingBlocked(true);
+                setQuotaEvent({
+                    type: 'quota_exceeded',
+                    percentUsed: combinedData?.percentUsed || modeData?.percentUsed || 100,
+                    message: `You've used ${combinedData?.percentUsed || modeData?.percentUsed || 100}% of your monthly quota.`,
+                    actions: [
+                        { id: 'upgrade', label: 'Upgrade Plan', enabled: false, hint: 'Coming Soon' },
+                        { id: 'add_hours', label: 'Add Hours', enabled: false, hint: 'Coming Soon' },
+                        { id: 'dismiss', label: 'OK', enabled: true }
+                    ]
+                });
+                setShowModal(true);
+            } else if (modeData?.isWarning || combinedData?.isWarning) {
+                console.log(`[useQuotaWarning] ⚠️ Pre-connect check: quota warning for ${mode} mode`);
+                setQuotaEvent({
+                    type: 'quota_warning',
+                    percentUsed: combinedData?.percentUsed || modeData?.percentUsed || 80,
+                    message: `You've used ${combinedData?.percentUsed || modeData?.percentUsed || 80}% of your monthly quota.`,
+                    actions: [
+                        { id: 'upgrade', label: 'Upgrade Plan', enabled: false, hint: 'Coming Soon' },
+                        { id: 'dismiss', label: 'OK', enabled: true }
+                    ]
+                });
+                setShowToast(true);
+            }
+        } catch (err) {
+            console.warn('[useQuotaWarning] Pre-connect quota check failed (allowing session):', err.message);
+            // Fail-open: let the backend enforce on WS init
+        }
+    }, [getAccessToken]);
+
     return {
         // State
         quotaEvent,
@@ -105,6 +163,7 @@ export function useQuotaWarning() {
         openModal,
         handleAction,
         reset,
+        checkQuotaOnMount,
 
         // Derived
         hasWarning: quotaEvent?.type === 'quota_warning',

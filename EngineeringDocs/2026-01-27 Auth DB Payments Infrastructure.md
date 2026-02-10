@@ -548,21 +548,83 @@ We use the Supabase CLI for version-controlled migrations:
 
 ---
 
-## Part 3: Payments Integration (Planned)
+## Part 3: Payments & Billing Integration (Planned Wiring)
 
-**Status:** Not yet implemented
+**Status:** Ready for Implementation
+**Provider:** Stripe (Checkout + Webhooks)
 
-**Planned Features:**
-1. **Stripe Integration** - Subscription billing and payment processing
-2. **Plan Management** - Create and manage subscription tiers
-3. **Usage Metering** - Track translation minutes and TTS usage
-4. **Billing Portal** - Customer self-service for payment methods
+This section outlines the architectural "wiring" required to enable self-service upgrades and top-ups, integrating the existing database schema with Stripe's billing engine.
 
-**Dependencies:**
-- ✅ Authentication middleware (completed)
-- ⏳ Database schema (in progress)
-- ⏳ Stripe webhook handlers (planned)
-- ⏳ Frontend billing UI (planned)
+### 1. Upgrade Plan Flow (Subscription)
+**Goal:** Allow users to switch from Free/Starter to Pro/Unlimited.
+
+**Wiring Diagram:**
+1.  **Trigger:** User clicks "Upgrade Plan" in `UsageLimitModal` or `/settings/billing`.
+2.  **API Call:** `POST /api/billing/subscription-checkout`
+    *   **Body:** `{ planCode: 'pro', interval: 'month' }`
+    *   **Auth:** Requires `admin` role.
+3.  **Stripe Interaction:**
+    *   Backend creates a **Stripe Checkout Session** (Mode: `subscription`).
+    *   `client_reference_id`: Set to `church_id`.
+    *   `metadata`: `{ target_plan: 'pro' }`.
+4.  **User Action:** Enters card details on Stripe hosted page -> Redirects back to `/billing?success=true`.
+5.  **Fulfillment (Webhook):** `checkout.session.completed`
+    *   Backend verifies signature.
+    *   **DB Update:**
+        ```sql
+        UPDATE public.subscriptions
+        SET 
+            stripe_subscription_id = $1,
+            plan_id = (SELECT id FROM plans WHERE code = $2),
+            status = 'active',
+            current_period_end = $3
+        WHERE church_id = $4;
+        ```
+
+### 2. "Top Up" Flow (One-Time Add Hours)
+**Goal:** Allow users to purchase extra hours (e.g., "5 Hour Pack") when quota is low, without changing plans.
+
+**Schema Strategy:**
+We will utilize the `usage_monthly` table and a new `purchased_credits` ledger.
+*   **New Table:** `public.purchased_credits` (church_id, amount_seconds, stripe_payment_id, created_at).
+
+**Wiring Diagram:**
+1.  **Trigger:** User clicks "Add Hours" in `UsageLimitModal`.
+2.  **API Call:** `POST /api/billing/top-up-checkout`
+    *   **Body:** `{ packId: '5_hours' }`
+3.  **Stripe Interaction:**
+    *   Backend creates a **Stripe Checkout Session** (Mode: `payment` - One-time).
+    *   `metadata`: `{ type: 'top_up', seconds: 18000 }` (5 hours).
+4.  **Fulfillment (Webhook):** `checkout.session.completed`
+    *   **DB Transaction:**
+        1.  Insert into `purchased_credits`.
+        2.  **Update Quota Logic:** The `get_session_quota_status` RPC must be updated to add `SUM(purchased_credits)` to the `included_seconds`.
+        ```javascript
+        // RPC Logic Update
+        total_allowance = plan_allowance + COALESCE((
+            SELECT SUM(amount_seconds) 
+            FROM purchased_credits 
+            WHERE church_id = pid 
+            AND created_at > date_trunc('month', now()) -- Assuming credits expire monthly? Or permanent?
+        ), 0);
+        ```
+
+### 3. Customer Portal (Manage Payment Methods)
+**Goal:** Allow users to update credit cards and view invoices.
+
+1.  **API Call:** `GET /api/billing/portal`
+2.  **Stripe Interaction:**
+    *   `stripe.billingPortal.sessions.create({ customer: stripe_customer_id })`
+3.  **Redirect:** User is sent to Stripe's self-serve portal.
+
+### 4. Dependencies to Build
+- [ ] **Stripe Service**: `backend/services/stripe.js` (Initialize SDK)
+- [ ] **Webhook Handler**: `backend/routes/webhooks.js` (Signature verification + event routing)
+- [ ] **Billing Routes**: `backend/routes/billing.js` (Checkout session creation)
+- [ ] **Schema Updates**: 
+    - Add `stripe_customer_id` to `churches` (or `subscriptions`).
+    - Add `purchased_credits` table (for top-ups).
+
 
 ---
 
@@ -902,3 +964,58 @@ backend/
     - Toast variant for 80% warning, full modal for 100% exceeded
     - Start button disabled when quota exceeded
 
+<<<<<<< Updated upstream
+=======
+### 2026-02-06 - Abandoned Session Reaper
+- ✅ **Periodic Reaper**: Created `backend/usage/abandonedSessionReaper.js` to clean up abandoned sessions on long-running servers
+- ✅ **Heartbeat-Based Detection**: Reaper identifies stale spans by checking if `last_seen_at` is older than 5 minutes (300 seconds)
+- ✅ **Functions**:
+    - `reapAbandonedSessionSpans()` - Finds and stops stale spans via `stopSessionSpan()` with reason `'abandoned_reaper'`
+    - `reapAbandonedSessions()` - Ends session records with no in-memory presence or active spans
+    - `startPeriodicReaper()` - Starts 5-minute interval, runs immediately on startup
+- ✅ **Server Integration**: `server.js` now starts the reaper automatically after `cleanupAbandonedSessions()`
+- ✅ **Integration Test**: Added `backend/tests/integration/test-abandoned-reaper.js` covering:
+    - Stale span reaping
+    - Recent span preservation (active recording is NOT reaped)
+    - Abandoned session cleanup
+- ✅ **Use Cases**: Handles users who forget to end sessions, close laptops while recording, or experience network drops
+
+### 2026-02-07 - URL Routing & OAuth Fixes
+- ✅ **URL-Based Routing**: Migrated from state-based routing to React Router for proper URL navigation
+- ✅ **OAuth Redirect Fix**: Fixed Google OAuth callback flow
+- ✅ **Session Code Persistence**: Fixed session code display issues in listener page
+- ✅ **Auth Context Updates**: Updated OAuth redirect URLs
+
+### 2026-02-10 - PR 7.7 - Secure Quota Enforcement & Verification
+- ✅ **Pre-Connect Gate**: Implemented `GET /api/quota-check` REST endpoint to check quota status before WebSocket connection
+- ✅ **Frontend Hard Lock**: Added `checkQuotaOnMount()` to `useQuotaWarning` hook to disable UI immediately if quota exceeded
+- ✅ **Simultaneous Quota Testing**: Updated `set_test_usage.js` to manage both Solo and Host quotas in parallel
+- ✅ **Last-Minute Verification**: Added `--last-minute` flag to test precise session termination at 0s remaining
+- ✅ **Robustness**: Fixed "Dismiss" button responsiveness in `UsageLimitModal` by simplifying state logic
+
+---
+
+## Part 10: Robustness & Verification (PR7.7)
+
+**Context:** To prevent loophole exploitation (e.g., cache clearing, refresh) and ensure strict quota enforcement, we implemented a "Fail-Secure" pre-connect layer and robust verification tools.
+
+### 1. Pre-Connect Enforcement Layer
+**Goal:** Block users BEFORE they connect to the WebSocket, preventing "flash of unlocked UI".
+- **REST Endpoint**: `GET /api/quota-check` (lightweight, auth-only) returns instant quota status.
+- **Frontend Guard**: `useQuotaWarning.checkQuotaOnMount()` calls this API on page load.
+- **Behavior**: If quota exceeded, `isRecordingBlocked` is set to `true` immediately, disabling "Start" buttons even if the WebSocket hasn't connected yet.
+
+### 2. Simultaneous Quota Management
+**Refinement:** Updated `backend/scripts/set_test_usage.js` to manage **both** Solo and Host quotas in parallel.
+- **Why**: Plans now have separate limits (e.g., 4h Solo vs 6h Host).
+- **Tool**: The script updates both buckets to the target percentage (e.g., 85%) to ensure consistent testing.
+
+### 3. Last-Minute Verification
+**Feature:** Added `--last-minute` flag to the test script.
+- **Logic**: Sets usage to exactly `Limit - 60 seconds`.
+- **Purpose**: Verifies that the "Approaching Limit" (1 min remaining) warning fires correctly and that the session terminates precisely at 0s.
+
+---
+
+
+>>>>>>> Stashed changes

@@ -279,7 +279,28 @@ export async function handleSoloMode(clientWs) {
   };
 
   // Handle client messages
+<<<<<<< Updated upstream
   clientWs.on("message", async (msg) => {
+=======
+  clientWs.on("message", async (msg, isBinary) => {
+    // Phase 7: Handle binary messages (raw audio)
+    // ONLY trust the isBinary flag from the websocket library
+    // Do NOT check Buffer.isBuffer(msg) because ws returns Buffers for text frames too
+    if (isBinary) {
+      // QUOTA GATE: Silently drop audio if quota exceeded
+      if (quotaExceeded) return;
+
+      if (speechStream) {
+        ensureSessionActive();
+        speechStream.write(msg);
+      } else {
+        // Debug: received binary but stream not ready
+        // This might happen if audio starts before 'init'
+      }
+      return;
+    }
+
+>>>>>>> Stashed changes
     try {
       const message = JSON.parse(msg.toString());
       // Filter out noisy audio message logs
@@ -302,6 +323,35 @@ export async function handleSoloMode(clientWs) {
           // Keep-alive pong received (frontend confirms connection alive)
           return; // Don't log pong messages
         case 'init':
+          // QUOTA GATE: Check before allowing session to initialize
+          {
+            const initChurchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
+            if (initChurchId) {
+              try {
+                const initQuota = await checkQuotaLimit(initChurchId, 'solo');
+                if (initQuota.action === 'lock') {
+                  quotaExceeded = true;
+                  const event = createQuotaEvent(initQuota);
+                  if (clientWs.readyState === WebSocket.OPEN && event) {
+                    clientWs.send(JSON.stringify(event));
+                  }
+                  console.log(`[SoloMode] 🚫 INIT BLOCKED - quota exceeded for church ${initChurchId}`);
+                  break; // Do not initialize speech stream
+                } else if (initQuota.action === 'warn' && !quotaWarningSent) {
+                  quotaWarningSent = true;
+                  const event = createQuotaEvent(initQuota);
+                  if (clientWs.readyState === WebSocket.OPEN && event) {
+                    clientWs.send(JSON.stringify(event));
+                  }
+                  console.log(`[SoloMode] ⚠️ Quota warning sent on init: ${initQuota.message}`);
+                }
+              } catch (err) {
+                console.error(`[SoloMode] ⚠️ Init quota check failed (allowing session):`, err.message);
+                // Fail-open: allow session if quota check errors
+              }
+            }
+          }
+
           // Update language preferences and tier
           const prevSourceLang = currentSourceLang;
           const prevTargetLang = currentTargetLang;

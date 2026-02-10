@@ -17,6 +17,7 @@ import { partialTranslationWorker, finalTranslationWorker } from './translationW
 import { realtimePartialTranslationWorker, realtimeFinalTranslationWorker } from './translationWorkersRealtime.js';
 import { grammarWorker } from './grammarWorker.js';
 import { CoreEngine } from '../core/engine/coreEngine.js';
+import { checkQuotaLimit, createQuotaEvent } from './usage/quotaEnforcement.js';
 // PHASE 8: Using CoreEngine which coordinates all extracted engines
 // Host mode is a thin wrapper: host mic → coreEngine → broadcast events → listeners
 
@@ -53,6 +54,12 @@ export async function handleHostConnection(clientWs, sessionId) {
   // Track stream readiness and queue messages
   let isStreamReady = false;
   let messageQueue = [];
+
+  // QUOTA ENFORCEMENT: Track if warning has been sent this session
+  let quotaWarningSent = false;
+  let quotaExceeded = false;
+  let quotaHeartbeatInterval = null;
+  const QUOTA_HEARTBEAT_MS = 30000; // Check quota every 30 seconds
 
   // PHASE 8: Core Engine Orchestrator - coordinates all extracted engines
   // Initialize core engine (same as solo mode)
@@ -121,6 +128,35 @@ export async function handleHostConnection(clientWs, sessionId) {
 
       switch (message.type) {
         case 'init':
+          // QUOTA GATE: Check before allowing session to initialize
+          {
+            const hostChurchId = session.churchId || clientWs.churchId || process.env.TEST_CHURCH_ID;
+            if (hostChurchId) {
+              try {
+                const initQuota = await checkQuotaLimit(hostChurchId, 'host');
+                if (initQuota.action === 'lock') {
+                  quotaExceeded = true;
+                  const event = createQuotaEvent(initQuota);
+                  if (clientWs.readyState === WebSocket.OPEN && event) {
+                    clientWs.send(JSON.stringify(event));
+                  }
+                  console.log(`[HostMode] 🚫 INIT BLOCKED - quota exceeded for church ${hostChurchId}`);
+                  break; // Do not initialize speech stream
+                } else if (initQuota.action === 'warn' && !quotaWarningSent) {
+                  quotaWarningSent = true;
+                  const event = createQuotaEvent(initQuota);
+                  if (clientWs.readyState === WebSocket.OPEN && event) {
+                    clientWs.send(JSON.stringify(event));
+                  }
+                  console.log(`[HostMode] ⚠️ Quota warning sent on init: ${initQuota.message}`);
+                }
+              } catch (err) {
+                console.error(`[HostMode] ⚠️ Init quota check failed (allowing session):`, err.message);
+                // Fail-open: allow session if quota check errors
+              }
+            }
+          }
+
           if (message.sourceLang) {
             currentSourceLang = message.sourceLang;
             sessionStore.updateSourceLanguage(currentSessionId, currentSourceLang);
@@ -2468,6 +2504,35 @@ export async function handleHostConnection(clientWs, sessionId) {
 
               // Mark stream as ready and process queued messages
               isStreamReady = true;
+
+              // QUOTA ENFORCEMENT: Start heartbeat quota check interval
+              const hostChurchId = session.churchId || clientWs.churchId || process.env.TEST_CHURCH_ID;
+              if (hostChurchId && !quotaHeartbeatInterval) {
+                quotaHeartbeatInterval = setInterval(async () => {
+                  try {
+                    if (quotaExceeded) return; // Already exceeded, stop checking
+                    const quotaResult = await checkQuotaLimit(hostChurchId, 'host');
+                    if (quotaResult.action === 'lock') {
+                      quotaExceeded = true;
+                      const event = createQuotaEvent(quotaResult);
+                      if (clientWs.readyState === WebSocket.OPEN && event) {
+                        clientWs.send(JSON.stringify(event));
+                        console.log(`[HostMode] 🚫 QUOTA EXCEEDED - sent quota_exceeded event`);
+                      }
+                    } else if (quotaResult.action === 'warn' && !quotaWarningSent) {
+                      quotaWarningSent = true;
+                      const event = createQuotaEvent(quotaResult);
+                      if (clientWs.readyState === WebSocket.OPEN && event) {
+                        clientWs.send(JSON.stringify(event));
+                        console.log(`[HostMode] ⚠️ Quota warning sent: ${quotaResult.message}`);
+                      }
+                    }
+                  } catch (err) {
+                    // Silent heartbeat/quota check failures
+                  }
+                }, QUOTA_HEARTBEAT_MS);
+              }
+
               if (messageQueue.length > 0) {
                 console.log(`[HostMode] 🔄 Processing ${messageQueue.length} queued messages`);
                 for (const queuedMsg of messageQueue) {
@@ -2501,6 +2566,9 @@ export async function handleHostConnection(clientWs, sessionId) {
 
 
         case 'audio':
+          // QUOTA GATE: Silently drop audio if quota exceeded
+          if (quotaExceeded) break;
+
           // Process audio through Google Speech stream
           if (isStreamReady && speechStream) {
             // Stream audio to Google Speech for transcription
@@ -2563,6 +2631,12 @@ export async function handleHostConnection(clientWs, sessionId) {
   // Handle host disconnect - start grace timer (host can reconnect within 30s)
   clientWs.on('close', async () => {
     console.log('[HostMode] Host disconnected from session', currentSessionId);
+
+    // Clean up quota enforcement heartbeat
+    if (quotaHeartbeatInterval) {
+      clearInterval(quotaHeartbeatInterval);
+      quotaHeartbeatInterval = null;
+    }
 
     if (speechStream) {
       speechStream.destroy();

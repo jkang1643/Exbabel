@@ -156,3 +156,108 @@ We have verified the session lifecycle and billing logic with the following scen
     1.  Enters **grace period** (30s) - keeps expecting reconnect.
     2.  If no reconnect, session is `ended` with reason `host_disconnected`.
     3.  Billing stops at the disconnect time + grace period (safety cap).
+<<<<<<< Updated upstream
+=======
+
+---
+
+## 10. Quota Testing & Verification (Database Commands)
+
+For precise testing of quota limits, warnings, and locks, we recommend manipulating the database directly using SQL. This bypasses the need to "wait" for usage to accumulate.
+
+Run these commands in the Supabase SQL Editor.
+
+### Prerequisites
+*   **Target Church ID**: Replace `'YOUR_CHURCH_ID_HERE'` with your test church ID.
+*   **Current Month**: These commands affect the current month's usage (`date_trunc('month', now())`).
+*   **Assumptions**: Examples assume a **Starter Plan (60 minutes = 3600 seconds)** limit. Adjust quantities accordingly for Pro/Unlimited.
+
+### 1. Reset Usage (0%)
+Clear all usage for the current month to start fresh.
+```sql
+DELETE FROM public.usage_monthly 
+WHERE church_id = 'YOUR_CHURCH_ID_HERE' 
+AND month_start = date_trunc('month', now())::DATE;
+```
+
+### 2. Set Usage to 85% (Warning Threshold)
+Force usage to 85% (3,060 seconds) to test the warning popup.
+```sql
+INSERT INTO public.usage_monthly (church_id, month_start, metric, total_quantity)
+VALUES (
+    'YOUR_CHURCH_ID_HERE', 
+    date_trunc('month', now())::DATE, 
+    'solo_seconds', -- Or 'host_seconds'
+    3060 -- 85% of 3600
+)
+ON CONFLICT (church_id, month_start, metric) 
+DO UPDATE SET total_quantity = 3060;
+```
+*Verification*: Connect to Solo Mode. You should see a toast/warning immediately or on the next heartbeat (30s).
+
+### 3. Set Usage to 100% (Quota Lock)
+Force usage to 100% (3,600 seconds) to test the active block.
+```sql
+INSERT INTO public.usage_monthly (church_id, month_start, metric, total_quantity)
+VALUES (
+    'YOUR_CHURCH_ID_HERE', 
+    date_trunc('month', now())::DATE, 
+    'solo_seconds', -- Or 'host_seconds'
+    3600 -- 100% of 3600
+)
+ON CONFLICT (church_id, month_start, metric) 
+DO UPDATE SET total_quantity = 3600;
+```
+*Verification*: Solo Mode should prevent starting a new session (Start button disabled or error message).
+
+### 4. Verify Current State
+Check exactly what the database sees as your usage.
+```sql
+SELECT * FROM public.get_session_quota_status('YOUR_CHURCH_ID_HERE');
+```
+This RPC returns the live breakdown including `remaining_seconds`, `active_seconds_now`, and `used_seconds_mtd`.
+
+---
+
+## 11. Automated Testing (CLI Script)
+
+For faster and more repeatable testing, we recommend using the Node.js test script which handles the math and DB updates for you.
+
+### Script Location
+`backend/scripts/set_test_usage.js`
+
+### Capabilities
+- Updates **BOTH** Solo and Host quotas simultaneously.
+- supports selecting plan tiers (Starter, Pro, Unlimited).
+- Supports "Last Minute" mode for precise cutoff testing.
+
+### Usage Examples
+
+Run these commands from the `backend/` directory:
+
+#### A. Test "Quota Exceeded" (100%)
+Sets usage to 100% of the Starter plan. Start buttons should be disabled immediately.
+```bash
+node scripts/set_test_usage.js --percent=100
+```
+
+#### B. Test "Approaching Limit" (85%)
+Sets usage to 85%. You should see warning toasts in the UI.
+```bash
+node scripts/set_test_usage.js --percent=85
+```
+
+#### C. Test "Last Minute" (Limit - 60s)
+Sets usage to exactly 60 seconds remaining. Ideal for testing the countdown and session termination.
+```bash
+node scripts/set_test_usage.js --last-minute
+```
+
+#### D. Reset to Normal (0%)
+Clears all usage.
+```bash
+node scripts/set_test_usage.js --reset
+```
+
+
+>>>>>>> Stashed changes

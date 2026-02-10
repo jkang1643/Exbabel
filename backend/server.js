@@ -174,6 +174,7 @@ import { meRouter } from './routes/me.js';
 import { entitlementsRouter } from './routes/entitlements.js';
 import usageRouter from './routes/usage.js';
 import { churchRouter } from './routes/churches.js';
+import { analyticsRouter } from './routes/analytics.js';
 
 // Reload API keys now that dotenv has loaded the .env file
 // (apiAuth is instantiated when imported, but dotenv.config runs after imports)
@@ -375,6 +376,7 @@ app.use('/api', meRouter);
 app.use('/api', entitlementsRouter);
 app.use('/api', usageRouter);
 app.use('/api', churchRouter);
+app.use('/api', analyticsRouter);
 
 // ========================================
 // SESSION MANAGEMENT ENDPOINTS

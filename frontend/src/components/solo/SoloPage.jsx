@@ -17,6 +17,8 @@ import TtsRoutingOverlay from '../tts/TtsRoutingOverlay';
 import AdvancedSettingsDrawer from './AdvancedSettingsDrawer';
 import { UsageLimitModal, QuotaWarningToast } from '../ui/UsageLimitModal';
 import { normalizeLanguageCode } from '../../config/ttsVoices';
+import { useSessionTimer } from '../../hooks/useSessionTimer';
+import '../../components/home/AdminAnalytics.css';
 
 /**
  * SoloPage - Main Solo Mode Experience
@@ -181,6 +183,14 @@ export function SoloPage({ onBackToHome }) {
 
     // Quota warning/exceeded handling
     const quotaWarning = useQuotaWarning();
+
+    // Live session timer
+    const sessionTimer = useSessionTimer();
+
+    // Pre-connect quota check: blocks Start button if quota already exceeded
+    useEffect(() => {
+        quotaWarning.checkQuotaOnMount('solo');
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     // WebSocket URL
     const getWebSocketUrl = () => {
@@ -367,6 +377,7 @@ export function SoloPage({ onBackToHome }) {
 
             // Start session state machine
             session.start();
+            sessionTimer.start();
 
             console.log('[SoloPage] Started listening');
         } catch (error) {
@@ -379,13 +390,14 @@ export function SoloPage({ onBackToHome }) {
         audioCapture.stopRecording();
         ttsQueue.stopTts();
         session.stop();
+        sessionTimer.stop();
 
         if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ type: 'audio_end' }));
         }
 
         console.log('[SoloPage] Stopped');
-    }, [audioCapture, ttsQueue, session]);
+    }, [audioCapture, ttsQueue, session, sessionTimer]);
 
     // Handle language change
     const handleLanguageChange = useCallback((type, lang) => {
@@ -606,6 +618,15 @@ export function SoloPage({ onBackToHome }) {
 
             {/* Control Button */}
             <div className="solo-controls">
+                {/* Session Timer Bar */}
+                {sessionTimer.isRunning && (
+                    <div className="session-timer-bar">
+                        <span className="timer-icon">⏱️</span>
+                        <span className="timer-elapsed">{sessionTimer.formattedTime}</span>
+                        <span className="timer-separator">|</span>
+                        <span className="timer-remaining">Solo Session Active</span>
+                    </div>
+                )}
                 {session.state === SessionState.IDLE ? (
                     <button
                         className="control-button start"
@@ -724,6 +745,8 @@ export function SoloPage({ onBackToHome }) {
         .solo-controls {
           padding: 1.5rem;
           display: flex;
+          flex-direction: column;
+          align-items: center;
           justify-content: center;
           background: rgba(255, 255, 255, 0.7);
           border-top: 1px solid rgba(59, 91, 255, 0.1);

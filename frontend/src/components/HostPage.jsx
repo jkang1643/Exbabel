@@ -17,6 +17,8 @@ import { isMobileDevice, isSystemAudioSupported } from '../utils/deviceDetection
 import { useAuth } from '@/contexts/AuthContext';
 import { useQuotaWarning } from '../hooks/useQuotaWarning';
 import { UsageLimitModal, QuotaWarningToast } from './ui/UsageLimitModal';
+import { useSessionTimer } from '../hooks/useSessionTimer';
+import './home/AdminAnalytics.css';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -72,6 +74,14 @@ export function HostPage({ onBackToHome }) {
 
   // Quota warning state
   const quotaWarning = useQuotaWarning();
+
+  // Pre-connect quota check: blocks Start Broadcast button if quota already exceeded
+  useEffect(() => {
+    quotaWarning.checkQuotaOnMount('host');
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live session timer
+  const sessionTimer = useSessionTimer();
 
   // Track seen raw messages for invariant checking
   const seenRawInFpsRef = useRef(new Set());
@@ -1103,6 +1113,7 @@ export function HostPage({ onBackToHome }) {
       }, true); // streaming mode
 
       setIsStreaming(true);
+      sessionTimer.start();
       setError('');
     } catch (err) {
       console.error('Failed to start recording:', err);
@@ -1120,6 +1131,7 @@ export function HostPage({ onBackToHome }) {
     }
 
     setIsStreaming(false);
+    sessionTimer.stop();
   };
 
   // End Session - closes the session completely (different from Stop Broadcast)
@@ -1578,23 +1590,34 @@ export function HostPage({ onBackToHome }) {
           </div>
 
           {/* Broadcast Controls */}
-          <div className="flex justify-center gap-3 sm:gap-4 mb-4 sm:mb-6">
-            {!isStreaming ? (
-              <button
-                onClick={handleStartBroadcast}
-                disabled={connectionState !== 'open'}
-                className="px-6 py-3 sm:px-8 sm:py-4 bg-red-500 hover:bg-red-600 disabled:bg-gray-300 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg transition-all transform hover:scale-105 disabled:scale-100"
-              >
-                🎙️ Start Broadcasting
-              </button>
-            ) : (
-              <button
-                onClick={handleStopBroadcast}
-                className="px-6 py-3 sm:px-8 sm:py-4 bg-gray-500 hover:bg-gray-600 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg transition-all transform hover:scale-105"
-              >
-                ⏹️ Stop Broadcasting
-              </button>
+          <div className="flex flex-col items-center gap-3 sm:gap-4 mb-4 sm:mb-6">
+            {/* Session Timer Bar */}
+            {sessionTimer.isRunning && (
+              <div className="session-timer-bar" style={{ width: '100%', maxWidth: '400px' }}>
+                <span className="timer-icon">⏱️</span>
+                <span className="timer-elapsed">{sessionTimer.formattedTime}</span>
+                <span className="timer-separator">|</span>
+                <span className="timer-remaining">Host Session Active</span>
+              </div>
             )}
+            <div className="flex justify-center gap-3 sm:gap-4">
+              {!isStreaming ? (
+                <button
+                  onClick={handleStartBroadcast}
+                  disabled={connectionState !== 'open' || quotaWarning.isRecordingBlocked}
+                  className="px-6 py-3 sm:px-8 sm:py-4 bg-red-500 hover:bg-red-600 disabled:bg-gray-300 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg transition-all transform hover:scale-105 disabled:scale-100"
+                >
+                  {quotaWarning.isRecordingBlocked ? '🚫 Quota Exceeded' : '🎙️ Start Broadcasting'}
+                </button>
+              ) : (
+                <button
+                  onClick={handleStopBroadcast}
+                  className="px-6 py-3 sm:px-8 sm:py-4 bg-gray-500 hover:bg-gray-600 text-white text-sm sm:text-base font-semibold rounded-lg shadow-lg transition-all transform hover:scale-105"
+                >
+                  ⏹️ Stop Broadcasting
+                </button>
+              )}
+            </div>
           </div>
 
           {/* End Session Button - Properly Themed */}
