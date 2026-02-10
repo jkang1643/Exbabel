@@ -153,11 +153,8 @@ We have verified the session lifecycle and billing logic with the following scen
 ### ✅ Test 3: Inactive Admin (Timeout)
 *   **Action**: Host disconnects (e.g., closes tab/browser crash).
 *   **Result**:
-    1.  Enters **grace period** (30s) - keeps expecting reconnect.
     2.  If no reconnect, session is `ended` with reason `host_disconnected`.
     3.  Billing stops at the disconnect time + grace period (safety cap).
-<<<<<<< Updated upstream
-=======
 
 ---
 
@@ -258,6 +255,3 @@ Clears all usage.
 ```bash
 node scripts/set_test_usage.js --reset
 ```
-
-
->>>>>>> Stashed changes

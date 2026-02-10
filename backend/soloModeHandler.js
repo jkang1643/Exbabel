@@ -26,6 +26,7 @@ import { resolveModel, getAllowedTtsTiers } from './entitlements/index.js';
 import { recordUsageEvent } from './usage/recordUsage.js';
 import { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from './usage/sessionSpans.js';
 import { checkQuotaLimit, createQuotaEvent } from './usage/quotaEnforcement.js';
+import { supabaseAdmin } from './supabaseAdmin.js';
 import crypto from 'crypto';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
@@ -39,6 +40,7 @@ export async function handleSoloMode(clientWs) {
   let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
   let legacySessionId = `session_${Date.now()}`;
   let currentVoiceId = null; // Track selected voice ID
+  let currentTtsMode = 'unary'; // Track TTS mode: 'streaming' or 'unary' (default unary to prevent duplicates)
 
   // MULTI-SESSION OPTIMIZATION: Track this session for fair-share allocation
   // This allows the rate limiter to distribute capacity fairly across sessions
@@ -56,6 +58,129 @@ export async function handleSoloMode(clientWs) {
   // QUOTA ENFORCEMENT: Track if warning has been sent this session
   let quotaWarningSent = false;
   let quotaExceeded = false;
+
+  // SESSION TRACKING UUID: Ensure we have a valid UUID for DB relationships (Foreign Keys)
+  let trackingSessionId = null;
+  let sessionSpanStartPromise = null;
+
+  // Helper to ensure a valid DB session exists for metering
+  const ensureTrackingSession = async (churchId) => {
+    // If we already have a tracking ID, use it
+    if (trackingSessionId) return trackingSessionId;
+
+    // Use a local candidate ID first - DO NOT assign global trackingSessionId until success
+    const candidateId = crypto.randomUUID();
+    // Use 6-char alphanumeric code to satisfy database constraints (matching SessionStore format)
+    // Start with 'S' to distinguish Solo mode, followed by 5 random chars
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let sessionCode = 'S';
+    for (let i = 0; i < 5; i++) {
+      sessionCode += chars.charAt(crypto.randomInt(0, chars.length));
+    }
+
+    try {
+      // console.log(`[SoloMode] Creating metering session ${candidateId} (church: ${churchId})`);
+      const { error } = await supabaseAdmin.from('sessions').insert({
+        id: candidateId,
+        church_id: churchId,
+        status: 'active',
+        source_lang: currentSourceLang,
+        session_code: sessionCode,
+        metadata: {
+          mode: 'solo',
+          client_session_id: sessionId // Link back to client ID
+        }
+      });
+
+      if (error) {
+        console.error(`[SoloMode] ⚠️ Failed to create metering session: ${error.message}`);
+        // If we can't create the session, session_spans will likely fail with FK violation
+        // preventing meaningful usage tracking.
+        return null;
+      }
+
+      // SUCCESS - now we can safely use this as our tracking ID
+      trackingSessionId = candidateId;
+      return trackingSessionId;
+    } catch (err) {
+      console.error(`[SoloMode] ⚠️ Error creating metering session:`, err);
+      return null;
+    }
+  };
+
+  // Helper to ensure session span is active (called on both JSON 'audio' and binary messages)
+  const ensureSessionActive = () => {
+    // START SESSION SPAN on first audio (active streaming time only)
+    // CRITICAL: Fire-and-forget pattern - DO NOT BLOCK audio processing
+    if (!sessionSpanStarted) {
+      sessionSpanStarted = true; // Mark as started immediately to prevent duplicate calls
+      const meteringChurchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
+
+      if (meteringChurchId) {
+        // Non-blocking: start span in background, tracked via promise
+        sessionSpanStartPromise = (async () => {
+          // Ensure we have a valid session row in DB first (calls to session_spans require FK)
+          const validSessionId = await ensureTrackingSession(meteringChurchId);
+
+          if (!validSessionId) {
+            console.log(`[SoloMode] ⚠️ Skipping session span start (no valid DB session)`);
+            sessionSpanStarted = false; // Reset to allow retry
+            return;
+          }
+
+          startSessionSpan({
+            sessionId: validSessionId,
+            churchId: meteringChurchId,
+            metadata: { sourceLang: currentSourceLang, targetLang: currentTargetLang, mode: 'solo' }
+          }).then(spanResult => {
+            console.log(`[SoloMode] 🎙️ Start span result:`, JSON.stringify(spanResult));
+            if (spanResult.alreadyActive) {
+              console.log(`[SoloMode] 🎙️ Session span already active (resuming)`);
+            } else {
+              console.log(`[SoloMode] 🎙️ Started session span on first audio (church: ${meteringChurchId})`);
+            }
+
+            // Start heartbeat interval (only after successful span start)
+            if (!sessionSpanHeartbeatInterval) {
+              sessionSpanHeartbeatInterval = setInterval(async () => {
+                try {
+                  await heartbeatSessionSpan({ sessionId: validSessionId });
+
+                  // Check quota limits alongside heartbeat
+                  const churchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
+                  if (churchId && !quotaExceeded) {
+                    const quotaResult = await checkQuotaLimit(churchId, 'solo');
+
+                    if (quotaResult.action === 'lock') {
+                      quotaExceeded = true;
+                      const event = createQuotaEvent(quotaResult);
+                      if (clientWs.readyState === WebSocket.OPEN && event) {
+                        clientWs.send(JSON.stringify(event));
+                        console.log(`[SoloMode] 🚫 QUOTA EXCEEDED - sent quota_exceeded event`);
+                      }
+                    } else if (quotaResult.action === 'warn' && !quotaWarningSent) {
+                      quotaWarningSent = true;
+                      const event = createQuotaEvent(quotaResult);
+                      if (clientWs.readyState === WebSocket.OPEN && event) {
+                        clientWs.send(JSON.stringify(event));
+                        console.log(`[SoloMode] ⚠️ Quota warning sent: ${quotaResult.message}`);
+                      }
+                    }
+                  }
+                } catch (err) {
+                  // Silent heartbeat/quota check failures
+                }
+              }, SESSION_SPAN_HEARTBEAT_MS);
+            }
+          }).catch(err => {
+            console.error(`[SoloMode] ✗ Failed to start session span:`, err.message);
+            // CRITICAL: Reset flag so we can try again on next audio chunk
+            sessionSpanStarted = false;
+          });
+        })();
+      }
+    }
+  };
 
   // PHASE 1: Extract entitlements from WS connection (attached by server.js)
   const entitlements = clientWs.entitlements || null;
@@ -220,7 +345,11 @@ export async function handleSoloMode(clientWs) {
   const triggerTtsStreaming = async (seqId, text, targetLang, voiceId = null) => {
     // Only trigger for non-empty text
     if (!text || text.trim().length === 0) return;
-    if (!isStreamingEnabled()) return;
+    // CRITICAL: Check if streaming is enabled based on frontend's ttsMode setting
+    if (!isStreamingEnabled({ ttsMode: currentTtsMode })) {
+      console.log(`[SoloMode] Skipping backend TTS - ttsMode is '${currentTtsMode}' (frontend handles unary)`);
+      return;
+    }
 
     // DEBUG: Log voice selection state before resolution
     console.log(`[SoloMode] Resolving voice for TTS - targetLang: ${targetLang || currentTargetLang}`);
@@ -279,9 +408,6 @@ export async function handleSoloMode(clientWs) {
   };
 
   // Handle client messages
-<<<<<<< Updated upstream
-  clientWs.on("message", async (msg) => {
-=======
   clientWs.on("message", async (msg, isBinary) => {
     // Phase 7: Handle binary messages (raw audio)
     // ONLY trust the isBinary flag from the websocket library
@@ -300,7 +426,6 @@ export async function handleSoloMode(clientWs) {
       return;
     }
 
->>>>>>> Stashed changes
     try {
       const message = JSON.parse(msg.toString());
       // Filter out noisy audio message logs
@@ -378,6 +503,11 @@ export async function handleSoloMode(clientWs) {
           }
           if (message.targetLang) {
             currentTargetLang = message.targetLang;
+          }
+          // Update TTS mode if provided (streaming or unary)
+          if (message.ttsMode) {
+            currentTtsMode = message.ttsMode;
+            console.log(`[SoloMode] 🔊 TTS mode set to: ${currentTtsMode}`);
           }
           if (message.tier !== undefined) {
             let newTier = message.tier === 'premium' || message.tier === true;
@@ -1016,7 +1146,9 @@ export async function handleSoloMode(clientWs) {
                           setLastEmittedText(finalSeqId, correctedText);
 
                           // Trigger TTS streaming for this committed segment
-                          await triggerTtsStreaming(finalSeqId, correctedText, currentTargetLang);
+                          // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
+                          const normalizedTtsText = normalizePunctuation(correctedText);
+                          await triggerTtsStreaming(finalSeqId, normalizedTtsText, currentTargetLang);
 
                           // CRITICAL: Update last sent FINAL tracking after sending
                           // Track both original and corrected text to prevent duplicates
@@ -1059,7 +1191,9 @@ export async function handleSoloMode(clientWs) {
                           setLastEmittedText(finalSeqIdError, textToProcess);
 
                           // Trigger TTS streaming for this committed segment
-                          await triggerTtsStreaming(finalSeqIdError, textToProcess, currentTargetLang);
+                          // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
+                          const normalizedTtsTextError = normalizePunctuation(textToProcess);
+                          await triggerTtsStreaming(finalSeqIdError, normalizedTtsTextError, currentTargetLang);
 
                           // CRITICAL: Update last sent FINAL tracking after sending (even on error)
                           lastSentOriginalText = textToProcess; // Track original
@@ -1099,7 +1233,9 @@ export async function handleSoloMode(clientWs) {
                         setLastEmittedText(finalSeqIdNonEn, textToProcess);
 
                         // Trigger TTS streaming for this committed segment
-                        await triggerTtsStreaming(finalSeqIdNonEn, textToProcess, currentTargetLang);
+                        // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
+                        const normalizedTtsTextNonEn = normalizePunctuation(textToProcess);
+                        await triggerTtsStreaming(finalSeqIdNonEn, normalizedTtsTextNonEn, currentTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         lastSentFinalText = textToProcess;
@@ -1217,7 +1353,9 @@ export async function handleSoloMode(clientWs) {
                         setLastEmittedText(finalSeqIdTrans, translatedText);
 
                         // Trigger TTS streaming for this committed segment (use translated text)
-                        await triggerTtsStreaming(finalSeqIdTrans, translatedText, currentTargetLang);
+                        // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
+                        const normalizedTtsTextTrans = normalizePunctuation(translatedText);
+                        await triggerTtsStreaming(finalSeqIdTrans, normalizedTtsTextTrans, currentTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates
@@ -3250,59 +3388,8 @@ export async function handleSoloMode(clientWs) {
           if (speechStream) {
             // START SESSION SPAN on first audio (active streaming time only)
             // CRITICAL: Fire-and-forget pattern - DO NOT BLOCK audio processing
-            if (!sessionSpanStarted) {
-              sessionSpanStarted = true; // Mark as started immediately to prevent duplicate calls
-              const meteringChurchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
-              if (meteringChurchId) {
-                // Non-blocking: start span in background
-                startSessionSpan({
-                  sessionId: sessionId,
-                  churchId: meteringChurchId,
-                  metadata: { sourceLang: currentSourceLang, targetLang: currentTargetLang, mode: 'solo' }
-                }).then(spanResult => {
-                  if (spanResult.alreadyActive) {
-                    console.log(`[SoloMode] 🎙️ Session span already active (resuming)`);
-                  } else {
-                    console.log(`[SoloMode] 🎙️ Started session span on first audio (church: ${meteringChurchId})`);
-                  }
+            ensureSessionActive();
 
-                  // Start heartbeat interval (only after successful span start)
-                  if (!sessionSpanHeartbeatInterval) {
-                    sessionSpanHeartbeatInterval = setInterval(async () => {
-                      try {
-                        await heartbeatSessionSpan({ sessionId: sessionId });
-
-                        // Check quota limits alongside heartbeat
-                        const churchId = clientWs.churchId || process.env.TEST_CHURCH_ID;
-                        if (churchId && !quotaExceeded) {
-                          const quotaResult = await checkQuotaLimit(churchId, 'solo');
-
-                          if (quotaResult.action === 'lock') {
-                            quotaExceeded = true;
-                            const event = createQuotaEvent(quotaResult);
-                            if (clientWs.readyState === WebSocket.OPEN && event) {
-                              clientWs.send(JSON.stringify(event));
-                              console.log(`[SoloMode] 🚫 QUOTA EXCEEDED - sent quota_exceeded event`);
-                            }
-                          } else if (quotaResult.action === 'warn' && !quotaWarningSent) {
-                            quotaWarningSent = true;
-                            const event = createQuotaEvent(quotaResult);
-                            if (clientWs.readyState === WebSocket.OPEN && event) {
-                              clientWs.send(JSON.stringify(event));
-                              console.log(`[SoloMode] ⚠️ Quota warning sent: ${quotaResult.message}`);
-                            }
-                          }
-                        }
-                      } catch (err) {
-                        // Silent heartbeat/quota check failures
-                      }
-                    }, SESSION_SPAN_HEARTBEAT_MS);
-                  }
-                }).catch(spanErr => {
-                  console.warn(`[SoloMode] ⚠️ Failed to start session span:`, spanErr.message);
-                });
-              }
-            }
 
             // Measure RTT if client sent timestamp
             if (message.clientTimestamp) {
@@ -3338,14 +3425,35 @@ export async function handleSoloMode(clientWs) {
               clearInterval(sessionSpanHeartbeatInterval);
               sessionSpanHeartbeatInterval = null;
             }
-            stopSessionSpan({
-              sessionId: sessionId,
-              reason: 'audio_end'
-            }).then(result => {
-              console.log(`[SoloMode] ✓ Session span stopped (audio_end): ${result.durationSeconds}s`);
-            }).catch(err => {
-              console.warn(`[SoloMode] ⚠️ Failed to stop session span:`, err.message);
-            });
+
+            // Fix: Use trackingSessionId (UUID) for DB operations
+            // Check if we have a valid tracking session before calling DB
+            if (trackingSessionId) {
+              (async () => {
+                if (sessionSpanStartPromise) await sessionSpanStartPromise;
+
+                stopSessionSpan({
+                  sessionId: trackingSessionId,
+                  reason: 'audio_end'
+                }).then(async (result) => {
+                  console.log(`[SoloMode] ✓ Session span stopped (audio_end): ${result.durationSeconds}s`);
+
+                  // Also mark the DB session as ended to keep data clean
+                  try {
+                    await supabaseAdmin.from('sessions').update({
+                      status: 'ended',
+                      ended_at: new Date().toISOString(),
+                      metadata: { ended_reason: 'audio_end' }
+                    }).eq('id', trackingSessionId);
+                  } catch (e) { /* ignore cleanup error */ }
+
+                }).catch(err => {
+                  console.warn(`[SoloMode] ⚠️ Failed to stop session span:`, err.message);
+                });
+              })();
+            } else {
+              console.log(`[SoloMode] ⚠️ Skipping stopSessionSpan (no tracking UUID)`);
+            }
             sessionSpanStarted = false; // Reset so next recording starts a new span
           }
 
@@ -3882,15 +3990,29 @@ export async function handleSoloMode(clientWs) {
       clearInterval(sessionSpanHeartbeatInterval);
       sessionSpanHeartbeatInterval = null;
     }
-    if (sessionSpanStarted) {
-      stopSessionSpan({
-        sessionId: sessionId,
-        reason: 'client_disconnect'
-      }).then(result => {
-        console.log(`[SoloMode] ✓ Session span stopped on disconnect: ${result.durationSeconds}s`);
-      }).catch(err => {
-        console.warn(`[SoloMode] ⚠️ Failed to stop session span on disconnect:`, err.message);
-      });
+    if (sessionSpanStarted && trackingSessionId) {
+      (async () => {
+        if (sessionSpanStartPromise) await sessionSpanStartPromise;
+
+        stopSessionSpan({
+          sessionId: trackingSessionId,
+          reason: 'client_disconnect'
+        }).then(async (result) => {
+          console.log(`[SoloMode] ✓ Session span stopped on disconnect: ${result.durationSeconds}s`);
+
+          // Also mark the DB session as ended to keep data clean
+          try {
+            await supabaseAdmin.from('sessions').update({
+              status: 'ended',
+              ended_at: new Date().toISOString(),
+              metadata: { ended_reason: 'disconnect' }
+            }).eq('id', trackingSessionId);
+          } catch (e) { /* ignore cleanup error */ }
+
+        }).catch(err => {
+          console.warn(`[SoloMode] ⚠️ Failed to stop session span on disconnect:`, err.message);
+        });
+      })();
       sessionSpanStarted = false;
     }
 

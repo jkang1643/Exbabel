@@ -30,6 +30,9 @@ export function SoloPage({ onBackToHome }) {
     // Auth context for token
     const { getAccessToken } = useAuth();
 
+    // Stable session ID (created once, never changes)
+    const sessionIdRef = useRef(`solo_${Date.now()}`);
+
     // Connection state
     const [ws, setWs] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
@@ -160,12 +163,9 @@ export function SoloPage({ onBackToHome }) {
         }
     });
 
-    // Stable session ID for streaming (must not change on re-render)
-    const streamingSessionIdRef = useRef(`solo_${Date.now()}`);
-
-    // TTS streaming (real-time)
+    // TTS streaming (real-time) - uses same session ID as main WebSocket
     const ttsStreaming = useTtsStreaming({
-        sessionId: streamingSessionIdRef.current,
+        sessionId: sessionIdRef.current,
         enabled: streamingTts && session.mode !== SoloMode.TEXT_ONLY,
         onBufferUpdate: (ms) => {
             console.log('[SoloPage] Buffer:', ms, 'ms');
@@ -324,8 +324,9 @@ export function SoloPage({ onBackToHome }) {
                         sourceLang,
                         targetLang,
                         tier: 'basic',
-                        sessionId: streamingSessionIdRef.current,
-                        voiceId: selectedVoice?.voiceId || null
+                        sessionId: sessionIdRef.current,
+                        voiceId: selectedVoice?.voiceId || null,
+                        ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
                     };
                     console.log('[SoloPage] 📤 SENDING INIT (after info):', initMessage);
                     socket.send(JSON.stringify(initMessage));
@@ -426,8 +427,9 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang: newSourceLang,
                 targetLang: newTargetLang,
                 tier: 'basic',
-                sessionId: streamingSessionIdRef.current,
-                voiceId: selectedVoice?.voiceId || null // Include current voice
+                sessionId: sessionIdRef.current,
+                voiceId: selectedVoice?.voiceId || null, // Include current voice
+                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
 
             console.log('[SoloPage] 📤 Sending init message:', initMessage);
@@ -452,8 +454,9 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang: sourceLang,
                 targetLang: targetLang,
                 tier: 'basic',
-                sessionId: streamingSessionIdRef.current,
-                voiceId: voice.voiceId
+                sessionId: sessionIdRef.current,
+                voiceId: voice.voiceId,
+                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
 
             console.log('[SoloPage] 📤 Sending init message (voice update):', initMessage);
@@ -478,7 +481,8 @@ export function SoloPage({ onBackToHome }) {
                 type: 'init',
                 sourceLang: newSourceLang,
                 targetLang: newTargetLang,
-                tier: 'basic'
+                tier: 'basic',
+                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
             };
 
             console.log('[SoloPage] 📤 Sending init message (swap):', initMessage);
@@ -522,6 +526,23 @@ export function SoloPage({ onBackToHome }) {
             }));
         }
     }, [targetLang, isConnected, isServerReady]);
+
+    // Send updated init when streamingTts changes (so backend knows the TTS mode)
+    useEffect(() => {
+        if (isConnected && isServerReady && wsRef.current?.readyState === WebSocket.OPEN) {
+            const initMessage = {
+                type: 'init',
+                sourceLang,
+                targetLang,
+                tier: 'basic',
+                sessionId: sessionIdRef.current,
+                voiceId: selectedVoice?.voiceId || null,
+                ttsMode: streamingTts ? 'streaming' : 'unary'
+            };
+            console.log('[SoloPage] 📤 Sending init (streamingTts changed):', initMessage);
+            wsRef.current.send(JSON.stringify(initMessage));
+        }
+    }, [streamingTts, isConnected, isServerReady, sourceLang, targetLang, selectedVoice]);
 
     // Get display state
     const getDisplayState = () => {
@@ -588,11 +609,13 @@ export function SoloPage({ onBackToHome }) {
                     />
                 )}
 
-                {/* RTS Routing Overlay */}
-                <TtsRoutingOverlay
-                    isActive={!!activeRouting}
-                    {...activeRouting}
-                />
+                {/* RTS Routing Overlay (Debug only) */}
+                {import.meta.env.VITE_ENABLE_DEBUG_ROUTING === 'true' && (
+                    <TtsRoutingOverlay
+                        isActive={!!activeRouting}
+                        {...activeRouting}
+                    />
+                )}
 
                 {/* Queue Badge */}
                 {ttsQueue.queueLength > 0 && (
@@ -802,3 +825,4 @@ export function SoloPage({ onBackToHome }) {
 }
 
 export default SoloPage;
+// Force rebuild Fri Feb  6 16:24:13 CST 2026

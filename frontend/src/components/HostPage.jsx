@@ -383,7 +383,7 @@ export function HostPage({ onBackToHome }) {
 
         // Generate QR code with join URL using configured app URL
         // This ensures QR codes work on mobile devices by using the production domain
-        const joinUrl = `${APP_URL}?join=${data.sessionCode}`;
+        const joinUrl = `${APP_URL}/listener?code=${data.sessionCode}`;
         console.log('[HostPage] Generated QR code URL:', joinUrl);
         const qrUrl = await QRCode.toDataURL(joinUrl, {
           width: 300,
@@ -516,10 +516,12 @@ export function HostPage({ onBackToHome }) {
           setAvailableVoices(message.voices || []);
           setAllowedTiers(message.allowedTiers || []);
           setPlanCode(message.planCode || 'starter');
-          // Auto-select first allowed voice if none selected
+          // Auto-select default voice (marked by backend) if none selected
           if (message.voices?.length > 0 && !selectedVoice) {
+            const defaultVoice = message.voices.find(v => v.isDefault);
             const firstAllowed = message.voices.find(v => v.isAllowed);
-            setSelectedVoice(firstAllowed || message.voices[0]);
+            setSelectedVoice(defaultVoice || firstAllowed || message.voices[0]);
+            console.log('[Host] Auto-selected voice:', (defaultVoice || firstAllowed || message.voices[0])?.displayName);
           }
           return;
         }
@@ -1204,7 +1206,7 @@ export function HostPage({ onBackToHome }) {
     if (!sessionCode) return;
 
     try {
-      const joinUrl = `${APP_URL}?join=${sessionCode}`;
+      const joinUrl = `${APP_URL}/listener?code=${sessionCode}`;
       const svgString = await QRCode.toString(joinUrl, {
         type: 'svg',
         width: 300,

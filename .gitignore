@@ -72,7 +72,5 @@ backend/*-service-account.json
 
 
 # Database Backups
-db/backups/data_*.sql
-db/backups/full_backup_*.sql
-# Allow schema.sql to be committed
+db/backups/*.sql
 !db/backups/schema.sql

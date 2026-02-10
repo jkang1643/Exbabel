@@ -115,6 +115,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const targetLangRef = useRef('es'); // Ref to avoid closure issues in WebSocket handler
   const [userPlan, setUserPlan] = useState(null); // Track user plan for voice defaults
 
+  // Sync sessionCodeProp with sessionCode state (for URL parameters)
+  useEffect(() => {
+    if (sessionCodeProp && sessionCodeProp !== sessionCode) {
+      setSessionCode(sessionCodeProp);
+    }
+  }, [sessionCodeProp]);
+
   // Keep ref in sync with state
   useEffect(() => {
     targetLangRef.current = targetLang;
@@ -608,8 +615,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       });
     }
 
-    // Trigger voice fetch if changed
-    ttsControllerRef.current.fetchVoices(targetLang);
+    // CRITICAL FIX: Only fetch voices if WebSocket is connected
+    // Without this check, fetchVoices silently fails when called before connection
+    if (connectionState === 'open') {
+      console.log('[ListenerPage] Fetching voices for:', targetLang);
+      ttsControllerRef.current.fetchVoices(targetLang);
+    } else {
+      console.warn('[ListenerPage] Skipping fetchVoices - WebSocket not ready:', connectionState);
+    }
 
   }, [targetLang, selectedVoice, ttsSettings, connectionState]);
 
@@ -619,9 +632,19 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
     // CRITICAL: Wait for userPlan to be set before making default decisions
     // This prevents premature defaults when session_joined hasn't arrived yet
+    // However, add a timeout to prevent indefinite waiting
     if (userPlan === null) {
       console.log('[ListenerPage] ⏳ Waiting for userPlan before selecting voice default...');
-      return;
+
+      // Timeout fallback: If plan doesn't load within 2 seconds, default to 'starter'
+      const timeoutId = setTimeout(() => {
+        if (userPlan === null) {
+          console.warn('[ListenerPage] ⚠️ userPlan timeout - defaulting to starter plan');
+          setUserPlan('starter');
+        }
+      }, 2000);
+
+      return () => clearTimeout(timeoutId);
     }
 
     // Helper to check if voice is allowed - uses server-sent isAllowed flag
@@ -700,8 +723,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       // Robust Gemini detection
       const isGemini = tier === 'gemini' || (selectedVoice && selectedVoice.startsWith('gemini-'));
 
+      // Check if this is any ElevenLabs tier
+      const isElevenLabs = tier === 'elevenlabs_flash' || tier === 'elevenlabs_turbo' ||
+        tier === 'elevenlabs_v3' || tier === 'elevenlabs';
+
       if (isGemini) {
         defaultSpeed = 1.45;
+      } else if (isElevenLabs) {
+        defaultSpeed = 1.0; // All ElevenLabs voices default to 1.0x (normal speed)
       } else if (tier === 'chirp3_hd') {
         defaultSpeed = 1.1;
       } else if (tier === 'neural2' || tier === 'standard') {
@@ -986,10 +1015,16 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         switch (message.type) {
           case 'session_joined':
             console.log('[Listener] Joined session:', message.sessionCode);
-            if (message.plan) {
-              console.log('[Listener] User Plan:', message.plan);
-              setUserPlan(message.plan);
-            }
+            // Extract plan from session_joined message (backend now includes it)
+            const receivedPlan = message.plan || 'starter';
+            console.log('[Listener] User Plan:', receivedPlan);
+            setUserPlan(receivedPlan);
+            break;
+
+          case 'plan_updated':
+            // Handle plan updates (sent by backend if entitlements load late)
+            console.log('[Listener] Plan updated:', message.plan);
+            setUserPlan(message.plan);
             break;
 
           case 'translation':
@@ -1719,7 +1754,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
             {/* Session Code */}
             <div className="flex-shrink-0 flex items-center gap-1">
               <span className="text-[10px] uppercase font-bold text-gray-400 sm:text-gray-600 sm:font-normal sm:capitalize sm:block hidden">Code:</span>
-              <p className="text-sm sm:text-xl font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{sessionInfo?.sessionCode}</p>
+              <p className="text-sm sm:text-xl font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{sessionCode || sessionInfo?.sessionCode}</p>
             </div>
 
             {/* Voice Model */}
@@ -1869,7 +1904,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
         </div>
       )}
       {/* TTS Routing Debug Overlay */}
-      {routingDebug && (
+      {import.meta.env.VITE_ENABLE_DEBUG_ROUTING === 'true' && routingDebug && (
         <div className="fixed bottom-20 left-4 z-50 bg-black/80 text-white text-[10px] p-2 rounded-md border border-gray-600 font-mono pointer-events-none max-w-xs shadow-xl backdrop-blur-sm">
           <div className="flex justify-between items-center mb-1 pb-1 border-b border-gray-700">
             <span className="font-bold text-blue-400">TTS ROUTING DEBUG</span>

@@ -1500,20 +1500,62 @@ export function normalizeLiturgicalTerms(text) {
  */
 export function normalizePunctuation(text) {
   if (!text) return text;
+
+  const original = text;
   let normalized = text;
+
+  // Always log to see if function is being called
+  console.log('[normalizePunctuation] Called with text:', text.substring(0, 100));
+  console.log('[normalizePunctuation] Text contains curly quotes?', text.includes('\u2018') || text.includes('\u2019') || text.includes('\u201C') || text.includes('\u201D'));
+
   if (punctuationNormalization) {
     for (const [key, value] of Object.entries(punctuationNormalization)) {
+      if (normalized.includes(key)) {
+        console.log(`[normalizePunctuation] Found character to normalize: "${key}" (U+${key.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}) → "${value}"`);
+      }
+
       if (key === '。') {
         // Ensure there's a space after the period if it was a Chinese full-stop
         normalized = normalized.split(key).join('. ');
       } else if (key === '：') {
         // Ensure there's a space after the colon if it was a Chinese full-width colon
         normalized = normalized.split(key).join(': ');
+      } else if (key === '，') {
+        // Ensure there's a space after the comma if it was a Chinese full-width comma
+        normalized = normalized.split(key).join(', ');
       } else {
         normalized = normalized.split(key).join(value);
       }
     }
   }
+
   // Clean up any double spaces introduced by the replacement or already present
-  return normalized.replace(/\s+/g, ' ').trim();
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  // CRITICAL: Replace straight single quotes with double quotes for ALL languages
+  // Single quotes cause ElevenLabs hallucinations, double quotes work better
+  // Example: "Entonces Pedro les dijo: 'Arrepentíos.'" → "Entonces Pedro les dijo: \"Arrepentíos.\""
+  normalized = normalized.replace(/'/g, '"');
+
+  // Add space before opening double quotes if missing (for better TTS readability)
+  // Example: 'dijo:"Arrepentíos' → 'dijo: "Arrepentíos'
+  normalized = normalized.replace(/(\S)"([^"])/g, '$1 "$2');
+
+  // CRITICAL: Remove trailing spaces after punctuation (causes ElevenLabs hallucinations)
+  // Example: "Arrepentíos. " → "Arrepentíos."
+  normalized = normalized.replace(/([.!?,;:])\s+$/g, '$1');
+
+  // Also clean up spaces before closing quotes
+  normalized = normalized.replace(/\s+(["'])/g, '$1');
+
+  // Debug logging if text changed
+  if (original !== normalized) {
+    console.log('[normalizePunctuation] ✅ Text normalized:');
+    console.log('  BEFORE:', original.substring(0, 100));
+    console.log('  AFTER:', normalized.substring(0, 100));
+  } else {
+    console.log('[normalizePunctuation] ⚠️ No changes made (text already normalized or no special chars)');
+  }
+
+  return normalized;
 }

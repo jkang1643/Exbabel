@@ -677,6 +677,7 @@ backend/
 │   ├── getListeningQuota.js
 │   ├── sessionSpans.js            [NEW]
 │   ├── getSessionQuota.js         [NEW]
+│   ├── abandonedSessionReaper.js  [NEW]
 │   └── index.js
 ├── middleware/
 │   ├── requireAuthContext.js
@@ -846,6 +847,7 @@ backend/
     - **Explicit End**: "End Session" button in Host UI triggers `end_session` message.
     - **Graceful End**: Host disconnect triggers 30s grace timer (`scheduleSessionEnd`) before closing.
     - **Startup Cleanup**: `cleanupAbandonedSessions` runs on server start to mark zombie sessions as ended.
+    - **Periodic Reaper**: `abandonedSessionReaper` runs every 5 minutes to clean up stale sessions (last heartbeat > 5 min ago) on long-running servers.
 - ✅ **Frontend**: Added distinct "End Session" button with confirmation dialog in `HostPage.jsx`.
 - ✅ **Host Adapter**: Wired `end_session` and grace timer logic into the active `adapter.js`.
 
@@ -860,6 +862,12 @@ backend/
 - ✅ **Frontend Auth**: Implemented Supabase Auth (Email + Google) via `AuthContext.jsx`.
 - ✅ **UI Components**: Setup shadcn/ui and created modern `LoginPage` and `NoProfilePage`.
 - ✅ **App Shell Gating**: Secured `App.jsx` to block unauthorized access to Host/Solo modes.
+
+### 2026-02-06 - Bug Fix: Solo Mode Session Constraint
+- ✅ **Fix: Foreign Key Violation**: Updated `ensureTrackingSession` to await DB insert before allowing `startSessionSpan`, preventing race conditions.
+- ✅ **Fix: Silent Failure Retry**: Added `.catch()` block to `ensureSessionActive` to reset `sessionSpanStarted` flag on failure, allowing instant retries.
+- ✅ **Fix: Session Code Constraint**: Changed Solo Mode session ID generation from `SOLO-XXXX` (9 chars) to `SXXXXX` (6 chars alphanumeric) to satisfy `sessions_session_code_check1` database constraint.
+
 - ✅ **Host Token Injection**: Updated `HostPage.jsx` to pass JWT via `sec-websocket-protocol` (header) or query param for `ws` connection.
 - ✅ **Session API**: Secured `/api/session/start` with Bearer token authentication from frontend.
 
@@ -964,8 +972,6 @@ backend/
     - Toast variant for 80% warning, full modal for 100% exceeded
     - Start button disabled when quota exceeded
 
-<<<<<<< Updated upstream
-=======
 ### 2026-02-06 - Abandoned Session Reaper
 - ✅ **Periodic Reaper**: Created `backend/usage/abandonedSessionReaper.js` to clean up abandoned sessions on long-running servers
 - ✅ **Heartbeat-Based Detection**: Reaper identifies stale spans by checking if `last_seen_at` is older than 5 minutes (300 seconds)
@@ -982,9 +988,24 @@ backend/
 
 ### 2026-02-07 - URL Routing & OAuth Fixes
 - ✅ **URL-Based Routing**: Migrated from state-based routing to React Router for proper URL navigation
+    - **Package**: Installed `react-router-dom` for URL-based routing
+    - **Routes**: Created route mappings for all pages (`/signin`, `/signup`, `/solo`, `/host`, `/listener`, etc.)
+    - **Protected Routes**: Implemented `ProtectedRoute` component for authentication guards
+    - **Navigation**: Replaced all `setMode()` calls with `navigate()` from `useNavigate` hook
+    - **Browser Support**: Added support for browser back/forward buttons and direct URL access
 - ✅ **OAuth Redirect Fix**: Fixed Google OAuth callback flow
+    - **Problem**: After Google OAuth, users stayed on `/signin#` instead of being redirected home
+    - **Solution**: Added `useEffect` hooks to `LoginRoute` and `SignUpRoute` to detect authenticated users and auto-redirect to home page
+    - **Files Modified**: `frontend/src/App.jsx` (LoginRoute, SignUpRoute)
 - ✅ **Session Code Persistence**: Fixed session code display issues in listener page
+    - **Fix 1**: Changed session code display from `sessionInfo?.sessionCode` to `sessionCode || sessionInfo?.sessionCode`
+    - **Fix 2**: Added `useEffect` to sync `sessionCodeProp` with `sessionCode` state for URL parameters
+    - **Result**: Session codes now persist correctly when entered manually or loaded from URL (`/listener?code=ABC123`)
+    - **Files Modified**: `frontend/src/components/ListenerPage.jsx`
 - ✅ **Auth Context Updates**: Updated OAuth redirect URLs
+    - `signInWithGoogle`: Changed redirect from `window.location.origin` to `${window.location.origin}/signin`
+    - `signUpWithEmail`: Changed redirect from `window.location.origin` to `${window.location.origin}/signup`
+    - **Files Modified**: `frontend/src/contexts/AuthContext.jsx`
 
 ### 2026-02-10 - PR 7.7 - Secure Quota Enforcement & Verification
 - ✅ **Pre-Connect Gate**: Implemented `GET /api/quota-check` REST endpoint to check quota status before WebSocket connection
@@ -1016,6 +1037,3 @@ backend/
 - **Purpose**: Verifies that the "Approaching Limit" (1 min remaining) warning fires correctly and that the session terminates precisely at 0s.
 
 ---
-
-
->>>>>>> Stashed changes

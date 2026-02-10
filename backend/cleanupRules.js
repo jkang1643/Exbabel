@@ -521,11 +521,78 @@ export const versePatterns = {
   'and': '–'
 };
 
-// Z. Punctuation Normalization - Map full-width characters to half-width equivalents
+// Z. Punctuation Normalization - Map full-width/CJK characters to half-width equivalents
+// These characters can cause TTS models to vocalize artifacts or hallucinate
 export const punctuationNormalization = {
-  '。': '.',
-  '“': '"',
-  '”': '"',
-  '：': ':'
-};
+  // Chinese/CJK full-width punctuation
+  '。': '.',     // Full-width period
+  '，': ',',     // Full-width comma (CRITICAL: was missing, caused TTS artifacts)
+  '：': ':',     // Full-width colon
+  '；': ';',     // Full-width semicolon
+  '！': '!',     // Full-width exclamation
+  '？': '?',     // Full-width question mark
+  '（': '(',     // Full-width left parenthesis
+  '）': ')',     // Full-width right parenthesis
+  '【': '[',     // Full-width left bracket
+  '】': ']',     // Full-width right bracket
+  '「': '"',     // CJK left corner bracket
+  '」': '"',     // CJK right corner bracket
+  '『': '"',     // CJK left white corner bracket
+  '』': '"',     // CJK right white corner bracket
+  '“': '"',      // Left double quotation mark
+  '”': '"',      // Right double quotation mark
+  '‘': "'",      // Left single quotation mark
+  '’': "'",      // Right single quotation mark
+  '、': ',',     // Chinese enumeration comma (ideographic comma)
+  '‥': '..',    // Two-dot leader
+  '…': '...',   // Horizontal ellipsis
+  '—': '-',     // Em dash
+  '～': '~',     // Full-width tilde
+  '·': ' ',     // Middle dot (interpunct) - replace with space
+  '　': ' ',     // Ideographic space (full-width space)
 
+  // International quote variants
+  '«': '"',     // French/Russian left guillemet
+  '»': '"',     // French/Russian right guillemet
+  '‹': "'",     // Single left guillemet
+  '›': "'",     // Single right guillemet
+  '„': '"',     // German/Polish low-9 double quote
+  '‚': "'",     // German/Polish low-9 single quote
+  '‟': '"',     // Double high-reversed-9 quotation mark
+
+  // Arabic/Hebrew punctuation
+  '،': ',',     // Arabic comma
+  '؛': ';',     // Arabic semicolon
+  '؟': '?',     // Arabic question mark
+  '״': '"',     // Hebrew double geresh (U+05F4) - Hebrew double quote
+  '׳': "'",     // Hebrew geresh (U+05F3) - Hebrew single quote
+
+  // Indic script punctuation (Hindi, Bengali, Marathi, Tamil, Telugu, Gujarati, etc.)
+  '।': '.',     // Devanagari danda (U+0964) - period for Hindi, Marathi, Nepali, etc.
+  '॥': '.',     // Devanagari double danda (U+0965)
+
+  // Burmese punctuation
+  '၊': ',',     // Burmese comma (U+104A)
+  '။': '.',     // Burmese full stop (U+104B)
+
+  // Ethiopic punctuation (Amharic)
+  '።': '.',     // Ethiopic full stop (U+1362)
+  '፣': ',',     // Ethiopic comma (U+1363)
+  '፤': ';',     // Ethiopic semicolon (U+1364)
+  '፧': '?',     // Ethiopic question mark (U+1367)
+
+  // Armenian punctuation
+  '՝': ',',     // Armenian comma (U+055D)
+  '։': '.',     // Armenian full stop (U+0589)
+  '՞': '?',     // Armenian question mark (U+055E)
+
+  // Other special punctuation
+  '–': '-',     // En dash
+  '‐': '-',     // Hyphen
+  '‑': '-',     // Non-breaking hyphen
+  '⁃': '-',     // Hyphen bullet
+  '′': "'",     // Prime (often used as apostrophe)
+  '″': '"',     // Double prime
+  '‵': "'",     // Reversed prime
+  '‶': '"'      // Reversed double prime
+};

@@ -57,6 +57,7 @@ import { getAllowedTtsTiers } from '../entitlements/index.js';
 import { recordUsageEvent } from '../usage/recordUsage.js';
 import { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from '../usage/sessionSpans.js';
 import { checkQuotaLimit, createQuotaEvent } from '../usage/quotaEnforcement.js';
+import { normalizePunctuation } from '../transcriptionCleanup.js';
 import crypto from 'crypto';
 
 /**
@@ -67,6 +68,20 @@ import crypto from 'crypto';
 function normalizeForCompare(s = '') {
   return s.trim().toLowerCase().replace(/[^\w\s']/g, '').replace(/\s+/g, ' ');
 }
+
+// TTS deduplication caches - MODULE SCOPE (shared across all connections)
+// CRITICAL: These MUST be at module scope, not inside the WebSocket handler
+// If they're inside the handler, each connection gets separate caches and can't deduplicate!
+const ttsSentCache = new Map(); // Key: `${seqId}_${targetLang}`, Value: { text, timestamp }
+const MAX_TTS_CACHE_ENTRIES = 100;
+const TTS_CACHE_EXPIRY_MS = 60000; // 60 seconds
+
+// Text-based deduplication cache - prevents duplicate synthesis for same text content
+// CRITICAL: This catches duplicates when the same text is processed with different seqIds
+const ttsSentTextCache = new Map(); // Key: `${normalizedText}_${targetLang}`, Value: { timestamp }
+const MAX_TTS_TEXT_CACHE_ENTRIES = 100;
+const TTS_TEXT_CACHE_EXPIRY_MS = 60000; // 60 seconds
+
 
 /**
  * Check if a partial is a recovery stub that should be suppressed
@@ -645,6 +660,111 @@ export async function handleHostConnection(clientWs, sessionId) {
 
                 const safeLang = targetLang || currentTargetLang || 'en';
 
+                // DEBUG: Log every TTS trigger attempt with stack trace
+                console.log(`[TTS-DEBUG] ========== TTS TRIGGER ATTEMPT ==========`);
+                console.log(`[TTS-DEBUG] seqId: ${seqId}`);
+                console.log(`[TTS-DEBUG] lang: ${safeLang}`);
+                console.log(`[TTS-DEBUG] text: "${text.substring(0, 100)}..."`);
+                console.log(`[TTS-DEBUG] text length: ${text.length}`);
+                console.log(`[TTS-DEBUG] normalized (trim+lower): "${text.trim().toLowerCase().substring(0, 100)}..."`);
+                console.log(`[TTS-DEBUG] Stack trace:`);
+                console.log(new Error().stack);
+
+                // CRITICAL: Deduplicate TTS requests for same seqId+language combination
+                // This prevents duplicate audio synthesis when the same segment is translated multiple times
+                // (e.g., partial translation followed by final translation)
+                const cacheKey = `${seqId}_${safeLang}`;
+                const now = Date.now();
+
+                console.log(`[TTS-DEBUG] Checking caches...`);
+                console.log(`[TTS-DEBUG] seqId cache key: "${cacheKey}"`);
+                console.log(`[TTS-DEBUG] seqId cache has key: ${ttsSentCache.has(cacheKey)}`);
+                console.log(`[TTS-DEBUG] seqId cache size: ${ttsSentCache.size}`);
+
+                // Check if we've already sent TTS for this seqId+language
+                if (ttsSentCache.has(cacheKey)) {
+                  const cached = ttsSentCache.get(cacheKey);
+                  const age = now - cached.timestamp;
+
+                  // If cache entry is still fresh, skip this request
+                  if (age < TTS_CACHE_EXPIRY_MS) {
+                    console.log(`[HostMode] ⏭️ SKIP DUPLICATE TTS (seqId match): seqId=${seqId}, lang=${safeLang} (already sent ${age}ms ago)`);
+                    console.log(`[HostMode]   Cached text: "${cached.text.substring(0, 60)}..."`);
+                    console.log(`[HostMode]   New text: "${text.substring(0, 60)}..."`);
+                    return; // Skip duplicate
+                  }
+                }
+
+                // CRITICAL: Also check text-based cache to catch duplicates with different seqIds
+                // This prevents duplicate TTS when the same text is processed multiple times from different code paths
+                const textCacheKey = `${text.trim().toLowerCase()}_${safeLang}`;
+                console.log(`[TTS-DEBUG] text cache key: "${textCacheKey.substring(0, 100)}..."`);
+                console.log(`[TTS-DEBUG] text cache has key: ${ttsSentTextCache.has(textCacheKey)}`);
+                console.log(`[TTS-DEBUG] text cache size: ${ttsSentTextCache.size}`);
+                if (ttsSentTextCache.has(textCacheKey)) {
+                  const cached = ttsSentTextCache.get(textCacheKey);
+                  const age = now - cached.timestamp;
+
+                  // If cache entry is still fresh, skip this request
+                  if (age < TTS_TEXT_CACHE_EXPIRY_MS) {
+                    console.log(`[HostMode] ⏭️ SKIP DUPLICATE TTS (text match): lang=${safeLang} (already sent ${age}ms ago)`);
+                    console.log(`[HostMode]   Text: "${text.substring(0, 60)}..."`);
+                    console.log(`[HostMode]   This seqId: ${seqId}`);
+                    return; // Skip duplicate
+                  }
+                }
+
+                // Mark this seqId+language as sent
+                ttsSentCache.set(cacheKey, { text: text.trim(), timestamp: now });
+                console.log(`[TTS-DEBUG] ✅ Added to seqId cache: "${cacheKey}"`);
+
+                // Mark this text+language as sent
+                ttsSentTextCache.set(textCacheKey, { timestamp: now });
+                console.log(`[TTS-DEBUG] ✅ Added to text cache: "${textCacheKey.substring(0, 100)}..."`);
+                console.log(`[TTS-DEBUG] ========== PROCEEDING WITH TTS ==========`);
+
+                // Clean up old cache entries to prevent memory leak
+                if (ttsSentCache.size > MAX_TTS_CACHE_ENTRIES) {
+                  const entriesToDelete = [];
+                  for (const [key, value] of ttsSentCache.entries()) {
+                    if (now - value.timestamp > TTS_CACHE_EXPIRY_MS) {
+                      entriesToDelete.push(key);
+                    }
+                  }
+                  entriesToDelete.forEach(key => ttsSentCache.delete(key));
+
+                  // If still too large, delete oldest entries
+                  if (ttsSentCache.size > MAX_TTS_CACHE_ENTRIES) {
+                    const sortedEntries = Array.from(ttsSentCache.entries())
+                      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+                    const numToDelete = ttsSentCache.size - MAX_TTS_CACHE_ENTRIES;
+                    for (let i = 0; i < numToDelete; i++) {
+                      ttsSentCache.delete(sortedEntries[i][0]);
+                    }
+                  }
+                }
+
+                // Clean up old text cache entries to prevent memory leak
+                if (ttsSentTextCache.size > MAX_TTS_TEXT_CACHE_ENTRIES) {
+                  const entriesToDelete = [];
+                  for (const [key, value] of ttsSentTextCache.entries()) {
+                    if (now - value.timestamp > TTS_TEXT_CACHE_EXPIRY_MS) {
+                      entriesToDelete.push(key);
+                    }
+                  }
+                  entriesToDelete.forEach(key => ttsSentTextCache.delete(key));
+
+                  // If still too large, delete oldest entries
+                  if (ttsSentTextCache.size > MAX_TTS_TEXT_CACHE_ENTRIES) {
+                    const sortedEntries = Array.from(ttsSentTextCache.entries())
+                      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+                    const numToDelete = ttsSentTextCache.size - MAX_TTS_TEXT_CACHE_ENTRIES;
+                    for (let i = 0; i < numToDelete; i++) {
+                      ttsSentTextCache.delete(sortedEntries[i][0]);
+                    }
+                  }
+                }
+
                 // Get allowed TTS tiers from entitlements (defaults to all if no entitlements)
                 const allowedTiers = entitlements
                   ? getAllowedTtsTiers(entitlements.limits.ttsTier)
@@ -687,7 +807,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                 }, clientWs.churchId);
               };
 
-              // Grammar correction cache (from solo mode)
+              // TTS deduplication caches are now at MODULE SCOPE (lines 75-83)
+              // This ensures they're shared across all WebSocket connections
+
               const grammarCorrectionCache = new Map();
               const MAX_GRAMMAR_CACHE_ENTRIES = 20;
               const MIN_GRAMMAR_CACHE_LENGTH = 5;
@@ -789,6 +911,15 @@ export async function handleHostConnection(clientWs, sessionId) {
 
               // Extract final processing into separate async function (using solo mode logic, adapted for broadcasting)
               const processFinalText = (textToProcess, options = {}) => {
+                // DEBUG: Log every processFinalText call
+                console.log(`[FINAL-DEBUG] ========== processFinalText CALLED ==========`);
+                console.log(`[FINAL-DEBUG] text: "${textToProcess.substring(0, 100)}..."`);
+                console.log(`[FINAL-DEBUG] text length: ${textToProcess.length}`);
+                console.log(`[FINAL-DEBUG] options:`, JSON.stringify(options));
+                console.log(`[FINAL-DEBUG] forceFinal: ${!!options.forceFinal}`);
+                console.log(`[FINAL-DEBUG] Stack trace:`);
+                console.log(new Error().stack);
+
                 // If already processing, queue this final instead of skipping
                 if (isProcessingFinal) {
                   // CRITICAL: Before queuing, check if this is an older version of text already committed
@@ -1254,7 +1385,9 @@ export async function handleHostConnection(clientWs, sessionId) {
                         const ttsText = (targetLang === currentSourceLang) ? correctedText : translatedText;
 
                         if (ttsText) {
-                          triggerTtsStreaming(finalSourceSeqId, ttsText, targetLang);
+                          // CRITICAL: Normalize punctuation before TTS to prevent artifacts
+                          const normalizedTtsText = normalizePunctuation(ttsText);
+                          triggerTtsStreaming(finalSourceSeqId, normalizedTtsText, targetLang);
                         }
                       }
 

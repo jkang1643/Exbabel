@@ -337,7 +337,7 @@ const metrics = {
  */
 export function recordFirstAudioLatency(segmentId, latencyMs) {
     metrics.segmentLatencies.push({ segmentId, latencyMs, timestamp: Date.now() });
-    console.log(`[TTS-WS] Time to first audio for ${segmentId}: ${latencyMs}ms`);
+    // console.log(`[TTS-WS] Time to first audio for ${segmentId}: ${latencyMs}ms`);
 
     // Keep only last 100 entries
     if (metrics.segmentLatencies.length > 100) {

@@ -1,0 +1,533 @@
+# ProPresenter Integration - Implementation Plan (Revised)
+
+## Goal
+
+Integrate ProPresenter with Exbabel so that slides displayed in ProPresenter (lyrics, Bible verses, announcements) are automatically captured, translated, and displayed in the Exbabel web app in real-time.
+
+## Background
+
+ProPresenter is the leading presentation software used by churches worldwide. It provides a Network API that allows external applications to retrieve current slide information, including text content. By polling this API, Exbabel can capture slide content and display translated versions for multilingual audiences.
+
+### Architecture Flow
+
+```
+ProPresenter (Church Projector)
+    ↓ Network API
+ProPresenter API Poller (Backend)
+    ↓ WebSocket
+Exbabel Web App (Audience Devices)
+    ↓ Display
+Translated Slide Content
+```
+
+## User Review Required
+
+> [!IMPORTANT]
+> **ProPresenter API Access Requirements**
+> 
+> To enable this integration, churches must:
+> 1. Enable Network API in ProPresenter settings (Network tab)
+> 2. Set a controller password
+> 3. Provide Exbabel with:
+>    - ProPresenter computer IP address
+>    - API port (default: 50001 for HTTP, varies for WebSocket)
+>    - Controller password
+> 
+> **Security Note:** ProPresenter API connections are typically unencrypted. For production, recommend VPN or local network only.
+
+> [!WARNING]
+> **Bible Verse API Integration Required**
+> 
+> When ProPresenter displays Bible verses, we should fetch canonical text from a Bible API (bible-api.com or API.Bible) rather than relying solely on what's displayed in ProPresenter. This ensures theological accuracy and supports multiple translations.
+
+## Proposed Changes
+
+### Backend Components
+
+#### [NEW] `backend/services/proPresenterClient.js`
+ProPresenter API client service:
+- Connect to ProPresenter Network API (HTTP or WebSocket)
+- Authenticate with controller password
+- Poll for current slide text using `/v1/slide/current_text_and_image_uuids`
+- Detect slide changes and extract text content
+- Handle connection errors and reconnection
+- Support both ProPresenter 7 and ProPresenter 17+
+
+**Key Methods:**
+```javascript
+class ProPresenterClient {
+  constructor(host, port, password)
+  async connect()
+  async getCurrentSlide()
+  async getPresentationSlideIndex()
+  onSlideChange(callback)
+  disconnect()
+}
+```
+
+#### [NEW] `backend/services/slideContentProcessor.js`
+Process and categorize slide content:
+- Detect content type (lyrics, Bible verse, announcement, generic)
+- Extract Bible verse references using existing detection engine
+- Clean and normalize slide text
+- Prepare content for translation
+
+**Content Type Detection:**
+- **Bible Verse:** Contains verse reference patterns (e.g., "John 3:16")
+- **Lyrics:** Repetitive structure, rhyming patterns, verse/chorus markers
+- **Announcement:** Short, informational text
+- **Generic:** Everything else
+
+#### [NEW] `backend/services/bibleApiFetcher.js`
+Service to fetch canonical Bible verse text:
+- Integrate with bible-api.com (free, no auth) or API.Bible
+- Cache verse text (72 hour TTL)
+- Support multiple translations (KJV, NIV, ESV, etc.)
+- Handle language-specific Bible versions
+
+#### [NEW] `backend/proPresenterHandler.js`
+WebSocket handler for ProPresenter integration:
+- Manage ProPresenter client connection
+- Poll for slide changes (configurable interval, default 500ms)
+- Broadcast slide content to connected Exbabel clients
+- Integrate with translation pipeline
+- Handle Bible verse detection and fetching
+
+#### [MODIFY] [backend/server.js](file:///home/jkang1643/projects/realtimetranslationapp/backend/server.js)
+Add ProPresenter integration routes:
+- `POST /api/propresenter/connect` - Connect to ProPresenter instance
+- `POST /api/propresenter/disconnect` - Disconnect from ProPresenter
+- `GET /api/propresenter/status` - Get connection status
+- `GET /api/propresenter/current-slide` - Get current slide content
+- WebSocket upgrade path for ProPresenter slide streaming
+
+---
+
+### Frontend Components
+
+#### [NEW] `frontend/src/components/ProPresenterDisplay.jsx`
+Main ProPresenter slide display component:
+- Shows current slide content with translation
+- Displays content type indicator (lyrics, verse, announcement)
+- Shows Bible verse references with canonical text
+- Smooth transitions between slides
+- Configurable styling (font, size, colors)
+
+**Layout:**
+```
+┌─────────────────────────────────────┐
+│ 🎵 Lyrics                           │
+├─────────────────────────────────────┤
+│ Amazing grace, how sweet the sound  │
+│ That saved a wretch like me         │
+│                                     │
+│ Gracia asombrosa, cuán dulce el son │
+│ Que salvó a un desgraciado como yo  │
+└─────────────────────────────────────┘
+```
+
+#### [NEW] `frontend/src/components/ProPresenterSetup.jsx`
+Setup component for connecting to ProPresenter:
+- Input fields for IP address, port, password
+- Connection status indicator
+- Test connection button
+- Save connection settings
+
+#### [NEW] `frontend/src/pages/ProPresenterPage.jsx`
+Dedicated page for ProPresenter integration:
+- Setup panel (collapsible after connection)
+- Slide display area
+- Language selector for translation
+- Connection status and controls
+
+#### [MODIFY] `frontend/src/components/MemberHome.jsx` or `HostPage.jsx`
+Add ProPresenter integration option:
+- Link to ProPresenter page
+- Quick connection status indicator
+- Enable/disable ProPresenter mode
+
+---
+
+### Core Services
+
+#### [NEW] `core/services/bibleApiFetcher.js`
+Shared service for Bible API integration:
+- Fetch verse text by reference (book, chapter, verse)
+- Support multiple translations and languages
+- Implement caching strategy
+- Error handling and fallbacks
+
+#### [MODIFY] [core/engine/bibleReferenceEngine.js](file:///home/jkang1643/projects/realtimetranslationapp/core/engine/bibleReferenceEngine.js)
+Integrate Bible API fetching:
+- After detecting verse reference, fetch canonical text
+- Include verse text in `SCRIPTURE_DETECTED` events
+- Handle API failures gracefully
+
+---
+
+### Configuration
+
+#### [NEW] `backend/config/proPresenterConfig.js`
+ProPresenter integration configuration:
+```javascript
+export default {
+  polling: {
+    interval: 500,        // Poll every 500ms
+    timeout: 5000         // Connection timeout
+  },
+  api: {
+    httpPort: 50001,      // Default HTTP API port
+    wsPort: null,         // WebSocket port (varies)
+    protocol: 'http'      // or 'ws' for WebSocket
+  },
+  contentDetection: {
+    bibleVersePatterns: [...],
+    lyricsIndicators: ['verse', 'chorus', 'bridge'],
+    minTextLength: 5
+  }
+}
+```
+
+---
+
+## Verification Plan
+
+### Automated Tests
+
+#### 1. ProPresenter Client Tests
+**File:** `backend/tests/proPresenterClient.test.js` (NEW)
+
+```bash
+npm test -- proPresenterClient.test.js
+```
+
+**Test Coverage:**
+- Connect to ProPresenter API (mock server)
+- Authenticate with password
+- Fetch current slide text
+- Detect slide changes
+- Handle connection errors
+- Reconnection logic
+
+#### 2. Slide Content Processor Tests
+**File:** `backend/tests/slideContentProcessor.test.js` (NEW)
+
+```bash
+npm test -- slideContentProcessor.test.js
+```
+
+**Test Coverage:**
+- Detect Bible verse content
+- Detect lyrics content
+- Detect announcement content
+- Extract verse references
+- Clean and normalize text
+
+#### 3. Bible API Fetcher Tests
+**File:** `backend/tests/bibleApiFetcher.test.js` (NEW)
+
+```bash
+npm test -- bibleApiFetcher.test.js
+```
+
+**Test Coverage:**
+- Fetch verse by reference
+- Multiple translations
+- Caching functionality
+- Error handling
+- Language support
+
+---
+
+### Manual Testing
+
+#### 1. ProPresenter Connection Testing
+
+**Prerequisites:**
+- ProPresenter 7 or 17+ installed
+- Network API enabled in ProPresenter settings
+
+**Setup:**
+1. Open ProPresenter
+2. Go to Preferences → Network
+3. Enable "Network" and note IP/port
+4. Set controller password
+5. Start Exbabel backend
+
+**Test Connection:**
+1. Open Exbabel ProPresenter setup page
+2. Enter ProPresenter IP, port, password
+3. Click "Connect"
+4. Verify connection status shows "Connected"
+5. Verify current slide text appears
+
+#### 2. Slide Change Detection Testing
+
+**Test:**
+1. Connect to ProPresenter (as above)
+2. In ProPresenter, create a simple presentation with 3 slides:
+   - Slide 1: "Welcome to our service"
+   - Slide 2: "Amazing grace, how sweet the sound"
+   - Slide 3: "John 3:16 - For God so loved the world..."
+3. Advance through slides in ProPresenter
+4. Verify Exbabel detects each slide change within 1 second
+5. Verify slide text appears correctly in Exbabel
+
+#### 3. Translation Testing
+
+**Test:**
+1. Connect to ProPresenter
+2. Select Spanish as target language in Exbabel
+3. Display slide: "Welcome to our service"
+4. Verify translation appears: "Bienvenidos a nuestro servicio"
+5. Test with multiple languages (French, German, Korean)
+
+#### 4. Bible Verse Detection & Display Testing
+
+**Test:**
+1. Connect to ProPresenter
+2. Display slide with verse reference: "John 3:16 - For God so loved the world..."
+3. Verify Exbabel detects verse reference
+4. Verify canonical verse text fetched from Bible API
+5. Verify translation of canonical text (not ProPresenter text)
+6. Verify verse reference displayed prominently
+
+**Test Variations:**
+- Explicit reference: "John 3:16"
+- Reference in text: "As it says in John 3:16..."
+- Multiple verses on one slide
+
+#### 5. Lyrics Detection Testing
+
+**Test:**
+1. Display slide with lyrics:
+   ```
+   Amazing grace, how sweet the sound
+   That saved a wretch like me
+   ```
+2. Verify Exbabel detects as "Lyrics" content type
+3. Verify translation maintains line breaks
+4. Verify smooth transitions between verses/choruses
+
+#### 6. Multi-User Testing
+
+**Test:**
+1. Connect to ProPresenter
+2. Open Exbabel on 3 different devices:
+   - Device 1: English
+   - Device 2: Spanish
+   - Device 3: French
+3. Advance slides in ProPresenter
+4. Verify all devices show translated content simultaneously
+5. Verify each device shows correct language
+
+---
+
+### Performance Testing
+
+#### Latency Test
+**Goal:** Measure delay from ProPresenter slide change to Exbabel display
+
+**Method:**
+1. Use screen recording to capture both ProPresenter and Exbabel
+2. Advance slide in ProPresenter
+3. Measure time until translation appears in Exbabel
+
+**Target:**
+- Slide detection: < 500ms (polling interval)
+- Translation: < 1500ms
+- **Total: < 2 seconds**
+
+#### Polling Performance Test
+**Goal:** Verify polling doesn't overload ProPresenter or backend
+
+**Method:**
+1. Connect to ProPresenter
+2. Monitor backend CPU/memory usage
+3. Monitor ProPresenter performance
+4. Run for 30 minutes with slide changes every 10 seconds
+
+**Expected:**
+- Backend CPU: < 10% increase
+- ProPresenter: No noticeable lag
+- Memory: < 50MB increase
+
+---
+
+## Implementation Phases
+
+### Phase 1: ProPresenter API Client (4-6 hours)
+1. Create `proPresenterClient.js` service
+2. Implement HTTP API connection
+3. Add authentication
+4. Implement slide polling
+5. Add slide change detection
+6. Write and run tests
+
+### Phase 2: Content Processing & Bible API (4-6 hours)
+1. Create `slideContentProcessor.js`
+2. Implement content type detection
+3. Create `bibleApiFetcher.js` service
+4. Integrate with bible-api.com
+5. Add caching layer
+6. Write and run tests
+
+### Phase 3: Backend Integration (3-5 hours)
+1. Create `proPresenterHandler.js`
+2. Add API routes for ProPresenter connection
+3. Integrate with translation pipeline
+4. Add WebSocket broadcasting
+5. Test end-to-end flow
+
+### Phase 4: Frontend UI (4-6 hours)
+1. Create `ProPresenterSetup.jsx` component
+2. Create `ProPresenterDisplay.jsx` component
+3. Create `ProPresenterPage.jsx` page
+4. Add routing and navigation
+5. Test UI with mock data
+
+### Phase 5: Integration Testing & Documentation (1-3 hours)
+1. Test with real ProPresenter instance
+2. Test all content types (lyrics, verses, announcements)
+3. Test multi-language support
+4. Write setup guide for churches
+5. Create troubleshooting documentation
+
+**Total Estimated Time:** 16-26 hours
+
+---
+
+## Technical Considerations
+
+### ProPresenter API Endpoints
+
+**HTTP API (ProPresenter 7+):**
+- Base URL: `http://{ip}:{port}/v1/`
+- Authentication: Password in request headers or query params
+- Key Endpoint: `GET /v1/slide/current_text_and_image_uuids`
+
+**WebSocket API (Alternative):**
+- URL: `ws://{ip}:{port}/`
+- Authentication: First message after connection
+- Real-time slide change notifications (more efficient than polling)
+
+**Recommendation:** Start with HTTP polling for simplicity, add WebSocket support for performance optimization.
+
+### Polling Strategy
+
+**Interval Selection:**
+- Too fast (< 200ms): Unnecessary load on ProPresenter
+- Too slow (> 1000ms): Noticeable delay for users
+- **Recommended: 500ms** - Good balance of responsiveness and efficiency
+
+**Optimization:**
+- Only fetch slide text if slide index changed
+- Cache last slide index to avoid redundant requests
+- Implement exponential backoff on connection errors
+
+### Bible API Selection
+
+**Recommended: bible-api.com**
+- ✅ Free, no authentication
+- ✅ Simple REST API
+- ✅ Multiple translations (KJV, WEB, etc.)
+- ❌ Limited language support (primarily English)
+
+**Alternative: API.Bible**
+- ✅ 1,600+ Bible versions
+- ✅ 1,200+ languages
+- ✅ Official Bible Society API
+- ❌ Requires API key
+- ❌ Rate limits
+
+**Recommendation:** Use bible-api.com for MVP, add API.Bible as premium feature.
+
+### Content Type Detection
+
+**Bible Verses:**
+- Pattern matching: "Book Chapter:Verse" (e.g., "John 3:16")
+- Use existing Bible reference detection engine
+- Confidence threshold: ≥ 0.85
+
+**Lyrics:**
+- Indicators: "verse", "chorus", "bridge" in slide notes
+- Repetitive structure detection
+- Line break patterns
+
+**Announcements:**
+- Short text (< 100 characters)
+- Informational keywords: "welcome", "today", "next week"
+
+**Fallback:** Generic content (translate as-is)
+
+### WebSocket Message Types
+
+**Backend → Frontend (Slide Update):**
+```json
+{
+  "type": "slide_update",
+  "contentType": "lyrics" | "verse" | "announcement" | "generic",
+  "originalText": "Amazing grace, how sweet the sound",
+  "translatedText": "Gracia asombrosa, cuán dulce el son",
+  "timestamp": 1234567890,
+  "slideIndex": 5
+}
+```
+
+**Backend → Frontend (Verse Update):**
+```json
+{
+  "type": "verse_update",
+  "reference": "John 3:16",
+  "verseText": "For God so loved the world...",
+  "translatedText": "Porque de tal manera amó Dios al mundo...",
+  "translation": "WEB",
+  "language": "es",
+  "timestamp": 1234567890
+}
+```
+
+**Frontend → Backend (Connection Request):**
+```json
+{
+  "type": "propresenter_connect",
+  "host": "192.168.1.100",
+  "port": 50001,
+  "password": "secret123"
+}
+```
+
+---
+
+## Success Criteria
+
+1. ✅ Successfully connect to ProPresenter Network API
+2. ✅ Detect slide changes within 1 second
+3. ✅ Extract slide text accurately
+4. ✅ Detect Bible verses and fetch canonical text
+5. ✅ Translate slide content to target language
+6. ✅ Display translated content in Exbabel web app
+7. ✅ Support multiple simultaneous users (different languages)
+8. ✅ Handle connection errors gracefully
+9. ✅ All automated tests pass
+10. ✅ Setup documentation complete with screenshots
+
+---
+
+## Future Enhancements
+
+### Phase 2 Features
+- **WebSocket API Support:** Real-time slide notifications (no polling)
+- **Slide Preview:** Show next slide content
+- **Image Support:** Display slide images alongside text
+- **Presentation Library:** Browse and select presentations
+- **Stage Display Integration:** Show translations on ProPresenter stage displays
+- **Offline Mode:** Cache presentations for offline translation
+- **Custom Styling:** Per-church branding and styling options
+
+### Advanced Features
+- **AI-Powered Lyrics Detection:** Better detection of song structure
+- **Hymn Database Integration:** Fetch official translations of known hymns
+- **Multi-Screen Support:** Different translations on different screens
+- **Recording & Playback:** Record services with synchronized translations
+- **Analytics:** Track most-used languages, popular songs, etc.

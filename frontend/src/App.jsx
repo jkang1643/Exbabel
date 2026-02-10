@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useEffect } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/contexts/AuthContext'
 import { LoginPage } from '@/components/auth/LoginPage'
 import { SignUpPage } from '@/components/auth/SignUpPage'
@@ -23,84 +24,10 @@ import { HostPage } from './components/HostPage'
 import { ListenerPage } from './components/ListenerPage'
 import DemoPage from './components/DemoPage'
 
-function AppContent() {
-  const { user, profile, loading, isAuthenticated, isVisitor, isMember, isAdmin, hasChurch, signOut } = useAuth()
-  const [mode, setMode] = useState('home') // Default to home (will resolve to correct home based on state)
-  const [sessionCode, setSessionCode] = useState('')
+// Protected route wrapper for routes that require authentication
+function ProtectedRoute({ children, requireAuth = true, requireMember = false, requireAdmin = false }) {
+  const { isAuthenticated, isMember, isAdmin, loading } = useAuth()
 
-  // Check URL parameters for direct join links (from QR code)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const joinCode = params.get('join')
-
-    if (joinCode) {
-      setSessionCode(joinCode.toUpperCase())
-      setMode('listener')
-      // Clean URL after reading parameter
-      window.history.replaceState({}, '', window.location.pathname)
-    }
-  }, [])
-
-  const handleSelectMode = (selectedMode, code = '') => {
-    setMode(selectedMode)
-    if (code) {
-      setSessionCode(code)
-    }
-  }
-
-  const handleJoinSession = (code) => {
-    setSessionCode(code)
-    setMode('listener')
-  }
-
-  const handleBackToHome = () => {
-    setMode('home')
-    setSessionCode('')
-  }
-
-  const handleSwitchToLogin = () => {
-    setMode('login')
-  }
-
-  const handleSwitchToSignUp = () => {
-    setMode('signup')
-  }
-
-  const handleLoginSuccess = () => {
-    // After login, go to home
-    setMode('home')
-  }
-
-  const handleSignUpSuccess = () => {
-    // After signup confirmation email sent, go to home
-    setMode('home')
-  }
-
-  const handleSignOut = async () => {
-    await signOut()
-    setMode('home')
-  }
-
-  // Navigation handlers
-  const handleJoinChurch = () => {
-    setMode('join-church')
-  }
-
-  const handleCreateChurch = () => {
-    // If not authenticated, route to signup first
-    if (!isAuthenticated) {
-      setMode('signup')
-    } else {
-      setMode('create-church')
-    }
-  }
-
-  const handleChurchJoinSuccess = () => {
-    // After joining a church, go to home (will now show MemberHome)
-    setMode('home')
-  }
-
-  // Show loading spinner while checking auth
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-100">
@@ -109,130 +36,262 @@ function AppContent() {
     )
   }
 
-  // Login page
-  if (mode === 'login') {
-    return <LoginPage onSuccess={handleLoginSuccess} onBack={() => setMode('home')} onSwitchToSignUp={handleSwitchToSignUp} />
+  if (requireAuth && !isAuthenticated) {
+    return <Navigate to="/signin" replace />
   }
 
-  // Sign up page
-  if (mode === 'signup') {
-    return <SignUpPage onSuccess={handleSignUpSuccess} onBack={() => setMode('home')} onSwitchToSignIn={handleSwitchToLogin} />
+  if (requireMember && !isMember && !isAdmin) {
+    return <Navigate to="/" replace />
   }
 
-  // Listener page - available to everyone
-  if (mode === 'listener') {
-    return <ListenerPage sessionCodeProp={sessionCode} onBackToHome={handleBackToHome} />
+  if (requireAdmin && !isAdmin) {
+    return <Navigate to="/" replace />
   }
 
-  // Demo page - available to everyone
-  if (mode === 'demo') {
-    return <DemoPage onBackToHome={handleBackToHome} />
+  return children
+}
+
+// Home route that redirects based on user state
+function HomeRoute() {
+  const { user, profile, loading, isAuthenticated, isVisitor, isMember, isAdmin, hasChurch, signOut } = useAuth()
+  const navigate = useNavigate()
+
+  const handleJoinSession = (code) => {
+    navigate(`/listener?code=${code}`)
   }
 
-  // Join church page
-  if (mode === 'join-church') {
+  const handleSignOut = async () => {
+    await signOut()
+    navigate('/')
+  }
+
+  const handleJoinChurch = () => {
+    navigate('/join-church')
+  }
+
+  const handleCreateChurch = () => {
+    if (!isAuthenticated) {
+      navigate('/signup')
+    } else {
+      navigate('/create-church')
+    }
+  }
+
+  const handleChurchJoinSuccess = () => {
+    navigate('/')
+  }
+
+  if (loading) {
     return (
-      <JoinChurchPage
-        onBack={handleBackToHome}
-        onSuccess={handleChurchJoinSuccess}
-      />
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 to-pink-100">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
+      </div>
     )
   }
 
-  // Create church page - SaaS-style onboarding for new admins
-  if (mode === 'create-church') {
+  // Admin without a church -> redirect to onboarding
+  if (isAdmin && !hasChurch) {
     return (
       <CreateChurchPage
-        onBack={handleBackToHome}
+        onBack={handleSignOut}
         onSuccess={handleChurchJoinSuccess}
       />
     )
   }
 
-  // Solo mode - requires church membership
-  if (mode === 'solo') {
-    if (!isAuthenticated || isVisitor) {
-      setMode('home')
-      return null
-    }
-    return <SoloPage onBackToHome={handleBackToHome} />
-  }
-
-  // Host mode - requires admin role
-  if (mode === 'host') {
-    if (!isAuthenticated || !isAdmin) {
-      setMode('home')
-      return null
-    }
-    return <HostPage onBackToHome={handleBackToHome} />
-  }
-
-  // Home page - route to appropriate home based on user state
-  // Priority: Admin with church > Admin without church (onboarding) > Member > Visitor
-  if (mode === 'home' || mode === 'join') {
-    if (isAdmin) {
-      // Admin without a church -> redirect to onboarding
-      if (!hasChurch) {
-        return (
-          <CreateChurchPage
-            onBack={handleSignOut}
-            onSuccess={handleChurchJoinSuccess}
-          />
-        )
-      }
-      // Admin with a church -> show dashboard
-      return (
-        <AdminHome
-          onHostSession={() => setMode('host')}
-          onSoloMode={() => setMode('solo')}
-          onJoinSession={handleJoinSession}
-          onSignOut={handleSignOut}
-        />
-      )
-    }
-
-    if (isMember) {
-      return (
-        <MemberHome
-          onSoloMode={() => setMode('solo')}
-          onJoinSession={handleJoinSession}
-          onSignOut={handleSignOut}
-          onJoinChurch={handleJoinChurch}
-        />
-      )
-    }
-
-    // Visitor (authenticated but no profile) or anonymous
+  // Admin with a church -> show dashboard
+  if (isAdmin) {
     return (
-      <VisitorHome
+      <AdminHome
+        onHostSession={() => navigate('/host')}
+        onSoloMode={() => navigate('/solo')}
         onJoinSession={handleJoinSession}
-        onJoinChurch={handleJoinChurch}
-        onCreateChurch={handleCreateChurch}
-        onSignIn={handleSwitchToLogin}
-        onSignUp={handleSwitchToSignUp}
         onSignOut={handleSignOut}
       />
     )
   }
 
-  // Default: show visitor home
+  // Member -> show member home
+  if (isMember) {
+    return (
+      <MemberHome
+        onSoloMode={() => navigate('/solo')}
+        onJoinSession={handleJoinSession}
+        onSignOut={handleSignOut}
+        onJoinChurch={handleJoinChurch}
+      />
+    )
+  }
+
+  // Visitor (authenticated but no profile) or anonymous
   return (
     <VisitorHome
       onJoinSession={handleJoinSession}
       onJoinChurch={handleJoinChurch}
       onCreateChurch={handleCreateChurch}
-      onSignIn={handleSwitchToLogin}
-      onSignUp={handleSwitchToSignUp}
+      onSignIn={() => navigate('/signin')}
+      onSignUp={() => navigate('/signup')}
       onSignOut={handleSignOut}
     />
   )
 }
 
+// Login page wrapper
+function LoginRoute() {
+  const navigate = useNavigate()
+  const { isAuthenticated, loading } = useAuth()
+
+  // Redirect authenticated users to home (handles OAuth callback)
+  useEffect(() => {
+    if (!loading && isAuthenticated) {
+      navigate('/')
+    }
+  }, [isAuthenticated, loading, navigate])
+
+  return (
+    <LoginPage
+      onSuccess={() => navigate('/')}
+      onBack={() => navigate('/')}
+      onSwitchToSignUp={() => navigate('/signup')}
+    />
+  )
+}
+
+// Sign up page wrapper
+function SignUpRoute() {
+  const navigate = useNavigate()
+  const { isAuthenticated, loading } = useAuth()
+
+  // Redirect authenticated users to home (handles OAuth callback)
+  useEffect(() => {
+    if (!loading && isAuthenticated) {
+      navigate('/')
+    }
+  }, [isAuthenticated, loading, navigate])
+
+  return (
+    <SignUpPage
+      onSuccess={() => navigate('/')}
+      onBack={() => navigate('/')}
+      onSwitchToSignIn={() => navigate('/signin')}
+    />
+  )
+}
+
+// Listener page wrapper with QR code support
+function ListenerRoute() {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const [sessionCode, setSessionCode] = useState('')
+
+  useEffect(() => {
+    // Check for session code in URL parameters (from QR code or direct link)
+    const code = searchParams.get('code') || searchParams.get('join')
+    if (code) {
+      setSessionCode(code.toUpperCase())
+    }
+  }, [searchParams])
+
+  return <ListenerPage sessionCodeProp={sessionCode} onBackToHome={() => navigate('/')} />
+}
+
+// Solo page wrapper
+function SoloRoute() {
+  const navigate = useNavigate()
+  return <SoloPage onBackToHome={() => navigate('/')} />
+}
+
+// Host page wrapper
+function HostRoute() {
+  const navigate = useNavigate()
+  return <HostPage onBackToHome={() => navigate('/')} />
+}
+
+// Demo page wrapper
+function DemoRoute() {
+  const navigate = useNavigate()
+  return <DemoPage onBackToHome={() => navigate('/')} />
+}
+
+// Join church page wrapper
+function JoinChurchRoute() {
+  const navigate = useNavigate()
+  return (
+    <JoinChurchPage
+      onBack={() => navigate('/')}
+      onSuccess={() => navigate('/')}
+    />
+  )
+}
+
+// Create church page wrapper
+function CreateChurchRoute() {
+  const navigate = useNavigate()
+  const { signOut } = useAuth()
+
+  const handleSignOut = async () => {
+    await signOut()
+    navigate('/')
+  }
+
+  return (
+    <CreateChurchPage
+      onBack={handleSignOut}
+      onSuccess={() => navigate('/')}
+    />
+  )
+}
+
+function AppContent() {
+  return (
+    <Routes>
+      {/* Public routes */}
+      <Route path="/" element={<HomeRoute />} />
+      <Route path="/signin" element={<LoginRoute />} />
+      <Route path="/signup" element={<SignUpRoute />} />
+      <Route path="/listener" element={<ListenerRoute />} />
+      <Route path="/demo" element={<DemoRoute />} />
+      <Route path="/join-church" element={<JoinChurchRoute />} />
+
+      {/* Protected routes */}
+      <Route
+        path="/solo"
+        element={
+          <ProtectedRoute requireAuth={true} requireMember={true}>
+            <SoloRoute />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/host"
+        element={
+          <ProtectedRoute requireAuth={true} requireAdmin={true}>
+            <HostRoute />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/create-church"
+        element={
+          <ProtectedRoute requireAuth={true}>
+            <CreateChurchRoute />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Catch-all redirect to home */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  )
+}
+
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </BrowserRouter>
   )
 }
 

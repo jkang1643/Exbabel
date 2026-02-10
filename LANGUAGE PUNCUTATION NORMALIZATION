@@ -1,0 +1,118 @@
+📚 Legend
+
+“ ” = opening / closing double quotes
+
+‘ ’ = opening / closing single quotes
+
+, = comma
+
+، = Arabic comma
+
+， = full-width CJK comma
+
+、 = Japanese comma variant
+
+✅ GA LANGUAGES (24)
+Language	Double Quotes	Single Quotes	Comma
+Arabic (Egypt)	« »	‹ ›	،
+Bangla	“ ”	‘ ’	,
+Dutch	“ ” or „ ”	‘ ’	,
+English (India)	“ ”	‘ ’	,
+English (US)	“ ”	‘ ’	,
+French (France)	« »	‹ ›	,
+German	„ “	‚ ‘	,
+Hindi	“ ”	‘ ’	,
+Indonesian	“ ”	‘ ’	,
+Italian	« »	‘ ’	,
+Japanese	「 」	『 』	、
+Korean	“ ”	‘ ’	,
+Marathi	“ ”	‘ ’	,
+Polish	„ ”	‘ ’	,
+Portuguese (Brazil)	“ ”	‘ ’	,
+Romanian	„ ”	‘ ’	,
+Russian	« »	„ “	,
+Spanish (Spain)	« »	“ ”	,
+Tamil	“ ”	‘ ’	,
+Telugu	“ ”	‘ ’	,
+Thai	“ ”	‘ ’	,
+Turkish	“ ”	‘ ’	,
+Ukrainian	« »	„ “	,
+Vietnamese	“ ”	‘ ’	,
+🔮 PREVIEW LANGUAGES (63)
+Language	Double Quotes	Single Quotes	Comma
+Afrikaans	“ ”	‘ ’	,
+Albanian	“ ”	‘ ’	,
+Amharic	« »	‹ ›	,
+Arabic (World)	« »	‹ ›	،
+Armenian	« »	‹ ›	,
+Azerbaijani	« »	‘ ’	,
+Basque	« »	‘ ’	,
+Belarusian	« »	„ “	,
+Bulgarian	„ “	‘ ’	,
+Burmese	“ ”	‘ ’	၊ (U+104A)
+Catalan	« »	‘ ’	,
+Cebuano	“ ”	‘ ’	,
+Chinese (Mainland)	“ ”	‘ ’	，
+Chinese (Taiwan)	「 」	『 』	，
+Croatian	„ ”	‘ ’	,
+Czech	„ “	‘ ’	,
+Danish	“ ”	‘ ’	,
+English (Australia)	“ ”	‘ ’	,
+English (UK)	‘ ’	“ ”	,
+Estonian	„ “	‘ ’	,
+Filipino	“ ”	‘ ’	,
+Finnish	” ”	’ ’	,
+French (Canada)	« »	‹ ›	,
+Galician	« »	‘ ’	,
+Georgian	„ “	‘ ’	,
+Greek	« »	‘ ’	,
+Gujarati	“ ”	‘ ’	,
+Haitian Creole	« »	‘ ’	,
+Hebrew	״ ״	׳ ׳	,
+Hungarian	„ ”	‘ ’	,
+Icelandic	„ “	‘ ’	,
+Javanese	“ ”	‘ ’	,
+Kannada	“ ”	‘ ’	,
+Konkani	“ ”	‘ ’	,
+Lao	“ ”	‘ ’	,
+Latin	“ ”	‘ ’	,
+Latvian	„ “	‘ ’	,
+Lithuanian	„ “	‘ ’	,
+Luxembourgish	„ “	‘ ’	,
+Macedonian	„ “	‘ ’	,
+Maithili	“ ”	‘ ’	,
+Malagasy	“ ”	‘ ’	,
+Malay	“ ”	‘ ’	,
+Malayalam	“ ”	‘ ’	,
+Mongolian	« »	‹ ›	,
+Nepali	“ ”	‘ ’	,
+Norwegian (Bokmål)	« »	‘ ’	,
+Norwegian (Nynorsk)	« »	‘ ’	,
+Odia	“ ”	‘ ’	,
+Pashto	« »	‹ ›	،
+Persian (Iran)	« »	‹ ›	،
+Portuguese (Portugal)	« »	‘ ’	,
+Punjabi (India)	“ ”	‘ ’	,
+Serbian	„ “	‘ ’	,
+Sindhi	« »	‹ ›	،
+Sinhala	“ ”	‘ ’	,
+Slovak	„ “	‘ ’	,
+Slovenian	„ “	‘ ’	,
+Spanish (LatAm)	« »	“ ”	,
+Spanish (Mexico)	« »	“ ”	,
+Swahili	“ ”	‘ ’	,
+Swedish	” ”	’ ’	,
+Urdu	« »	‹ ›	،
+⚠️ Important Engineering Notes (For TTS / NLP / UI)
+
+Arabic-script languages use Arabic comma (،) — this matters for tokenization & pause timing.
+
+CJK languages:
+
+Chinese uses full-width punctuation
+
+Japanese uses entirely different quotation systems
+
+Germanic & Slavic languages often use low-opening quotes („)
+
+French requires non-breaking spaces inside « »
