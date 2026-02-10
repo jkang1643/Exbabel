@@ -73,11 +73,9 @@ export function useQuotaWarning() {
         console.log('[useQuotaWarning] Action clicked:', actionId);
 
         if (actionId === 'upgrade') {
-            // TODO: Navigate to upgrade page
-            console.log('[useQuotaWarning] Upgrade clicked - Coming Soon');
+            window.location.href = '/billing?upgrade=true';
         } else if (actionId === 'add_hours') {
-            // TODO: Show add hours flow
-            console.log('[useQuotaWarning] Add Hours clicked - Coming Soon');
+            window.location.href = '/billing?topup=true';
         }
     }, []);
 

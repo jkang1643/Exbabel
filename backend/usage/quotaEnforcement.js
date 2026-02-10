@@ -213,8 +213,8 @@ export function createQuotaEvent(checkResult) {
         combinedPercentUsed: Math.round(status.combined.percentUsed * 100),
         // Action buttons (for frontend)
         actions: [
-            { id: 'upgrade', label: 'Upgrade Plan', enabled: false, hint: 'Coming Soon' },
-            { id: 'add_hours', label: 'Add Hours', enabled: false, hint: 'Coming Soon' },
+            { id: 'upgrade', label: 'Upgrade Plan', enabled: true },
+            { id: 'add_hours', label: 'Add Hours', enabled: true },
             { id: 'dismiss', label: action === 'lock' ? 'OK' : 'Dismiss', enabled: true }
         ]
     };

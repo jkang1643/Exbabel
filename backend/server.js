@@ -56,6 +56,7 @@ app.use('/api', cors({
 app.use(cors({
   origin: [
     'http://localhost:3000',                        // Local development
+    'http://localhost:5173',                        // Vite dev server
     'https://exbabel.com',                          // Marketing site
     'https://www.exbabel.com',                      // Marketing www
     'https://app.exbabel.com',                      // Application frontend
@@ -64,6 +65,11 @@ app.use(cors({
   ],
   credentials: true
 }));
+
+// ⚠️ CRITICAL: Stripe webhook MUST be mounted BEFORE express.json()
+// because signature verification requires the raw request body.
+app.use('/api/webhooks', webhookRouter);
+
 app.use(express.json());
 
 // Store active sessions for tracking
@@ -178,6 +184,8 @@ import { entitlementsRouter } from './routes/entitlements.js';
 import usageRouter from './routes/usage.js';
 import { churchRouter } from './routes/churches.js';
 import { analyticsRouter } from './routes/analytics.js';
+import { webhookRouter } from './routes/webhooks.js';
+import { billingRouter } from './routes/billing.js';
 
 // Reload API keys now that dotenv has loaded the .env file
 // (apiAuth is instantiated when imported, but dotenv.config runs after imports)
@@ -381,6 +389,7 @@ app.use('/api', entitlementsRouter);
 app.use('/api', usageRouter);
 app.use('/api', churchRouter);
 app.use('/api', analyticsRouter);
+app.use('/api', billingRouter);
 
 // ========================================
 // SESSION MANAGEMENT ENDPOINTS

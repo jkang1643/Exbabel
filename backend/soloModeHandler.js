@@ -426,6 +426,7 @@ export async function handleSoloMode(clientWs) {
       return;
     }
 
+
     try {
       const message = JSON.parse(msg.toString());
       // Filter out noisy audio message logs
