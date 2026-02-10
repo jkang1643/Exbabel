@@ -23,6 +23,7 @@ import { SoloPage } from './components/solo'
 import { HostPage } from './components/HostPage'
 import { ListenerPage } from './components/ListenerPage'
 import DemoPage from './components/DemoPage'
+import { BillingPage } from './components/BillingPage'
 
 // Protected route wrapper for routes that require authentication
 function ProtectedRoute({ children, requireAuth = true, requireMember = false, requireAdmin = false }) {
@@ -123,7 +124,12 @@ function HomeRoute() {
     )
   }
 
-  // Visitor (authenticated but no profile) or anonymous
+  // Authenticated visitor (has account but no church) -> go to join church
+  if (isVisitor) {
+    return <Navigate to="/join-church" replace />
+  }
+
+  // Anonymous user -> show visitor home
   return (
     <VisitorHome
       onJoinSession={handleJoinSession}
@@ -275,6 +281,15 @@ function AppContent() {
         element={
           <ProtectedRoute requireAuth={true}>
             <CreateChurchRoute />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/billing"
+        element={
+          <ProtectedRoute requireAuth={true} requireAdmin={true}>
+            <BillingPage />
           </ProtectedRoute>
         }
       />

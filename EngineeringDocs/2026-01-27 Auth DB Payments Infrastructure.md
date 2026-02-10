@@ -617,13 +617,17 @@ We will utilize the `usage_monthly` table and a new `purchased_credits` ledger.
     *   `stripe.billingPortal.sessions.create({ customer: stripe_customer_id })`
 3.  **Redirect:** User is sent to Stripe's self-serve portal.
 
-### 4. Dependencies to Build
-- [ ] **Stripe Service**: `backend/services/stripe.js` (Initialize SDK)
-- [ ] **Webhook Handler**: `backend/routes/webhooks.js` (Signature verification + event routing)
-- [ ] **Billing Routes**: `backend/routes/billing.js` (Checkout session creation)
-- [ ] **Schema Updates**: 
-    - Add `stripe_customer_id` to `churches` (or `subscriptions`).
-    - Add `purchased_credits` table (for top-ups).
+### 4. Dependencies ✅ COMPLETED (2026-02-10)
+- [x] **Stripe Service**: `backend/services/stripe.js` (Initialize SDK)
+- [x] **Webhook Handler**: `backend/routes/webhooks.js` (Signature verification + event routing)
+- [x] **Billing Routes**: `backend/routes/billing.js` (Checkout session creation, portal, status)
+- [x] **Schema Updates**: 
+    - Added `stripe_customer_id` to `churches`.
+    - Added `purchased_credits` table (for top-ups).
+    - Added `stripe_price_id` to `plans`.
+    - Updated `get_session_quota_status` RPC to include purchased credits.
+- [x] **Frontend**: `BillingPage.jsx` (plan display, upgrade, top-up, portal)
+- [x] **Wiring**: Webhook route before `express.json()`, billing route alongside API routes
 
 
 ---
@@ -652,6 +656,10 @@ We will utilize the `usage_monthly` table and a new `purchased_credits` ledger.
 - `backend/tests/integration/test-listening-spans.js` - Listening span tests
 - `backend/tests/manual-test-session-quota.js` - End-to-end session quota verification [NEW]
 - `backend/AUTH_TESTING.md` - Testing guide
+- `backend/services/stripe.js` - Stripe SDK singleton [NEW]
+- `backend/routes/webhooks.js` - Stripe webhook handler [NEW]
+- `backend/routes/billing.js` - Billing API routes [NEW]
+- `frontend/src/components/BillingPage.jsx` - Billing management page [NEW]
 - `supabase/migrations/20260128_record_usage_event.sql` - Usage RPC
 - `supabase/migrations/20260130_update_record_usage_event.sql` - Adds usage_monthly upsert
 - `supabase/migrations/20260130_get_session_quota_status.sql` - Session quota live counter RPC [NEW]
@@ -711,18 +719,18 @@ backend/
 - [x] Implement TTS tier gating (simple catalog filtering) (PR7.2)
 - [x] Align Dev and Production database configurations (IDs & Routing) (PR7.3)
 
-### Short-Term (Stripe Integration)
-- [ ] Connect Stripe account to backend
-- [ ] Implement webhook handlers for subscription events
-- [ ] Add Stripe customer creation to church onboarding
-- [ ] Sync Stripe status to `subscriptions` table
+### Short-Term (Stripe Integration) ✅ COMPLETED
+- [x] Connect Stripe account to backend
+- [x] Implement webhook handlers for subscription events
+- [x] Add Stripe customer creation to church onboarding
+- [x] Sync Stripe status to `subscriptions` table
 
-### Medium-Term (Payments)
-- [ ] Integrate Stripe SDK
-- [ ] Create subscription plans
-- [ ] Implement webhook handlers
-- [ ] Build billing portal API
-- [ ] Add usage metering
+### Medium-Term (Payments) ✅ COMPLETED
+- [x] Integrate Stripe SDK
+- [x] Create subscription plans
+- [x] Implement webhook handlers
+- [x] Build billing portal API
+- [x] Add usage metering
 
 ### Long-Term (Features)
 - [ ] Church management dashboard
@@ -1037,3 +1045,95 @@ backend/
 - **Purpose**: Verifies that the "Approaching Limit" (1 min remaining) warning fires correctly and that the session terminates precisely at 0s.
 
 ---
+
+## Part 11: Stripe Billing Integration (2026-02-10)
+
+**Context:** To enable self-service subscription upgrades and credit purchases, we integrated Stripe billing into the Exbabel backend and frontend.
+
+### 1. Database Migrations
+- Added `stripe_customer_id TEXT` to `churches` (partial unique index on non-null)
+- Created `purchased_credits` table (`church_id`, `amount_seconds`, `stripe_payment_intent_id`, `created_at`) with idempotency constraint
+- Added `stripe_price_id TEXT UNIQUE NULL` to `plans` and seeded Stripe Price IDs
+- Updated `get_session_quota_status` RPC to include `purchased_seconds_mtd` and `total_available_seconds` (monthly-expiring credits)
+
+### 2. Stripe Service (`backend/services/stripe.js`)
+- Singleton Stripe SDK initialization with `STRIPE_SECRET_KEY`
+- Warns if key is missing; billing features gracefully degrade
+
+### 3. Webhook Handler (`backend/routes/webhooks.js`)
+- **Critical:** Mounted BEFORE `express.json()` in `server.js` (requires raw body for signature verification)
+- Uses `stripe.webhooks.constructEvent()` for signature verification
+- **Events handled:**
+  - `checkout.session.completed` (subscription) → UPDATE `subscriptions` with plan, Stripe IDs
+  - `checkout.session.completed` (payment, type=top_up) → INSERT into `purchased_credits` (idempotent)
+  - `customer.subscription.updated` → UPDATE subscription status, period, plan
+  - `customer.subscription.deleted` → UPDATE status to `canceled`
+- All handlers call `clearEntitlementsCache(churchId)` for immediate effect
+
+### 4. Billing API (`backend/routes/billing.js`)
+- All endpoints require `requireAuth` + `requireAdmin` middleware
+- `POST /api/billing/subscription-checkout` — Stripe Checkout Session (mode: subscription)
+- `POST /api/billing/top-up-checkout` — Stripe Checkout Session (mode: payment)
+- `GET /api/billing/portal` — Stripe Billing Portal session
+- `GET /api/billing/status` — Current plan, usage, credits, available packs
+- Top-up packs: 1hr ($9.99), 5hr ($39.99), 10hr ($69.99)
+- Uses `ensureStripeCustomer(churchId)` for lazy customer creation
+
+### 5. Church Onboarding Update (`backend/routes/churches.js`)
+- Church creation now includes Step 5: Stripe customer creation (non-blocking)
+- Fallback: `ensureStripeCustomer` in billing.js lazily creates customer on first billing action
+
+### 6. Frontend Billing Page (`frontend/src/components/BillingPage.jsx`)
+- Current plan card with usage progress bar
+- Upgrade buttons (Pro / Unlimited) with Stripe Checkout redirect
+- Add Hours section with 3 pack options
+- Purchased credits history
+- Manage Billing button (Stripe Customer Portal)
+- Handles Stripe redirect success/cancel params
+
+### 7. Frontend Wiring
+- `/billing` route in `App.jsx` (admin-only `ProtectedRoute`)
+- 💳 Billing link in `Header.jsx` user dropdown (admin-only, replaces dashboard card)
+- `useQuotaWarning.js` navigates to `/billing?upgrade=true` and `/billing?topup=true`
+- `quotaEnforcement.js` — Upgrade/Add Hours buttons now enabled (removed "Coming Soon")
+
+### 8. Server Wiring (`backend/server.js`)
+```javascript
+// ⚠️ CRITICAL: Webhook MUST be before express.json()
+app.use('/api/webhooks', webhookRouter);
+app.use(express.json());
+// ... later ...
+app.use('/api', billingRouter);
+```
+
+### 9. Environment Variables
+```
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_PUBLISHABLE_KEY=pk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+APP_BASE_URL=http://localhost:5173
+```
+
+---
+
+### 2026-02-10 - Stripe Billing Integration
+- ✅ **Database**: Added `stripe_customer_id` to `churches`, created `purchased_credits` table, added `stripe_price_id` to `plans`, updated quota RPC with credits
+- ✅ **Stripe Service**: Created `backend/services/stripe.js` (SDK singleton)
+- ✅ **Webhook Handler**: Created `backend/routes/webhooks.js` with signature verification and handlers for `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`
+- ✅ **Billing API**: Created `backend/routes/billing.js` with subscription checkout, top-up checkout, portal, and status endpoints
+- ✅ **Church Onboarding**: Added Stripe customer creation to `churches.js` (non-blocking)
+- ✅ **Server Wiring**: Webhook route mounted BEFORE `express.json()` in `server.js` (critical for signature verification)
+- ✅ **Frontend**: Created `BillingPage.jsx` with plan display, usage bar, upgrade/top-up buttons, and Stripe redirect handling
+- ✅ **Route**: Added `/billing` as admin-only ProtectedRoute in `App.jsx`
+- ✅ **Dashboard**: Added 💳 Billing card to `AdminHome.jsx`
+- ✅ **Quota Actions**: Enabled `useQuotaWarning.js` navigation to `/billing` and removed "Coming Soon" from action buttons
+- ✅ **Env Template**: Added Stripe section to `env-template-backend.txt`
+
+### 2026-02-10 - Role Rewire: Member-First Access Model
+- ✅ **Default Role**: Changed `churches.js` join and create endpoints from `role: 'admin'` → `role: 'member'`
+- ✅ **AuthContext Fix**: Reverted `isAdmin` from `isAuthenticated` (temp hack) to `profile?.role === 'admin'` — admin now requires actual DB role
+- ✅ **Stripe-Gated Admin**: Webhook `checkout.session.completed` promotes all church profiles to `role: 'admin'`; `customer.subscription.deleted` demotes back to `role: 'member'`
+- ✅ **Post-Signup Redirect**: Authenticated visitors (no church) redirect to `/join-church` instead of showing VisitorHome or CreateChurchPage
+- ✅ **Church Creation Paywall**: "Create a Church" card in `VisitorHome.jsx` replaced with "Start a Ministry" linking to `exbabel.com/#pricing`
+- ✅ **Header Dropdown**: Replaced flat email + Sign Out with clickable user dropdown (☰ icon) containing Billing (admin-only) and Sign Out
+- ✅ **AdminHome Cleanup**: Removed 💳 Billing card from dashboard (moved to Header dropdown), reverted to 2-column grid

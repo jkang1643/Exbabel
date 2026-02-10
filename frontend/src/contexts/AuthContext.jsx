@@ -221,9 +221,7 @@ export function AuthProvider({ children }) {
     const isAuthenticated = !!user;
     const isVisitor = isAuthenticated && !profile;
     const isMember = isAuthenticated && profile && profile.role === 'member';
-    // TODO: Revert to (isAuthenticated && profile && profile.role === 'admin') when member flow is ready
-    // For now, all authenticated users are treated as admin so they can create a church
-    const isAdmin = isAuthenticated;
+    const isAdmin = isAuthenticated && profile?.role === 'admin';
     const hasChurch = !!profile?.church_id;
 
     const value = {

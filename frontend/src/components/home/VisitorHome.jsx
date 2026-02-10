@@ -91,15 +91,17 @@ export function VisitorHome({ onJoinSession, onJoinChurch, onCreateChurch, onSig
                             </CardHeader>
                         </Card>
 
-                        <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={onCreateChurch}>
-                            <CardHeader className="text-center p-4">
-                                <div className="text-3xl mb-1">✨</div>
-                                <CardTitle className="text-lg">Create a Church</CardTitle>
-                                <CardDescription className="text-sm">
-                                    Start your own translation ministry
-                                </CardDescription>
-                            </CardHeader>
-                        </Card>
+                        <a href="https://exbabel.com/#pricing" target="_blank" rel="noopener noreferrer" className="block">
+                            <Card className="hover:shadow-lg transition-shadow cursor-pointer border-amber-200 bg-amber-50/50">
+                                <CardHeader className="text-center p-4">
+                                    <div className="text-3xl mb-1">✨</div>
+                                    <CardTitle className="text-lg">Start a Ministry</CardTitle>
+                                    <CardDescription className="text-sm">
+                                        Subscribe to host live translations
+                                    </CardDescription>
+                                </CardHeader>
+                            </Card>
+                        </a>
                     </div>
 
 

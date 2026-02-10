@@ -137,3 +137,21 @@ ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
 
 # API Base URL (for enterprise/custom deployments)
 ELEVENLABS_BASE_URL=https://api.elevenlabs.io
+
+# ===================================
+# Stripe (REQUIRED for billing)
+# ===================================
+
+# Stripe secret key (server-side only — never expose to frontend)
+# Get from: https://dashboard.stripe.com/test/apikeys
+STRIPE_SECRET_KEY=sk_test_your-stripe-secret-key-here
+
+# Stripe publishable key (safe for frontend)
+STRIPE_PUBLISHABLE_KEY=pk_test_your-stripe-publishable-key-here
+
+# Stripe webhook signing secret (from Stripe CLI or Dashboard)
+# stripe listen --forward-to localhost:3001/api/webhooks/stripe
+STRIPE_WEBHOOK_SECRET=whsec_your-webhook-signing-secret-here
+
+# App base URL (used for Stripe checkout success/cancel redirects)
+APP_BASE_URL=http://localhost:5173

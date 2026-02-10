@@ -170,6 +170,19 @@ async function handleSubscriptionCheckout(session, churchId) {
         .is('stripe_customer_id', null);
 
     console.log(`[Webhook] ✓ Subscription upgraded: church=${churchId} plan=${plan.code} status=${subscription.status}`);
+
+    // Promote the church's profiles to admin (Stripe-gated admin access)
+    const { error: roleErr } = await supabaseAdmin
+        .from('profiles')
+        .update({ role: 'admin' })
+        .eq('church_id', churchId);
+
+    if (roleErr) {
+        console.error(`[Webhook] ✗ Failed to promote profiles to admin:`, roleErr.message);
+    } else {
+        console.log(`[Webhook] ✓ Promoted profiles to admin for church=${churchId}`);
+    }
+
     clearEntitlementsCache(churchId);
 }
 
@@ -274,6 +287,19 @@ async function handleSubscriptionDeleted(subscription) {
     }
 
     console.log(`[Webhook] ✓ Subscription canceled: church=${sub.church_id}`);
+
+    // Demote profiles back to member (admin access revoked)
+    const { error: roleErr } = await supabaseAdmin
+        .from('profiles')
+        .update({ role: 'member' })
+        .eq('church_id', sub.church_id);
+
+    if (roleErr) {
+        console.error(`[Webhook] ✗ Failed to demote profiles:`, roleErr.message);
+    } else {
+        console.log(`[Webhook] ✓ Demoted profiles to member for church=${sub.church_id}`);
+    }
+
     clearEntitlementsCache(sub.church_id);
 }
 

@@ -5,6 +5,7 @@
 import express from 'express';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { requireAuth } from '../middleware/requireAuthContext.js';
+import { stripe } from '../services/stripe.js';
 
 export const churchRouter = express.Router();
 
@@ -107,7 +108,7 @@ churchRouter.post('/churches/join', requireAuth, async (req, res) => {
             .insert({
                 user_id: userId,
                 church_id: churchId,
-                role: 'admin'  // Default to admin for all new users
+                role: 'member'  // Default to member — admin requires Stripe payment
             })
             .select('user_id, church_id, role')
             .single();
@@ -286,7 +287,7 @@ churchRouter.post('/churches/create', requireAuth, async (req, res) => {
             .insert({
                 user_id: userId,
                 church_id: churchId,
-                role: 'admin'
+                role: 'member'  // Default to member — admin requires Stripe payment
             })
             .select('user_id, church_id, role')
             .single();
@@ -334,6 +335,24 @@ churchRouter.post('/churches/create', requireAuth, async (req, res) => {
             await supabaseAdmin.from('profiles').delete().eq('user_id', userId);
             await supabaseAdmin.from('churches').delete().eq('id', churchId);
             return res.status(500).json({ error: 'Failed to create billing settings' });
+        }
+
+        // Step 5: Create Stripe customer (non-blocking — lazy creation in billing.js as fallback)
+        if (stripe) {
+            try {
+                const customer = await stripe.customers.create({
+                    name: trimmedName,
+                    metadata: { church_id: churchId },
+                });
+                await supabaseAdmin
+                    .from('churches')
+                    .update({ stripe_customer_id: customer.id })
+                    .eq('id', churchId);
+                console.log(`[Churches] ✓ Stripe customer created: ${customer.id}`);
+            } catch (stripeErr) {
+                // Non-fatal: customer will be created lazily on first billing action
+                console.warn(`[Churches] ⚠️ Stripe customer creation failed (non-fatal):`, stripeErr.message);
+            }
         }
 
         console.log(`[Churches] ✅ User ${userId} created church "${trimmedName}" and is now admin`);
