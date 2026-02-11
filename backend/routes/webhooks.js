@@ -4,10 +4,12 @@
  * Receives Stripe events and updates the database accordingly.
  * Uses signature verification (STRIPE_WEBHOOK_SECRET) instead of JWT auth.
  * 
- * Handled events (MVP):
+ * Handled events:
  *   - checkout.session.completed  (subscription upgrade + top-up purchase)
- *   - customer.subscription.updated (status changes, plan changes)
- *   - customer.subscription.deleted (cancellation)
+ *   - customer.subscription.updated (status changes, plan changes → deterministic admin promotion/demotion)
+ *   - customer.subscription.deleted (cancellation → demote to member)
+ *   - invoice.payment_succeeded    (confirm subscription stays active)
+ *   - invoice.payment_failed       (demote to member on payment failure)
  * 
  * CRITICAL: This route MUST be mounted BEFORE express.json() in server.js,
  * because Stripe signature verification requires the raw request body.
@@ -23,6 +25,11 @@ import { clearEntitlementsCache } from '../entitlements/index.js';
 const router = express.Router();
 
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
+
+// Statuses that grant admin access
+const ADMIN_STATUSES = ['active', 'trialing'];
+// Statuses that revoke admin access
+const MEMBER_STATUSES = ['past_due', 'canceled', 'paused'];
 
 /**
  * POST /api/webhooks/stripe
@@ -65,6 +72,14 @@ router.post(
 
                 case 'customer.subscription.deleted':
                     await handleSubscriptionDeleted(event.data.object);
+                    break;
+
+                case 'invoice.payment_succeeded':
+                    await handleInvoicePaymentSucceeded(event.data.object);
+                    break;
+
+                case 'invoice.payment_failed':
+                    await handleInvoicePaymentFailed(event.data.object);
                     break;
 
                 default:
@@ -169,19 +184,11 @@ async function handleSubscriptionCheckout(session, churchId) {
         .eq('id', churchId)
         .is('stripe_customer_id', null);
 
-    console.log(`[Webhook] ✓ Subscription upgraded: church=${churchId} plan=${plan.code} status=${subscription.status}`);
+    const mappedStatus = mapStripeStatus(subscription.status);
+    console.log(`[Webhook] ✓ Subscription upgraded: church=${churchId} plan=${plan.code} status=${mappedStatus}`);
 
-    // Promote the church's profiles to admin (Stripe-gated admin access)
-    const { error: roleErr } = await supabaseAdmin
-        .from('profiles')
-        .update({ role: 'admin' })
-        .eq('church_id', churchId);
-
-    if (roleErr) {
-        console.error(`[Webhook] ✗ Failed to promote profiles to admin:`, roleErr.message);
-    } else {
-        console.log(`[Webhook] ✓ Promoted profiles to admin for church=${churchId}`);
-    }
+    // Deterministic admin promotion based on status
+    await syncRoleFromStatus(churchId, mappedStatus);
 
     clearEntitlementsCache(churchId);
 }
@@ -223,44 +230,28 @@ async function handleTopUpCheckout(session, churchId) {
 
 /**
  * Handle customer.subscription.updated
- * Covers: plan changes, status transitions (active→past_due, pause, etc.)
+ * 
+ * Covers: plan changes, status transitions (active→past_due, trialing→active, etc.)
+ * DETERMINISTIC: promotes/demotes admin based on subscription status.
  */
 async function handleSubscriptionUpdated(subscription) {
     const stripeSubscriptionId = subscription.id;
     const stripePriceId = subscription.items.data[0]?.price?.id;
     const stripeCustomerId = subscription.customer;
 
-    // Find the church by stripe_subscription_id
-    const { data: sub, error: findErr } = await supabaseAdmin
-        .from('subscriptions')
-        .select('church_id')
-        .eq('stripe_subscription_id', stripeSubscriptionId)
-        .single();
-
-    if (findErr || !sub) {
-        // Try finding by stripe_customer_id as fallback
-        const { data: church } = await supabaseAdmin
-            .from('churches')
-            .select('id')
-            .eq('stripe_customer_id', stripeCustomerId)
-            .single();
-
-        if (!church) {
-            console.error(`[Webhook] ✗ subscription.updated: cannot find church for sub=${stripeSubscriptionId}`);
-            return;
-        }
-
-        // Update using church_id from churches table
-        await updateSubscriptionRow(church.id, subscription, stripePriceId, stripeSubscriptionId);
+    // Find the church
+    let churchId = await findChurchForSubscription(stripeSubscriptionId, stripeCustomerId);
+    if (!churchId) {
+        console.error(`[Webhook] ✗ subscription.updated: cannot find church for sub=${stripeSubscriptionId}`);
         return;
     }
 
-    await updateSubscriptionRow(sub.church_id, subscription, stripePriceId, stripeSubscriptionId);
+    await updateSubscriptionRow(churchId, subscription, stripePriceId, stripeSubscriptionId);
 }
 
 /**
  * Handle customer.subscription.deleted
- * Sets subscription status to 'canceled'
+ * Sets subscription status to 'canceled' and demotes profiles to member
  */
 async function handleSubscriptionDeleted(subscription) {
     const stripeSubscriptionId = subscription.id;
@@ -289,18 +280,90 @@ async function handleSubscriptionDeleted(subscription) {
     console.log(`[Webhook] ✓ Subscription canceled: church=${sub.church_id}`);
 
     // Demote profiles back to member (admin access revoked)
-    const { error: roleErr } = await supabaseAdmin
-        .from('profiles')
-        .update({ role: 'member' })
-        .eq('church_id', sub.church_id);
-
-    if (roleErr) {
-        console.error(`[Webhook] ✗ Failed to demote profiles:`, roleErr.message);
-    } else {
-        console.log(`[Webhook] ✓ Demoted profiles to member for church=${sub.church_id}`);
-    }
+    await syncRoleFromStatus(sub.church_id, 'canceled');
 
     clearEntitlementsCache(sub.church_id);
+}
+
+/**
+ * Handle invoice.payment_succeeded
+ * 
+ * Confirms the subscription stays active after a successful payment.
+ * Particularly important for:
+ *   - Recurring payments (renewal)
+ *   - Recovery from past_due status
+ */
+async function handleInvoicePaymentSucceeded(invoice) {
+    const stripeSubscriptionId = extractSubscriptionId(invoice.subscription);
+    if (!stripeSubscriptionId) {
+        // One-time payment (e.g., top-up) — no action needed
+        console.log(`[Webhook] invoice.payment_succeeded: no subscription (one-time payment), skipping`);
+        return;
+    }
+
+    const stripeCustomerId = invoice.customer;
+    const churchId = await findChurchForSubscription(stripeSubscriptionId, stripeCustomerId);
+
+    if (!churchId) {
+        console.error(`[Webhook] ✗ invoice.payment_succeeded: cannot find church for sub=${stripeSubscriptionId}`);
+        return;
+    }
+
+    // Ensure status is active
+    const { error } = await supabaseAdmin
+        .from('subscriptions')
+        .update({ status: 'active' })
+        .eq('church_id', churchId)
+        .in('status', ['past_due', 'trialing']); // Only update if was past_due or trialing
+
+    if (!error) {
+        console.log(`[Webhook] ✓ invoice.payment_succeeded: church=${churchId} → status=active`);
+    }
+
+    // Re-promote to admin (recovers from past_due demotion)
+    await syncRoleFromStatus(churchId, 'active');
+
+    clearEntitlementsCache(churchId);
+}
+
+/**
+ * Handle invoice.payment_failed
+ * 
+ * When a subscription payment fails, demote the church to member.
+ * This gates admin features until payment is resolved.
+ */
+async function handleInvoicePaymentFailed(invoice) {
+    const stripeSubscriptionId = extractSubscriptionId(invoice.subscription);
+    if (!stripeSubscriptionId) {
+        console.log(`[Webhook] invoice.payment_failed: no subscription (one-time payment), skipping`);
+        return;
+    }
+
+    const stripeCustomerId = invoice.customer;
+    const churchId = await findChurchForSubscription(stripeSubscriptionId, stripeCustomerId);
+
+    if (!churchId) {
+        console.error(`[Webhook] ✗ invoice.payment_failed: cannot find church for sub=${stripeSubscriptionId}`);
+        return;
+    }
+
+    // Update status to past_due
+    const { error } = await supabaseAdmin
+        .from('subscriptions')
+        .update({ status: 'past_due' })
+        .eq('church_id', churchId);
+
+    if (error) {
+        console.error(`[Webhook] ✗ invoice.payment_failed: failed to update status:`, error.message);
+        return;
+    }
+
+    console.log(`[Webhook] ⚠️ invoice.payment_failed: church=${churchId} → status=past_due`);
+
+    // Demote to member (admin features gated until payment resolves)
+    await syncRoleFromStatus(churchId, 'past_due');
+
+    clearEntitlementsCache(churchId);
 }
 
 // ============================================================================
@@ -308,15 +371,83 @@ async function handleSubscriptionDeleted(subscription) {
 // ============================================================================
 
 /**
- * Update subscription row with latest Stripe data
+ * Deterministic role sync: promote or demote ALL profiles in a church
+ * based on the subscription status.
+ * 
+ * This is the SINGLE source of truth for admin/member transitions:
+ *   - active, trialing → admin
+ *   - past_due, canceled, paused → member
+ * 
+ * @param {string} churchId
+ * @param {string} status - Mapped subscription status
+ */
+async function syncRoleFromStatus(churchId, status) {
+    const shouldBeAdmin = ADMIN_STATUSES.includes(status);
+    const newRole = shouldBeAdmin ? 'admin' : 'member';
+
+    const { error } = await supabaseAdmin
+        .from('profiles')
+        .update({ role: newRole })
+        .eq('church_id', churchId);
+
+    if (error) {
+        console.error(`[Webhook] ✗ Failed to set role=${newRole} for church=${churchId}:`, error.message);
+    } else {
+        console.log(`[Webhook] ✓ Role sync: church=${churchId} → role=${newRole} (status=${status})`);
+    }
+}
+
+/**
+ * Find the church_id for a given Stripe subscription.
+ * Tries subscription table first, then falls back to churches table.
+ * 
+ * @param {string} stripeSubscriptionId
+ * @param {string} stripeCustomerId
+ * @returns {Promise<string|null>} churchId or null
+ */
+async function findChurchForSubscription(stripeSubscriptionId, stripeCustomerId) {
+    // Try by subscription ID
+    const { data: sub } = await supabaseAdmin
+        .from('subscriptions')
+        .select('church_id')
+        .eq('stripe_subscription_id', stripeSubscriptionId)
+        .single();
+
+    if (sub?.church_id) return sub.church_id;
+
+    // Fallback: try by customer ID on churches table
+    if (stripeCustomerId) {
+        const { data: church } = await supabaseAdmin
+            .from('churches')
+            .select('id')
+            .eq('stripe_customer_id', stripeCustomerId)
+            .single();
+
+        if (church?.id) return church.id;
+    }
+
+    return null;
+}
+
+/**
+ * Update subscription row with latest Stripe data.
+ * Also triggers deterministic role sync based on new status.
  */
 async function updateSubscriptionRow(churchId, subscription, stripePriceId, stripeSubscriptionId) {
+    const mappedStatus = mapStripeStatus(subscription.status);
+
     const updateData = {
-        status: mapStripeStatus(subscription.status),
+        status: mappedStatus,
         stripe_subscription_id: stripeSubscriptionId,
-        current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-        current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
     };
+
+    // Safely parse period timestamps (may be null in some Stripe events)
+    if (subscription.current_period_start) {
+        updateData.current_period_start = new Date(subscription.current_period_start * 1000).toISOString();
+    }
+    if (subscription.current_period_end) {
+        updateData.current_period_end = new Date(subscription.current_period_end * 1000).toISOString();
+    }
 
     // If price changed, also update plan
     if (stripePriceId) {
@@ -342,7 +473,11 @@ async function updateSubscriptionRow(churchId, subscription, stripePriceId, stri
         return;
     }
 
-    console.log(`[Webhook] ✓ Subscription updated: church=${churchId} status=${updateData.status}`);
+    console.log(`[Webhook] ✓ Subscription updated: church=${churchId} status=${mappedStatus}`);
+
+    // Deterministic admin promotion/demotion on EVERY status transition
+    await syncRoleFromStatus(churchId, mappedStatus);
+
     clearEntitlementsCache(churchId);
 }
 
@@ -362,6 +497,17 @@ function mapStripeStatus(stripeStatus) {
         'paused': 'paused',
     };
     return statusMap[stripeStatus] || 'active';
+}
+
+/**
+ * Extract subscription ID from Stripe's subscription field.
+ * Stripe may return either a string ID or an expanded subscription object.
+ */
+function extractSubscriptionId(subscriptionField) {
+    if (!subscriptionField) return null;
+    if (typeof subscriptionField === 'string') return subscriptionField;
+    if (typeof subscriptionField === 'object' && subscriptionField.id) return subscriptionField.id;
+    return null;
 }
 
 export { router as webhookRouter };

@@ -1,13 +1,15 @@
 /**
  * Billing API Routes
  * 
- * All endpoints require admin role (invariant #4).
+ * Endpoints requiring auth only (gateway to becoming admin):
+ *   POST /api/billing/checkout-session       — Create Stripe Checkout for new subscription
+ *   GET  /api/billing/checkout-status        — Poll checkout session completion
  * 
- * Endpoints:
- *   POST /api/billing/subscription-checkout  — Create Stripe Checkout for plan upgrade
- *   POST /api/billing/top-up-checkout        — Create Stripe Checkout for hour pack
- *   GET  /api/billing/portal                 — Create Stripe Billing Portal session
- *   GET  /api/billing/status                 — Get current subscription + usage info
+ * Endpoints requiring admin role:
+ *   POST /api/billing/subscription-checkout  — Upgrade existing subscription
+ *   POST /api/billing/top-up-checkout        — Purchase hour pack
+ *   GET  /api/billing/portal                 — Stripe Billing Portal
+ *   GET  /api/billing/status                 — Current subscription + usage info
  * 
  * @module routes/billing
  */
@@ -19,7 +21,7 @@ import { requireAuth, requireAdmin } from '../middleware/requireAuthContext.js';
 
 const router = express.Router();
 
-const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
+const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000';
 
 // Top-up packs configuration (server-side truth)
 const TOP_UP_PACKS = {
@@ -29,22 +31,194 @@ const TOP_UP_PACKS = {
 };
 
 // ============================================================================
-// MIDDLEWARE: All billing routes require admin
-// ============================================================================
-
-router.use(requireAuth, requireAdmin);
-
-// ============================================================================
-// POST /billing/subscription-checkout
+// AUTH-ONLY ENDPOINTS (gateway to admin — NOT admin-gated)
 // ============================================================================
 
 /**
- * Create a Stripe Checkout Session for a subscription plan upgrade.
+ * POST /billing/checkout-session
  * 
- * Body: { planCode: 'pro' | 'unlimited' }
+ * Create a Stripe Checkout Session for a NEW subscription.
+ * This is the gateway to becoming admin — requires auth but NOT admin role.
+ * 
+ * Body: { plan: 'starter' | 'pro' | 'unlimited' }
  * Returns: { url: string } — Stripe-hosted checkout page URL
  */
-router.post('/billing/subscription-checkout', async (req, res) => {
+router.post('/billing/checkout-session', requireAuth, async (req, res) => {
+    try {
+        if (!stripe) {
+            return res.status(503).json({ error: 'Billing not configured' });
+        }
+
+        const { plan } = req.body;
+        if (!plan) {
+            return res.status(400).json({ error: 'plan is required (starter, pro, unlimited)' });
+        }
+
+        const userId = req.auth.user_id;
+        const profile = req.auth.profile;
+
+        // Must have a church to subscribe  
+        if (!profile?.church_id) {
+            return res.status(400).json({
+                error: 'You must create or join a church before subscribing.',
+                code: 'NO_CHURCH',
+            });
+        }
+
+        const churchId = profile.church_id;
+
+        // Check if already has an active subscription
+        const { data: existingSub } = await supabaseAdmin
+            .from('subscriptions')
+            .select('status, stripe_subscription_id')
+            .eq('church_id', churchId)
+            .single();
+
+        if (existingSub?.stripe_subscription_id && ['active', 'trialing'].includes(existingSub?.status)) {
+            return res.status(400).json({
+                error: 'Church already has an active subscription. Use the billing page to upgrade.',
+                code: 'ALREADY_SUBSCRIBED',
+            });
+        }
+
+        // Look up the plan's Stripe price
+        const { data: planData, error: planErr } = await supabaseAdmin
+            .from('plans')
+            .select('id, code, name, stripe_price_id')
+            .eq('code', plan)
+            .single();
+
+        if (planErr || !planData) {
+            return res.status(400).json({ error: `Invalid plan: ${plan}` });
+        }
+
+        if (!planData.stripe_price_id) {
+            return res.status(400).json({ error: `Plan ${plan} has no Stripe price configured` });
+        }
+
+        // Get or create Stripe customer for this church
+        const customerId = await ensureStripeCustomer(churchId);
+
+        // Build checkout session config
+        const sessionConfig = {
+            mode: 'subscription',
+            customer: customerId,
+            client_reference_id: churchId,
+            metadata: {
+                church_id: churchId,
+                user_id: userId,
+                plan_code: plan,
+            },
+            line_items: [{
+                price: planData.stripe_price_id,
+                quantity: 1,
+            }],
+            success_url: `${APP_BASE_URL}/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}&plan=${plan}`,
+            cancel_url: `${APP_BASE_URL}/billing?canceled=true`,
+            subscription_data: {
+                metadata: {
+                    church_id: churchId,
+                    user_id: userId,
+                    plan_code: plan,
+                },
+            },
+        };
+
+        // Starter plan gets 30-day free trial
+        if (plan === 'starter') {
+            sessionConfig.subscription_data.trial_period_days = 30;
+        }
+
+        const session = await stripe.checkout.sessions.create(sessionConfig);
+
+        console.log(`[Billing] ✓ Checkout session created: church=${churchId} plan=${plan} user=${userId} session=${session.id} trial=${plan === 'starter' ? '30d' : 'none'}`);
+        res.json({ url: session.url });
+
+    } catch (err) {
+        console.error('[Billing] ✗ checkout-session error:', err.message);
+        res.status(500).json({ error: 'Failed to create checkout session' });
+    }
+});
+
+/**
+ * GET /billing/checkout-status?session_id=cs_xxx
+ * 
+ * Poll the status of a Stripe Checkout Session.
+ * Used by the frontend to detect when webhook processing is complete.
+ * Requires auth but NOT admin (user may not be admin yet when polling).
+ * 
+ * Returns: { status, plan, subscriptionStatus }
+ */
+router.get('/billing/checkout-status', requireAuth, async (req, res) => {
+    try {
+        if (!stripe) {
+            return res.status(503).json({ error: 'Billing not configured' });
+        }
+
+        const { session_id } = req.query;
+        if (!session_id) {
+            return res.status(400).json({ error: 'session_id is required' });
+        }
+
+        const session = await stripe.checkout.sessions.retrieve(session_id);
+
+        // Basic security: verify the session belongs to this user's church
+        const churchId = req.auth.profile?.church_id;
+        if (churchId && session.metadata?.church_id !== churchId) {
+            return res.status(403).json({ error: 'Session does not belong to your church' });
+        }
+
+        // Check if our webhook has processed the subscription
+        let subscriptionStatus = null;
+        let profileRole = null;
+        if (session.subscription) {
+            const { data: sub } = await supabaseAdmin
+                .from('subscriptions')
+                .select('status')
+                .eq('stripe_subscription_id', session.subscription)
+                .single();
+            subscriptionStatus = sub?.status || null;
+        }
+
+        // Check if the user has been promoted to admin
+        if (req.auth.user_id) {
+            const { data: profile } = await supabaseAdmin
+                .from('profiles')
+                .select('role')
+                .eq('user_id', req.auth.user_id)
+                .single();
+            profileRole = profile?.role || null;
+        }
+
+        res.json({
+            status: session.status,                    // 'open', 'complete', 'expired'
+            paymentStatus: session.payment_status,     // 'paid', 'unpaid', 'no_payment_required'
+            plan: session.metadata?.plan_code || null,
+            subscriptionStatus,                        // null until webhook processes
+            profileRole,                               // 'member' → 'admin' after promotion
+            webhookProcessed: subscriptionStatus !== null,
+        });
+
+    } catch (err) {
+        console.error('[Billing] ✗ checkout-status error:', err.message);
+        res.status(500).json({ error: 'Failed to check session status' });
+    }
+});
+
+// ============================================================================
+// ADMIN-ONLY ENDPOINTS
+// ============================================================================
+
+/**
+ * POST /billing/subscription-checkout
+ * 
+ * Create a Stripe Checkout Session for a subscription plan UPGRADE.
+ * Requires admin (only existing subscribers can upgrade).
+ * 
+ * Body: { planCode: 'pro' | 'unlimited' }
+ * Returns: { url: string }
+ */
+router.post('/billing/subscription-checkout', requireAuth, requireAdmin, async (req, res) => {
     try {
         if (!stripe) {
             return res.status(503).json({ error: 'Billing not configured' });
@@ -56,6 +230,7 @@ router.post('/billing/subscription-checkout', async (req, res) => {
         }
 
         const churchId = req.auth.profile.church_id;
+        const userId = req.auth.user_id;
 
         // 1. Look up the plan and its Stripe price
         const { data: plan, error: planErr } = await supabaseAdmin
@@ -82,24 +257,26 @@ router.post('/billing/subscription-checkout', async (req, res) => {
             client_reference_id: churchId,
             metadata: {
                 church_id: churchId,
+                user_id: userId,
                 plan_code: planCode,
             },
             line_items: [{
                 price: plan.stripe_price_id,
                 quantity: 1,
             }],
-            success_url: `${APP_BASE_URL}/billing?success=true&plan=${planCode}`,
+            success_url: `${APP_BASE_URL}/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}&plan=${planCode}`,
             cancel_url: `${APP_BASE_URL}/billing?canceled=true`,
             // If already has a subscription, allow switching
             subscription_data: {
                 metadata: {
                     church_id: churchId,
+                    user_id: userId,
                     plan_code: planCode,
                 },
             },
         });
 
-        console.log(`[Billing] ✓ Checkout session created: church=${churchId} plan=${planCode} session=${session.id}`);
+        console.log(`[Billing] ✓ Upgrade checkout created: church=${churchId} plan=${planCode} session=${session.id}`);
         res.json({ url: session.url });
 
     } catch (err) {
@@ -108,17 +285,15 @@ router.post('/billing/subscription-checkout', async (req, res) => {
     }
 });
 
-// ============================================================================
-// POST /billing/top-up-checkout
-// ============================================================================
-
 /**
+ * POST /billing/top-up-checkout
+ * 
  * Create a Stripe Checkout Session for a one-time top-up purchase.
  * 
  * Body: { packId: '1_hour' | '5_hours' | '10_hours' }
- * Returns: { url: string } — Stripe-hosted checkout page URL
+ * Returns: { url: string }
  */
-router.post('/billing/top-up-checkout', async (req, res) => {
+router.post('/billing/top-up-checkout', requireAuth, requireAdmin, async (req, res) => {
     try {
         if (!stripe) {
             return res.status(503).json({ error: 'Billing not configured' });
@@ -157,7 +332,7 @@ router.post('/billing/top-up-checkout', async (req, res) => {
                 },
                 quantity: 1,
             }],
-            success_url: `${APP_BASE_URL}/billing?success=true&topup=${packId}`,
+            success_url: `${APP_BASE_URL}/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}&topup=${packId}`,
             cancel_url: `${APP_BASE_URL}/billing?canceled=true`,
         });
 
@@ -170,16 +345,13 @@ router.post('/billing/top-up-checkout', async (req, res) => {
     }
 });
 
-// ============================================================================
-// GET /billing/portal
-// ============================================================================
-
 /**
- * Create a Stripe Billing Portal session for managing payment methods / invoices.
+ * GET /billing/portal
  * 
- * Returns: { url: string } — Stripe-hosted portal URL
+ * Create a Stripe Billing Portal session for managing payment methods / invoices.
+ * Returns: { url: string }
  */
-router.get('/billing/portal', async (req, res) => {
+router.get('/billing/portal', requireAuth, requireAdmin, async (req, res) => {
     try {
         if (!stripe) {
             return res.status(503).json({ error: 'Billing not configured' });
@@ -202,16 +374,13 @@ router.get('/billing/portal', async (req, res) => {
     }
 });
 
-// ============================================================================
-// GET /billing/status
-// ============================================================================
-
 /**
- * Get current subscription and usage status for the admin's church.
+ * GET /billing/status
  * 
- * Returns: { subscription, plan, usage, packs }
+ * Get current subscription and usage status for the admin's church.
+ * Returns: { subscription, plan, usage, purchasedCredits, availablePacks }
  */
-router.get('/billing/status', async (req, res) => {
+router.get('/billing/status', requireAuth, requireAdmin, async (req, res) => {
     try {
         const churchId = req.auth.profile.church_id;
 
