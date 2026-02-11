@@ -24,6 +24,7 @@ import { HostPage } from './components/HostPage'
 import { ListenerPage } from './components/ListenerPage'
 import DemoPage from './components/DemoPage'
 import { BillingPage } from './components/BillingPage'
+import { CheckoutPage } from './components/CheckoutPage'
 
 // Protected route wrapper for routes that require authentication
 function ProtectedRoute({ children, requireAuth = true, requireMember = false, requireAdmin = false }) {
@@ -145,20 +146,22 @@ function HomeRoute() {
 // Login page wrapper
 function LoginRoute() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { isAuthenticated, loading } = useAuth()
+  const redirectTo = searchParams.get('redirect') || '/'
 
-  // Redirect authenticated users to home (handles OAuth callback)
+  // Redirect authenticated users to their destination (handles OAuth callback)
   useEffect(() => {
     if (!loading && isAuthenticated) {
-      navigate('/')
+      navigate(redirectTo)
     }
-  }, [isAuthenticated, loading, navigate])
+  }, [isAuthenticated, loading, navigate, redirectTo])
 
   return (
     <LoginPage
-      onSuccess={() => navigate('/')}
+      onSuccess={() => navigate(redirectTo)}
       onBack={() => navigate('/')}
-      onSwitchToSignUp={() => navigate('/signup')}
+      onSwitchToSignUp={() => navigate(`/signup${redirectTo !== '/' ? `?redirect=${encodeURIComponent(redirectTo)}` : ''}`)}
     />
   )
 }
@@ -166,20 +169,23 @@ function LoginRoute() {
 // Sign up page wrapper
 function SignUpRoute() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { isAuthenticated, loading } = useAuth()
+  const redirectTo = searchParams.get('redirect') || '/'
 
-  // Redirect authenticated users to home (handles OAuth callback)
+  // Redirect authenticated users to their destination (handles email verification callback)
   useEffect(() => {
     if (!loading && isAuthenticated) {
-      navigate('/')
+      navigate(redirectTo)
     }
-  }, [isAuthenticated, loading, navigate])
+  }, [isAuthenticated, loading, navigate, redirectTo])
 
   return (
     <SignUpPage
-      onSuccess={() => navigate('/')}
+      onSuccess={() => navigate(redirectTo)}
       onBack={() => navigate('/')}
-      onSwitchToSignIn={() => navigate('/signin')}
+      onSwitchToSignIn={() => navigate(`/signin${redirectTo !== '/' ? `?redirect=${encodeURIComponent(redirectTo)}` : ''}`)}
+      redirectAfter={redirectTo !== '/' ? redirectTo : undefined}
     />
   )
 }
@@ -233,7 +239,9 @@ function JoinChurchRoute() {
 // Create church page wrapper
 function CreateChurchRoute() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { signOut } = useAuth()
+  const redirectTo = searchParams.get('redirect') || '/'
 
   const handleSignOut = async () => {
     await signOut()
@@ -243,7 +251,7 @@ function CreateChurchRoute() {
   return (
     <CreateChurchPage
       onBack={handleSignOut}
-      onSuccess={() => navigate('/')}
+      onSuccess={() => navigate(redirectTo)}
     />
   )
 }
@@ -258,6 +266,7 @@ function AppContent() {
       <Route path="/listener" element={<ListenerRoute />} />
       <Route path="/demo" element={<DemoRoute />} />
       <Route path="/join-church" element={<JoinChurchRoute />} />
+      <Route path="/checkout" element={<CheckoutPage />} />
 
       {/* Protected routes */}
       <Route

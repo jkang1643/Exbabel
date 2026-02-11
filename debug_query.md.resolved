@@ -1,0 +1,20 @@
+# Debug Query for Subscription Status
+
+Run this query in Supabase SQL Editor to check the subscription and profile status:
+
+```sql
+SELECT 
+  s.status as subscription_status,
+  s.stripe_subscription_id,
+  p.role as user_role,
+  p.user_id
+FROM subscriptions s
+JOIN profiles p ON s.church_id = p.church_id
+WHERE s.church_id = '28d565b7-1a4b-475f-9f30-71fd7c0239bc';
+```
+
+## What to look for:
+
+1. **If `subscription_status` is still `inactive`**: The webhook handler is NOT running
+2. **If `subscription_status` is `trialing` or `active` but `user_role` is `member`**: The webhook ran but [syncRoleFromStatus](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/routes/webhooks.js#373-399) failed
+3. **If `subscription_status` is `trialing` or `active` and `user_role` is `admin`**: Everything is working correctly

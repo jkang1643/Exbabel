@@ -1,0 +1,89 @@
+# End-to-End Routing Flow Guide
+
+This document maps the routing architecture across both the **Exbabel Marketing Site** and the **RealTimeTranslationApp SaaS platform**.
+
+---
+
+## 1. Exbabel Marketing Site (`exbabel`)
+The marketing site serves as the primary landing page and entry point, built with Next.js App Router.
+
+### Frontend Pages
+| Path | Component | Purpose |
+| :--- | :--- | :--- |
+| `/` | [app/page.tsx](file://wsl.localhost/Ubuntu/home/jkang1643/projects/exbabel/app/page.tsx) | Landing page (Features, Pricing, FAQ) |
+| `/guides` | [app/guides/page.tsx](file://wsl.localhost/Ubuntu/home/jkang1643/projects/exbabel/app/guides/page.tsx) | Documentation index |
+| `/guides/[slug]` | [app/guides/[slug]/page.tsx](file://wsl.localhost/Ubuntu/home/jkang1643/projects/exbabel/app/guides/%5Bslug%5D/page.tsx) | Individual documentation articles |
+
+### App Interconnectivity ([lib/config.ts](file://wsl.localhost/Ubuntu/home/jkang1643/projects/exbabel/lib/config.ts))
+The marketing site redirects specific actions (like "Sign Up" or "Start Free Trial") to the SaaS application:
+- **Sign In**: `app.exbabel.com/signin`
+- **Sign Up**: `app.exbabel.com/signup`
+- **Plan Redirects**:
+  - Starter: `/signup?plan=starter`
+  - Pro: `/signup?plan=pro`
+  - Unlimited: `/signup?plan=unlimited`
+
+---
+
+## 2. RealTimeTranslationApp SaaS (`realtimetranslationapp`)
+The core application handles user sessions, translation logic, and billing.
+
+### Frontend Platform (React + React Router)
+Routing is managed in [src/App.jsx](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx). Access is controlled by [ProtectedRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#29-55).
+
+| Path | Controller | Access Level | Purpose |
+| :--- | :--- | :--- | :--- |
+| `/` | [HomeRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#56-145) | Public/Auth | Dashboard (Visitor/Member/Admin) |
+| `/signin` | [LoginRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#146-168) | Public | Authentication |
+| `/signup` | [SignUpRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#169-192) | Public | Registration |
+| `/listener` | [ListenerRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#193-209) | Public | Join session as a listener |
+| `/demo` | [DemoRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#222-227) | Public | Interactive product demo |
+| `/checkout` | [CheckoutPage](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/components/CheckoutPage.jsx#84-323) | Public | Plan selection & pricing |
+| `/solo` | [SoloRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#210-215) | Member | Direct mic-to-text mode |
+| `/host` | [HostRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#216-221) | Admin | Multi-user session hosting |
+| `/join-church` | [JoinChurchRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#228-238)| Member | Joining an organization |
+| `/create-church`| [CreateChurchRoute](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx#239-258)| Admin | Setting up a new organization |
+| `/billing` | `BillingPage` | Admin | Subscription management |
+
+### Backend API (Express)
+Endpoints are mounted in [backend/server.js](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/server.js) and modularized in `backend/routes/`.
+
+| Endpoint | Router | Purpose |
+| :--- | :--- | :--- |
+| `/api/me` | `me.js` | User profile & identity |
+| `/api/entititvements`| `entitlements.js`| Plan features & limits |
+| `/api/usage` | `usage.js` | Tracking characters/hours |
+| `/api/churches` | `churches.js` | Church/Org management |
+| `/api/billing` | `billing.js` | Stripe payments & pricing |
+| `/api/webhooks` | `webhooks.js` | Stripe event handlers |
+| `/api/analytics` | `analytics.js` | Performance monitoring |
+| `/session/start` | (inline) | Create a Host session |
+| `/session/join` | (inline) | Listener join verification |
+| `/health` | (inline) | System status & version |
+
+### WebSocket Infrastructure
+The real-time engine handles different connection types based on URL patterns.
+
+| WebSocket Path | Handler | Purpose |
+| :--- | :--- | :--- |
+| `/translate` | `websocketHandler.js`| Main translation (Host/Listener) |
+| `/api/translate` | `apiWebSocketHandler.js`| Secure API integrations |
+| `/ws/tts` | `ttsStreamingHandler.js`| Real-time audio streaming |
+| (internal) | `soloModeHandler.js` | Solo mode logic |
+
+---
+
+## 3. End-to-End User Flows
+
+### A. New User Sign-Up Flow
+1. **Marketing Site**: User clicks "Get Started" on `/pricing`.
+2. **Redirect**: Navigates to `app.exbabel.com/signup?plan=pro`.
+3. **App Registration**: `SignUpPage` handles account creation.
+4. **App Onboarding**: `CreateChurchRoute` prompts for ministry details.
+5. **Subscription**: `CheckoutPage` initializes Stripe session via `POST /api/billing/checkout-session`.
+6. **Dashboard**: Returns to `/` (routed to `AdminHome`).
+
+### B. Live Session Flow
+1. **Host**: Admin starts session at `/host` → Calls `POST /session/start` → Connects to `ws:///translate?role=host`.
+2. **Listener**: Anonymous user visits `/listener?code=ABCD` (or scans QR) → Calls `POST /session/join` → Connects to `ws:///translate?role=listener`.
+3. **Translation**: Audio stream flows through WebSocket, processed by `host/adapter.js` (Backend), and broadcast to listeners via `websocketHandler.js`.

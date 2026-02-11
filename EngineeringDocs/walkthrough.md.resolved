@@ -1,0 +1,87 @@
+# Stripe-as-Primary-Admin: Steps 1–6 Walkthrough
+
+## Changes Made
+
+### Backend — [billing.js](file:///home/jkang1643/projects/realtimetranslationapp/backend/routes/billing.js)
+- **Removed** global [requireAdmin](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/middleware/requireAuthContext.js#113-134) middleware — each route now specifies its own middleware
+- **New** `POST /api/billing/checkout-session` (auth-only) — gateway to becoming admin
+  - 30-day trial for `starter` plan
+  - `user_id` added to session metadata
+  - Checks for existing active subscription to prevent duplicates
+- **New** `GET /api/billing/checkout-status?session_id=X` (auth-only) — frontend polls this after checkout
+  - Returns `status`, `paymentStatus`, `subscriptionStatus`, `profileRole`, `webhookProcessed`
+- **Updated** all `success_url` values to include `{CHECKOUT_SESSION_ID}` template
+- **Updated** all existing admin endpoints to use per-route `requireAuth, requireAdmin`
+
+render_diffs(file:///home/jkang1643/projects/realtimetranslationapp/backend/routes/billing.js)
+
+---
+
+### Backend — [webhooks.js](file:///home/jkang1643/projects/realtimetranslationapp/backend/routes/webhooks.js)
+- **New** `invoice.payment_succeeded` handler — ensures status stays/becomes `active`, re-promotes to admin
+- **New** `invoice.payment_failed` handler — sets status to `past_due`, demotes to member
+- **New** [syncRoleFromStatus(churchId, status)](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/routes/webhooks.js#373-399) — single source of truth for admin/member transitions
+  - `active | trialing` → admin
+  - `past_due | canceled | paused` → member
+- **Enhanced** [updateSubscriptionRow](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/routes/webhooks.js#310-348) — now calls [syncRoleFromStatus](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/routes/webhooks.js#373-399) on every status transition
+- **Extracted** [findChurchForSubscription](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/routes/webhooks.js#400-431) helper (reduces duplication)
+
+render_diffs(file:///home/jkang1643/projects/realtimetranslationapp/backend/routes/webhooks.js)
+
+---
+
+### Frontend — [CheckoutPage.jsx](file:///home/jkang1643/projects/realtimetranslationapp/frontend/src/components/CheckoutPage.jsx) [NEW]
+Account-before-payment flow:
+1. `/checkout?plan=starter` → captures intent
+2. Not signed in → redirect to `/signup`
+3. No church → redirect to `/create-church`
+4. Ready → auto-calls `POST /api/billing/checkout-session` → Stripe
+5. Already admin → redirect to `/billing`
+6. No plan param → shows plan selection cards (Starter/Pro/Unlimited)
+
+---
+
+### Frontend — [BillingPage.jsx](file:///home/jkang1643/projects/realtimetranslationapp/frontend/src/components/BillingPage.jsx)
+- **New** "Finalizing your subscription..." spinner state
+- **New** [pollCheckoutStatus(sessionId)](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/components/BillingPage.jsx#82-148) — polls every 2s (max 10 attempts)
+- On webhook completion → shows success banner, reloads profile + billing data
+- Supports both new `checkout=success&session_id=X` and legacy `success=true` URL formats
+
+---
+
+### Frontend — [App.jsx](file:///home/jkang1643/projects/realtimetranslationapp/frontend/src/App.jsx)
+- Added `/checkout` route (public, no ProtectedRoute wrapper)
+
+### Frontend — [VisitorHome.jsx](file:///home/jkang1643/projects/realtimetranslationapp/frontend/src/components/home/VisitorHome.jsx)
+- "Start a Ministry" now links to `/checkout?plan=starter` instead of external pricing page
+
+---
+
+## Verification Steps
+
+Run these in your WSL terminal:
+
+```bash
+# 1. Build check (frontend)
+cd ~/projects/realtimetranslationapp/frontend && npx vite build
+
+# 2. Start backend
+cd ~/projects/realtimetranslationapp/backend && npm run dev
+
+# 3. Forward Stripe webhooks (separate terminal)
+stripe listen --forward-to localhost:3001/api/webhooks/stripe
+
+# 4. Trigger test events
+stripe trigger checkout.session.completed
+stripe trigger invoice.payment_succeeded
+stripe trigger invoice.payment_failed
+stripe trigger customer.subscription.updated
+stripe trigger customer.subscription.deleted
+```
+
+### Manual Flow Test
+1. Open `http://localhost:3000/checkout?plan=starter`
+2. Should redirect to signup if not signed in
+3. After signup → redirect back to checkout → Stripe
+4. Complete with test card `4242 4242 4242 4242`
+5. Should see "Finalizing..." → success banner → admin dashboard

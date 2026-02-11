@@ -134,18 +134,25 @@ export function AuthProvider({ children }) {
     };
 
     // Sign up with email (requires email confirmation)
-    const signUpWithEmail = async (email, password) => {
+    // redirectAfter: optional URL path to redirect to after email verification
+    const signUpWithEmail = async (email, password, redirectAfter) => {
         // Don't set global loading here, let the component handle its own loading state
         // otherwise App.jsx unmounts the page because it listens to global loading
         setError(null);
 
         try {
             console.log('[AuthContext] Signing up with email:', email);
+            // Build emailRedirectTo with optional redirect param
+            let emailRedirectTo = `${window.location.origin}/signup`;
+            if (redirectAfter) {
+                emailRedirectTo += `?redirect=${encodeURIComponent(redirectAfter)}`;
+            }
+
             const { data, error } = await supabase.auth.signUp({
                 email,
                 password,
                 options: {
-                    emailRedirectTo: `${window.location.origin}/signup`,
+                    emailRedirectTo,
                 },
             });
 

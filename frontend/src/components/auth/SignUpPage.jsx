@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-export function SignUpPage({ onSuccess, onBack, onSwitchToSignIn }) {
+export function SignUpPage({ onSuccess, onBack, onSwitchToSignIn, redirectAfter }) {
     const { signUpWithEmail, signInWithGoogle, loading, error } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -49,7 +49,7 @@ export function SignUpPage({ onSuccess, onBack, onSwitchToSignIn }) {
         console.log('[SignUp] Attempting sign up for:', email);
 
         try {
-            const result = await signUpWithEmail(email, password);
+            const result = await signUpWithEmail(email, password, redirectAfter);
             console.log('[SignUp] Sign up result:', result);
 
             if (result.error) {

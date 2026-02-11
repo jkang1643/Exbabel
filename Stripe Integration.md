@@ -187,39 +187,42 @@ stripe trigger checkout.session.completed
 
 ---
 
-## Role Rewire: Member-First Access Model
+## Role Rewire: Account-First Access Model
 
-**Design:** Member is the default consumer role (B2B2C). Admin is the paying church customer, gated behind Stripe payment.
+**Design:** Admin role is exclusively for paying customers (or those in the 30-day trial). The path to admin is: Sign Up → Create Church → Checkout (Trial) → Admin.
 
 ### Role Assignment Rules
 
 | Action | Role Assigned |
 |---|---|
 | Sign up + join a church | `member` |
-| Create a church | `member` (church creation ≠ admin) |
+| Create a church | `member` (redirects to `/checkout`) |
 | Stripe `checkout.session.completed` (subscription) | All church profiles promoted to `admin` |
 | Stripe `customer.subscription.deleted` | All church profiles demoted back to `member` |
+| Stripe `invoice.payment_failed` | All church profiles demoted back to `member` |
 
 ### Files Changed
 
 #### `backend/routes/churches.js`
-- `POST /churches/join` (L111): `role: 'admin'` → `role: 'member'`
-- `POST /churches/create` (L290): `role: 'admin'` → `role: 'member'`
+- `POST /churches/join`: `role: 'member'` (unchanged)
+- `POST /churches/create`: `role: 'member'`, `subscription.status: 'inactive'` (redirects to checkout, where webhook upgrades role)
 
 #### `backend/routes/webhooks.js`
-- `handleSubscriptionCheckout`: After plan upgrade, promotes all profiles in church to `role: 'admin'`
-- `handleSubscriptionDeleted`: After cancellation, demotes all profiles back to `role: 'member'`
+- `handleSubscriptionCheckout`: After plan upgrade, promotes all profiles to `role: 'admin'`
+- `handleSubscriptionDeleted`: Demotes all profiles back to `role: 'member'`
+- `syncRoleFromStatus`: Deterministic source of truth for admin/member based on `active/trialing` vs `past_due/canceled`
+
+#### `frontend/src/components/CheckoutPage.jsx` (NEW)
+- Handles the "Account First" flow
+- Captures intent (`?plan=starter`)
+- Enforces Auth and Church existence before redirecting to Stripe
 
 #### `frontend/src/components/home/VisitorHome.jsx`
-- "Create a Church" card replaced with **"Start a Ministry"** → links to `exbabel.com/#pricing` (behind paywall)
+- "Start a Ministry" link points to internal `/checkout?plan=starter`
 
-#### `frontend/src/components/Header.jsx`
-- Billing dropdown item: admin-only (members don't see billing)
-- Email + badge area is now a clickable dropdown trigger with ☰ hamburger icon
-
-#### `frontend/src/components/home/AdminHome.jsx`
-- Billing card removed from dashboard (moved to Header dropdown)
-- Grid reverted to 2-column (Solo Mode + Join Session)
+#### `frontend/src/App.jsx`
+- Added public `/checkout` route
+- Updated Route wrappers (`SignUpRoute`, `LoginRoute`, etc.) to support `?redirect=` parameter persistence
 
 ---
 
@@ -231,13 +234,28 @@ stripe trigger checkout.session.completed
 | `backend/routes/webhooks.js` | NEW | Webhook handler + admin role promotion/demotion |
 | `backend/routes/billing.js` | NEW | Billing API (checkout, portal, status) |
 | `frontend/src/components/BillingPage.jsx` | NEW | Billing management page |
+| `frontend/src/components/CheckoutPage.jsx` | NEW | Acquisition flow entry point |
 | `backend/server.js` | MODIFIED | Route mounting (webhook before json parser) |
 | `backend/routes/churches.js` | MODIFIED | Default role → member, Stripe customer creation |
 | `backend/usage/quotaEnforcement.js` | MODIFIED | Enabled upgrade/add-hours buttons |
-| `frontend/src/App.jsx` | MODIFIED | Added /billing route |
+| `frontend/src/App.jsx` | MODIFIED | Added /billing and /checkout routes |
 | `frontend/src/hooks/useQuotaWarning.js` | MODIFIED | Navigate to /billing |
-| `frontend/src/components/home/AdminHome.jsx` | MODIFIED | Reverted to 2-col grid (billing removed) |
-| `frontend/src/components/Header.jsx` | MODIFIED | User dropdown with billing (admin-only) |
-| `frontend/src/components/home/VisitorHome.jsx` | MODIFIED | "Start a Ministry" links to pricing |
+| `frontend/src/contexts/AuthContext.jsx` | MODIFIED | `signUpWithEmail` supports redirect param |
+| `frontend/src/components/home/VisitorHome.jsx` | MODIFIED | "Start a Ministry" links to checkout |
 | `env-template-backend.txt` | MODIFIED | Added Stripe env vars |
 
+
+### Critical Fix: Admin Role Assignment (2026-02-11)
+
+**Issue:** Users were staying as `member` after payment instead of being upgraded to `admin`.
+**Root Cause:** Subscriptions were created with `status: 'active'`, preventing the webhook from detecting a status transition to trigger the role upgrade.
+
+**Resolution:**
+1. **Initial Status:** Changed `POST /churches/create` to set subscription `status: 'inactive'`.
+2. **Database:** Added `'inactive'` as a valid status via migration.
+3. **Flow:**
+   - Church created → `status: 'inactive'`, `role: 'member'`
+   - Payment success → Webhook sets `status: 'trialing/active'`
+   - Webhook triggers `syncRoleFromStatus` → `role: 'admin'` ✅
+
+This ensures the webhook is the **single source of truth** for admin access.

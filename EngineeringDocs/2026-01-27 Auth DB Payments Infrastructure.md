@@ -548,86 +548,150 @@ We use the Supabase CLI for version-controlled migrations:
 
 ---
 
-## Part 3: Payments & Billing Integration (Planned Wiring)
+## Part 3: Payments & Billing Integration (Implemented Infrastructure)
 
-**Status:** Ready for Implementation
+**Status:** Implementation Complete (2026-02-10)
 **Provider:** Stripe (Checkout + Webhooks)
 
-This section outlines the architectural "wiring" required to enable self-service upgrades and top-ups, integrating the existing database schema with Stripe's billing engine.
+This section outlines the implemented "wiring" that enables self-service upgrades, top-ups, and the critical "Account First" acquisition flow.
 
-### 1. Upgrade Plan Flow (Subscription)
-**Goal:** Allow users to switch from Free/Starter to Pro/Unlimited.
+### 1. Admin Acquisition Flow (Account First)
+**Goal:** Default path for new users to become admins.
+**Principle:** "Account before payment". Users must have an authenticated account and a church record *before* Stripe is engaged.
 
-**Wiring Diagram:**
-1.  **Trigger:** User clicks "Upgrade Plan" in `UsageLimitModal` or `/settings/billing`.
-2.  **API Call:** `POST /api/billing/subscription-checkout`
-    *   **Body:** `{ planCode: 'pro', interval: 'month' }`
-    *   **Auth:** Requires `admin` role.
-3.  **Stripe Interaction:**
+**Flow:**
+1.  **Entry:** User visits `/checkout?plan=starter` (e.g., from landing page).
+2.  **Auth Gating:**
+    *   If not signed in → Redirects to `/signup?redirect=/checkout?plan=starter`.
+    *   **Crucial:** The `redirect` query param is preserved through the entire email verification loop (Supabase `emailRedirectTo`).
+3.  **Church Creation:**
+    *   If signed in but no church → Redirects to `/create-church?redirect=/checkout?plan=starter`.
+4.  **Checkout Initialization:**
+    *   Once authenticated with a church, `CheckoutPage` calls `POST /api/billing/checkout-session`.
+    *   **Body:** `{ plan: 'starter' }` (begins 30-day free trial).
+5.  **Stripe Interaction:**
     *   Backend creates a **Stripe Checkout Session** (Mode: `subscription`).
     *   `client_reference_id`: Set to `church_id`.
-    *   `metadata`: `{ target_plan: 'pro' }`.
-4.  **User Action:** Enters card details on Stripe hosted page -> Redirects back to `/billing?success=true`.
-5.  **Fulfillment (Webhook):** `checkout.session.completed`
-    *   Backend verifies signature.
-    *   **DB Update:**
-        ```sql
-        UPDATE public.subscriptions
-        SET 
-            stripe_subscription_id = $1,
-            plan_id = (SELECT id FROM plans WHERE code = $2),
-            status = 'active',
-            current_period_end = $3
-        WHERE church_id = $4;
-        ```
+    *   `metadata`: `{ user_id: '...', church_id: '...' }`.
+6.  **Success:**
+    *   User returns to `/billing?checkout=success&session_id=...`.
+    *   Frontend polls `/api/billing/checkout-status` until webhook confirms role upgrade.
 
-### 2. "Top Up" Flow (One-Time Add Hours)
-**Goal:** Allow users to purchase extra hours (e.g., "5 Hour Pack") when quota is low, without changing plans.
+### 2. Deterministic Role Synchronization
+**Goal:** Ensure the user's role (`admin` vs `member`) always matches their subscription status, with no race conditions.
 
-**Schema Strategy:**
-We will utilize the `usage_monthly` table and a new `purchased_credits` ledger.
-*   **New Table:** `public.purchased_credits` (church_id, amount_seconds, stripe_payment_id, created_at).
+**Source of Truth:** `backend/routes/webhooks.js` -> `syncRoleFromStatus(churchId, status)`
 
-**Wiring Diagram:**
-1.  **Trigger:** User clicks "Add Hours" in `UsageLimitModal`.
-2.  **API Call:** `POST /api/billing/top-up-checkout`
-    *   **Body:** `{ packId: '5_hours' }`
+**Logic:**
+*   **Admin Access Granted:** Status is `active` or `trialing`.
+*   **Admin Access Revoked:** Status is `past_due`, `canceled`, `unpaid`, or `paused`.
+
+**Triggers:**
+*   `customer.subscription.updated` (Plan changes, trial expiry)
+*   `customer.subscription.deleted` (Cancellation)
+*   `invoice.payment_succeeded` (Renewal success → ensures `active`)
+*   `invoice.payment_failed` (Payment failure → sets `past_due` → demotes to `member`)
+
+### 3. Upgrade Plan Flow (Subscription)
+**Goal:** Allow users to switch from Free/Starter to Pro/Unlimited.
+
+1.  **Trigger:** User clicks "Upgrade Plan" in `UsageLimitModal` or `/billing`.
+2.  **API Call:** `POST /api/billing/checkout-session`
+    *   **Body:** `{ plan: 'pro' }`
 3.  **Stripe Interaction:**
-    *   Backend creates a **Stripe Checkout Session** (Mode: `payment` - One-time).
-    *   `metadata`: `{ type: 'top_up', seconds: 18000 }` (5 hours).
-4.  **Fulfillment (Webhook):** `checkout.session.completed`
-    *   **DB Transaction:**
-        1.  Insert into `purchased_credits`.
-        2.  **Update Quota Logic:** The `get_session_quota_status` RPC must be updated to add `SUM(purchased_credits)` to the `included_seconds`.
-        ```javascript
-        // RPC Logic Update
-        total_allowance = plan_allowance + COALESCE((
-            SELECT SUM(amount_seconds) 
-            FROM purchased_credits 
-            WHERE church_id = pid 
-            AND created_at > date_trunc('month', now()) -- Assuming credits expire monthly? Or permanent?
-        ), 0);
-        ```
+    *   Backend creates a **Stripe Checkout Session** (Mode: `subscription`).
+    *   Uses `setup_mode` if already on a compatible subscription, or creates a new session.
+4.  **Fulfillment (Webhook):** `customer.subscription.updated`
+    *   Updates `plan_id` and `stripe_price_id` in `subscriptions` table.
+    *   Calls `syncRoleFromStatus` (idempotent).
 
-### 3. Customer Portal (Manage Payment Methods)
-**Goal:** Allow users to update credit cards and view invoices.
+### 4. "Top Up" Flow (One-Time Add Hours)
+**Goal:** Allow users to purchase extra hours (e.g., "5 Hour Pack") when quota is low.
 
-1.  **API Call:** `GET /api/billing/portal`
-2.  **Stripe Interaction:**
-    *   `stripe.billingPortal.sessions.create({ customer: stripe_customer_id })`
-3.  **Redirect:** User is sent to Stripe's self-serve portal.
+1.  **API Call:** `POST /api/billing/checkout-session` (Shared endpoint handle logic based on payload)
+    *   **Body:** `{ topUpPack: '5_hours' }`
+2.  **Fulfillment (Webhook):** `checkout.session.completed` (Mode: `payment`)
+    *   Inserts into `purchased_credits` table.
+    *   `get_session_quota_status` RPC automatically places these credits on top of the monthly allowance.
 
-### 4. Dependencies ✅ COMPLETED (2026-02-10)
-- [x] **Stripe Service**: `backend/services/stripe.js` (Initialize SDK)
-- [x] **Webhook Handler**: `backend/routes/webhooks.js` (Signature verification + event routing)
-- [x] **Billing Routes**: `backend/routes/billing.js` (Checkout session creation, portal, status)
-- [x] **Schema Updates**: 
-    - Added `stripe_customer_id` to `churches`.
-    - Added `purchased_credits` table (for top-ups).
-    - Added `stripe_price_id` to `plans`.
-    - Updated `get_session_quota_status` RPC to include purchased credits.
-- [x] **Frontend**: `BillingPage.jsx` (plan display, upgrade, top-up, portal)
-- [x] **Wiring**: Webhook route before `express.json()`, billing route alongside API routes
+### 5. Verified Implementation Details
+- **Webhook Security:** Webhook route mounted *before* `express.json()` to allow raw body signature verification.
+- **Null Safety:** `updateSubscriptionRow` handles missing `current_period_start/end` fields (common in test clock events).
+- **Subscription ID Extraction:** `extractSubscriptionId` helper handles both string IDs and expanded objects in Stripe invoice events.
+- **Redirects:** Frontend Auth Context and Route Wrappers (`SignUpRoute`, `LoginRoute`, `CreateChurchRoute`) now universally support the `?redirect=` parameter to preserve user intent.
+
+### 6. Checkout Page Hybrid Routing Pattern (2026-02-11)
+**Goal:** Enable `/checkout` to serve dual purposes: plan browsing UI for logged-in users AND smart routing controller for landing page conversions.
+
+**Pattern:** The `/checkout` page acts as a **hybrid controller** based on the presence of the `?plan=` query parameter.
+
+#### Behavior Matrix
+
+| URL | User State | Action |
+|-----|-----------|--------|
+| `/checkout` (no params) | Any | Shows 3-tier plan selection UI |
+| `/checkout?plan=starter` | Not authenticated | Redirects to `/signup?redirect=/checkout?plan=starter` |
+| `/checkout?plan=starter` | Authenticated, no church | Redirects to `/create-church?redirect=/checkout?plan=starter` |
+| `/checkout?plan=starter` | Authenticated with church | Auto-creates Stripe checkout session → Redirects to Stripe |
+| `/checkout?plan=starter` | Already admin | Redirects to `/billing` (for upgrades) |
+
+#### Implementation Details
+
+**File:** `frontend/src/components/CheckoutPage.jsx`
+
+**Smart Router Logic:**
+```javascript
+useEffect(() => {
+  if (loading) return;
+
+  // No plan parameter → show normal UI (browsing mode)
+  if (!plan) return;
+
+  // Invalid plan → redirect to checkout without params
+  if (!PLANS.find(p => p.code === plan)) {
+    navigate('/checkout', { replace: true });
+    return;
+  }
+
+  // Plan parameter present → act as smart router
+  if (isAdmin) {
+    navigate('/billing', { replace: true }); // Upgrade flow
+  } else if (!isAuthenticated) {
+    navigate(`/signup?redirect=/checkout?plan=${plan}`, { replace: true });
+  } else if (!hasChurch) {
+    navigate(`/create-church?redirect=/checkout?plan=${plan}`, { replace: true });
+  } else {
+    handleCheckout(plan); // Auto-trigger Stripe
+  }
+}, [loading, isAuthenticated, isAdmin, hasChurch, plan, navigate]);
+```
+
+**Button Click Flow (Manual Selection):**
+- User clicks "Get Pro" button on `/checkout` (no params)
+- Calls `handleCheckout('pro')`
+- Function checks auth state and either redirects to signup/create-church OR creates Stripe session
+
+**Landing Page Integration:**
+- Marketing site (`exbabel.com`) routes to `app.exbabel.com/checkout?plan=starter`
+- Config file: `exbabel/lib/config.ts`
+```typescript
+export const appRoutes = {
+  pricingStarter: `${getAppUrl()}/checkout?plan=starter`,
+  pricingPro: `${getAppUrl()}/checkout?plan=pro`,
+  pricingUnlimited: `${getAppUrl()}/checkout?plan=unlimited`,
+};
+```
+
+**Complete User Journey (From Landing Page):**
+1. User clicks "Start Free Trial" on `exbabel.com/pricing`
+2. Redirects to `localhost:3000/checkout?plan=starter`
+3. Not signed in → Redirects to `/signup?redirect=/checkout?plan=starter`
+4. After signup → Redirects to `/create-church?redirect=/checkout?plan=starter`
+5. After creating church → Back to `/checkout?plan=starter`
+6. Auto-triggers Stripe checkout → Redirects to Stripe payment page
+7. After payment → Returns to `/billing?checkout=success`
+8. Webhook confirms subscription → Role upgraded to `admin`
+
 
 
 ---
@@ -804,9 +868,43 @@ backend/
 
 ## Changelog
 
-### 2026-01-27 - Initial Implementation
-- ✅ Created Supabase admin client
-- ✅ Implemented authentication middleware
+### 6. Checkout Page Hybrid Routing Pattern (2026-02-11)
+**Goal:** Enable `/checkout` to serve dual purposes: plan browsing UI for logged-in users AND smart routing controller for landing page conversions.
+
+**Pattern:** The `/checkout` page acts as a **hybrid controller** based on the presence of the `?plan=` query parameter.
+
+[... (Routing details previously added) ...]
+
+---
+
+## Part 10: Critical Fixes & Hardening
+
+### 1. Admin Role Assignment Fix (2026-02-11)
+
+**Severity:** Critical
+**Issue:** Users completing the payment flow were assigned `'member'` role instead of `'admin'`, blocking access to paid features.
+
+**Root Cause Analysis:**
+- Church creation initialized subscriptions with `status: 'active'`.
+- The webhook (`customer.subscription.updated`) relies on status *transitions* or explicit checks to trigger `syncRoleFromStatus`.
+- Since the status was already `'active'`, the webhook saw no change/reason to upgrade the role.
+
+**Solution:**
+1. **Schema Update:** Added `'inactive'` to the `subscriptions.status` CHECK constraint.
+   - Migration: `20260211_add_inactive_status.sql`
+2. **Logic Change:** `POST /churches/create` now initializes subscriptions as `'inactive'`.
+3. **Flow:**
+   - Creation: `status='inactive'`, `role='member'`
+   - Payment: Webhook sets `status='trialing'/'active'`
+   - Trigger: Webhook detects valid admin status → Upgrades `role='admin'`
+
+**SQL Migration:**
+```sql
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_status_check;
+ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_status_check
+CHECK (status = ANY (ARRAY['inactive', 'trialing', 'active', 'past_due', 'canceled', 'paused']));
+```
+
 - ✅ Added `/api/me` endpoint
 - ✅ Configured environment variables
 - ✅ Tested authentication flow
@@ -1137,3 +1235,31 @@ APP_BASE_URL=http://localhost:5173
 - ✅ **Church Creation Paywall**: "Create a Church" card in `VisitorHome.jsx` replaced with "Start a Ministry" linking to `exbabel.com/#pricing`
 - ✅ **Header Dropdown**: Replaced flat email + Sign Out with clickable user dropdown (☰ icon) containing Billing (admin-only) and Sign Out
 - ✅ **AdminHome Cleanup**: Removed 💳 Billing card from dashboard (moved to Header dropdown), reverted to 2-column grid
+
+### 2026-02-11 - Checkout & Pricing Verification
+- ✅ **Pricing Strategy**: Updated base pricing with **50% Launch Discount**:
+    - **Starter**: $45/mo → **$22.50/mo** (billed yearly)
+    - **Pro**: $100/mo → **$50/mo** (billed yearly)
+    - **Unlimited**: $300/mo → **$150/mo** (billed yearly)
+- ✅ **Checkout Flow**: Refined "Account First" flow:
+    - **Entry**: `/checkout` (shows all plans) is now public
+    - **Auth**: Clicking a plan redirects to Signup/Login → then auto-initiated Checkout
+- ✅ **Terminology**: Standardized "Practice Mode" → "**Solo Mode**" across all UI/Pricing
+- ✅ **Visuals**:
+    - Added high-res plan icons (Starter/Pro/Unlimited)
+    - Added "30-DAY FREE TRIAL" badge to Starter
+    - Added "MOST POPULAR" badge to Pro
+- ✅ **Discount Logic**:
+    - Server-side comparison of `allow_promotion_codes` vs `discounts` array
+    - Implemented auto-application of `STRIPE_50_PERCENT_COUPON_ID`
+    - Removed conflicting `allow_promotion_codes: true` setting
+
+### 2026-02-11 - Portal Integration & Robust Webhooks (PR 7.8)
+- ✅ **Portal-Based Upgrades**: Switched upgrade flow to use Stripe Customer Portal (`/billing/subscription-checkout` redirect).
+    - **Benefit**: Native confirmation screen, prevents duplicate subscriptions, automatic proration handling.
+    - **Deep Link**: Uses `flow_data` to automatically navigate users to the "Update Plan" screen.
+- ✅ **Robust Webhook Handling**:
+    - **Event Coverage**: Added handlers for `invoice.paid` and `invoice_payment.paid` to ensure payment confirmation is never missed.
+    - **Safe Plan Updates**: Restored `plan_id` updates in `customer.subscription.updated` but restricted to `status='active'` only. This allows instant Portal upgrades while blocking trial abuse.
+- ✅ **Proration Fix**: Improved `extractSubscriptionId` to check invoice line items when the top-level subscription ID is missing (common in proration invoices).
+- ✅ **UX Refinement**: "Start a Ministry" link on VisitorHome now directs to the Plans page (`/checkout`) instead of pre-selecting a plan, allowing users to compare options first.

@@ -300,14 +300,16 @@ churchRouter.post('/churches/create', requireAuth, async (req, res) => {
         }
 
         // Step 3: Create subscription with starter plan (Invariant #8: one subscription per church)
+        // IMPORTANT: Start with 'inactive' status. The Stripe webhook will set to 'trialing' (free trial)
+        // or 'active' (paid), which will trigger the role upgrade to 'admin' via syncRoleFromStatus.
         const { error: subErr } = await supabaseAdmin
             .from('subscriptions')
             .insert({
                 church_id: churchId,
                 plan_id: starterPlan.id,
-                status: 'active',
-                current_period_start: new Date().toISOString(),
-                current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() // 30 days
+                status: 'inactive',  // Webhook will upgrade to 'trialing' or 'active'
+                current_period_start: null,  // Will be set by webhook
+                current_period_end: null     // Will be set by webhook
             });
 
         if (subErr) {

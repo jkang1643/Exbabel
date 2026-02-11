@@ -75,10 +75,13 @@ router.post(
                     break;
 
                 case 'invoice.payment_succeeded':
+                case 'invoice.paid':
+                case 'invoice_payment.paid': // Legacy/alternative event seen in logs
                     await handleInvoicePaymentSucceeded(event.data.object);
                     break;
 
                 case 'invoice.payment_failed':
+                case 'invoice_payment.failed':
                     await handleInvoicePaymentFailed(event.data.object);
                     break;
 
@@ -289,15 +292,31 @@ async function handleSubscriptionDeleted(subscription) {
  * Handle invoice.payment_succeeded
  * 
  * Confirms the subscription stays active after a successful payment.
+ * 
+ * CRITICAL: This is where we update plan_id to grant premium features.
+ * Only after payment succeeds do we give users access to upgraded plans.
+ * 
  * Particularly important for:
+ *   - Trial users upgrading (must pay before getting Pro features)
  *   - Recurring payments (renewal)
  *   - Recovery from past_due status
  */
 async function handleInvoicePaymentSucceeded(invoice) {
-    const stripeSubscriptionId = extractSubscriptionId(invoice.subscription);
+    let stripeSubscriptionId = extractSubscriptionId(invoice.subscription);
+
+    // If top-level subscription is missing, check line items (common for proration invoices)
+    if (!stripeSubscriptionId && invoice.lines?.data) {
+        for (const line of invoice.lines.data) {
+            if (line.subscription) {
+                stripeSubscriptionId = extractSubscriptionId(line.subscription);
+                if (stripeSubscriptionId) break;
+            }
+        }
+    }
+
     if (!stripeSubscriptionId) {
         // One-time payment (e.g., top-up) — no action needed
-        console.log(`[Webhook] invoice.payment_succeeded: no subscription (one-time payment), skipping`);
+        console.log(`[Webhook] invoice.payment_succeeded: no subscription found (one-time payment?), skipping. Invoice=${invoice.id}`);
         return;
     }
 
@@ -309,18 +328,44 @@ async function handleInvoicePaymentSucceeded(invoice) {
         return;
     }
 
-    // Ensure status is active
-    const { error } = await supabaseAdmin
-        .from('subscriptions')
-        .update({ status: 'active' })
-        .eq('church_id', churchId)
-        .in('status', ['past_due', 'trialing']); // Only update if was past_due or trialing
+    // Fetch subscription to get current price
+    const subscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+    const stripePriceId = subscription.items.data[0]?.price?.id;
 
-    if (!error) {
-        console.log(`[Webhook] ✓ invoice.payment_succeeded: church=${churchId} → status=active`);
+    // Look up plan by price
+    let planId = null;
+    let planCode = null;
+    if (stripePriceId) {
+        const { data: plan } = await supabaseAdmin
+            .from('plans')
+            .select('id, code')
+            .eq('stripe_price_id', stripePriceId)
+            .single();
+
+        if (plan) {
+            planId = plan.id;
+            planCode = plan.code;
+            console.log(`[Webhook] ✓ Plan identified: ${plan.code} (price=${stripePriceId})`);
+        }
     }
 
-    // Re-promote to admin (recovers from past_due demotion)
+    // Update status to active AND update plan_id (only after payment succeeds)
+    const updateData = { status: 'active' };
+    if (planId) {
+        updateData.plan_id = planId;
+        updateData.stripe_price_id = stripePriceId;
+    }
+
+    const { error } = await supabaseAdmin
+        .from('subscriptions')
+        .update(updateData)
+        .eq('church_id', churchId);
+
+    if (!error) {
+        console.log(`[Webhook] ✓ invoice.payment_succeeded: church=${churchId} → status=active${planCode ? `, plan=${planCode}` : ''}`);
+    }
+
+    // Promote to admin (only after payment succeeds)
     await syncRoleFromStatus(churchId, 'active');
 
     clearEntitlementsCache(churchId);
@@ -333,9 +378,20 @@ async function handleInvoicePaymentSucceeded(invoice) {
  * This gates admin features until payment is resolved.
  */
 async function handleInvoicePaymentFailed(invoice) {
-    const stripeSubscriptionId = extractSubscriptionId(invoice.subscription);
+    let stripeSubscriptionId = extractSubscriptionId(invoice.subscription);
+
+    // If top-level subscription is missing, check line items
+    if (!stripeSubscriptionId && invoice.lines?.data) {
+        for (const line of invoice.lines.data) {
+            if (line.subscription) {
+                stripeSubscriptionId = extractSubscriptionId(line.subscription);
+                if (stripeSubscriptionId) break;
+            }
+        }
+    }
+
     if (!stripeSubscriptionId) {
-        console.log(`[Webhook] invoice.payment_failed: no subscription (one-time payment), skipping`);
+        console.log(`[Webhook] invoice.payment_failed: no subscription found (one-time payment?), skipping. Invoice=${invoice.id}`);
         return;
     }
 
@@ -431,7 +487,9 @@ async function findChurchForSubscription(stripeSubscriptionId, stripeCustomerId)
 
 /**
  * Update subscription row with latest Stripe data.
- * Also triggers deterministic role sync based on new status.
+ * 
+ * IMPORTANT: Does NOT update plan_id here - that only happens on invoice.paid
+ * to prevent trial users from getting premium features without payment.
  */
 async function updateSubscriptionRow(churchId, subscription, stripePriceId, stripeSubscriptionId) {
     const mappedStatus = mapStripeStatus(subscription.status);
@@ -449,8 +507,10 @@ async function updateSubscriptionRow(churchId, subscription, stripePriceId, stri
         updateData.current_period_end = new Date(subscription.current_period_end * 1000).toISOString();
     }
 
-    // If price changed, also update plan
-    if (stripePriceId) {
+    // ✅ RESTORED (CONDITIONAL): Update plan_id on subscription.updated ONLY if active.
+    // This allows legitimate upgrades via Portal (which sets status=active) to work immediately,
+    // while still preventing trial users (status=trialing) from accessing premium features unpaid.
+    if (mappedStatus === 'active' && stripePriceId) {
         const { data: plan } = await supabaseAdmin
             .from('plans')
             .select('id, code')
@@ -460,6 +520,7 @@ async function updateSubscriptionRow(churchId, subscription, stripePriceId, stri
         if (plan) {
             updateData.plan_id = plan.id;
             updateData.stripe_price_id = stripePriceId;
+            console.log(`[Webhook] ✓ Updating plan to ${plan.code} (status=active)`);
         }
     }
 
@@ -475,8 +536,9 @@ async function updateSubscriptionRow(churchId, subscription, stripePriceId, stri
 
     console.log(`[Webhook] ✓ Subscription updated: church=${churchId} status=${mappedStatus}`);
 
-    // Deterministic admin promotion/demotion on EVERY status transition
-    await syncRoleFromStatus(churchId, mappedStatus);
+    // ❌ REMOVED: Don't sync role on subscription.updated
+    // Role sync now only happens on invoice.paid (after payment succeeds)
+    // await syncRoleFromStatus(churchId, mappedStatus);
 
     clearEntitlementsCache(churchId);
 }

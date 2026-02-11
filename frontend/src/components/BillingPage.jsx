@@ -6,10 +6,10 @@
  *   - Upgrade subscription plan
  *   - Purchase additional hours (top-up)
  *   - Access Stripe Customer Portal
- *   - Success/cancel feedback from Stripe checkout
+ *   - Success/cancel feedback from Stripe checkout with session_id polling
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -26,8 +26,8 @@ const PLAN_INFO = {
 };
 
 export function BillingPage() {
-    const { getAccessToken, signOut } = useAuth();
-    const [searchParams] = useSearchParams();
+    const { getAccessToken, signOut, reloadProfile } = useAuth();
+    const [searchParams, setSearchParams] = useSearchParams();
     const navigate = useNavigate();
 
     const [status, setStatus] = useState(null);
@@ -35,23 +35,116 @@ export function BillingPage() {
     const [actionLoading, setActionLoading] = useState(null);
     const [error, setError] = useState(null);
     const [successMessage, setSuccessMessage] = useState(null);
+    const [finalizing, setFinalizing] = useState(false);
+    const pollRef = useRef(null);
 
     // Check for Stripe redirect params
     useEffect(() => {
+        const checkout = searchParams.get('checkout');
+        const sessionId = searchParams.get('session_id');
+        const canceled = searchParams.get('canceled');
+
+        if (checkout === 'success' && sessionId) {
+            // Stripe checkout completed — poll for webhook processing
+            setFinalizing(true);
+            pollCheckoutStatus(sessionId);
+        } else if (checkout === 'success') {
+            // Legacy success without session_id
+            const plan = searchParams.get('plan');
+            const topup = searchParams.get('topup');
+            showSuccessMessage(plan, topup);
+        } else if (canceled === 'true') {
+            setError('Checkout was canceled. No charges were made.');
+        }
+
+        // Also handle legacy ?success=true format
         if (searchParams.get('success') === 'true') {
             const plan = searchParams.get('plan');
             const topup = searchParams.get('topup');
-            if (plan) {
-                setSuccessMessage(`🎉 Successfully upgraded to ${PLAN_INFO[plan]?.name || plan}!`);
-            } else if (topup) {
-                setSuccessMessage(`🎉 Successfully purchased additional hours!`);
-            } else {
-                setSuccessMessage(`🎉 Payment successful!`);
-            }
-        } else if (searchParams.get('canceled') === 'true') {
-            setError('Checkout was canceled. No charges were made.');
+            showSuccessMessage(plan, topup);
         }
-    }, [searchParams]);
+
+        return () => {
+            if (pollRef.current) clearInterval(pollRef.current);
+        };
+    }, []);
+
+    function showSuccessMessage(plan, topup) {
+        if (plan) {
+            setSuccessMessage(`🎉 Successfully upgraded to ${PLAN_INFO[plan]?.name || plan}!`);
+        } else if (topup) {
+            setSuccessMessage(`🎉 Successfully purchased additional hours!`);
+        } else {
+            setSuccessMessage(`🎉 Payment successful!`);
+        }
+    }
+
+    /**
+     * Poll checkout status until webhook has processed.
+     * Shows "Finalizing your subscription..." spinner.
+     * Max 10 attempts (20 seconds), then shows success anyway.
+     */
+    async function pollCheckoutStatus(sessionId) {
+        let attempts = 0;
+        const maxAttempts = 10;
+
+        const poll = async () => {
+            attempts++;
+            try {
+                const token = getAccessToken();
+                const res = await fetch(`${API_URL}/api/billing/checkout-status?session_id=${sessionId}`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+
+                    // Webhook has processed and role is updated
+                    if (data.webhookProcessed && data.profileRole === 'admin') {
+                        clearInterval(pollRef.current);
+                        pollRef.current = null;
+                        setFinalizing(false);
+
+                        const plan = data.plan || searchParams.get('plan');
+                        showSuccessMessage(plan, null);
+
+                        // Reload auth profile to reflect admin role
+                        await reloadProfile();
+
+                        // Reload billing status
+                        await loadBillingStatus();
+
+                        // Clean up URL params
+                        setSearchParams({});
+                        return;
+                    }
+                }
+            } catch (err) {
+                console.error('[Billing] Poll error:', err);
+            }
+
+            // Max attempts reached — show success anyway
+            if (attempts >= maxAttempts) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+                setFinalizing(false);
+
+                const plan = searchParams.get('plan');
+                showSuccessMessage(plan, null);
+
+                // Try reloading in case webhook processed after all
+                await reloadProfile();
+                await loadBillingStatus();
+                setSearchParams({});
+            }
+        };
+
+        // Initial poll immediately, then every 2 seconds
+        await poll();
+        if (pollRef.current === null && attempts < maxAttempts) {
+            pollRef.current = setInterval(poll, 2000);
+        }
+    }
 
     // Load billing status
     useEffect(() => {
@@ -61,7 +154,7 @@ export function BillingPage() {
     async function loadBillingStatus() {
         try {
             setLoading(true);
-            const token = await getAccessToken();
+            const token = getAccessToken();
             const res = await fetch(`${API_URL}/api/billing/status`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
@@ -80,7 +173,7 @@ export function BillingPage() {
         try {
             setActionLoading(endpoint);
             setError(null);
-            const token = await getAccessToken();
+            const token = getAccessToken();
             const res = await fetch(`${API_URL}/api/billing/${endpoint}`, {
                 method: endpoint === 'portal' ? 'GET' : 'POST',
                 headers: {
@@ -105,11 +198,65 @@ export function BillingPage() {
         }
     }
 
+    async function handleUpgrade(planCode) {
+        try {
+            setActionLoading('upgrade');
+            setError(null);
+            const token = getAccessToken();
+            const res = await fetch(`${API_URL}/api/billing/subscription-checkout`, {
+                method: 'POST',
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ planCode }),
+            });
+
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error || 'Upgrade failed');
+            }
+
+            const data = await res.json();
+            const planName = PLAN_INFO[planCode]?.name || planCode;
+            setSuccessMessage(`🎉 Successfully upgraded to ${planName}!`);
+
+            // Reload billing status to show new plan
+            await loadBillingStatus();
+
+        } catch (err) {
+            console.error('[Billing] Upgrade error:', err);
+            setError(err.message);
+        } finally {
+            setActionLoading(null);
+        }
+    }
+
     function formatTime(seconds) {
         if (!seconds && seconds !== 0) return '—';
         const hours = seconds / 3600;
         if (hours >= 1) return `${hours.toFixed(1)} hrs`;
         return `${Math.round(seconds / 60)} min`;
+    }
+
+    // Finalizing state (waiting for webhook to process)
+    if (finalizing) {
+        return (
+            <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white">
+                <Header onSignOut={signOut} />
+                <div className="container mx-auto px-4 py-16 text-center">
+                    <div className="max-w-md mx-auto">
+                        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600 mx-auto mb-6"></div>
+                        <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                            Finalizing your subscription...
+                        </h2>
+                        <p className="text-gray-600">
+                            Setting up your account. This usually takes just a moment.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        );
     }
 
     if (loading) {
@@ -193,7 +340,7 @@ export function BillingPage() {
                                     <div className="w-full bg-gray-200 rounded-full h-3">
                                         <div
                                             className={`h-3 rounded-full transition-all ${usage.percentUsed >= 100 ? 'bg-red-500' :
-                                                    usage.percentUsed >= 80 ? 'bg-yellow-500' : 'bg-blue-500'
+                                                usage.percentUsed >= 80 ? 'bg-yellow-500' : 'bg-blue-500'
                                                 }`}
                                             style={{ width: `${Math.min(usage.percentUsed, 100)}%` }}
                                         />
