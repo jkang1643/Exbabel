@@ -320,7 +320,7 @@ wss.on("connection", async (clientWs, req) => {
     handleHostConnection(clientWs, sessionId);
     return;
   } else if (role === 'listener' && sessionId) {
-    handleListenerConnection(clientWs, sessionId, targetLang || 'en', userName);
+    handleListenerConnection(clientWs, req, sessionId, targetLang || 'en', userName);
     return;
   }
 

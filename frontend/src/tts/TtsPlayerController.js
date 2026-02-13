@@ -1077,13 +1077,27 @@ export class TtsPlayerController {
 
             console.log(`[TtsPlayerController] Reusing Audio element [id:${audio.__id || 'none'}] for segment: ${segmentId}, volume: ${audio.volume}`);
 
-            // Apply playback rate reinforcement for ALL voices (solid guarantee)
+            // Apply playback rate reinforcement
+            let rate = 1.0;
             if (queueItem.ssmlOptions && queueItem.ssmlOptions.rate) {
-                const rate = parseFloat(queueItem.ssmlOptions.rate);
-                if (!isNaN(rate) && rate !== 1.0) {
-                    console.log(`[TtsPlayerController] Reinforcing playbackRate in browser [${queueItem.resolvedRoute?.tier || 'unknown'}]: ${rate}x`);
-                    audio.playbackRate = rate;
-                }
+                rate = parseFloat(queueItem.ssmlOptions.rate);
+            }
+
+            // Check for Tier based overrides
+            const tier = queueItem.resolvedRoute?.tier;
+            if (tier === 'elevenlabs_flash') {
+                console.log(`[TtsPlayerController] Applying 0.7x compensation for Flash v2. Original rate: ${rate}`);
+                rate *= 0.7; // Compensate for native 1.45x speed
+            } else if (tier === 'gemini') {
+                // Gemini also needs slowing down
+                rate *= 0.7;
+            }
+
+            if (!isNaN(rate)) {
+                audio.playbackRate = rate;
+                console.log(`[TtsPlayerController] DEBUG: audio.playbackRate set to: ${audio.playbackRate}`);
+            } else {
+                audio.playbackRate = 1.0;
             }
 
             this.currentAudio = audio;

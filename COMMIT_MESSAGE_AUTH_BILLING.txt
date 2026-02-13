@@ -1,0 +1,9 @@
+feat(auth-billing): Complete Auth, DB, and Payments Infrastructure
+
+- Implemented Stripe integration for subscriptions and payments
+- Added webhook handlers for role synchronization
+- Implemented usage metering (session spans, listening spans)
+- Added quota enforcement (solo/host limits, warnings)
+- Created Billing Page and Checkout Page with hybrid routing
+- Updated database schema for multi-tenancy and billing
+- Added entitlements and usage debug endpoints

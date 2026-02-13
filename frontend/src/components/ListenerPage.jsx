@@ -307,10 +307,16 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // Stable session ID for streaming (must not change on re-render)
   const streamingSessionIdRef = useRef(`listener_${Date.now()}`);
 
+  // Determine effective playback rate
+  const getEffectivePlaybackRate = () => {
+    return ttsSettings.speakingRate || 1.0;
+  };
+
   // TTS streaming (real-time) - uses session ID from join if available
   const ttsStreaming = useTtsStreaming({
     sessionId: sessionInfo?.sessionId || streamingSessionIdRef.current,
     enabled: streamingTts && isJoined && connectionState === 'open',
+    playbackRate: getEffectivePlaybackRate(),
     onBufferUpdate: (ms) => {
       console.log('[ListenerPage] Buffer:', ms, 'ms');
     },
@@ -663,28 +669,14 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
       let defaultVoiceId = null;
 
-      // Priority 1: Find the highest-quality allowed voice based on plan
-      // Use tier priority ordering to select the best available allowed voice
-      const tierPriority = ['elevenlabs_flash', 'elevenlabs_turbo', 'elevenlabs_v3', 'elevenlabs', 'gemini', 'chirp3_hd', 'neural2', 'studio', 'standard'];
-
-      for (const tier of tierPriority) {
-        const allowedVoice = availableVoices.find(v => v.tier === tier && isVoiceAllowed(v));
-        if (allowedVoice) {
-          defaultVoiceId = allowedVoice.voiceId;
-          break;
-        }
-      }
-
-      // Universal Fallback
-      if (!defaultVoiceId) {
-        // Find any allowed voice
-        const firstAllowed = availableVoices.find(v => isVoiceAllowed(v));
-        if (firstAllowed) {
-          defaultVoiceId = firstAllowed.voiceId;
-        } else {
-          // Last resort: Just pick the first one (even if technically disallowed, better than crash)
-          defaultVoiceId = availableVoices[0]?.voiceId;
-        }
+      // Use the first allowed voice from the server-provided list
+      // The server already sorts voices by tier priority in getDefaultVoice()
+      const firstAllowed = availableVoices.find(v => isVoiceAllowed(v));
+      if (firstAllowed) {
+        defaultVoiceId = firstAllowed.voiceId;
+      } else {
+        // Last resort: Just pick the first one (even if technically disallowed, better than crash)
+        defaultVoiceId = availableVoices[0]?.voiceId;
       }
 
       if (defaultVoiceId) {
@@ -720,12 +712,12 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       // Determine tier-specific default speed
       let defaultSpeed = 1.1; // Baseline is 1.1x for Standard, Neural2, Chirp3
 
-      // Robust Gemini detection
-      const isGemini = tier === 'gemini' || (selectedVoice && selectedVoice.startsWith('gemini-'));
-
-      // Check if this is any ElevenLabs tier
+      // Check if this is any ElevenLabs tier (Explicitly check to avoid fallthrough)
       const isElevenLabs = tier === 'elevenlabs_flash' || tier === 'elevenlabs_turbo' ||
-        tier === 'elevenlabs_v3' || tier === 'elevenlabs';
+        tier === 'elevenlabs_v3' || tier === 'elevenlabs' || (tier && tier.startsWith('elevenlabs'));
+
+      // Robust Gemini detection (Ensure we don't accidentally catch ElevenLabs)
+      const isGemini = !isElevenLabs && (tier === 'gemini' || (selectedVoice && selectedVoice.startsWith('gemini-')));
 
       if (isGemini) {
         defaultSpeed = 1.45;
@@ -741,7 +733,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       if (tierChanged) {
         console.log(`[ListenerPage] Tier changed to ${tier}, resetting speed to ${defaultSpeed}x`);
         setTtsSettings(prev => ({ ...prev, speakingRate: defaultSpeed }));
-      } else if (isFirstLoad && (ttsSettings.speakingRate === 1.0 || ttsSettings.speakingRate === 1.1) && defaultSpeed !== ttsSettings.speakingRate) {
+      } else if (isFirstLoad && defaultSpeed !== ttsSettings.speakingRate) {
+        // Fix: Don't restrict to only if currently 1.0/1.1 - just enforce default on first load for consistency
         console.log(`[ListenerPage] First load with ${tier} tier, forcing default speed to ${defaultSpeed}x`);
         setTtsSettings(prev => ({ ...prev, speakingRate: defaultSpeed }));
       }
@@ -860,8 +853,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       ? websocketUrl
       : (websocketUrl.endsWith('/') ? `${websocketUrl}translate` : `${websocketUrl}/translate`);
 
+    // CRITICAL: Use persistent listener ID to track unique users across sessions
+    let listenerId = localStorage.getItem('exbabel_listener_id');
+    if (!listenerId) {
+      listenerId = crypto.randomUUID();
+      localStorage.setItem('exbabel_listener_id', listenerId);
+    }
+
     const ws = new WebSocket(
-      `${finalWsUrl}?role=listener&sessionId=${sessionId}&targetLang=${lang}&userName=${encodeURIComponent(name)}`
+      `${finalWsUrl}?role=listener&sessionId=${sessionId}&targetLang=${lang}&userName=${encodeURIComponent(name)}&listenerId=${listenerId}`
     );
 
     ws.onopen = () => {

@@ -72,7 +72,7 @@ export default function AdminAnalytics() {
         );
     }
 
-    const { quota, dailyUsage, languages, listenerCount, planCode } = data;
+    const { quota, dailyUsage, languages, listenerCount, memberCount, planCode, totalSessions, totalUsageSeconds, avgDailySeconds } = data;
     const soloQuota = quota.solo || { included: 0, used: 0, remaining: 0, percentUsed: 0 };
     const hostQuota = quota.host || { included: 0, used: 0, remaining: 0, percentUsed: 0 };
 
@@ -136,6 +136,22 @@ export default function AdminAnalytics() {
                 <div className="stat-card">
                     <div className="stat-value">{listenerCount || 0}</div>
                     <div className="stat-label">Listeners</div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-value">{memberCount || 0}</div>
+                    <div className="stat-label">Members</div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-value">{totalSessions || 0}</div>
+                    <div className="stat-label">Total Sessions</div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-value">{formatHours(totalUsageSeconds || 0)}</div>
+                    <div className="stat-label">Total Usage</div>
+                </div>
+                <div className="stat-card">
+                    <div className="stat-value">{formatHours(avgDailySeconds || 0)}</div>
+                    <div className="stat-label">Avg Daily</div>
                 </div>
             </div>
 

@@ -35,68 +35,102 @@ const VOICE_CACHE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 // Fallback voices for when API discovery fails or voice resolution is ambiguous
 // Based on Google TTS documentation - conservative, known-working voice names
 const FALLBACK_VOICES = {
-  "af-ZA": { "standard": "af-ZA-Standard-A" },
-  "am-ET": { "standard": "am-ET-Standard-A", "neural2": "am-ET-Wavenet-A" },
-  "ar-XA": { "standard": "ar-XA-Standard-A", "neural2": "ar-XA-Wavenet-A", "chirp3_hd": "ar-XA-Chirp3-HD-Kore" },
-  "bg-BG": { "standard": "bg-BG-Standard-A" },
-  "bn-IN": { "standard": "bn-IN-Standard-A", "neural2": "bn-IN-Wavenet-A", "chirp3_hd": "bn-IN-Chirp3-HD-Kore" },
-  "ca-ES": { "standard": "ca-ES-Standard-A" },
-  "cmn-CN": { "standard": "cmn-CN-Standard-A", "neural2": "cmn-CN-Wavenet-A", "chirp3_hd": "cmn-CN-Chirp3-HD-Kore" },
-  "cmn-TW": { "standard": "cmn-TW-Standard-A", "neural2": "cmn-TW-Wavenet-A", "chirp3_hd": "cmn-TW-Chirp3-HD-Kore" },
-  "cs-CZ": { "standard": "cs-CZ-Standard-A", "neural2": "cs-CZ-Wavenet-A", "chirp3_hd": "cs-CZ-Chirp3-HD-Kore" },
-  "da-DK": { "standard": "da-DK-Standard-A", "neural2": "da-DK-Neural2-D", "chirp3_hd": "da-DK-Chirp3-HD-Kore" },
-  "de-DE": { "standard": "de-DE-Standard-A", "neural2": "de-DE-Neural2-A", "chirp3_hd": "de-DE-Chirp3-HD-Kore" },
-  "el-GR": { "standard": "el-GR-Standard-A", "neural2": "el-GR-Wavenet-A" },
-  "en-AU": { "standard": "en-AU-Standard-A", "neural2": "en-AU-Neural2-A", "chirp3_hd": "en-AU-Chirp3-HD-Kore" },
-  "en-GB": { "standard": "en-GB-Standard-A", "neural2": "en-GB-Neural2-A", "chirp3_hd": "en-GB-Chirp3-HD-Kore" },
-  "en-IN": { "standard": "en-IN-Standard-A", "neural2": "en-IN-Neural2-A", "chirp3_hd": "en-IN-Chirp3-HD-Kore" },
-  "en-US": { "standard": "en-US-Standard-A", "neural2": "en-US-Neural2-A", "chirp3_hd": "en-US-Chirp3-HD-Kore" },
-  "es-ES": { "standard": "es-ES-Standard-A", "neural2": "es-ES-Neural2-A", "chirp3_hd": "es-ES-Chirp3-HD-Kore" },
-  "es-US": { "standard": "es-US-Standard-A", "neural2": "es-US-Neural2-A", "chirp3_hd": "es-US-Chirp3-HD-Kore" },
-  "et-EE": { "standard": "et-EE-Standard-A" },
-  "eu-ES": { "standard": "eu-ES-Standard-A" },
-  "fi-FI": { "standard": "fi-FI-Standard-A", "neural2": "fi-FI-Wavenet-A" },
-  "fil-PH": { "standard": "fil-PH-Standard-A", "neural2": "fil-PH-Wavenet-A" },
-  "fr-CA": { "standard": "fr-CA-Standard-A", "neural2": "fr-CA-Neural2-A", "chirp3_hd": "fr-CA-Chirp3-HD-Kore" },
-  "fr-FR": { "standard": "fr-FR-Standard-A", "neural2": "fr-FR-Neural2-A", "chirp3_hd": "fr-FR-Chirp3-HD-Kore" },
-  "gl-ES": { "standard": "gl-ES-Standard-A" },
-  "gu-IN": { "standard": "gu-IN-Standard-A", "neural2": "gu-IN-Wavenet-A" },
-  "he-IL": { "standard": "he-IL-Standard-A", "neural2": "he-IL-Wavenet-A" },
-  "hi-IN": { "standard": "hi-IN-Standard-A", "neural2": "hi-IN-Neural2-A", "chirp3_hd": "hi-IN-Chirp3-HD-Kore" },
-  "hu-HU": { "standard": "hu-HU-Standard-A", "neural2": "hu-HU-Wavenet-A" },
-  "id-ID": { "standard": "id-ID-Standard-A", "neural2": "id-ID-Wavenet-A", "chirp3_hd": "id-ID-Chirp3-HD-Kore" },
-  "is-IS": { "standard": "is-IS-Standard-A" },
-  "it-IT": { "standard": "it-IT-Standard-A", "neural2": "it-IT-Neural2-A", "chirp3_hd": "it-IT-Chirp3-HD-Kore" },
-  "ja-JP": { "standard": "ja-JP-Standard-A", "neural2": "ja-JP-Neural2-B", "chirp3_hd": "ja-JP-Chirp3-HD-Kore" },
-  "kn-IN": { "standard": "kn-IN-Standard-A", "neural2": "kn-IN-Wavenet-A" },
-  "ko-KR": { "standard": "ko-KR-Standard-A", "neural2": "ko-KR-Neural2-A", "chirp3_hd": "ko-KR-Chirp3-HD-Kore" },
-  "lt-LT": { "standard": "lt-LT-Standard-A" },
-  "lv-LV": { "standard": "lv-LV-Standard-A" },
-  "ml-IN": { "standard": "ml-IN-Standard-A", "neural2": "ml-IN-Wavenet-A" },
-  "mr-IN": { "standard": "mr-IN-Standard-A", "neural2": "mr-IN-Wavenet-A" },
-  "ms-MY": { "standard": "ms-MY-Standard-A", "neural2": "ms-MY-Wavenet-A" },
-  "nb-NO": { "standard": "nb-NO-Standard-A", "neural2": "nb-NO-Wavenet-A" },
-  "nl-NL": { "standard": "nl-NL-Standard-A", "neural2": "nl-NL-Wavenet-A", "chirp3_hd": "nl-NL-Chirp3-HD-Kore" },
-  "pa-IN": { "standard": "pa-IN-Standard-A", "neural2": "pa-IN-Wavenet-A" },
-  "pl-PL": { "standard": "pl-PL-Standard-A", "neural2": "pl-PL-Neural2-A", "chirp3_hd": "pl-PL-Chirp3-HD-Kore" },
-  "pt-BR": { "standard": "pt-BR-Standard-A", "neural2": "pt-BR-Neural2-A", "chirp3_hd": "pt-BR-Chirp3-HD-Kore" },
-  "pt-PT": { "standard": "pt-PT-Standard-A", "neural2": "pt-PT-Wavenet-A" },
-  "ro-RO": { "standard": "ro-RO-Standard-A", "neural2": "ro-RO-Wavenet-A" },
-  "ru-RU": { "standard": "ru-RU-Standard-A", "neural2": "ru-RU-Neural2-A", "chirp3_hd": "ru-RU-Chirp3-HD-Kore" },
-  "sk-SK": { "standard": "sk-SK-Standard-A", "neural2": "sk-SK-Wavenet-A" },
-  "sr-RS": { "standard": "sr-RS-Standard-A" },
-  "sv-SE": { "standard": "sv-SE-Standard-A", "neural2": "sv-SE-Wavenet-A", "chirp3_hd": "sv-SE-Chirp3-HD-Kore" },
-  "ta-IN": { "standard": "ta-IN-Standard-A", "neural2": "ta-IN-Wavenet-A" },
-  "te-IN": { "standard": "te-IN-Standard-A" },
-  "th-TH": { "standard": "th-TH-Standard-A", "neural2": "th-TH-Neural2-C", "chirp3_hd": "th-TH-Chirp3-HD-Kore" },
-  "tr-TR": { "standard": "tr-TR-Standard-A", "neural2": "tr-TR-Wavenet-A", "chirp3_hd": "tr-TR-Chirp3-HD-Kore" },
-  "uk-UA": { "standard": "uk-UA-Standard-A", "neural2": "uk-UA-Wavenet-A" },
-  "vi-VN": { "standard": "vi-VN-Standard-A", "neural2": "vi-VN-Neural2-A", "chirp3_hd": "vi-VN-Chirp3-HD-Kore" },
+  "af-ZA": { "standard": "af-ZA-Standard-A", "gemini": "Kore" },
+  "am-ET": { "gemini": "Kore" },
+  "ar-XA": { "standard": "ar-XA-Standard-A", "neural2": "ar-XA-Wavenet-A", "chirp3_hd": "ar-XA-Chirp3-HD-Kore", "gemini": "Kore" },
+  "ar-EG": { "gemini": "Kore" },
+  "ar-001": { "gemini": "Kore" },
+  "az-AZ": { "gemini": "Kore" },
+  "be-BY": { "gemini": "Kore" },
+  "bg-BG": { "standard": "bg-BG-Standard-A", "gemini": "Kore" },
+  "bn-BD": { "gemini": "Kore" },
+  "bn-IN": { "standard": "bn-IN-Standard-A", "neural2": "bn-IN-Wavenet-A", "chirp3_hd": "bn-IN-Chirp3-HD-Kore", "gemini": "Kore" },
+  "ca-ES": { "standard": "ca-ES-Standard-A", "gemini": "Kore" },
+  "ceb-PH": { "gemini": "Kore" },
+  "cmn-CN": { "standard": "cmn-CN-Standard-A", "neural2": "cmn-CN-Wavenet-A", "chirp3_hd": "cmn-CN-Chirp3-HD-Kore", "gemini": "Kore" },
+  "cmn-TW": { "standard": "cmn-TW-Standard-A", "neural2": "cmn-TW-Wavenet-A", "chirp3_hd": "cmn-TW-Chirp3-HD-Kore", "gemini": "Kore" },
+  "cs-CZ": { "standard": "cs-CZ-Standard-A", "neural2": "cs-CZ-Wavenet-A", "chirp3_hd": "cs-CZ-Chirp3-HD-Kore", "gemini": "Kore" },
+  "da-DK": { "standard": "da-DK-Standard-A", "neural2": "da-DK-Neural2-F", "chirp3_hd": "da-DK-Chirp3-HD-Kore", "gemini": "Kore" },
+  "de-DE": { "standard": "de-DE-Standard-A", "neural2": "de-DE-Neural2-A", "chirp3_hd": "de-DE-Chirp3-HD-Kore", "gemini": "Kore" },
+  "el-GR": { "standard": "el-GR-Standard-A", "neural2": "el-GR-Wavenet-A", "gemini": "Kore" },
+  "en-AU": { "standard": "en-AU-Standard-A", "neural2": "en-AU-Neural2-A", "chirp3_hd": "en-AU-Chirp3-HD-Kore", "gemini": "Kore" },
+  "en-GB": { "standard": "en-GB-Standard-A", "neural2": "en-GB-Neural2-A", "chirp3_hd": "en-GB-Chirp3-HD-Kore", "gemini": "Kore" },
+  "en-IN": { "standard": "en-IN-Standard-A", "neural2": "en-IN-Neural2-A", "chirp3_hd": "en-IN-Chirp3-HD-Kore", "gemini": "Kore" },
+  "en-US": { "standard": "en-US-Standard-A", "neural2": "en-US-Neural2-A", "chirp3_hd": "en-US-Chirp3-HD-Kore", "gemini": "Kore" },
+  "es-419": { "gemini": "Kore" },
+  "es-ES": { "standard": "es-ES-Standard-A", "neural2": "es-ES-Neural2-A", "chirp3_hd": "es-ES-Chirp3-HD-Kore", "gemini": "Kore" },
+  "es-US": { "standard": "es-US-Standard-A", "neural2": "es-US-Neural2-A", "chirp3_hd": "es-US-Chirp3-HD-Kore", "gemini": "Kore" },
+  "et-EE": { "standard": "et-EE-Standard-A", "gemini": "Kore" },
+  "eu-ES": { "standard": "eu-ES-Standard-A", "gemini": "Kore" },
+  "fa-IR": { "gemini": "Kore" },
+  "fi-FI": { "standard": "fi-FI-Standard-A", "neural2": "fi-FI-Wavenet-B", "gemini": "Kore" },
+  "fil-PH": { "standard": "fil-PH-Standard-A", "neural2": "fil-PH-Wavenet-A", "gemini": "Kore" },
+  "fr-CA": { "standard": "fr-CA-Standard-A", "neural2": "fr-CA-Neural2-A", "chirp3_hd": "fr-CA-Chirp3-HD-Kore", "gemini": "Kore" },
+  "fr-FR": { "standard": "fr-FR-Standard-A", "neural2": "fr-FR-Neural2-A", "chirp3_hd": "fr-FR-Chirp3-HD-Kore", "gemini": "Kore" },
+  "gl-ES": { "standard": "gl-ES-Standard-A", "gemini": "Kore" },
+  "gu-IN": { "standard": "gu-IN-Standard-A", "neural2": "gu-IN-Wavenet-A", "gemini": "Kore" },
+  "he-IL": { "standard": "he-IL-Standard-A", "neural2": "he-IL-Wavenet-A", "gemini": "Kore" },
+  "hi-IN": { "standard": "hi-IN-Standard-A", "neural2": "hi-IN-Neural2-A", "chirp3_hd": "hi-IN-Chirp3-HD-Kore", "gemini": "Kore" },
+  "hr-HR": { "gemini": "Kore" },
+  "ht-HT": { "gemini": "Kore" },
+  "hu-HU": { "standard": "hu-HU-Standard-A", "neural2": "hu-HU-Wavenet-A", "gemini": "Kore" },
+  "hy-AM": { "gemini": "Kore" },
+  "id-ID": { "standard": "id-ID-Standard-A", "neural2": "id-ID-Wavenet-A", "chirp3_hd": "id-ID-Chirp3-HD-Kore", "gemini": "Kore" },
+  "is-IS": { "standard": "is-IS-Standard-A", "gemini": "Kore" },
+  "it-IT": { "standard": "it-IT-Standard-A", "neural2": "it-IT-Neural2-A", "chirp3_hd": "it-IT-Chirp3-HD-Kore", "gemini": "Kore" },
+  "ja-JP": { "standard": "ja-JP-Standard-A", "neural2": "ja-JP-Neural2-B", "chirp3_hd": "ja-JP-Chirp3-HD-Kore", "gemini": "Kore" },
+  "jv-JV": { "gemini": "Kore" },
+  "ka-GE": { "gemini": "Kore" },
+  "kn-IN": { "standard": "kn-IN-Standard-A", "neural2": "kn-IN-Wavenet-A", "gemini": "Kore" },
+  "ko-KR": { "standard": "ko-KR-Standard-A", "neural2": "ko-KR-Neural2-A", "chirp3_hd": "ko-KR-Chirp3-HD-Kore", "gemini": "Kore" },
+  "kok-IN": { "gemini": "Kore" },
+  "la-VA": { "gemini": "Kore" },
+  "lb-LU": { "gemini": "Kore" },
+  "lo-LA": { "gemini": "Kore" },
+  "lt-LT": { "standard": "lt-LT-Standard-A", "gemini": "Kore" },
+  "lv-LV": { "standard": "lv-LV-Standard-A", "gemini": "Kore" },
+  "mai-IN": { "gemini": "Kore" },
+  "mg-MG": { "gemini": "Kore" },
+  "mk-MK": { "gemini": "Kore" },
+  "ml-IN": { "standard": "ml-IN-Standard-A", "neural2": "ml-IN-Wavenet-A", "gemini": "Kore" },
+  "mn-MN": { "gemini": "Kore" },
+  "mr-IN": { "standard": "mr-IN-Standard-A", "neural2": "mr-IN-Wavenet-A", "gemini": "Kore" },
+  "ms-MY": { "standard": "ms-MY-Standard-A", "neural2": "ms-MY-Wavenet-A", "gemini": "Kore" },
+  "my-MM": { "gemini": "Kore" },
+  "nb-NO": { "standard": "nb-NO-Standard-A", "neural2": "nb-NO-Wavenet-F", "gemini": "Kore" },
+  "ne-NP": { "gemini": "Kore" },
+  "nl-NL": { "standard": "nl-NL-Standard-A", "neural2": "nl-NL-Wavenet-F", "chirp3_hd": "nl-NL-Chirp3-HD-Kore", "gemini": "Kore" },
+  "nn-NO": { "gemini": "Kore" },
+  "or-IN": { "gemini": "Kore" },
+  "pa-IN": { "standard": "pa-IN-Standard-A", "neural2": "pa-IN-Wavenet-A", "gemini": "Kore" },
+  "pl-PL": { "standard": "pl-PL-Standard-A", "neural2": "pl-PL-Wavenet-F", "chirp3_hd": "pl-PL-Chirp3-HD-Kore", "gemini": "Kore" },
+  "ps-AF": { "gemini": "Kore" },
+  "pt-BR": { "standard": "pt-BR-Standard-A", "neural2": "pt-BR-Neural2-A", "chirp3_hd": "pt-BR-Chirp3-HD-Kore", "gemini": "Kore" },
+  "pt-PT": { "standard": "pt-PT-Standard-A", "neural2": "pt-PT-Wavenet-E", "gemini": "Kore" },
+  "ro-RO": { "standard": "ro-RO-Standard-A", "neural2": "ro-RO-Wavenet-A", "gemini": "Kore" },
+  "ru-RU": { "standard": "ru-RU-Standard-A", "neural2": "ru-RU-Wavenet-A", "chirp3_hd": "ru-RU-Chirp3-HD-Kore", "gemini": "Kore" },
+  "sd-IN": { "gemini": "Kore" },
+  "si-LK": { "gemini": "Kore" },
+  "sk-SK": { "standard": "sk-SK-Standard-A", "neural2": "sk-SK-Wavenet-A", "gemini": "Kore" },
+  "sl-SI": { "gemini": "Kore" },
+  "sq-AL": { "gemini": "Kore" },
+  "sr-RS": { "standard": "sr-RS-Standard-A", "gemini": "Kore" },
+  "sv-SE": { "standard": "sv-SE-Standard-A", "neural2": "sv-SE-Wavenet-A", "chirp3_hd": "sv-SE-Chirp3-HD-Kore", "gemini": "Kore" },
+  "sw-KE": { "gemini": "Kore" },
+  "ta-IN": { "standard": "ta-IN-Standard-A", "neural2": "ta-IN-Wavenet-A", "gemini": "Kore" },
+  "te-IN": { "standard": "te-IN-Standard-A", "gemini": "Kore" },
+  "th-TH": { "standard": "th-TH-Standard-A", "neural2": "th-TH-Neural2-C", "chirp3_hd": "th-TH-Chirp3-HD-Kore", "gemini": "Kore" },
+  "tr-TR": { "standard": "tr-TR-Standard-A", "neural2": "tr-TR-Wavenet-A", "chirp3_hd": "tr-TR-Chirp3-HD-Kore", "gemini": "Kore" },
+  "uk-UA": { "standard": "uk-UA-Standard-A", "neural2": "uk-UA-Wavenet-A", "gemini": "Kore" },
+  "ur-IN": { "standard": "ur-IN-Standard-A", "neural2": "ur-IN-Wavenet-A", "chirp3_hd": "ur-IN-Chirp3-HD-Kore", "gemini": "Kore" },
+  "ur-PK": { "gemini": "Kore" },
+  "vi-VN": { "standard": "vi-VN-Standard-A", "neural2": "vi-VN-Neural2-A", "chirp3_hd": "vi-VN-Chirp3-HD-Kore", "gemini": "Kore" },
   "yue-HK": { "standard": "yue-HK-Standard-A", "chirp3_hd": "yue-HK-Chirp3-HD-Kore" },
   // Regional Mappings (Critical for invalid argument fix)
-  "es-MX": { "standard": "es-US-Standard-A", "neural2": "es-US-Neural2-A", "chirp3_hd": "es-US-Chirp3-HD-Kore" }, // Map MX to US
-  "af-ZA": { "standard": "af-ZA-Standard-A" },
+  "es-MX": { "standard": "es-US-Standard-A", "neural2": "es-US-Neural2-A", "chirp3_hd": "es-US-Chirp3-HD-Kore", "gemini": "Kore" }, // Map MX to US
+  "af-ZA": { "standard": "af-ZA-Standard-A", "gemini": "Kore" },
 };
+
 /**
  * Get Google TTS service instance for voice discovery
  * @private
@@ -279,41 +313,71 @@ export function getElevenLabsModelCapabilities(tier) {
  */
 const LANGUAGE_TIER_AVAILABILITY = {
   "af-ZA": [
+    "gemini",
     "standard"
   ],
+  "am-ET": [
+    "gemini"
+  ],
   "ar-XA": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
+  "ar-EG": [
+    "gemini"
+  ],
+  "ar-001": [
+    "gemini"
+  ],
+  "az-AZ": [
+    "gemini"
+  ],
+  "be-BY": [
+    "gemini"
+  ],
   "eu-ES": [
-    "standard"
+    "gemini",
+    "standard" // Standard is listed in FALLBACK_VOICES
+  ],
+  "bn-BD": [
+    "gemini"
   ],
   "bn-IN": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
   "bg-BG": [
+    "gemini",
     "chirp3_hd",
     "standard"
   ],
   "ca-ES": [
+    "gemini",
     "standard"
+  ],
+  "ceb-PH": [
+    "gemini"
   ],
   "yue-HK": [
     "chirp3_hd",
     "standard"
   ],
   "hr-HR": [
+    "gemini",
     "chirp3_hd"
   ],
   "cs-CZ": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
   "da-DK": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
@@ -330,6 +394,7 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "standard"
   ],
   "en-AU": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
@@ -355,20 +420,30 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "neural2",
     "standard"
   ],
+  "es-419": [
+    "gemini"
+  ],
   "et-EE": [
+    "gemini",
     "chirp3_hd",
     "standard"
   ],
+  "fa-IR": [
+    "gemini"
+  ],
   "fil-PH": [
+    "gemini",
     "neural2",
     "standard"
   ],
   "fi-FI": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
   "fr-CA": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
@@ -381,6 +456,7 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "standard"
   ],
   "gl-ES": [
+    "gemini",
     "standard"
   ],
   "de-DE": [
@@ -391,16 +467,19 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "standard"
   ],
   "el-GR": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
   "gu-IN": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
   "he-IL": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
@@ -411,12 +490,20 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "neural2",
     "standard"
   ],
+  "ht-HT": [
+    "gemini"
+  ],
   "hu-HU": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
+  "hy-AM": [
+    "gemini"
+  ],
   "is-IS": [
+    "gemini",
     "standard"
   ],
   "id-ID": [
@@ -437,7 +524,14 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "neural2",
     "standard"
   ],
+  "jv-JV": [
+    "gemini"
+  ],
+  "ka-GE": [
+    "gemini"
+  ],
   "kn-IN": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
@@ -448,22 +542,53 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "neural2",
     "standard"
   ],
+  "kok-IN": [
+    "gemini"
+  ],
+  "la-VA": [
+    "gemini"
+  ],
+  "lb-LU": [
+    "gemini"
+  ],
+  "lo-LA": [
+    "gemini"
+  ],
   "lv-LV": [
+    "gemini",
     "chirp3_hd",
     "standard"
   ],
   "lt-LT": [
+    "gemini",
     "chirp3_hd",
     "standard"
   ],
+  "mai-IN": [
+    "gemini"
+  ],
+  "mg-MG": [
+    "gemini"
+  ],
+  "mk-MK": [
+    "gemini"
+  ],
   "ms-MY": [
+    "gemini",
     "neural2",
     "standard"
   ],
   "ml-IN": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
+  ],
+  "mn-MN": [
+    "gemini"
+  ],
+  "my-MM": [
+    "gemini"
   ],
   "cmn-CN": [
     "gemini",
@@ -478,6 +603,7 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "standard"
   ],
   "cmn-TW": [
+    "gemini",
     "neural2",
     "standard"
   ],
@@ -488,9 +614,19 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "standard"
   ],
   "nb-NO": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
+  ],
+  "ne-NP": [
+    "gemini"
+  ],
+  "nn-NO": [
+    "gemini"
+  ],
+  "or-IN": [
+    "gemini"
   ],
   "pl-PL": [
     "gemini",
@@ -510,9 +646,13 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "standard"
   ],
   "pa-IN": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
+  ],
+  "ps-AF": [
+    "gemini"
   ],
   "ro-RO": [
     "gemini",
@@ -526,16 +666,25 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "neural2",
     "standard"
   ],
+  "sd-IN": [
+    "gemini"
+  ],
+  "si-LK": [
+    "gemini"
+  ],
   "sr-RS": [
+    "gemini",
     "chirp3_hd",
     "standard"
   ],
   "sk-SK": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
   ],
   "sl-SI": [
+    "gemini",
     "chirp3_hd"
   ],
   "es-ES": [
@@ -552,10 +701,17 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "neural2",
     "standard"
   ],
+  "sq-AL": [
+    "gemini"
+  ],
   "sv-SE": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
+  ],
+  "sw-KE": [
+    "gemini"
   ],
   "ta-IN": [
     "gemini",
@@ -587,9 +743,13 @@ const LANGUAGE_TIER_AVAILABILITY = {
     "standard"
   ],
   "ur-IN": [
+    "gemini",
     "chirp3_hd",
     "neural2",
     "standard"
+  ],
+  "ur-PK": [
+    "gemini"
   ],
   "vi-VN": [
     "gemini",
@@ -615,6 +775,9 @@ function _normalizeLanguageCode(languageCode) {
     'af': 'af-ZA',
     'af-af': 'af-ZA', // Fix for user input
     'am': 'am-ET',
+    'am-am': 'am-ET', // Fix for invalid frontend code
+    'hy': 'hy-AM',
+    'hy-hy': 'hy-AM', // Fix for invalid frontend code
     'ar': 'ar-XA',
     'az': 'az-AZ',
     'bg': 'bg-BG',
@@ -684,10 +847,33 @@ function _normalizeLanguageCode(languageCode) {
   // If already in full format (e.g., 'es-ES') and not in map, return as-is
   if (normalized.includes('-')) {
     const parts = languageCode.split('-');
+    let normalizedCode = languageCode;
     if (parts.length === 2) {
-      return `${parts[0].toLowerCase()}-${parts[1].toUpperCase()}`;
+      normalizedCode = `${parts[0].toLowerCase()}-${parts[1].toUpperCase()}`;
+    } else {
+      normalizedCode = languageCode;
     }
-    return languageCode;
+
+    // Dynamic Validation/Correction check
+    // If the code we are about to return is NOT supported, see if we can find a better match
+    // This fixes issues like 'vi-VI' (frontend) -> 'vi-VN' (supported), 'uk-UK' -> 'uk-UA', etc.
+    // This ensures valid routing for ALL providers (Google, Gemini, etc.) which require canonical locales.
+    if (typeof LANGUAGE_TIER_AVAILABILITY !== 'undefined' && !LANGUAGE_TIER_AVAILABILITY[normalizedCode]) {
+      const langPart = parts[0].toLowerCase();
+
+
+      // Find a supported locale for this language
+      const fallback = Object.keys(LANGUAGE_TIER_AVAILABILITY).find(k => k.startsWith(`${langPart}-`));
+
+      if (fallback) {
+        console.log(`[TTS Routing] Normalizing invalid code ${normalizedCode} -> ${fallback}`);
+        return fallback;
+      } else {
+        console.log(`[TTS Routing] Failed to find fallback for ${normalizedCode} (langPart=${langPart})`);
+      }
+    }
+
+    return normalizedCode;
   }
 
   return `${languageCode}-${languageCode.toUpperCase()}`;

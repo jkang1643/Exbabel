@@ -151,10 +151,21 @@ export class ElevenLabsTtsService extends TtsService {
 
             // Add voice settings based on tier capabilities
             // Only includes supported parameters for this model tier
-            const voiceSettings = buildVoiceSettings(
-                preResolvedRoute?.tier || 'elevenlabs',
+            let tier = preResolvedRoute?.tier || 'elevenlabs';
+            let voiceSettings = buildVoiceSettings(
+                tier,
                 request.elevenLabsSettings
             );
+
+            // Injected Fix: Default to 0.85x speed for V2/Flash/Turbo tiers if not specified
+            // to correct for accelerated native playback ("chipmunk effect")
+            const modelIdLower = modelId.toLowerCase();
+            if ((modelIdLower.includes('flash') || modelIdLower.includes('turbo') || modelIdLower.includes('v2')) &&
+                (!voiceSettings || voiceSettings.speed === undefined)) {
+                console.log(`[ElevenLabs TTS] Injecting default speed 0.85 for model: ${modelId}`);
+                voiceSettings = voiceSettings || {};
+                voiceSettings.speed = 0.85;
+            }
 
             // Only add voice_settings to body if we have any supported settings
             if (voiceSettings) {

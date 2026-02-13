@@ -24,7 +24,12 @@ churchRouter.get('/churches/search', async (req, res) => {
 
         let query = supabaseAdmin
             .from('churches')
-            .select('id, name, created_at')
+            .select(`
+                id, 
+                name, 
+                created_at,
+                member_count:profiles(count)
+            `)
             .order('name', { ascending: true })
             .limit(searchLimit);
 
@@ -33,17 +38,23 @@ churchRouter.get('/churches/search', async (req, res) => {
             query = query.ilike('name', `%${q.trim()}%`);
         }
 
-        const { data: churches, error } = await query;
+        const { data: rawChurches, error } = await query;
 
         if (error) {
             console.error('[Churches] Search error:', error.message);
             return res.status(500).json({ error: 'Failed to search churches' });
         }
 
+        // Flatten member_count from [{count: X}] to X
+        const churches = (rawChurches || []).map(church => ({
+            ...church,
+            member_count: church.member_count?.[0]?.count || 0
+        }));
+
         res.json({
             success: true,
-            churches: churches || [],
-            count: churches?.length || 0
+            churches,
+            count: churches.length
         });
     } catch (err) {
         console.error('[Churches] Unexpected error:', err.message);

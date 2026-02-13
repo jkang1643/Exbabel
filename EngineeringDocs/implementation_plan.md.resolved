@@ -1,0 +1,35 @@
+# Fix Solo Mode Duplication Bug
+
+## Problem
+Users are experiencing "run-on sentences" and duplicate TTS audio in Solo Mode. This occurs because the backend sends multiple "Final" translation events for the same segment (as updates/corrections), but the frontend blindly appends them as new segments instead of updating the existing one.
+
+## Proposed Changes
+
+### Frontend
+
+#### [MODIFY] [useSoloSession.js](file:///wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/hooks/useSoloSession.js)
+- Add a `useRef` to track `finalizedSeqIds` to maintain callback stability.
+- Update `handleFinal` signature to accept `seqId`.
+- In `handleFinal`:
+  - Check if `seqId` exists in `finalizedSeqIds`.
+  - If existing, update the `finalizedSegments` state instead of appending.
+  - If new, append and add to `finalizedSeqIds`.
+  - Pass an `isUpdate` flag to the [onTranslation](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/components/solo/SoloPage.jsx#89-144) callback.
+
+#### [MODIFY] [SoloPage.jsx](file:///wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/components/solo/SoloPage.jsx)
+- Update `handleMessage` to pass `message.seqId` to `session.handleFinal`.
+- Update [onTranslation](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/components/solo/SoloPage.jsx#89-144) callback to accept `isUpdate`.
+- In [onTranslation](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/src/components/solo/SoloPage.jsx#89-144):
+  - If `isUpdate` is true, skip TTS enqueueing to prevent duplicate audio (unless we want to support re-speaking corrections, but for now blocking duplicates is safer for the reported bug).
+  - Add logic to log updates for debugging.
+
+## Verification Plan
+
+### Automated Tests
+- None available for this specific interaction.
+
+### Manual Verification
+1.  **Code Review**: Verify the logic handles `seqId` correctly and maintains stable callbacks.
+2.  **User Verification (by proxy)**: The user will need to run the app and speak sentences that trigger corrections (e.g. pauses, run-on sentences) to verify visually and auditorily.
+    - **Visual**: Verify that corrections update the text in place instead of creating new bubbles.
+    - **Audio**: Verify that the same sentence doesn't play twice (or play a partial then a full version overlapping/sequentially).

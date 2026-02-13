@@ -355,9 +355,14 @@ Updated `get_session_quota_status(church_id)` to return mode-specific breakdown:
   // Solo breakdown
   included_solo_seconds, used_solo_seconds_mtd, remaining_solo_seconds,
   // Host breakdown
-  included_host_seconds, used_host_seconds_mtd, remaining_host_seconds
+  included_host_seconds, used_host_seconds_mtd, remaining_host_seconds,
+  // Purchased credits (NEW)
+  purchased_solo_seconds_mtd, purchased_host_seconds_mtd, purchased_seconds_mtd,
+  total_available_seconds
 }
 ```
+**Note:** `included_solo_seconds` and `included_host_seconds` now automatically include any purchased credits for that mode.
+
 
 ### 3. Quota Enforcement Module
 
@@ -610,8 +615,12 @@ This section outlines the implemented "wiring" that enables self-service upgrade
 
 1.  **API Call:** `POST /api/billing/checkout-session` (Shared endpoint handle logic based on payload)
     *   **Body:** `{ topUpPack: '5_hours' }`
-2.  **Fulfillment (Webhook):** `checkout.session.completed` (Mode: `payment`)
-    *   Inserts into `purchased_credits` table.
+3.  **Fulfillment (Webhook):** `checkout.session.completed` (Mode: `payment`)
+    *   **Doubling Logic:** Purchasing "X hours" creates **two** records:
+        *   X hours for **Solo Mode**
+        *   X hours for **Host Mode**
+        *   Total: 2X hours available (100% for each mode).
+    *   Inserts into `purchased_credits` table with `mode='solo'` and `mode='host'`.
     *   `get_session_quota_status` RPC automatically places these credits on top of the monthly allowance.
 
 ### 5. Verified Implementation Details
@@ -1150,7 +1159,9 @@ CHECK (status = ANY (ARRAY['inactive', 'trialing', 'active', 'past_due', 'cancel
 
 ### 1. Database Migrations
 - Added `stripe_customer_id TEXT` to `churches` (partial unique index on non-null)
-- Created `purchased_credits` table (`church_id`, `amount_seconds`, `stripe_payment_intent_id`, `created_at`) with idempotency constraint
+- Created `purchased_credits` table (`church_id`, `amount_seconds`, `stripe_payment_intent_id`, `created_at`, `mode`)
+    - Added `mode` column check constraint (`'solo'`, `'host'`)
+    - Indexed by `(church_id, mode, created_at)` for RPC performance
 - Added `stripe_price_id TEXT UNIQUE NULL` to `plans` and seeded Stripe Price IDs
 - Updated `get_session_quota_status` RPC to include `purchased_seconds_mtd` and `total_available_seconds` (monthly-expiring credits)
 
@@ -1163,7 +1174,7 @@ CHECK (status = ANY (ARRAY['inactive', 'trialing', 'active', 'past_due', 'cancel
 - Uses `stripe.webhooks.constructEvent()` for signature verification
 - **Events handled:**
   - `checkout.session.completed` (subscription) → UPDATE `subscriptions` with plan, Stripe IDs
-  - `checkout.session.completed` (payment, type=top_up) → INSERT into `purchased_credits` (idempotent)
+  - `checkout.session.completed` (payment, type=top_up) → INSERT into `purchased_credits` (Double-entry: 1x Solo + 1x Host)
   - `customer.subscription.updated` → UPDATE subscription status, period, plan
   - `customer.subscription.deleted` → UPDATE status to `canceled`
 - All handlers call `clearEntitlementsCache(churchId)` for immediate effect
@@ -1263,3 +1274,22 @@ APP_BASE_URL=http://localhost:5173
     - **Safe Plan Updates**: Restored `plan_id` updates in `customer.subscription.updated` but restricted to `status='active'` only. This allows instant Portal upgrades while blocking trial abuse.
 - ✅ **Proration Fix**: Improved `extractSubscriptionId` to check invoice line items when the top-level subscription ID is missing (common in proration invoices).
 - ✅ **UX Refinement**: "Start a Ministry" link on VisitorHome now directs to the Plans page (`/checkout`) instead of pre-selecting a plan, allowing users to compare options first.
+
+### 2026-02-12 - Purchased Hours Fix (Doubling Logic)
+- ✅ **Doubling Logic**: Updated webhook to credit purchased hours to **BOTH** Solo and Host modes (e.g., buying 1 hour = 1hr Solo + 1hr Host).
+- ✅ **Schema Update**: Added `mode` column to `purchased_credits` table to track mode-specific top-ups.
+- ✅ **RPC Update**: `get_session_quota_status` now calculates purchased credits per mode and includes them in the `included` quota.
+- ✅ **Frontend**: Updated Billing Page to show purchased credit breakdown (Solo vs Host).
+- ✅ **Backfill**: Migrated existing purchased credits to use the new split/double logic.
+### 2026-02-12 - Bug Fix: Listener WebSocket Crash (upgradeReq)
+- ✅ **Fix: WebSocket Crash**: Resolved a critical `TypeError: Cannot read properties of undefined (reading 'url')` in `handleListenerConnection`.
+- ✅ **Root Cause**: The code was attempting to access `clientWs.upgradeReq.url`, but `upgradeReq` is a deprecated property in recent `ws` versions and was returning `undefined`.
+- ✅ **Solution**: Updated `handleListenerConnection` to accept the `req` object directly from the `wss.on('connection', (ws, req) => ...)` handler in `server.js` and use `req.url`.
+- ✅ **Impact**: Restored connectivity for anonymous listeners and fixed a blocking regression in voice fetching/loading.
+### 2026-02-12 - Investigation: Missing Voices on Listener Page
+- 🔍 **Bug Description**: Voices fail to appear in the dropdown on the listener page even when the session is active.
+- 🔍 **Root Cause**: Identified a **Race Condition** in `backend/websocketHandler.js` within `handleListenerConnection`.
+    - **Detail**: The backend `awaits` the `getEntitlements(churchId)` call *before* attaching the `clientWs.on('message', ...)` listener.
+    - **Timing Issue**: The frontend (ListenerPage) sends the `tts/list_voices` request immediately upon connection. Because the backend is still awaiting entitlements, the message arrives before a listener is registered, causing it to be dropped.
+- 🔍 **Verification**: Confirmed that `handleSoloMode` attaches its handler synchronously at the start of the function, explaining why Solo mode is unaffected.
+- 🔍 **Proposed Fix**: Restructure `handleListenerConnection` to attach the message listener synchronously at the top of the function to ensure no early client requests are lost.

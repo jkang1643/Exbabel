@@ -198,6 +198,12 @@ async function handleSubscriptionCheckout(session, churchId) {
 
 /**
  * Handle top-up checkout — one-time credit purchase
+ * 
+ * IMPORTANT: Purchased hours are SPLIT 50/50 between solo and host modes.
+ * E.g., purchasing "5 hours" creates:
+ *   - 5 hours for solo mode (18000/2 = 9000 seconds)
+ *   - 5 hours for host mode (18000/2 = 9000 seconds)
+ * Total: 10 hours available across both modes
  */
 async function handleTopUpCheckout(session, churchId) {
     const seconds = parseInt(session.metadata?.seconds, 10);
@@ -208,14 +214,28 @@ async function handleTopUpCheckout(session, churchId) {
         return;
     }
 
-    // Idempotent insert (unique index on stripe_payment_intent_id will reject duplicates)
+    // Give full purchased seconds to BOTH solo and host modes
+    // This doubles the effective hours (e.g., buying 1 hour gives 1 hour solo + 1 hour host)
+    const secondsPerMode = seconds;
+
+    const creditsToInsert = [
+        {
+            church_id: churchId,
+            amount_seconds: secondsPerMode,
+            mode: 'solo',
+            stripe_payment_intent_id: `${paymentIntentId}_solo`,
+        },
+        {
+            church_id: churchId,
+            amount_seconds: secondsPerMode,
+            mode: 'host',
+            stripe_payment_intent_id: `${paymentIntentId}_host`,
+        }
+    ];
+
     const { error } = await supabaseAdmin
         .from('purchased_credits')
-        .insert({
-            church_id: churchId,
-            amount_seconds: seconds,
-            stripe_payment_intent_id: paymentIntentId,
-        });
+        .insert(creditsToInsert);
 
     if (error) {
         if (error.code === '23505') {
@@ -227,7 +247,7 @@ async function handleTopUpCheckout(session, churchId) {
         return;
     }
 
-    console.log(`[Webhook] ✓ Top-up recorded: church=${churchId} seconds=${seconds} pi=${paymentIntentId}`);
+    console.log(`[Webhook] ✓ Top-up recorded: church=${churchId} total=${seconds}s (${secondsPerMode}s solo + ${secondsPerMode}s host) pi=${paymentIntentId}`);
     clearEntitlementsCache(churchId);
 }
 

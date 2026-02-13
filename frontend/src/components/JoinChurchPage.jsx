@@ -17,7 +17,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-export function JoinChurchPage({ onBack, onSuccess }) {
+export function JoinChurchPage({ onBack, onSuccess, onSignIn }) {
     const { user, isAuthenticated, reloadProfile } = useAuth();
     const [searchQuery, setSearchQuery] = useState('');
     const [churches, setChurches] = useState([]);
@@ -115,6 +115,14 @@ export function JoinChurchPage({ onBack, onSuccess }) {
         }
     };
 
+    const [copiedId, setCopiedId] = useState(null);
+
+    const copyToClipboard = (text, id) => {
+        navigator.clipboard.writeText(text);
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(null), 2000);
+    };
+
     return (
         <div className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100">
             {/* Header */}
@@ -176,7 +184,15 @@ export function JoinChurchPage({ onBack, onSuccess }) {
                     {!isAuthenticated && (
                         <Alert className="mb-4">
                             <AlertDescription>
-                                Sign in to join a church and access member features.
+                                <button
+                                    onClick={onSignIn}
+                                    className="text-purple-600 hover:text-purple-800 font-semibold underline underline-offset-2 transition-colors inline-block"
+                                >
+                                    Sign in
+                                </button>
+                                <span className="ml-1">
+                                    to join a church and access member features.
+                                </span>
                             </AlertDescription>
                         </Alert>
                     )}
@@ -194,19 +210,53 @@ export function JoinChurchPage({ onBack, onSuccess }) {
                             </div>
                         ) : (
                             churches.map((church) => (
-                                <Card key={church.id} className="hover:shadow-md transition-shadow">
+                                <Card key={church.id} className="hover:shadow-md transition-all duration-200">
                                     <CardHeader className="py-4">
-                                        <div className="flex items-center justify-between">
-                                            <div>
-                                                <CardTitle className="text-lg">{church.name}</CardTitle>
-                                                <CardDescription className="text-sm">
-                                                    Created {new Date(church.created_at).toLocaleDateString()}
-                                                </CardDescription>
+                                        <div className="flex items-center justify-between gap-4">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <CardTitle className="text-lg font-bold text-gray-800 truncate">
+                                                        {church.name}
+                                                    </CardTitle>
+                                                    {church.member_count > 0 && (
+                                                        <span className="bg-purple-100 text-purple-700 text-xs font-semibold px-2 py-0.5 rounded-full flex-shrink-0">
+                                                            {church.member_count} {church.member_count === 1 ? 'member' : 'members'}
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded text-[11px] leading-tight select-all">
+                                                            {church.id.split('-')[0]}...
+                                                        </span>
+                                                        <button
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                copyToClipboard(church.id, church.id);
+                                                            }}
+                                                            className="text-gray-400 hover:text-purple-600 transition-colors"
+                                                            title="Copy Full UUID"
+                                                        >
+                                                            {copiedId === church.id ? (
+                                                                <span className="text-[10px] font-bold text-green-600">Copied!</span>
+                                                            ) : (
+                                                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                    <span className="flex items-center gap-1">
+                                                        <span className="text-xs">📅</span>
+                                                        {new Date(church.created_at).toLocaleDateString()}
+                                                    </span>
+                                                </div>
                                             </div>
+
                                             <Button
                                                 onClick={() => handleJoinChurch(church.id, church.name)}
                                                 disabled={isJoining === church.id || !isAuthenticated}
                                                 size="sm"
+                                                className="flex-shrink-0"
                                             >
                                                 {isJoining === church.id ? 'Joining...' : 'Join'}
                                             </Button>

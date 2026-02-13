@@ -246,18 +246,18 @@ export async function isVoiceValid({ voiceId, voiceName, languageCode, tier }) {
 export async function getDefaultVoice({ languageCode, allowedTiers }) {
     // Tier-aware priority: Select the best voice for the user's plan
     // - Starter: standard (basic quality, cost-effective)
-    // - Pro: chirp3_hd (high-fidelity, production-ready)
-    // - Unlimited: elevenlabs_flash (premium, ultra-realistic)
+    // - Pro: gemini (AI-powered, high-quality)
+    // - Unlimited: elevenlabs_flash v2.5 (premium, ultra-realistic)
 
     // Define tier priorities based on business plan positioning
     let tierPriority;
 
     if (allowedTiers.includes('elevenlabs_flash') || allowedTiers.includes('elevenlabs')) {
-        // Unlimited tier - prioritize premium voices
+        // Unlimited tier - prioritize ElevenLabs Flash v2.5 (Pastor John Doe for English)
         tierPriority = ['elevenlabs_flash', 'elevenlabs_turbo', 'elevenlabs_v3', 'elevenlabs', 'gemini', 'chirp3_hd', 'neural2', 'standard'];
-    } else if (allowedTiers.includes('chirp3_hd')) {
-        // Pro tier - prioritize Chirp3 HD
-        tierPriority = ['chirp3_hd', 'neural2', 'studio', 'standard'];
+    } else if (allowedTiers.includes('gemini')) {
+        // Pro tier - prioritize Gemini, fallback to Chirp3 HD
+        tierPriority = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard'];
     } else {
         // Starter tier - prioritize standard voices
         tierPriority = ['standard', 'neural2', 'studio'];
@@ -268,6 +268,19 @@ export async function getDefaultVoice({ languageCode, allowedTiers }) {
 
         const voices = await getVoicesFor({ languageCode, allowedTiers: [tier] });
         if (voices.length > 0) {
+            // Special case: For Unlimited tier with elevenlabs_flash, prefer Pastor John Doe for English
+            if (tier === 'elevenlabs_flash' && (languageCode.startsWith('en') || languageCode === 'en')) {
+                const pastorJohnDoe = voices.find(v => v.voiceName === 'OD2yvQtROA7HbZrCdll4');
+                if (pastorJohnDoe) {
+                    console.log(`[VoiceCatalog] Selected default voice for ${languageCode}: Pastor John Doe (tier: ${pastorJohnDoe.tier})`);
+                    return {
+                        tier: pastorJohnDoe.tier,
+                        voiceId: pastorJohnDoe.voiceId,
+                        voiceName: pastorJohnDoe.voiceName
+                    };
+                }
+            }
+
             const voice = voices[0];
             console.log(`[VoiceCatalog] Selected default voice for ${languageCode}: ${voice.voiceName} (tier: ${voice.tier}) from priority: ${tier}`);
             return {

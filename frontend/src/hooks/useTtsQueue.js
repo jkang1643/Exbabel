@@ -24,6 +24,7 @@ export function useTtsQueue({
     languageCode = 'es',
     voiceName = null,
     tier = 'gemini',
+    playbackRate = 1.0,
     onPlayStart,
     onPlayEnd,
     onError
@@ -154,6 +155,7 @@ export function useTtsQueue({
             id: segment.id || `tts_${Date.now()}`,
             text: segment.translatedText || segment.text,
             languageCode: segment.languageCode || languageCode,
+            voiceId: segment.voiceId, // Capture voiceId
             status: 'pending', // pending → synthesizing → playing → done
             timestamp: Date.now()
         };
@@ -174,7 +176,8 @@ export function useTtsQueue({
             segmentId: item.id,
             text: item.text,
             languageCode: item.languageCode || languageCode,
-            voiceName,
+            voiceName: voiceName, // Fallback to hook prop
+            voiceId: item.voiceId, // Use specific voiceId if available
             // CRITICAL: Do NOT send tier here - let backend extract it from voiceId
             // The backend will parse the tier from the voiceId URN (e.g., google_cloud_tts:chirp3_hd:...)
             // tier,  // REMOVED - was overriding voice selection
@@ -220,7 +223,10 @@ export function useTtsQueue({
             // Create source
             const source = ctx.createBufferSource();
             source.buffer = audioBuffer;
+            source.playbackRate.value = playbackRate;
             source.connect(ctx.destination);
+
+            console.log(`[useTtsQueue] Playing segment ${segmentId} at rate ${playbackRate}x (source.playbackRate.value=${source.playbackRate.value})`);
 
             currentSourceRef.current = source;
 

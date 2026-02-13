@@ -50,7 +50,16 @@ export class ElevenLabsStreamingProvider {
 
         const url = `${this.baseUrl}/text-to-speech/${voiceId}/stream`;
         const model = modelId || this.defaultModelId;
-        const format = outputFormat || this.defaultOutputFormat;
+
+        let format = outputFormat || this.defaultOutputFormat;
+
+        // Force 22.05kHz for Flash/Turbo models to prevent "chipmunk" speed issues
+        // The speed parameter failed to fix it, confirming this is a sample rate mismatch.
+        // Playing 44.1kHz requested audio that is actually 22kHz results in 2x speed (chipmunk).
+        if (model.includes('flash') || model.includes('turbo') || model.includes('v2')) {
+            console.log(`[ElevenLabs-Stream] Forcing mp3_22050_32 for model: ${model}`);
+            format = 'mp3_22050_32';
+        }
 
         // Build request body
         const body = {

@@ -16,6 +16,7 @@ import { StreamingAudioPlayer, decodeAudioFrame } from '../tts/StreamingAudioPla
 export function useTtsStreaming({
     sessionId,
     enabled = false,
+    playbackRate = 1.0,
     onBufferUpdate,
     onUnderrun,
     onError
@@ -24,13 +25,7 @@ export function useTtsStreaming({
     const onBufferUpdateRef = useRef(onBufferUpdate);
     const onUnderrunRef = useRef(onUnderrun);
     const onErrorRef = useRef(onError);
-
-    // Update refs when props change
-    useEffect(() => {
-        onBufferUpdateRef.current = onBufferUpdate;
-        onUnderrunRef.current = onUnderrun;
-        onErrorRef.current = onError;
-    }, [onBufferUpdate, onUnderrun, onError]);
+    const playbackRateRef = useRef(playbackRate);
 
     const [isConnected, setIsConnected] = useState(false);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -40,6 +35,19 @@ export function useTtsStreaming({
         chunksReceived: 0,
         underruns: 0
     });
+
+    // Update refs when props change
+    useEffect(() => {
+        onBufferUpdateRef.current = onBufferUpdate;
+        onUnderrunRef.current = onUnderrun;
+        onErrorRef.current = onError;
+        playbackRateRef.current = playbackRate;
+
+        // Update live player rate if already playing
+        if (playerRef.current && isPlaying) {
+            playerRef.current.setPlaybackRate(playbackRate);
+        }
+    }, [onBufferUpdate, onUnderrun, onError, playbackRate, isPlaying]);
 
     const wsRef = useRef(null);
     const playerRef = useRef(null);
@@ -99,7 +107,8 @@ export function useTtsStreaming({
                     streamId: `stream_${sessionId}_${Date.now()}`,
                     codec: 'mp3',
                     sampleRate: 44100,
-                    channels: 1
+                    channels: 1,
+                    playbackRate: playbackRateRef.current
                 });
             }
 

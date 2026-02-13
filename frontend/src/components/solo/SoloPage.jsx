@@ -86,8 +86,8 @@ export function SoloPage({ onBackToHome }) {
         onFinal: (text) => {
             console.log('[SoloPage] Final:', text.substring(0, 50));
         },
-        onTranslation: (text, translatedText) => {
-            console.log('[SoloPage] Translation:', { text, translatedText });
+        onTranslation: (text, translatedText, isUpdate) => {
+            console.log('[SoloPage] Translation:', { text, translatedText, isUpdate });
 
             // If streaming is enabled, the backend handles TTS via Orchestrator
             // We ONLY enqueue for Unary if streaming is DISABLED
@@ -99,12 +99,31 @@ export function SoloPage({ onBackToHome }) {
             // Auto-enqueue for TTS if not text-only mode
             // Use ref for closure-safe access to current targetLang
             if (session.mode !== SoloMode.TEXT_ONLY) {
+                // SKIP TTS FOR UPDATES/CORRECTIONS
+                // If this is just an update to an existing segment (e.g. grammar correction),
+                // we've likely already spoken the original version.
+                // Re-speaking it causes "stuttering" or overlapping audio.
+                if (isUpdate) {
+                    console.log('[SoloPage] Skipping TTS - update/correction only');
+                    return;
+                }
+
                 // BUG FIX: If translating (source != target), DO NOT use original text as fallback.
                 // If translation is undefined/empty, we should simply NOT speak yet.
                 // Using 'text' (source) as fallback causes English to be spoken in Chinese mode.
-                if (sourceLang !== targetLangRef.current && !translatedText) {
-                    // console.log('[SoloPage] Skipping TTS - translation not ready yet');
-                    return;
+                const isTranslationRequired = sourceLang !== targetLangRef.current;
+
+                if (isTranslationRequired) {
+                    if (!translatedText) {
+                        console.log('[SoloPage] Skipping TTS - translation not ready yet (undefined/null)');
+                        return;
+                    }
+                    // ALSO check if translatedText is just the original text (which sometimes happens if backend falls back)
+                    // We don't want to speak English in a Spanish mode
+                    if (translatedText === text && text.trim().length > 0) {
+                        console.log('[SoloPage] Skipping TTS - translation equals original (fallback detected)');
+                        return;
+                    }
                 }
 
                 const textToSpeak = translatedText || text;
@@ -146,11 +165,20 @@ export function SoloPage({ onBackToHome }) {
         }
     });
 
+    // Determine playback rate based on tier
+    // Determine playback rate based on tier
+    const getPlaybackRate = useCallback(() => {
+        return 1.0;
+    }, []);
+
+    const playbackRate = getPlaybackRate();
+
     // TTS queue
     const ttsQueue = useTtsQueue({
         ws,
         languageCode: normalizeLanguageCode(targetLang),
         tier: 'gemini',
+        playbackRate,
         onPlayStart: () => {
             console.log('[SoloPage] TTS playing');
         },
@@ -167,6 +195,7 @@ export function SoloPage({ onBackToHome }) {
     const ttsStreaming = useTtsStreaming({
         sessionId: sessionIdRef.current,
         enabled: streamingTts && session.mode !== SoloMode.TEXT_ONLY,
+        playbackRate,
         onBufferUpdate: (ms) => {
             console.log('[SoloPage] Buffer:', ms, 'ms');
         },
@@ -253,20 +282,43 @@ export function SoloPage({ onBackToHome }) {
                 setAvailableVoices(message.voices || []);
                 setAllowedTiers(message.allowedTiers || []);
                 setPlanCode(message.planCode || 'starter');
-                // Auto-select first ALLOWED voice if none selected
+                // Auto-select plan-appropriate default voice based on tier priority
+                // Always select the default voice based on plan, don't persist previous selections
                 if (message.voices?.length > 0) {
-                    setSelectedVoice(prev => {
-                        // FIX: Only keep existing selection if it exists in the NEW list (and for the same tier if strict)
-                        // But mainly we care that the voiceId exists in the new options
-                        if (prev && message.voices.some(v => v.voiceId === prev.voiceId)) {
-                            return prev;
-                        }
+                    // Define tier priorities based on plan (matches backend voiceCatalog logic)
+                    let tierPriority;
+                    const allowedTiers = message.allowedTiers || [];
 
-                        // Otherwise (or if invalid), find first allowed voice
-                        const firstAllowed = message.voices.find(v => v.isAllowed);
-                        console.log(`[SoloPage] 🔄 Auto-selecting voice: ${firstAllowed?.voiceName || message.voices[0].voiceName}`);
-                        return firstAllowed || message.voices[0];
-                    });
+                    if (allowedTiers.includes('elevenlabs_flash') || allowedTiers.includes('elevenlabs')) {
+                        // Unlimited tier
+                        tierPriority = ['elevenlabs_flash', 'elevenlabs_turbo', 'elevenlabs_v3', 'elevenlabs', 'gemini', 'chirp3_hd', 'neural2', 'standard'];
+                    } else if (allowedTiers.includes('gemini')) {
+                        // Pro tier
+                        tierPriority = ['gemini', 'chirp3_hd', 'neural2', 'studio', 'standard'];
+                    } else {
+                        // Starter tier
+                        tierPriority = ['standard', 'neural2', 'studio'];
+                    }
+
+                    // Find first voice matching tier priority
+                    let voiceToSelect = null;
+                    for (const tier of tierPriority) {
+                        if (!allowedTiers.includes(tier)) continue;
+
+                        const voice = message.voices.find(v => v.tier === tier && v.isAllowed);
+                        if (voice) {
+                            voiceToSelect = voice;
+                            break;
+                        }
+                    }
+
+                    // Fallback to first allowed voice if no match found
+                    if (!voiceToSelect) {
+                        voiceToSelect = message.voices.find(v => v.isAllowed) || message.voices[0];
+                    }
+
+                    console.log(`[SoloPage] 🔄 Auto-selecting plan-appropriate voice: ${voiceToSelect?.voiceName} (tier: ${voiceToSelect?.tier})`);
+                    setSelectedVoice(voiceToSelect);
                 }
                 return;
             }
@@ -305,7 +357,8 @@ export function SoloPage({ onBackToHome }) {
             } else {
                 session.handleFinal(
                     message.originalText || message.transcript,
-                    message.translatedText || message.translation
+                    message.translatedText || message.translation,
+                    message.seqId // Pass seqId for deduplication
                 );
             }
             return;

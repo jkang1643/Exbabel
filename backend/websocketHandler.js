@@ -497,7 +497,7 @@ const LISTENING_HEARTBEAT_INTERVAL_MS = 30000; // 30 seconds
 /**
  * Handle listener connection
  */
-export async function handleListenerConnection(clientWs, sessionId, targetLang, userName) {
+export async function handleListenerConnection(clientWs, req, sessionId, targetLang, userName) {
   console.log(`[Listener] 🎧 Handling connection for ${userName} (Lang: ${targetLang}, Session: ${sessionId}) - Code Version: VERIFIED_FIX_V2`);
 
   // Start OpenTelemetry span
@@ -515,8 +515,21 @@ export async function handleListenerConnection(clientWs, sessionId, targetLang, 
   // Generate socket ID for session store
   const socketId = `listener_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
-  // Generate UUID for listening span tracking (listening_spans.user_id must be UUID)
-  const listenerSpanUserId = crypto.randomUUID();
+  // Extract persistent listener ID from query params (sent by frontend)
+  // Fallback to generating a new UUID if not provided (backward compatibility)
+  const query = new URL(req.url, 'http://localhost').searchParams;
+  const clientListenerId = query.get('listenerId');
+
+  // Use provided ID if valid UUID, otherwise generate new one
+  const listenerSpanUserId = (clientListenerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clientListenerId))
+    ? clientListenerId
+    : crypto.randomUUID();
+
+  if (clientListenerId && listenerSpanUserId !== clientListenerId) {
+    console.warn(`[Listener] Invalid listenerId provided: ${clientListenerId}, generated new: ${listenerSpanUserId}`);
+  } else if (clientListenerId) {
+    console.log(`[Listener] Using persistent listener ID: ${listenerSpanUserId}`);
+  }
 
   try {
     // Add listener to session

@@ -355,7 +355,9 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                 const voiceOption = availableVoices.find(v => v.voiceId === newVoiceId);
                                 if (voiceOption) {
                                     const tier = voiceOption.tier || 'standard';
-                                    const isGemini = tier === 'gemini' || voiceOption.displayName?.includes('Studio');
+                                    const isElevenLabs = tier.startsWith('elevenlabs');
+                                    // Ensure we don't treat ElevenLabs as Gemini even if voice name contains "Studio" (unlikely but safe)
+                                    const isGemini = !isElevenLabs && (tier === 'gemini' || voiceOption.displayName?.includes('Studio'));
                                     const isChirp3 = tier === 'chirp3_hd';
 
                                     if (isGemini && speakingRate === 1.0) {
@@ -364,6 +366,10 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
                                     } else if (isChirp3 && speakingRate === 1.0) {
                                         console.log('[TtsPanel] Nudging speaking rate to 1.1x for Chirp3 voice');
                                         setSpeakingRate(1.1);
+                                    } else if (isElevenLabs) {
+                                        // Optional: Explicitly reset to 1.0 for ElevenLabs if coming from another speed
+                                        console.log('[TtsPanel] Resetting speaking rate to 1.0x for ElevenLabs voice');
+                                        setSpeakingRate(1.0);
                                     }
                                 }
                             }}

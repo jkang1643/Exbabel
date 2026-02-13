@@ -9,6 +9,50 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top**
 
+### BUG 42: FIXED — Solo Mode Unlimited Voice Unlocking (Stale Entitlements)
+**Status:** ✅ RESOLVED (2026-02-13)
+
+Resolved a critical bug where Solo Mode users on the "Unlimited" plan were restricted to "Starter" tier voices, despite Host Mode working correctly.
+
+#### Root Cause:
+1. **Stale Closure:** `soloModeHandler.js` captured the `entitlements` variable at the time of WebSocket connection. If entitlements weren't immediately available (race condition) or the user connected without an explicit token that resolved instantly, the handler defaulted to `null` and never refreshed.
+2. **Missing Fallback:** unlike Host Mode, which re-fetched entitlements on session creation, Solo Mode had no mechanism to recover if the initial check failed.
+
+#### Key Fixes:
+1. **Dynamic Access:** Updated `tts/list_voices` handler in `soloModeHandler.js` to access `clientWs.entitlements` dynamically, ensuring it always uses the latest state.
+2. **Active Recovery:** Implemented a fallback mechanism: if entitlements are missing but a `churchId` is present on the socket, the handler now explicitly fetches the entitlements from the database and updates the socket session.
+
+#### Impact:
+- ✅ **Unlimited Access:** Solo Mode users now correctly access all 90+ Gemini and ElevenLabs voices.
+- ✅ **Self-Healing:** The system recovers from initial auth race conditions automatically.
+
+#### Files Modified:
+- `backend/soloModeHandler.js` - Dynamic entitlement fetching
+
+---
+
+### BUG 41: FIXED — Invalid Language Code Routing (Dynamic Normalization)
+**Status:** ✅ RESOLVED (2026-02-13)
+
+Resolved a routing failure where premium voices (Gemini/Chirp) were inaccessible for languages where the frontend sent non-standard codes (e.g., `mai-MAI` instead of `mai-IN`, `sq-SQ` instead of `sq-AL`).
+
+#### Root Cause:
+1. **Frontend Non-Standard Codes:** The frontend constructed locale codes by simply uppercasing the language code (e.g., `am` -> `am-AM`), which often resulted in invalid ISO locales (Amharic is `am-ET`, not `am-AM`).
+2. **Strict Matching:** The backend `ttsRouting.js` mapped voices strictly by valid Google Cloud locales. When `am-AM` was requested, no voices matched, causing a fallback to standard/robotic voices.
+
+#### Key Fixes:
+1. **Dynamic Normalization:** Implemented `_normalizeLanguageCode` in `ttsRouting.js`. It checks if the requested code exists in the `LANGUAGE_TIER_AVAILABILITY` map. If not, it attempts to find a valid suffix for that language (e.g., maps `am-AM` -> `am-ET`).
+2. **Gemini Tier Expansion:** Updated `ttsRouting.js` to explicitly support all 90+ Gemini languages, enabling premium TTS for Armenian, Amharic, Croatian, etc.
+
+#### Impact:
+- ✅ **90+ Languages Supported:** All Gemini languages now route correctly, even with "incorrect" frontend codes.
+- ✅ **Standard/Neural2 Fixes:** Legacy tiers also benefit from the normalization, fixing routing for these languages across the board.
+
+#### Files Modified:
+- `backend/tts/ttsRouting.js` - Normalization logic and tier expansion
+
+---
+
 ### BUG 40: FIXED — Production Streaming WebSocket Routing (URL Prefix Mismatch)
 **Status:** ✅ RESOLVED (2026-02-06)
 

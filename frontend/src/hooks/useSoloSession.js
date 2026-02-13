@@ -64,6 +64,7 @@ export function useSoloSession({
     const silenceTimeoutRef = useRef(null);
     const lastAudioTimeRef = useRef(null);
     const stateRef = useRef(state); // Ref for closure-safe state check
+    const finalizedSegmentsRef = useRef([]); // Ref for synchronous access to segments
 
     // Keep stateRef in sync
     useEffect(() => {
@@ -130,41 +131,99 @@ export function useSoloSession({
     }, [onPartial]);
 
     // Handle finalized transcript from server
-    const handleFinal = useCallback((text, translatedText) => {
+    const handleFinal = useCallback((text, translatedText, seqId) => {
         // Clear silence timer
         if (silenceTimeoutRef.current) {
             clearTimeout(silenceTimeoutRef.current);
             silenceTimeoutRef.current = null;
         }
 
-        const segment = {
-            id: `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-            originalText: text,
-            translatedText: translatedText || text,
-            timestamp: Date.now()
-        };
+        // Use provided seqId or generate one if missing (fallback)
+        const segmentId = seqId ? `seg_${seqId}` : `seg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        setFinalizedSegments(prev => [...prev, segment]);
+        // Use ref for synchronous check (avoid stale state issues)
+        const currentSegments = finalizedSegmentsRef.current;
+        const existingSegmentIndex = seqId ? currentSegments.findIndex(s => s.seqId === seqId) : -1;
+
+        let isUpdate = false;
+        let isTranslationArrival = false;
+        let newSegments = [...currentSegments];
+
+        if (existingSegmentIndex !== -1) {
+            isUpdate = true;
+            const existingSegment = currentSegments[existingSegmentIndex];
+
+            // DETECT LATE ARRIVING TRANSLATIONS
+            // If the previous version was a fallback (translatedText == originalText)
+            // AND the new version has a real translation (translatedText != text)
+            // THEN we treat this as a "Translation Arrival" which should trigger TTS.
+            const wasFallback = existingSegment.translatedText === existingSegment.originalText;
+            const isNowTranslated = translatedText && translatedText !== text;
+
+            if (wasFallback && isNowTranslated) {
+                isTranslationArrival = true;
+                console.log('[useSoloSession] 📢 Translation arrived for existing segment:', seqId);
+            }
+
+            // Update existing segment in new list
+            newSegments[existingSegmentIndex] = {
+                ...existingSegment,
+                originalText: text,
+                translatedText: translatedText || text,
+                // Keep original timestamp
+            };
+        } else {
+            // Add new segment
+            const newSegment = {
+                id: segmentId,
+                seqId: seqId, // Store the backend sequence ID
+                originalText: text,
+                translatedText: translatedText || text,
+                timestamp: Date.now()
+            };
+            newSegments.push(newSegment);
+        }
+
+        // Update Ref immediately
+        finalizedSegmentsRef.current = newSegments;
+
+        // Update State
+        setFinalizedSegments(newSegments);
         setPartialText('');
 
+        // Notify callbacks
         onFinal?.(text);
 
-        // BUG FIX: Pass both arguments (text, translatedText) so SoloPage receives them correctly.
-        // Previously: onTranslation?.(translatedText || text); -> This only passed one arg.
-        onTranslation?.(text, translatedText);
+        // Determine if TTS should trigger
+        // Trigger if: It's NEW (not update) OR It's a Translation Arrival
+        const shouldTriggerTts = !isUpdate || isTranslationArrival;
+
+        // BUG FIX: Pass isUpdate as FALSE if we want to trigger TTS (e.g. translation arrival)
+        onTranslation?.(text, translatedText, !shouldTriggerTts);
 
         // If not text-only mode, queue for TTS
+        // CRITICAL FIX: Only queue if it's a NEW segment OR a translation arrival
         if (mode !== SoloMode.TEXT_ONLY && translatedText) {
-            setPendingSpeakQueue(prev => [...prev, segment]);
+            if (shouldTriggerTts) {
+                const segment = {
+                    id: segmentId,
+                    originalText: text,
+                    translatedText: translatedText || text,
+                    timestamp: Date.now()
+                };
+                setPendingSpeakQueue(prev => [...prev, segment]);
 
-            // Transition to speaking state if not in preaching mode
-            // In preaching mode, we continue listening while TTS plays
-            if (mode === SoloMode.CONVERSATION) {
-                updateState(SessionState.SPEAKING);
+                // Transition to speaking state if not in preaching mode
+                // In preaching mode, we continue listening while TTS plays
+                if (mode === SoloMode.CONVERSATION) {
+                    updateState(SessionState.SPEAKING);
+                }
+            } else {
+                console.log('[useSoloSession] 🔄 Updated existing segment, skipping TTS queue');
             }
         }
 
-        console.log('[useSoloSession] Finalized:', text.substring(0, 50) + '...');
+        console.log(`[useSoloSession] Finalized (${isUpdate ? (isTranslationArrival ? 'TRANS-ARRIVAL' : 'UPDATE') : 'NEW'}):`, text.substring(0, 50) + '...');
     }, [mode, onFinal, onTranslation, updateState]);
 
     // Called when TTS finishes speaking

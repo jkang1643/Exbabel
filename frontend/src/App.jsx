@@ -232,6 +232,7 @@ function JoinChurchRoute() {
     <JoinChurchPage
       onBack={() => navigate('/')}
       onSuccess={() => navigate('/')}
+      onSignIn={() => navigate('/signin?redirect=/join-church')}
     />
   )
 }

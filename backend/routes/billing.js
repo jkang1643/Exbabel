@@ -18,6 +18,7 @@ import express from 'express';
 import { stripe } from '../services/stripe.js';
 import { supabaseAdmin } from '../supabaseAdmin.js';
 import { requireAuth, requireAdmin } from '../middleware/requireAuthContext.js';
+import { clearEntitlementsCache } from '../entitlements/index.js';
 
 const router = express.Router();
 
@@ -235,57 +236,64 @@ router.post('/billing/subscription-checkout', requireAuth, requireAdmin, async (
 
         const { planCode } = req.body;
         const churchId = req.auth.profile.church_id;
+        const userId = req.auth.user_id;
+
+        if (!planCode) {
+            return res.status(400).json({ error: 'planCode is required' });
+        }
 
         // Get or create Stripe customer
         const customerId = await ensureStripeCustomer(churchId);
 
-        // Get current subscription to pass to Portal
-        const { data: sub } = await supabaseAdmin
-            .from('subscriptions')
-            .select('stripe_subscription_id')
-            .eq('church_id', churchId)
+        // Look up the target plan's Stripe price
+        const { data: targetPlan, error: planErr } = await supabaseAdmin
+            .from('plans')
+            .select('id, code, name, stripe_price_id')
+            .eq('code', planCode)
             .single();
 
-        // Redirect to Customer Portal for upgrade
-        // Portal will show plan options and confirmation screen
-        const sessionConfig = {
-            customer: customerId,
-            return_url: `${APP_BASE_URL}/billing`,
-        };
-
-        // If user has a subscription, automatically navigate to the update page
-        if (sub?.stripe_subscription_id) {
-            sessionConfig.flow_data = {
-                type: 'subscription_update',
-                subscription_update: {
-                    subscription: sub.stripe_subscription_id,
-                },
-            };
+        if (planErr || !targetPlan) {
+            return res.status(400).json({ error: `Invalid plan: ${planCode}` });
         }
 
-        const session = await stripe.billingPortal.sessions.create(sessionConfig);
+        if (!targetPlan.stripe_price_id) {
+            return res.status(400).json({ error: `Plan ${planCode} has no Stripe price configured` });
+        }
 
-        console.log(`[Billing] ✓ Portal session created for upgrade: church=${churchId} target=${planCode || 'unspecified'}`);
+        // Create Stripe Checkout session for upgrade
+        const sessionConfig = {
+            mode: 'subscription',
+            customer: customerId,
+            client_reference_id: churchId,
+            metadata: {
+                church_id: churchId,
+                user_id: userId,
+                plan_code: planCode,
+            },
+            line_items: [{
+                price: targetPlan.stripe_price_id,
+                quantity: 1,
+            }],
+            success_url: `${APP_BASE_URL}/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}&plan=${planCode}`,
+            cancel_url: `${APP_BASE_URL}/billing?canceled=true`,
+            subscription_data: {
+                metadata: {
+                    church_id: churchId,
+                    user_id: userId,
+                    plan_code: planCode,
+                },
+            },
+        };
+
+        const session = await stripe.checkout.sessions.create(sessionConfig);
+
+        console.log(`[Billing] ✓ Upgrade checkout created: church=${churchId} to=${planCode} session=${session.id}`);
         res.json({ url: session.url });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     } catch (err) {
         console.error('[Billing] ✗ subscription-checkout error:', err.message);
         console.error('[Billing] ✗ Full error:', err);
-        res.status(500).json({ error: 'Failed to create portal session', details: err.message });
+        res.status(500).json({ error: 'Failed to create checkout session', details: err.message });
     }
 });
 
@@ -428,10 +436,12 @@ router.get('/billing/status', requireAuth, requireAdmin, async (req, res) => {
                 usedSecondsMtd: Number(quotaData.used_seconds_mtd),
                 includedSecondsPerMonth: quotaData.included_seconds_per_month,
                 purchasedSecondsMtd: Number(quotaData.purchased_seconds_mtd || 0),
+                purchasedSoloSecondsMtd: Number(quotaData.purchased_solo_seconds_mtd || 0),
+                purchasedHostSecondsMtd: Number(quotaData.purchased_host_seconds_mtd || 0),
                 totalAvailableSeconds: Number(quotaData.total_available_seconds || quotaData.included_seconds_per_month),
                 remainingSeconds: Number(quotaData.remaining_seconds),
-                percentUsed: quotaData.included_seconds_per_month > 0
-                    ? Math.round((Number(quotaData.used_seconds_mtd) / Number(quotaData.total_available_seconds || quotaData.included_seconds_per_month)) * 100)
+                percentUsed: quotaData.total_available_seconds > 0
+                    ? Math.round((Number(quotaData.used_seconds_mtd) / Number(quotaData.total_available_seconds)) * 100)
                     : 0,
             } : null,
             purchasedCredits: credits || [],

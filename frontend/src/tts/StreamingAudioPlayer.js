@@ -78,7 +78,25 @@ export class StreamingAudioPlayer {
         });
 
         this.isStarted = true;
+
+        // Apply initial playback rate if provided
+        if (streamConfig.playbackRate) {
+            this.setPlaybackRate(streamConfig.playbackRate);
+        }
+
         console.log('[StreamingPlayer] Started successfully');
+    }
+
+    /**
+     * Set playback rate
+     * @param {number} rate
+     */
+    setPlaybackRate(rate) {
+        if (this.audioElement) {
+            const safeRate = Math.max(0.5, Math.min(4.0, rate));
+            this.audioElement.playbackRate = safeRate;
+            console.log(`[StreamingPlayer] Set playbackRate to ${safeRate}x`);
+        }
     }
 
     /**

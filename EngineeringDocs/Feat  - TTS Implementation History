@@ -1992,3 +1992,93 @@ Created and ran `backend/scripts/test_regional_routing.js` to verify 14 regional
 - `frontend/src/components/solo/SoloPage.jsx` - Already using normalization
 - `frontend/src/tts/TtsPlayerController.js` - Already using normalization
 
+## Bug Fixes: Voice Mapping & Solo Mode Stability
+**Date:** 2026-02-12
+
+### The Issues
+1. **Invalid Default Voices**:
+   - Solo Mode (and potentially Host Mode defaults) for **Russian (`ru-RU`)** crashed because `ttsRouting.js` mapped the default `neural2` tier to `ru-RU-Neural2-A`, which does not exist in the Google TTS catalog.
+   - Systematic verification revealed **6 other languages** suffering from similar "ghost voice" mappings (likely deprecated by Google):
+     - `da-DK`: Mapped to `Neural2-D` (Missing)
+     - `fi-FI`, `nb-NO`, `nl-NL`, `pt-PT`: Mapped to `Wavenet-A` (Missing)
+     - `pl-PL`: Mapped to `Neural2-A` (Missing)
+
+2. **Frontend Bug (Solo Mode)**:
+   - `useTtsQueue.js` (used by Solo Mode) collected the user's selected `voiceId` but **failed to include it** in the synthesis request payload sent to the backend.
+   - This forced the backend to always perform fallback resolution, effectively ignoring the user's specific voice choice in Solo Mode.
+
+### The Fixes
+
+#### Backend: Comprehensive Voice Mapping Correction
+- **`ttsRouting.js`**:
+  - SYSTEMATICALLY verified `FALLBACK_VOICES` against the actual voice catalog.
+  - Corrected invalid mappings for all 7 affected languages:
+    - `ru-RU`: `Neural2-A` -> `Wavenet-A`
+    - `da-DK`: `Neural2-D` -> `Neural2-F`
+    - `fi-FI`: `Wavenet-A` -> `Wavenet-B`
+    - `nb-NO`: `Wavenet-A` -> `Wavenet-F`
+    - `nl-NL`: `Wavenet-A` -> `Wavenet-F`
+    - `pl-PL`: `Neural2-A` -> `Wavenet-F`
+    - `pt-PT`: `Wavenet-A` -> `Wavenet-E`
+
+#### Frontend: Solo Mode Request Fix
+- **`useTtsQueue.js`**:
+  - Updated `enqueue` function to capture `voiceId` from the segment data.
+  - Updated `processQueue` to include `voiceId` in the `tts/synthesize` WebSocket message.
+
+### Verification
+- **Manual Verification**: Confirmed Russian (`ru-RU`) now synthesizes correctly in Solo Mode using the default voice.
+- **Systematic Verification**: Verified existence of all new mapped voices in `backend/tts/voiceCatalog/catalogs/*.json`.
+- **Host Mode Verification**: Audited `ListenerPage.jsx` and `websocketHandler.js` to confirm Host Mode was already correct (sent `voiceId`) and now benefits from the improved backend defaults.
+
+### Files Modified
+- `backend/tts/ttsRouting.js` - Fixed 7 invalid voice mappings
+- `frontend/src/hooks/useTtsQueue.js` - Fixed dropped `voiceId`
+
+---
+
+## Stability Fixes & Polish - Solo Mode Parity & Core Reliability
+**Date:** 2026-02-13
+
+### The Issues
+1. **TTS Duplication in Solo Mode**:
+   - Updating translation segments caused the frontend to re-queue TTS for the same text, leading to double-speaking.
+2. **"Chipmunk" Audio Glitch**:
+   - ElevenLabs V2/Turbo models sometimes played back at the wrong sample rate (44.1kHz vs 22.05kHz), causing high-pitched speedup.
+3. **Solo Mode Entitlements Gap**:
+   - "Unlimited" plan users were not seeing all voices unlocked in Solo Mode, despite it working in Host Mode.
+4. **Stripe Upgrade UX**:
+   - The upgrade flow via Customer Portal was unreliable. Users needed a direct, high-conversion Checkout flow.
+5. **Analytics Inaccuracy**:
+   - Listener counts were effectively counting "sessions" rather than unique users, inflating numbers.
+
+### The Fixes
+
+#### Backend:
+- **Audio Sample Rate Enforcement**:
+  - Forced `22.05kHz` output for all ElevenLabs V2/Turbo/Multilingual models to ensure consistent playback speed.
+- **Solo Mode Entitlements (`soloModeHandler.js`)**:
+  - Fixed logic to correctly fetch and apply "Unlimited" plan entitlements to the Solo Mode session context.
+- **Stripe Checkout Integration**:
+  - Replaced Portal upgrades with direct Stripe Checkout Sessions for seamless subscription changes.
+- **Purchased Hours Logic**:
+  - Fixed webhook handler to correctly credit double hours (split between solo and host) for one-time purchases.
+- **Analytics Repair**:
+  - Updated `analytics.js` queries to correctly count unique listeners.
+
+#### Frontend:
+- **TTS Deduplication (`TtsPlayerController.js`)**:
+  - Implemented `seqId` tracking to ignore updates for segments that have already been queued or spoken.
+- **Solo Mode Defaults**:
+  - Improved logic to select the best available voice (Standard vs AI) based on the user's actual plan tier, preventing "silent" failures on load.
+- **UX Polish**:
+  - Added "Sign in" link to Join Church page.
+  - Fixed regression where voice lists were sometimes empty on the Listener page.
+
+### Verification
+- **Solo Mode**: Validated that updating translations does not trigger double speech.
+- **Audio Quality**: Confirmed ElevenLabs Turbo voices sound natural (no chipmunk effect).
+- **Entitlements**: Verified Unlimited users see all Premium/Ultra voices in Solo Mode.
+- **Billing**: Confirmed upgrades via Checkout work and hours are credited correctly.
+
+

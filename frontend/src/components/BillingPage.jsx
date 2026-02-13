@@ -170,25 +170,40 @@ export function BillingPage() {
     }
 
     async function handleCheckout(endpoint, body = {}) {
+        console.log('[DEBUG] handleCheckout called:', { endpoint, body });
         try {
             setActionLoading(endpoint);
             setError(null);
             const token = getAccessToken();
-            const res = await fetch(`${API_URL}/api/billing/${endpoint}`, {
-                method: endpoint === 'portal' ? 'GET' : 'POST',
+            const url = `${API_URL}/api/billing/${endpoint}`;
+            const method = endpoint === 'portal' ? 'GET' : 'POST';
+            console.log('[DEBUG] Making request:', { url, method, hasToken: !!token });
+
+            const res = await fetch(url, {
+                method,
                 headers: {
                     Authorization: `Bearer ${token}`,
                     'Content-Type': 'application/json',
                 },
                 body: endpoint === 'portal' ? undefined : JSON.stringify(body),
             });
+
+            console.log('[DEBUG] Response status:', res.status, res.ok);
+
             if (!res.ok) {
                 const data = await res.json().catch(() => ({}));
+                console.error('[DEBUG] Error response:', data);
                 throw new Error(data.error || 'Request failed');
             }
+
             const data = await res.json();
+            console.log('[DEBUG] Response data:', data);
+
             if (data.url) {
+                console.log('[DEBUG] Redirecting to:', data.url);
                 window.location.href = data.url;
+            } else {
+                console.warn('[DEBUG] No URL in response!');
             }
         } catch (err) {
             console.error(`[Billing] ${endpoint} error:`, err);
@@ -350,9 +365,14 @@ export function BillingPage() {
                                         <span>{formatTime(usage.remainingSeconds)} remaining</span>
                                     </div>
                                     {usage.purchasedSecondsMtd > 0 && (
-                                        <p className="text-xs text-blue-600">
-                                            Includes {formatTime(usage.purchasedSecondsMtd)} from purchased credits this month
-                                        </p>
+                                        <div className="text-xs text-blue-600 mt-2">
+                                            <p className="font-semibold">Purchased credits this month:</p>
+                                            <div className="ml-2 mt-1 space-y-0.5">
+                                                <p>• Solo: {formatTime(usage.purchasedSoloSecondsMtd || 0)}</p>
+                                                <p>• Host: {formatTime(usage.purchasedHostSecondsMtd || 0)}</p>
+                                                <p className="font-semibold">Total: {formatTime(usage.purchasedSecondsMtd)}</p>
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
                             </CardContent>

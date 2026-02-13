@@ -3614,10 +3614,27 @@ export async function handleSoloMode(clientWs) {
           try {
             const { getVoicesFor } = await import('./tts/voiceCatalog.js');
 
+            // FIXED: Dynamically access entitlements from the WebSocket connection
+            // This ensures we have the latest data, or at least attempting to get it if missing
+            let currentEntitlements = clientWs.entitlements;
+
+            // Fallback: If entitlements missing on socket but we have churchId, try to fetch them
+            if (!currentEntitlements && clientWs.churchId) {
+              console.warn(`[SoloMode] ⚠️ Entitlements missing on socket for ${message.languageCode}, attempting fetch for ${clientWs.churchId}`);
+              try {
+                const { getEntitlements } = await import('./entitlements/index.js');
+                currentEntitlements = await getEntitlements(clientWs.churchId);
+                clientWs.entitlements = currentEntitlements; // Cache it back
+                console.log(`[SoloMode] ✓ Recovered entitlements for plan=${currentEntitlements.subscription.planCode}`);
+              } catch (err) {
+                console.error(`[SoloMode] ❌ Failed to recover entitlements:`, err);
+              }
+            }
+
             // Use real entitlements if available, otherwise fallback to starter tier
-            const ttsTier = entitlements?.limits?.ttsTier || 'starter';
+            const ttsTier = currentEntitlements?.limits?.ttsTier || 'starter';
             const allowedTiers = getAllowedTtsTiers(ttsTier);
-            const planCode = entitlements?.subscription?.planCode || 'starter';
+            const planCode = currentEntitlements?.subscription?.planCode || 'starter';
 
             console.log(`[SoloMode] Fetching voices for ${message.languageCode} (plan=${planCode}, ttsTier=${ttsTier})`);
             console.log(`[SoloMode] Allowed tiers: [${allowedTiers.join(', ')}]`);
@@ -3808,10 +3825,66 @@ export async function handleSoloMode(clientWs) {
               }
             }
 
-            // If still no tier and no voice, default to gemini
+
+            // CRITICAL: Validate that the requested tier is allowed for this plan
+            // If user has a cached voice from a previous session with a higher tier (e.g., neural2 from trial),
+            // we need to override it with a plan-appropriate voice
+            const ttsTier = entitlements?.limits?.ttsTier || 'starter';
+            const allowedTiers = getAllowedTtsTiers(ttsTier);
+
+            console.log(`[SoloMode]   🔍 Tier Validation: plan=${ttsTier}, allowedTiers=[${allowedTiers.join(', ')}], requestedTier=${tierPreference}`);
+
+            // Check if the extracted/requested tier is allowed
+            if (tierPreference && !allowedTiers.includes(tierPreference)) {
+              console.log(`[SoloMode]   ⚠️ Tier '${tierPreference}' not allowed for plan=${ttsTier}. Allowed: [${allowedTiers.join(', ')}]`);
+              console.log(`[SoloMode]   🔄 Overriding with plan-appropriate default...`);
+
+              // Override with plan-appropriate default
+              const { getDefaultVoice } = await import('./tts/voiceCatalog.js');
+              const defaultVoice = await getDefaultVoice({
+                languageCode: message.languageCode,
+                allowedTiers
+              });
+
+              if (defaultVoice) {
+                tierPreference = defaultVoice.tier;
+                voicePreference = defaultVoice.voiceName;
+                console.log(`[SoloMode]   ✓ Overridden to: tier=${tierPreference}, voice=${voicePreference}`);
+              } else {
+                // Fallback to first allowed tier
+                tierPreference = allowedTiers[0] || 'standard';
+                voicePreference = null; // Let resolver pick a voice
+                console.log(`[SoloMode]   ⚠️ No default voice found, using first allowed tier: ${tierPreference}`);
+              }
+            }
+
+            // If no tier and no voice specified, use voice catalog to get plan-appropriate default
+            // (Frontend should normally send a voice, but this is a fallback)
             if (!tierPreference && !voicePreference) {
-              tierPreference = 'gemini';
-              console.log(`[SoloMode]   ⚠️ No tier or voice, defaulting to gemini`);
+              const ttsTier = entitlements?.limits?.ttsTier || 'starter';
+              const allowedTiers = getAllowedTtsTiers(ttsTier);
+
+              console.log(`[SoloMode]   ⚠️ No tier or voice specified, resolving default for plan=${ttsTier}, allowedTiers=[${allowedTiers.join(', ')}]`);
+
+              // Use voice catalog's getDefaultVoice which has correct tier priorities:
+              // - Starter: standard (basic quality)
+              // - Pro: gemini (AI-powered, high-quality)
+              // - Unlimited: elevenlabs_flash (premium, ultra-realistic, Pastor John Doe for English)
+              const { getDefaultVoice } = await import('./tts/voiceCatalog.js');
+              const defaultVoice = await getDefaultVoice({
+                languageCode: message.languageCode,
+                allowedTiers
+              });
+
+              if (defaultVoice) {
+                tierPreference = defaultVoice.tier;
+                voicePreference = defaultVoice.voiceName;
+                console.log(`[SoloMode]   ✓ Resolved default: tier=${tierPreference}, voice=${voicePreference}`);
+              } else {
+                // Fallback if no voice found (shouldn't happen for supported languages)
+                tierPreference = allowedTiers[0] || 'standard';
+                console.log(`[SoloMode]   ⚠️ No default voice found, using first allowed tier: ${tierPreference}`);
+              }
             }
 
             console.log(`[SoloMode]   📍 Final tierPreference: ${tierPreference}`);
@@ -3855,7 +3928,7 @@ export async function handleSoloMode(clientWs) {
               segmentId: message.segmentId,
               profile: {
                 engine: route.engine,
-                requestedTier: message.tier || 'gemini',
+                requestedTier: tierPreference,  // Use the resolved tierPreference (respects entitlements)
                 languageCode: route.languageCode,
                 voiceName: route.voiceName,
                 modelName: route.model || message.modelName,

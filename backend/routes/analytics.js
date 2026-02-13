@@ -88,7 +88,7 @@ analyticsRouter.get("/analytics", requireAuth, requireAdmin, async (req, res) =>
         const churchId = req.auth.profile.church_id;
 
         // Fetch all data in parallel
-        const [quotaStatus, mtdUsage, dailyUsage, sessionMeta] = await Promise.all([
+        const [quotaStatus, mtdUsage, dailyUsage, sessionMeta, memberCount] = await Promise.all([
             // 1. Quota status (solo/host/combined breakdowns)
             getQuotaStatus(churchId).catch(err => {
                 console.error('[Analytics] Quota status error:', err.message);
@@ -111,6 +111,12 @@ analyticsRouter.get("/analytics", requireAuth, requireAdmin, async (req, res) =>
             getSessionMetadata(churchId).catch(err => {
                 console.error('[Analytics] Session metadata error:', err.message);
                 return { languages: [], listenerCount: 0 };
+            }),
+
+            // 5. Member count for this church
+            getMemberCount(churchId).catch(err => {
+                console.error('[Analytics] Member count error:', err.message);
+                return 0;
             })
         ]);
 
@@ -122,6 +128,20 @@ analyticsRouter.get("/analytics", requireAuth, requireAdmin, async (req, res) =>
         } catch (e) {
             console.warn('[Analytics] Could not fetch entitlements:', e.message);
         }
+
+        // Calculate additional statistics
+        // 1. Total sessions this month
+        const totalSessions = await getSessionCount(churchId);
+
+        // 2. Total usage (combined solo + host seconds)
+        const soloUsage = mtdUsage.find(m => m.metric === 'solo_active_seconds')?.total || 0;
+        const hostUsage = mtdUsage.find(m => m.metric === 'host_active_seconds')?.total || 0;
+        const totalUsageSeconds = soloUsage + hostUsage;
+
+        // 3. Average daily usage (total usage / days elapsed in current month)
+        const now = new Date();
+        const daysElapsed = now.getDate(); // Current day of month (1-31)
+        const avgDailySeconds = daysElapsed > 0 ? totalUsageSeconds / daysElapsed : 0;
 
         // Convert percentUsed from fraction (0-1) to percentage (0-100) for frontend
         const scalePercent = (quota) => quota ? {
@@ -139,7 +159,12 @@ analyticsRouter.get("/analytics", requireAuth, requireAdmin, async (req, res) =>
             dailyUsage,
             languages: sessionMeta.languages,
             listenerCount: sessionMeta.listenerCount,
-            planCode
+            memberCount,
+            planCode,
+            // New statistics
+            totalSessions,
+            totalUsageSeconds,
+            avgDailySeconds
         });
 
     } catch (error) {
@@ -211,17 +236,32 @@ async function getSessionMetadata(churchId) {
         if (session.source_lang) langs.add(session.source_lang);
     }
 
-    // Get listener count from session_spans (listening_spans count distinct listeners)
+    // Get DISTINCT listener count from listening_spans (count unique user_ids)
     let listenerCount = 0;
     try {
-        const { count, error: countError } = await supabaseAdmin
+        const { data: listeningData, error: countError } = await supabaseAdmin
             .from('listening_spans')
-            .select('id', { count: 'exact', head: true })
+            .select('user_id')
             .eq('church_id', churchId)
             .gte('started_at', monthStart);
 
-        if (!countError) {
-            listenerCount = count || 0;
+        console.log('[Analytics] Listening spans query:', {
+            churchId,
+            monthStart,
+            rowCount: listeningData?.length,
+            error: countError?.message
+        });
+
+        if (!countError && listeningData) {
+            // Count distinct user_ids
+            const uniqueListeners = new Set(listeningData.map(span => span.user_id));
+            listenerCount = uniqueListeners.size;
+
+            console.log('[Analytics] Listener count calculation:', {
+                totalRows: listeningData.length,
+                uniqueListeners: listenerCount,
+                sampleUserIds: Array.from(uniqueListeners).slice(0, 5)
+            });
         }
     } catch (e) {
         // listening_spans table may not exist yet
@@ -233,3 +273,44 @@ async function getSessionMetadata(churchId) {
         listenerCount
     };
 }
+
+/**
+ * Get member count for a church.
+ * Returns the number of profiles (members) associated with the church.
+ */
+async function getMemberCount(churchId) {
+    const { count, error } = await supabaseAdmin
+        .from('profiles')
+        .select('*', { count: 'exact', head: true })
+        .eq('church_id', churchId);
+
+    if (error) {
+        console.error('[Analytics] Member count query error:', error.message);
+        return 0;
+    }
+
+    return count || 0;
+}
+
+/**
+ * Get session count for a church this month.
+ * Returns the number of sessions created in the current month.
+ */
+async function getSessionCount(churchId) {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+    const { count, error } = await supabaseAdmin
+        .from('sessions')
+        .select('*', { count: 'exact', head: true })
+        .eq('church_id', churchId)
+        .gte('created_at', monthStart);
+
+    if (error) {
+        console.error('[Analytics] Session count query error:', error.message);
+        return 0;
+    }
+
+    return count || 0;
+}
+

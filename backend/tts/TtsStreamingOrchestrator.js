@@ -195,14 +195,17 @@ class SessionOrchestrator {
         let streamHandle;
 
         if (route.provider === 'elevenlabs') {
-            const provider = getElevenLabsStreamingProvider();
             if (!provider.isConfigured()) throw new Error('ElevenLabs provider not configured');
+
+            const modelId = route.model || 'eleven_multilingual_v2';
+            const outputFormat = TTS_STREAMING_CONFIG.outputFormat;
+            console.log(`[TTS-Orch] ElevenLabs Stream Request: voiceId=${route.voiceName}, modelId=${modelId}, format=${outputFormat}`);
 
             streamHandle = provider.streamTts({
                 text,
                 voiceId: route.voiceName, // resolveTtsRoute handles ID cleaning
-                modelId: route.model || 'eleven_multilingual_v2',
-                outputFormat: TTS_STREAMING_CONFIG.outputFormat
+                modelId,
+                outputFormat
             });
         } else {
             // Google TTS
