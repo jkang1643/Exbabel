@@ -1,0 +1,141 @@
+# 🏁 Exbabel Stripe Live Launch Walkthrough
+
+**STOP.** Do not skip any steps. Follow this guide exactly to avoid breaking payments.
+
+---
+
+### Phase 1: Stripe Dashboard (The Switch)
+
+1.  **Log in** to your Stripe Dashboard.
+2.  **Toggle "Test Mode" OFF** (Top right corner).
+    *   *You are now in Live Mode. All data is real.*
+3.  **Activate Account**: If you haven't, complete the identity verification and bank account connection forms Stripe requires.
+
+---
+
+### Phase 2: Get Your Live Keys
+
+1.  Go to **Developers** -> **API Keys**.
+2.  **Publishable Key**: Copy the key starting with `pk_live_...`.
+3.  **Secret Key**: Click "Reveal live key" and copy the key starting with `sk_live_...`.
+    *   *Keep this tab open.*
+
+---
+
+### Phase 3: Update Codebase (The Config)
+
+**Backend (.env)**
+1.  Open your [backend/.env](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/.env) file (on your server).
+2.  Update these values:
+    ```env
+    NODE_ENV=production
+    STRIPE_SECRET_KEY=sk_live_...  <-- Paste your LIVE Secret Key
+    STRIPE_PUBLISHABLE_KEY=pk_live_... <-- Paste your LIVE Publishable Key
+    ```
+
+**Frontend (Build Config)**
+1.  Open your [frontend/.env.production](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/.env.production) (or [.env.local](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/frontend/.env.local) if you build from there).
+2.  Update:
+    ```env
+    VITE_STRIPE_PUBLISHABLE_KEY=pk_live_... <-- Paste your LIVE Publishable Key
+    ```
+3.  **CRITICAL:** You must **REBUILD** your frontend for this to take effect.
+    ```bash
+    cd frontend
+    npm run build
+    # Redeploy your 'dist' folder to S3/CloudFront
+    ```
+
+---
+
+### Phase 4: Re-Create Assets (The Replication)
+
+*Stripe Live Mode is empty. You must re-create everything manually.*
+
+#### 1. Rate Limiting & Settings
+*   Go to **Settings** -> **Public details**: Upload your **Logo** and Icon (Crucial for the Checkout page look).
+*   Go to **Settings** -> **Customer Portal**:
+    *   **Activate link**: Turn it on.
+    *   **Features**: Enable "Cancel subscription", "Update payment method", "View invoice history".
+    *   *Save changes.*
+
+#### 2. Create Coupons
+*   Go to **Product Catalog** -> **Coupons**.
+*   Create a **50% Off** coupon (if you use one).
+    *   **Name**: "50% Off"
+    *   **Percentage off**: 50%
+    *   **Duration**: Forever / Once / Multi-month (match your dev setup).
+    *   **ID**: Expand "Advanced options" and set the **ID** to specific value if your code hardcodes it (e.g. `cIkmQ7oJ` from your env), OR just create it and copy the *new* ID to your [.env](file://wsl.localhost/Ubuntu/home/jkang1643/projects/realtimetranslationapp/backend/.env) as `STRIPE_50_PERCENT_COUPON_ID`.
+
+#### 3. Create Plans (Products)
+*   Go to **Product Catalog** -> **Add product**.
+*   **Starter Plan**:
+    *   Name: "Starter Plan"
+    *   Price: $22.50 / Month / Recurring.
+    *   **Copy the Price ID** (starts with `price_...`).
+*   **Pro Plan**:
+    *   Name: "Pro Plan "
+    *   Price: $99.00 / Month / Recurring.
+    *   **Copy the Price ID**.
+*   **Unlimited Plan**:
+    *   Name: "Unlimited Plan"
+    *   Price: $199.00 / Month / Recurring.
+    *   **Copy the Price ID**.
+
+---
+
+### Phase 5: Update Database (The SQL)
+
+*Your app still has Test IDs in the database. We need to swap them.*
+
+1.  Open **Supabase Dashboard** -> **SQL Editor**.
+2.  Paste and run this specific command (replace with your COPIED IDs from Phase 4):
+
+```sql
+-- 1. STARTER
+UPDATE plans SET stripe_price_id = 'price_1LiveStarterID_FROM_STRIPE' WHERE code = 'starter';
+
+-- 2. PRO
+UPDATE plans SET stripe_price_id = 'price_1LiveProID_FROM_STRIPE' WHERE code = 'pro';
+
+-- 3. UNLIMITED
+UPDATE plans SET stripe_price_id = 'price_1LiveUnlimitedID_FROM_STRIPE' WHERE code = 'unlimited';
+```
+
+3.  **Verify**: Run `SELECT * FROM plans;` and confirm the IDs look like `price_1Live...`.
+
+---
+
+### Phase 6: Webhooks (The Connection)
+
+*Your app needs to hear about payments.*
+
+1.  Go to **Developers** -> **Webhooks** in Stripe (Live Mode).
+2.  Click **Add Endpoint**.
+3.  **Endpoint URL**: `https://api.exbabel.com/api/webhooks/stripe` (Your real production backend URL).
+4.  **Select events**:
+    *   `checkout.session.completed`
+    *   `invoice.payment_succeeded`
+    *   `invoice.payment_failed`
+    *   `customer.subscription.updated`
+    *   `customer.subscription.deleted`
+5.  Click **Add endpoint**.
+6.  **Copy Signing Secret**: Click "Reveal" (starts with `whsec_...`).
+7.  **Update Backend .env**:
+    ```env
+    STRIPE_WEBHOOK_SECRET=whsec_... <-- Paste the LIVE signing secret
+    ```
+8.  **Restart Backend**: `pm2 restart exbabel-backend`.
+
+---
+
+### Phase 7: The Money Test (Final Verification)
+
+1.  Go to your live website.
+2.  **Actually Buy It**: Use your *real* credit card. Buy the Starter Plan.
+3.  **Check**:
+    *   Did the UI update to "Starter"?
+    *   Did you get an email?
+4.  **Refund**: Go to Stripe, find the payment, and click **Refund**.
+
+**YOU ARE LIVE.** 🚀

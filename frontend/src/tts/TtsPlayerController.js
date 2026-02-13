@@ -1085,12 +1085,9 @@ export class TtsPlayerController {
 
             // Check for Tier based overrides
             const tier = queueItem.resolvedRoute?.tier;
-            if (tier === 'elevenlabs_flash') {
-                console.log(`[TtsPlayerController] Applying 0.7x compensation for Flash v2. Original rate: ${rate}`);
-                rate *= 0.7; // Compensate for native 1.45x speed
-            } else if (tier === 'gemini') {
-                // Gemini also needs slowing down
-                rate *= 0.7;
+            if (tier === 'gemini') {
+                // Gemini is too slow by default, speed it up
+                rate *= 1.4;
             }
 
             if (!isNaN(rate)) {
