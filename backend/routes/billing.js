@@ -363,7 +363,7 @@ router.post('/billing/top-up-checkout', requireAuth, requireAdmin, async (req, r
  * Create a Stripe Billing Portal session for managing payment methods / invoices.
  * Returns: { url: string }
  */
-router.get('/billing/portal', requireAuth, requireAdmin, async (req, res) => {
+router.post('/billing/portal', requireAuth, requireAdmin, async (req, res) => {
     try {
         if (!stripe) {
             return res.status(503).json({ error: 'Billing not configured' });
@@ -371,13 +371,34 @@ router.get('/billing/portal', requireAuth, requireAdmin, async (req, res) => {
 
         const churchId = req.auth.profile.church_id;
         const customerId = await ensureStripeCustomer(churchId);
+        const { flow } = req.body;
 
-        const portalSession = await stripe.billingPortal.sessions.create({
+        const sessionConfig = {
             customer: customerId,
             return_url: `${APP_BASE_URL}/billing`,
-        });
+        };
 
-        console.log(`[Billing] ✓ Portal session created: church=${churchId}`);
+        // If 'subscription_update' flow requested, deep link to that specific page
+        if (flow === 'subscription_update') {
+            const { data: sub } = await supabaseAdmin
+                .from('subscriptions')
+                .select('stripe_subscription_id')
+                .eq('church_id', churchId)
+                .single();
+
+            if (sub?.stripe_subscription_id) {
+                sessionConfig.flow_data = {
+                    type: 'subscription_update',
+                    subscription_update: {
+                        subscription: sub.stripe_subscription_id,
+                    },
+                };
+            }
+        }
+
+        const portalSession = await stripe.billingPortal.sessions.create(sessionConfig);
+
+        console.log(`[Billing] ✓ Portal session created: church=${churchId} flow=${flow || 'default'}`);
         res.json({ url: portalSession.url });
 
     } catch (err) {

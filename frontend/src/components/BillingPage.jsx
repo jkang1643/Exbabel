@@ -176,7 +176,8 @@ export function BillingPage() {
             setError(null);
             const token = getAccessToken();
             const url = `${API_URL}/api/billing/${endpoint}`;
-            const method = endpoint === 'portal' ? 'GET' : 'POST';
+            // Portal now uses POST to support flow_data
+            const method = 'POST';
             console.log('[DEBUG] Making request:', { url, method, hasToken: !!token });
 
             const res = await fetch(url, {
@@ -185,7 +186,7 @@ export function BillingPage() {
                     Authorization: `Bearer ${token}`,
                     'Content-Type': 'application/json',
                 },
-                body: endpoint === 'portal' ? undefined : JSON.stringify(body),
+                body: JSON.stringify(body),
             });
 
             console.log('[DEBUG] Response status:', res.status, res.ok);
@@ -393,18 +394,18 @@ export function BillingPage() {
                                     {currentPlan === 'starter' && (
                                         <Button
                                             className="py-6 text-lg bg-blue-500 hover:bg-blue-600"
-                                            onClick={() => handleCheckout('subscription-checkout', { planCode: 'pro' })}
+                                            onClick={() => handleCheckout('portal', { flow: 'subscription_update' })}
                                             disabled={!!actionLoading}
                                         >
-                                            {actionLoading === 'subscription-checkout' ? 'Redirecting...' : '⚡ Upgrade to Pro'}
+                                            {actionLoading === 'portal' ? 'Redirecting...' : '⚡ Upgrade to Pro'}
                                         </Button>
                                     )}
                                     <Button
                                         className="py-6 text-lg bg-purple-500 hover:bg-purple-600"
-                                        onClick={() => handleCheckout('subscription-checkout', { planCode: 'unlimited' })}
+                                        onClick={() => handleCheckout('portal', { flow: 'subscription_update' })}
                                         disabled={!!actionLoading}
                                     >
-                                        {actionLoading === 'subscription-checkout' ? 'Redirecting...' : '🚀 Upgrade to Unlimited'}
+                                        {actionLoading === 'portal' ? 'Redirecting...' : '🚀 Upgrade to Unlimited'}
                                     </Button>
                                 </div>
                             </CardContent>
