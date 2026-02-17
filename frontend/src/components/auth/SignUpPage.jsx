@@ -75,7 +75,7 @@ export function SignUpPage({ onSuccess, onBack, onSwitchToSignIn, redirectAfter 
 
     const handleGoogleSignUp = async () => {
         setLocalError(null);
-        const result = await signInWithGoogle();
+        const result = await signInWithGoogle(redirectAfter);
 
         if (result.error) {
             setLocalError(result.error.message || 'Google sign up failed');

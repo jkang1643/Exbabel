@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
+export function LoginPage({ onSuccess, onBack, onSwitchToSignUp, redirectAfter }) {
     const { signInWithEmail, signInWithGoogle, loading, error } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -43,7 +43,7 @@ export function LoginPage({ onSuccess, onBack, onSwitchToSignUp }) {
 
     const handleGoogleLogin = async () => {
         setLocalError(null);
-        const result = await signInWithGoogle();
+        const result = await signInWithGoogle(redirectAfter);
 
         if (result.error) {
             setLocalError(result.error.message || 'Google login failed');

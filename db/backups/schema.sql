@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict zuzkiXrEWyuTZXC60Xce6QZ9QKoBz8h9dxPGGnbNSXTen20Vb1OK1WroPYHzfUa
+\restrict GTkjpbJhtpqLeoRgHC6zf7c6MN6Hy205N9QcaPRBFkuhglpd2e97kXOYoD7hfmw
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 17.7 (Ubuntu 17.7-3.pgdg24.04+1)
@@ -32,7 +32,6 @@ ALTER TABLE IF EXISTS ONLY storage.vector_indexes DROP CONSTRAINT IF EXISTS vect
 ALTER TABLE IF EXISTS ONLY storage.s3_multipart_uploads_parts DROP CONSTRAINT IF EXISTS s3_multipart_uploads_parts_upload_id_fkey;
 ALTER TABLE IF EXISTS ONLY storage.s3_multipart_uploads_parts DROP CONSTRAINT IF EXISTS s3_multipart_uploads_parts_bucket_id_fkey;
 ALTER TABLE IF EXISTS ONLY storage.s3_multipart_uploads DROP CONSTRAINT IF EXISTS s3_multipart_uploads_bucket_id_fkey;
-ALTER TABLE IF EXISTS ONLY storage.prefixes DROP CONSTRAINT IF EXISTS "prefixes_bucketId_fkey";
 ALTER TABLE IF EXISTS ONLY storage.objects DROP CONSTRAINT IF EXISTS "objects_bucketId_fkey";
 ALTER TABLE IF EXISTS ONLY public.usage_events DROP CONSTRAINT IF EXISTS usage_events_church_id_fkey;
 ALTER TABLE IF EXISTS ONLY public.usage_daily DROP CONSTRAINT IF EXISTS usage_daily_church_id_fkey;
@@ -41,6 +40,7 @@ ALTER TABLE IF EXISTS ONLY public.subscriptions DROP CONSTRAINT IF EXISTS subscr
 ALTER TABLE IF EXISTS ONLY public.sessions DROP CONSTRAINT IF EXISTS sessions_host_user_id_fkey;
 ALTER TABLE IF EXISTS ONLY public.sessions DROP CONSTRAINT IF EXISTS sessions_church_id_fkey;
 ALTER TABLE IF EXISTS ONLY public.session_spans DROP CONSTRAINT IF EXISTS session_spans_session_id_fkey;
+ALTER TABLE IF EXISTS ONLY public.purchased_credits DROP CONSTRAINT IF EXISTS purchased_credits_church_id_fkey;
 ALTER TABLE IF EXISTS ONLY public.profiles DROP CONSTRAINT IF EXISTS profiles_user_id_fkey;
 ALTER TABLE IF EXISTS ONLY public.profiles DROP CONSTRAINT IF EXISTS profiles_church_id_fkey;
 ALTER TABLE IF EXISTS ONLY public.plan_model_routing DROP CONSTRAINT IF EXISTS plan_model_routing_plan_id_fkey;
@@ -63,11 +63,8 @@ ALTER TABLE IF EXISTS ONLY auth.mfa_challenges DROP CONSTRAINT IF EXISTS mfa_cha
 ALTER TABLE IF EXISTS ONLY auth.mfa_amr_claims DROP CONSTRAINT IF EXISTS mfa_amr_claims_session_id_fkey;
 ALTER TABLE IF EXISTS ONLY auth.identities DROP CONSTRAINT IF EXISTS identities_user_id_fkey;
 DROP TRIGGER IF EXISTS update_objects_updated_at ON storage.objects;
-DROP TRIGGER IF EXISTS prefixes_delete_hierarchy ON storage.prefixes;
-DROP TRIGGER IF EXISTS prefixes_create_hierarchy ON storage.prefixes;
-DROP TRIGGER IF EXISTS objects_update_create_prefix ON storage.objects;
-DROP TRIGGER IF EXISTS objects_insert_create_prefix ON storage.objects;
-DROP TRIGGER IF EXISTS objects_delete_delete_prefix ON storage.objects;
+DROP TRIGGER IF EXISTS protect_objects_delete ON storage.objects;
+DROP TRIGGER IF EXISTS protect_buckets_delete ON storage.buckets;
 DROP TRIGGER IF EXISTS enforce_bucket_name_length_trigger ON storage.buckets;
 DROP TRIGGER IF EXISTS tr_check_filters ON realtime.subscription;
 DROP TRIGGER IF EXISTS set_updated_at_usage_daily ON public.usage_daily;
@@ -76,12 +73,9 @@ DROP TRIGGER IF EXISTS set_updated_at_plans ON public.plans;
 DROP TRIGGER IF EXISTS set_updated_at_plan_model_routing ON public.plan_model_routing;
 DROP TRIGGER IF EXISTS set_updated_at_church_billing_settings ON public.church_billing_settings;
 DROP INDEX IF EXISTS storage.vector_indexes_name_bucket_id_idx;
-DROP INDEX IF EXISTS storage.objects_bucket_id_level_idx;
 DROP INDEX IF EXISTS storage.name_prefix_search;
-DROP INDEX IF EXISTS storage.idx_prefixes_lower_name;
-DROP INDEX IF EXISTS storage.idx_objects_lower_name;
+DROP INDEX IF EXISTS storage.idx_objects_bucket_id_name_lower;
 DROP INDEX IF EXISTS storage.idx_objects_bucket_id_name;
-DROP INDEX IF EXISTS storage.idx_name_bucket_level_unique;
 DROP INDEX IF EXISTS storage.idx_multipart_uploads_list;
 DROP INDEX IF EXISTS storage.buckets_analytics_unique_name_idx;
 DROP INDEX IF EXISTS storage.bucketid_objname;
@@ -103,7 +97,10 @@ DROP INDEX IF EXISTS public.subscriptions_status_idx;
 DROP INDEX IF EXISTS public.subscriptions_church_id_idx;
 DROP INDEX IF EXISTS public.session_spans_one_active_per_session;
 DROP INDEX IF EXISTS public.session_spans_church_started_at_idx;
+DROP INDEX IF EXISTS public.purchased_credits_payment_intent_uidx;
+DROP INDEX IF EXISTS public.purchased_credits_church_created_idx;
 DROP INDEX IF EXISTS public.profiles_church_id_idx;
+DROP INDEX IF EXISTS public.plans_stripe_price_id_uidx;
 DROP INDEX IF EXISTS public.plan_model_routing_plan_idx;
 DROP INDEX IF EXISTS public.listening_spans_session_user_idx;
 DROP INDEX IF EXISTS public.listening_spans_session_started_at_idx;
@@ -115,6 +112,9 @@ DROP INDEX IF EXISTS public.idx_sessions_church_recent;
 DROP INDEX IF EXISTS public.idx_sessions_church_id;
 DROP INDEX IF EXISTS public.idx_sessions_active_status;
 DROP INDEX IF EXISTS public.idx_session_spans_mode;
+DROP INDEX IF EXISTS public.idx_purchased_credits_monthly;
+DROP INDEX IF EXISTS public.idx_purchased_credits_mode;
+DROP INDEX IF EXISTS public.churches_stripe_customer_id_uidx;
 DROP INDEX IF EXISTS auth.users_is_anonymous_idx;
 DROP INDEX IF EXISTS auth.users_instance_id_idx;
 DROP INDEX IF EXISTS auth.users_instance_id_email_idx;
@@ -165,7 +165,6 @@ ALTER TABLE IF EXISTS ONLY supabase_migrations.schema_migrations DROP CONSTRAINT
 ALTER TABLE IF EXISTS ONLY storage.vector_indexes DROP CONSTRAINT IF EXISTS vector_indexes_pkey;
 ALTER TABLE IF EXISTS ONLY storage.s3_multipart_uploads DROP CONSTRAINT IF EXISTS s3_multipart_uploads_pkey;
 ALTER TABLE IF EXISTS ONLY storage.s3_multipart_uploads_parts DROP CONSTRAINT IF EXISTS s3_multipart_uploads_parts_pkey;
-ALTER TABLE IF EXISTS ONLY storage.prefixes DROP CONSTRAINT IF EXISTS prefixes_pkey;
 ALTER TABLE IF EXISTS ONLY storage.objects DROP CONSTRAINT IF EXISTS objects_pkey;
 ALTER TABLE IF EXISTS ONLY storage.migrations DROP CONSTRAINT IF EXISTS migrations_pkey;
 ALTER TABLE IF EXISTS ONLY storage.migrations DROP CONSTRAINT IF EXISTS migrations_name_key;
@@ -184,6 +183,7 @@ ALTER TABLE IF EXISTS ONLY public.subscriptions DROP CONSTRAINT IF EXISTS subscr
 ALTER TABLE IF EXISTS ONLY public.sessions DROP CONSTRAINT IF EXISTS sessions_session_code_key;
 ALTER TABLE IF EXISTS ONLY public.sessions DROP CONSTRAINT IF EXISTS sessions_pkey;
 ALTER TABLE IF EXISTS ONLY public.session_spans DROP CONSTRAINT IF EXISTS session_spans_pkey;
+ALTER TABLE IF EXISTS ONLY public.purchased_credits DROP CONSTRAINT IF EXISTS purchased_credits_pkey;
 ALTER TABLE IF EXISTS ONLY public.profiles DROP CONSTRAINT IF EXISTS profiles_pkey;
 ALTER TABLE IF EXISTS ONLY public.plans DROP CONSTRAINT IF EXISTS plans_pkey;
 ALTER TABLE IF EXISTS ONLY public.plans DROP CONSTRAINT IF EXISTS plans_code_key;
@@ -226,7 +226,6 @@ DROP TABLE IF EXISTS supabase_migrations.schema_migrations;
 DROP TABLE IF EXISTS storage.vector_indexes;
 DROP TABLE IF EXISTS storage.s3_multipart_uploads_parts;
 DROP TABLE IF EXISTS storage.s3_multipart_uploads;
-DROP TABLE IF EXISTS storage.prefixes;
 DROP TABLE IF EXISTS storage.objects;
 DROP TABLE IF EXISTS storage.migrations;
 DROP TABLE IF EXISTS storage.buckets_vectors;
@@ -241,6 +240,7 @@ DROP TABLE IF EXISTS public.usage_daily;
 DROP TABLE IF EXISTS public.subscriptions;
 DROP TABLE IF EXISTS public.sessions;
 DROP TABLE IF EXISTS public.session_spans;
+DROP TABLE IF EXISTS public.purchased_credits;
 DROP TABLE IF EXISTS public.profiles;
 DROP TABLE IF EXISTS public.plans;
 DROP TABLE IF EXISTS public.plan_model_routing;
@@ -270,33 +270,24 @@ DROP TABLE IF EXISTS auth.flow_state;
 DROP TABLE IF EXISTS auth.audit_log_entries;
 DROP FUNCTION IF EXISTS storage.update_updated_at_column();
 DROP FUNCTION IF EXISTS storage.search_v2(prefix text, bucket_name text, limits integer, levels integer, start_after text, sort_order text, sort_column text, sort_column_after text);
-DROP FUNCTION IF EXISTS storage.search_v1_optimised(prefix text, bucketname text, limits integer, levels integer, offsets integer, search text, sortcolumn text, sortorder text);
 DROP FUNCTION IF EXISTS storage.search_legacy_v1(prefix text, bucketname text, limits integer, levels integer, offsets integer, search text, sortcolumn text, sortorder text);
+DROP FUNCTION IF EXISTS storage.search_by_timestamp(p_prefix text, p_bucket_id text, p_limit integer, p_level integer, p_start_after text, p_sort_order text, p_sort_column text, p_sort_column_after text);
 DROP FUNCTION IF EXISTS storage.search(prefix text, bucketname text, limits integer, levels integer, offsets integer, search text, sortcolumn text, sortorder text);
-DROP FUNCTION IF EXISTS storage.prefixes_insert_trigger();
-DROP FUNCTION IF EXISTS storage.prefixes_delete_cleanup();
+DROP FUNCTION IF EXISTS storage.protect_delete();
 DROP FUNCTION IF EXISTS storage.operation();
-DROP FUNCTION IF EXISTS storage.objects_update_prefix_trigger();
-DROP FUNCTION IF EXISTS storage.objects_update_level_trigger();
-DROP FUNCTION IF EXISTS storage.objects_update_cleanup();
-DROP FUNCTION IF EXISTS storage.objects_insert_prefix_trigger();
-DROP FUNCTION IF EXISTS storage.objects_delete_cleanup();
-DROP FUNCTION IF EXISTS storage.lock_top_prefixes(bucket_ids text[], names text[]);
-DROP FUNCTION IF EXISTS storage.list_objects_with_delimiter(bucket_id text, prefix_param text, delimiter_param text, max_keys integer, start_after text, next_token text);
+DROP FUNCTION IF EXISTS storage.list_objects_with_delimiter(_bucket_id text, prefix_param text, delimiter_param text, max_keys integer, start_after text, next_token text, sort_order text);
 DROP FUNCTION IF EXISTS storage.list_multipart_uploads_with_delimiter(bucket_id text, prefix_param text, delimiter_param text, max_keys integer, next_key_token text, next_upload_token text);
 DROP FUNCTION IF EXISTS storage.get_size_by_bucket();
 DROP FUNCTION IF EXISTS storage.get_prefixes(name text);
 DROP FUNCTION IF EXISTS storage.get_prefix(name text);
 DROP FUNCTION IF EXISTS storage.get_level(name text);
+DROP FUNCTION IF EXISTS storage.get_common_prefix(p_key text, p_prefix text, p_delimiter text);
 DROP FUNCTION IF EXISTS storage.foldername(name text);
 DROP FUNCTION IF EXISTS storage.filename(name text);
 DROP FUNCTION IF EXISTS storage.extension(name text);
 DROP FUNCTION IF EXISTS storage.enforce_bucket_name_length();
-DROP FUNCTION IF EXISTS storage.delete_prefix_hierarchy_trigger();
-DROP FUNCTION IF EXISTS storage.delete_prefix(_bucket_id text, _name text);
 DROP FUNCTION IF EXISTS storage.delete_leaf_prefixes(bucket_ids text[], names text[]);
 DROP FUNCTION IF EXISTS storage.can_insert_object(bucketid text, name text, owner uuid, metadata jsonb);
-DROP FUNCTION IF EXISTS storage.add_prefixes(_bucket_id text, _name text);
 DROP FUNCTION IF EXISTS realtime.topic();
 DROP FUNCTION IF EXISTS realtime.to_regrole(role_name text);
 DROP FUNCTION IF EXISTS realtime.subscription_check_filters();
@@ -1062,96 +1053,67 @@ CREATE FUNCTION pgbouncer.get_auth(p_usename text) RETURNS TABLE(username text, 
 -- Name: get_session_quota_status(uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.get_session_quota_status(p_church_id uuid) RETURNS TABLE(included_seconds_per_month integer, used_seconds_mtd bigint, active_seconds_now integer, remaining_seconds bigint, included_solo_seconds integer, used_solo_seconds_mtd bigint, remaining_solo_seconds bigint, included_host_seconds integer, used_host_seconds_mtd bigint, remaining_host_seconds bigint)
+CREATE FUNCTION public.get_session_quota_status(p_church_id uuid) RETURNS TABLE(included_seconds_per_month integer, used_seconds_mtd bigint, active_seconds_now integer, remaining_seconds bigint, purchased_solo_seconds_mtd bigint, purchased_host_seconds_mtd bigint, purchased_seconds_mtd bigint, included_solo_seconds integer, used_solo_seconds_mtd bigint, remaining_solo_seconds bigint, included_host_seconds integer, used_host_seconds_mtd bigint, remaining_host_seconds bigint, total_available_seconds bigint)
     LANGUAGE sql STABLE SECURITY DEFINER
     AS $$
 WITH plan_limits AS (
   SELECT 
-    -- Get separate quotas (new columns)
     COALESCE(p.included_solo_seconds_per_month, p.included_seconds_per_month / 2)::INT AS solo_included,
     COALESCE(p.included_host_seconds_per_month, p.included_seconds_per_month / 2)::INT AS host_included,
-    -- Combined for backwards compatibility
     (COALESCE(p.included_solo_seconds_per_month, p.included_seconds_per_month / 2) + 
      COALESCE(p.included_host_seconds_per_month, p.included_seconds_per_month / 2))::INT AS total_included
   FROM public.subscriptions s
   JOIN public.plans p ON p.id = s.plan_id
-  WHERE s.church_id = p_church_id
-    AND s.status IN ('active', 'trialing')
+  WHERE s.church_id = p_church_id AND s.status IN ('active', 'trialing')
   LIMIT 1
 ),
+purchased_solo AS (
+  SELECT COALESCE(SUM(amount_seconds), 0)::BIGINT AS total FROM public.purchased_credits
+  WHERE church_id = p_church_id AND mode = 'solo' AND created_at >= date_trunc('month', now())
+),
+purchased_host AS (
+  SELECT COALESCE(SUM(amount_seconds), 0)::BIGINT AS total FROM public.purchased_credits
+  WHERE church_id = p_church_id AND mode = 'host' AND created_at >= date_trunc('month', now())
+),
 solo_mtd AS (
-  -- Solo mode usage (new metric)
-  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used
-  FROM public.usage_monthly um
-  WHERE um.church_id = p_church_id
-    AND um.month_start = date_trunc('month', now())::DATE
-    AND um.metric = 'solo_seconds'
+  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used FROM public.usage_monthly um
+  WHERE um.church_id = p_church_id AND um.month_start = date_trunc('month', now())::DATE AND um.metric = 'solo_seconds'
 ),
 host_mtd AS (
-  -- Host mode usage (new metric)
-  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used
-  FROM public.usage_monthly um
-  WHERE um.church_id = p_church_id
-    AND um.month_start = date_trunc('month', now())::DATE
-    AND um.metric = 'host_seconds'
+  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used FROM public.usage_monthly um
+  WHERE um.church_id = p_church_id AND um.month_start = date_trunc('month', now())::DATE AND um.metric = 'host_seconds'
 ),
 legacy_mtd AS (
-  -- Legacy session_seconds for backwards compatibility
-  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used
-  FROM public.usage_monthly um
-  WHERE um.church_id = p_church_id
-    AND um.month_start = date_trunc('month', now())::DATE
-    AND um.metric = 'session_seconds'
+  SELECT COALESCE(um.total_quantity, 0)::BIGINT AS used FROM public.usage_monthly um
+  WHERE um.church_id = p_church_id AND um.month_start = date_trunc('month', now())::DATE AND um.metric = 'session_seconds'
 ),
 active AS (
-  -- Calculate effective seconds for active SESSION spans
-  -- capped at last_seen_at + 45s to prevent runaway counts
-  SELECT COALESCE(SUM(
-    GREATEST(
-      0,
-      FLOOR(EXTRACT(EPOCH FROM (
-        LEAST(now(), COALESCE(last_seen_at, started_at) + interval '45 seconds')
-        - started_at
-      )))::INT
-    )
-  ), 0)::INT AS active_now
-  FROM public.session_spans
-  WHERE church_id = p_church_id
-    AND ended_at IS NULL
+  SELECT COALESCE(SUM(GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (LEAST(now(), COALESCE(last_seen_at, started_at) + interval '45 seconds') - started_at)))::INT)), 0)::INT AS active_now
+  FROM public.session_spans WHERE church_id = p_church_id AND ended_at IS NULL
 )
 SELECT
-  -- Combined (backwards compatible) - includes legacy session_seconds
   COALESCE(pl.total_included, 0) AS included_seconds_per_month,
   (COALESCE(sm.used, 0) + COALESCE(hm.used, 0) + COALESCE(lm.used, 0)) AS used_seconds_mtd,
   COALESCE(a.active_now, 0) AS active_seconds_now,
-  GREATEST(0, 
-    COALESCE(pl.total_included, 0)::BIGINT 
-    - COALESCE(sm.used, 0) 
-    - COALESCE(hm.used, 0) 
-    - COALESCE(lm.used, 0) 
-    - COALESCE(a.active_now, 0)::BIGINT
-  ) AS remaining_seconds,
-  -- Solo breakdown
-  COALESCE(pl.solo_included, 0) AS included_solo_seconds,
+  GREATEST(0, COALESCE(pl.total_included, 0)::BIGINT + COALESCE(ps.total, 0) + COALESCE(ph.total, 0) - COALESCE(sm.used, 0) - COALESCE(hm.used, 0) - COALESCE(lm.used, 0) - COALESCE(a.active_now, 0)::BIGINT) AS remaining_seconds,
+  COALESCE(ps.total, 0) AS purchased_solo_seconds_mtd,
+  COALESCE(ph.total, 0) AS purchased_host_seconds_mtd,
+  (COALESCE(ps.total, 0) + COALESCE(ph.total, 0)) AS purchased_seconds_mtd,
+  (COALESCE(pl.solo_included, 0) + COALESCE(ps.total, 0))::INT AS included_solo_seconds,
   COALESCE(sm.used, 0) AS used_solo_seconds_mtd,
-  GREATEST(0, COALESCE(pl.solo_included, 0)::BIGINT - COALESCE(sm.used, 0)) AS remaining_solo_seconds,
-  -- Host breakdown
-  COALESCE(pl.host_included, 0) AS included_host_seconds,
+  GREATEST(0, COALESCE(pl.solo_included, 0)::BIGINT + COALESCE(ps.total, 0) - COALESCE(sm.used, 0)) AS remaining_solo_seconds,
+  (COALESCE(pl.host_included, 0) + COALESCE(ph.total, 0))::INT AS included_host_seconds,
   COALESCE(hm.used, 0) AS used_host_seconds_mtd,
-  GREATEST(0, COALESCE(pl.host_included, 0)::BIGINT - COALESCE(hm.used, 0)) AS remaining_host_seconds
+  GREATEST(0, COALESCE(pl.host_included, 0)::BIGINT + COALESCE(ph.total, 0) - COALESCE(hm.used, 0)) AS remaining_host_seconds,
+  (COALESCE(pl.total_included, 0)::BIGINT + COALESCE(ps.total, 0) + COALESCE(ph.total, 0)) AS total_available_seconds
 FROM plan_limits pl
+FULL OUTER JOIN purchased_solo ps ON TRUE
+FULL OUTER JOIN purchased_host ph ON TRUE
 FULL OUTER JOIN solo_mtd sm ON TRUE
 FULL OUTER JOIN host_mtd hm ON TRUE
 FULL OUTER JOIN legacy_mtd lm ON TRUE
 FULL OUTER JOIN active a ON TRUE;
 $$;
-
-
---
--- Name: FUNCTION get_session_quota_status(p_church_id uuid); Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON FUNCTION public.get_session_quota_status(p_church_id uuid) IS 'Returns instant quota status with separate solo/host breakdowns. O(1) reads from usage_monthly + active session_spans.';
 
 
 --
@@ -1956,26 +1918,6 @@ $$;
 
 
 --
--- Name: add_prefixes(text, text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.add_prefixes(_bucket_id text, _name text) RETURNS void
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    prefixes text[];
-BEGIN
-    prefixes := "storage"."get_prefixes"("_name");
-
-    IF array_length(prefixes, 1) > 0 THEN
-        INSERT INTO storage.prefixes (name, bucket_id)
-        SELECT UNNEST(prefixes) as name, "_bucket_id" ON CONFLICT DO NOTHING;
-    END IF;
-END;
-$$;
-
-
---
 -- Name: can_insert_object(text, text, uuid, jsonb); Type: FUNCTION; Schema: storage; Owner: -
 --
 
@@ -2058,63 +2000,6 @@ $$;
 
 
 --
--- Name: delete_prefix(text, text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.delete_prefix(_bucket_id text, _name text) RETURNS boolean
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-BEGIN
-    -- Check if we can delete the prefix
-    IF EXISTS(
-        SELECT FROM "storage"."prefixes"
-        WHERE "prefixes"."bucket_id" = "_bucket_id"
-          AND level = "storage"."get_level"("_name") + 1
-          AND "prefixes"."name" COLLATE "C" LIKE "_name" || '/%'
-        LIMIT 1
-    )
-    OR EXISTS(
-        SELECT FROM "storage"."objects"
-        WHERE "objects"."bucket_id" = "_bucket_id"
-          AND "storage"."get_level"("objects"."name") = "storage"."get_level"("_name") + 1
-          AND "objects"."name" COLLATE "C" LIKE "_name" || '/%'
-        LIMIT 1
-    ) THEN
-    -- There are sub-objects, skip deletion
-    RETURN false;
-    ELSE
-        DELETE FROM "storage"."prefixes"
-        WHERE "prefixes"."bucket_id" = "_bucket_id"
-          AND level = "storage"."get_level"("_name")
-          AND "prefixes"."name" = "_name";
-        RETURN true;
-    END IF;
-END;
-$$;
-
-
---
--- Name: delete_prefix_hierarchy_trigger(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.delete_prefix_hierarchy_trigger() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    prefix text;
-BEGIN
-    prefix := "storage"."get_prefix"(OLD."name");
-
-    IF coalesce(prefix, '') != '' THEN
-        PERFORM "storage"."delete_prefix"(OLD."bucket_id", prefix);
-    END IF;
-
-    RETURN OLD;
-END;
-$$;
-
-
---
 -- Name: enforce_bucket_name_length(); Type: FUNCTION; Schema: storage; Owner: -
 --
 
@@ -2179,6 +2064,21 @@ BEGIN
     -- Return everything except the last segment
     RETURN _parts[1 : array_length(_parts,1) - 1];
 END
+$$;
+
+
+--
+-- Name: get_common_prefix(text, text, text); Type: FUNCTION; Schema: storage; Owner: -
+--
+
+CREATE FUNCTION storage.get_common_prefix(p_key text, p_prefix text, p_delimiter text) RETURNS text
+    LANGUAGE sql IMMUTABLE
+    AS $$
+SELECT CASE
+    WHEN position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1)) > 0
+    THEN left(p_key, length(p_prefix) + position(p_delimiter IN substring(p_key FROM length(p_prefix) + 1)))
+    ELSE NULL
+END;
 $$;
 
 
@@ -2299,270 +2199,218 @@ $_$;
 
 
 --
--- Name: list_objects_with_delimiter(text, text, text, integer, text, text); Type: FUNCTION; Schema: storage; Owner: -
+-- Name: list_objects_with_delimiter(text, text, text, integer, text, text, text); Type: FUNCTION; Schema: storage; Owner: -
 --
 
-CREATE FUNCTION storage.list_objects_with_delimiter(bucket_id text, prefix_param text, delimiter_param text, max_keys integer DEFAULT 100, start_after text DEFAULT ''::text, next_token text DEFAULT ''::text) RETURNS TABLE(name text, id uuid, metadata jsonb, updated_at timestamp with time zone)
-    LANGUAGE plpgsql
+CREATE FUNCTION storage.list_objects_with_delimiter(_bucket_id text, prefix_param text, delimiter_param text, max_keys integer DEFAULT 100, start_after text DEFAULT ''::text, next_token text DEFAULT ''::text, sort_order text DEFAULT 'asc'::text) RETURNS TABLE(name text, id uuid, metadata jsonb, updated_at timestamp with time zone, created_at timestamp with time zone, last_accessed_at timestamp with time zone)
+    LANGUAGE plpgsql STABLE
     AS $_$
+DECLARE
+    v_peek_name TEXT;
+    v_current RECORD;
+    v_common_prefix TEXT;
+
+    -- Configuration
+    v_is_asc BOOLEAN;
+    v_prefix TEXT;
+    v_start TEXT;
+    v_upper_bound TEXT;
+    v_file_batch_size INT;
+
+    -- Seek state
+    v_next_seek TEXT;
+    v_count INT := 0;
+
+    -- Dynamic SQL for batch query only
+    v_batch_query TEXT;
+
 BEGIN
-    RETURN QUERY EXECUTE
-        'SELECT DISTINCT ON(name COLLATE "C") * from (
-            SELECT
-                CASE
-                    WHEN position($2 IN substring(name from length($1) + 1)) > 0 THEN
-                        substring(name from 1 for length($1) + position($2 IN substring(name from length($1) + 1)))
-                    ELSE
-                        name
-                END AS name, id, metadata, updated_at
-            FROM
-                storage.objects
-            WHERE
-                bucket_id = $5 AND
-                name ILIKE $1 || ''%'' AND
-                CASE
-                    WHEN $6 != '''' THEN
-                    name COLLATE "C" > $6
-                ELSE true END
-                AND CASE
-                    WHEN $4 != '''' THEN
-                        CASE
-                            WHEN position($2 IN substring(name from length($1) + 1)) > 0 THEN
-                                substring(name from 1 for length($1) + position($2 IN substring(name from length($1) + 1))) COLLATE "C" > $4
-                            ELSE
-                                name COLLATE "C" > $4
-                            END
-                    ELSE
-                        true
-                END
-            ORDER BY
-                name COLLATE "C" ASC) as e order by name COLLATE "C" LIMIT $3'
-        USING prefix_param, delimiter_param, max_keys, next_token, bucket_id, start_after;
+    -- ========================================================================
+    -- INITIALIZATION
+    -- ========================================================================
+    v_is_asc := lower(coalesce(sort_order, 'asc')) = 'asc';
+    v_prefix := coalesce(prefix_param, '');
+    v_start := CASE WHEN coalesce(next_token, '') <> '' THEN next_token ELSE coalesce(start_after, '') END;
+    v_file_batch_size := LEAST(GREATEST(max_keys * 2, 100), 1000);
+
+    -- Calculate upper bound for prefix filtering (bytewise, using COLLATE "C")
+    IF v_prefix = '' THEN
+        v_upper_bound := NULL;
+    ELSIF right(v_prefix, 1) = delimiter_param THEN
+        v_upper_bound := left(v_prefix, -1) || chr(ascii(delimiter_param) + 1);
+    ELSE
+        v_upper_bound := left(v_prefix, -1) || chr(ascii(right(v_prefix, 1)) + 1);
+    END IF;
+
+    -- Build batch query (dynamic SQL - called infrequently, amortized over many rows)
+    IF v_is_asc THEN
+        IF v_upper_bound IS NOT NULL THEN
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND o.name COLLATE "C" >= $2 ' ||
+                'AND o.name COLLATE "C" < $3 ORDER BY o.name COLLATE "C" ASC LIMIT $4';
+        ELSE
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND o.name COLLATE "C" >= $2 ' ||
+                'ORDER BY o.name COLLATE "C" ASC LIMIT $4';
+        END IF;
+    ELSE
+        IF v_upper_bound IS NOT NULL THEN
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND o.name COLLATE "C" < $2 ' ||
+                'AND o.name COLLATE "C" >= $3 ORDER BY o.name COLLATE "C" DESC LIMIT $4';
+        ELSE
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND o.name COLLATE "C" < $2 ' ||
+                'ORDER BY o.name COLLATE "C" DESC LIMIT $4';
+        END IF;
+    END IF;
+
+    -- ========================================================================
+    -- SEEK INITIALIZATION: Determine starting position
+    -- ========================================================================
+    IF v_start = '' THEN
+        IF v_is_asc THEN
+            v_next_seek := v_prefix;
+        ELSE
+            -- DESC without cursor: find the last item in range
+            IF v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_next_seek FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" >= v_prefix AND o.name COLLATE "C" < v_upper_bound
+                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
+            ELSIF v_prefix <> '' THEN
+                SELECT o.name INTO v_next_seek FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" >= v_prefix
+                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
+            ELSE
+                SELECT o.name INTO v_next_seek FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id
+                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
+            END IF;
+
+            IF v_next_seek IS NOT NULL THEN
+                v_next_seek := v_next_seek || delimiter_param;
+            ELSE
+                RETURN;
+            END IF;
+        END IF;
+    ELSE
+        -- Cursor provided: determine if it refers to a folder or leaf
+        IF EXISTS (
+            SELECT 1 FROM storage.objects o
+            WHERE o.bucket_id = _bucket_id
+              AND o.name COLLATE "C" LIKE v_start || delimiter_param || '%'
+            LIMIT 1
+        ) THEN
+            -- Cursor refers to a folder
+            IF v_is_asc THEN
+                v_next_seek := v_start || chr(ascii(delimiter_param) + 1);
+            ELSE
+                v_next_seek := v_start || delimiter_param;
+            END IF;
+        ELSE
+            -- Cursor refers to a leaf object
+            IF v_is_asc THEN
+                v_next_seek := v_start || delimiter_param;
+            ELSE
+                v_next_seek := v_start;
+            END IF;
+        END IF;
+    END IF;
+
+    -- ========================================================================
+    -- MAIN LOOP: Hybrid peek-then-batch algorithm
+    -- Uses STATIC SQL for peek (hot path) and DYNAMIC SQL for batch
+    -- ========================================================================
+    LOOP
+        EXIT WHEN v_count >= max_keys;
+
+        -- STEP 1: PEEK using STATIC SQL (plan cached, very fast)
+        IF v_is_asc THEN
+            IF v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" >= v_next_seek AND o.name COLLATE "C" < v_upper_bound
+                ORDER BY o.name COLLATE "C" ASC LIMIT 1;
+            ELSE
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" >= v_next_seek
+                ORDER BY o.name COLLATE "C" ASC LIMIT 1;
+            END IF;
+        ELSE
+            IF v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" < v_next_seek AND o.name COLLATE "C" >= v_prefix
+                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
+            ELSIF v_prefix <> '' THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" < v_next_seek AND o.name COLLATE "C" >= v_prefix
+                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
+            ELSE
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = _bucket_id AND o.name COLLATE "C" < v_next_seek
+                ORDER BY o.name COLLATE "C" DESC LIMIT 1;
+            END IF;
+        END IF;
+
+        EXIT WHEN v_peek_name IS NULL;
+
+        -- STEP 2: Check if this is a FOLDER or FILE
+        v_common_prefix := storage.get_common_prefix(v_peek_name, v_prefix, delimiter_param);
+
+        IF v_common_prefix IS NOT NULL THEN
+            -- FOLDER: Emit and skip to next folder (no heap access needed)
+            name := rtrim(v_common_prefix, delimiter_param);
+            id := NULL;
+            updated_at := NULL;
+            created_at := NULL;
+            last_accessed_at := NULL;
+            metadata := NULL;
+            RETURN NEXT;
+            v_count := v_count + 1;
+
+            -- Advance seek past the folder range
+            IF v_is_asc THEN
+                v_next_seek := left(v_common_prefix, -1) || chr(ascii(delimiter_param) + 1);
+            ELSE
+                v_next_seek := v_common_prefix;
+            END IF;
+        ELSE
+            -- FILE: Batch fetch using DYNAMIC SQL (overhead amortized over many rows)
+            -- For ASC: upper_bound is the exclusive upper limit (< condition)
+            -- For DESC: prefix is the inclusive lower limit (>= condition)
+            FOR v_current IN EXECUTE v_batch_query USING _bucket_id, v_next_seek,
+                CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix) ELSE v_prefix END, v_file_batch_size
+            LOOP
+                v_common_prefix := storage.get_common_prefix(v_current.name, v_prefix, delimiter_param);
+
+                IF v_common_prefix IS NOT NULL THEN
+                    -- Hit a folder: exit batch, let peek handle it
+                    v_next_seek := v_current.name;
+                    EXIT;
+                END IF;
+
+                -- Emit file
+                name := v_current.name;
+                id := v_current.id;
+                updated_at := v_current.updated_at;
+                created_at := v_current.created_at;
+                last_accessed_at := v_current.last_accessed_at;
+                metadata := v_current.metadata;
+                RETURN NEXT;
+                v_count := v_count + 1;
+
+                -- Advance seek past this file
+                IF v_is_asc THEN
+                    v_next_seek := v_current.name || delimiter_param;
+                ELSE
+                    v_next_seek := v_current.name;
+                END IF;
+
+                EXIT WHEN v_count >= max_keys;
+            END LOOP;
+        END IF;
+    END LOOP;
 END;
 $_$;
-
-
---
--- Name: lock_top_prefixes(text[], text[]); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.lock_top_prefixes(bucket_ids text[], names text[]) RETURNS void
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    v_bucket text;
-    v_top text;
-BEGIN
-    FOR v_bucket, v_top IN
-        SELECT DISTINCT t.bucket_id,
-            split_part(t.name, '/', 1) AS top
-        FROM unnest(bucket_ids, names) AS t(bucket_id, name)
-        WHERE t.name <> ''
-        ORDER BY 1, 2
-        LOOP
-            PERFORM pg_advisory_xact_lock(hashtextextended(v_bucket || '/' || v_top, 0));
-        END LOOP;
-END;
-$$;
-
-
---
--- Name: objects_delete_cleanup(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.objects_delete_cleanup() RETURNS trigger
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    v_bucket_ids text[];
-    v_names      text[];
-BEGIN
-    IF current_setting('storage.gc.prefixes', true) = '1' THEN
-        RETURN NULL;
-    END IF;
-
-    PERFORM set_config('storage.gc.prefixes', '1', true);
-
-    SELECT COALESCE(array_agg(d.bucket_id), '{}'),
-           COALESCE(array_agg(d.name), '{}')
-    INTO v_bucket_ids, v_names
-    FROM deleted AS d
-    WHERE d.name <> '';
-
-    PERFORM storage.lock_top_prefixes(v_bucket_ids, v_names);
-    PERFORM storage.delete_leaf_prefixes(v_bucket_ids, v_names);
-
-    RETURN NULL;
-END;
-$$;
-
-
---
--- Name: objects_insert_prefix_trigger(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.objects_insert_prefix_trigger() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    PERFORM "storage"."add_prefixes"(NEW."bucket_id", NEW."name");
-    NEW.level := "storage"."get_level"(NEW."name");
-
-    RETURN NEW;
-END;
-$$;
-
-
---
--- Name: objects_update_cleanup(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.objects_update_cleanup() RETURNS trigger
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    -- NEW - OLD (destinations to create prefixes for)
-    v_add_bucket_ids text[];
-    v_add_names      text[];
-
-    -- OLD - NEW (sources to prune)
-    v_src_bucket_ids text[];
-    v_src_names      text[];
-BEGIN
-    IF TG_OP <> 'UPDATE' THEN
-        RETURN NULL;
-    END IF;
-
-    -- 1) Compute NEW−OLD (added paths) and OLD−NEW (moved-away paths)
-    WITH added AS (
-        SELECT n.bucket_id, n.name
-        FROM new_rows n
-        WHERE n.name <> '' AND position('/' in n.name) > 0
-        EXCEPT
-        SELECT o.bucket_id, o.name FROM old_rows o WHERE o.name <> ''
-    ),
-    moved AS (
-         SELECT o.bucket_id, o.name
-         FROM old_rows o
-         WHERE o.name <> ''
-         EXCEPT
-         SELECT n.bucket_id, n.name FROM new_rows n WHERE n.name <> ''
-    )
-    SELECT
-        -- arrays for ADDED (dest) in stable order
-        COALESCE( (SELECT array_agg(a.bucket_id ORDER BY a.bucket_id, a.name) FROM added a), '{}' ),
-        COALESCE( (SELECT array_agg(a.name      ORDER BY a.bucket_id, a.name) FROM added a), '{}' ),
-        -- arrays for MOVED (src) in stable order
-        COALESCE( (SELECT array_agg(m.bucket_id ORDER BY m.bucket_id, m.name) FROM moved m), '{}' ),
-        COALESCE( (SELECT array_agg(m.name      ORDER BY m.bucket_id, m.name) FROM moved m), '{}' )
-    INTO v_add_bucket_ids, v_add_names, v_src_bucket_ids, v_src_names;
-
-    -- Nothing to do?
-    IF (array_length(v_add_bucket_ids, 1) IS NULL) AND (array_length(v_src_bucket_ids, 1) IS NULL) THEN
-        RETURN NULL;
-    END IF;
-
-    -- 2) Take per-(bucket, top) locks: ALL prefixes in consistent global order to prevent deadlocks
-    DECLARE
-        v_all_bucket_ids text[];
-        v_all_names text[];
-    BEGIN
-        -- Combine source and destination arrays for consistent lock ordering
-        v_all_bucket_ids := COALESCE(v_src_bucket_ids, '{}') || COALESCE(v_add_bucket_ids, '{}');
-        v_all_names := COALESCE(v_src_names, '{}') || COALESCE(v_add_names, '{}');
-
-        -- Single lock call ensures consistent global ordering across all transactions
-        IF array_length(v_all_bucket_ids, 1) IS NOT NULL THEN
-            PERFORM storage.lock_top_prefixes(v_all_bucket_ids, v_all_names);
-        END IF;
-    END;
-
-    -- 3) Create destination prefixes (NEW−OLD) BEFORE pruning sources
-    IF array_length(v_add_bucket_ids, 1) IS NOT NULL THEN
-        WITH candidates AS (
-            SELECT DISTINCT t.bucket_id, unnest(storage.get_prefixes(t.name)) AS name
-            FROM unnest(v_add_bucket_ids, v_add_names) AS t(bucket_id, name)
-            WHERE name <> ''
-        )
-        INSERT INTO storage.prefixes (bucket_id, name)
-        SELECT c.bucket_id, c.name
-        FROM candidates c
-        ON CONFLICT DO NOTHING;
-    END IF;
-
-    -- 4) Prune source prefixes bottom-up for OLD−NEW
-    IF array_length(v_src_bucket_ids, 1) IS NOT NULL THEN
-        -- re-entrancy guard so DELETE on prefixes won't recurse
-        IF current_setting('storage.gc.prefixes', true) <> '1' THEN
-            PERFORM set_config('storage.gc.prefixes', '1', true);
-        END IF;
-
-        PERFORM storage.delete_leaf_prefixes(v_src_bucket_ids, v_src_names);
-    END IF;
-
-    RETURN NULL;
-END;
-$$;
-
-
---
--- Name: objects_update_level_trigger(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.objects_update_level_trigger() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-    -- Ensure this is an update operation and the name has changed
-    IF TG_OP = 'UPDATE' AND (NEW."name" <> OLD."name" OR NEW."bucket_id" <> OLD."bucket_id") THEN
-        -- Set the new level
-        NEW."level" := "storage"."get_level"(NEW."name");
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-
---
--- Name: objects_update_prefix_trigger(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.objects_update_prefix_trigger() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-    old_prefixes TEXT[];
-BEGIN
-    -- Ensure this is an update operation and the name has changed
-    IF TG_OP = 'UPDATE' AND (NEW."name" <> OLD."name" OR NEW."bucket_id" <> OLD."bucket_id") THEN
-        -- Retrieve old prefixes
-        old_prefixes := "storage"."get_prefixes"(OLD."name");
-
-        -- Remove old prefixes that are only used by this object
-        WITH all_prefixes as (
-            SELECT unnest(old_prefixes) as prefix
-        ),
-        can_delete_prefixes as (
-             SELECT prefix
-             FROM all_prefixes
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM "storage"."objects"
-                 WHERE "bucket_id" = OLD."bucket_id"
-                   AND "name" <> OLD."name"
-                   AND "name" LIKE (prefix || '%')
-             )
-         )
-        DELETE FROM "storage"."prefixes" WHERE name IN (SELECT prefix FROM can_delete_prefixes);
-
-        -- Add new prefixes
-        PERFORM "storage"."add_prefixes"(NEW."bucket_id", NEW."name");
-    END IF;
-    -- Set the new level
-    NEW."level" := "storage"."get_level"(NEW."name");
-
-    RETURN NEW;
-END;
-$$;
 
 
 --
@@ -2579,46 +2427,20 @@ $$;
 
 
 --
--- Name: prefixes_delete_cleanup(); Type: FUNCTION; Schema: storage; Owner: -
+-- Name: protect_delete(); Type: FUNCTION; Schema: storage; Owner: -
 --
 
-CREATE FUNCTION storage.prefixes_delete_cleanup() RETURNS trigger
-    LANGUAGE plpgsql SECURITY DEFINER
-    AS $$
-DECLARE
-    v_bucket_ids text[];
-    v_names      text[];
-BEGIN
-    IF current_setting('storage.gc.prefixes', true) = '1' THEN
-        RETURN NULL;
-    END IF;
-
-    PERFORM set_config('storage.gc.prefixes', '1', true);
-
-    SELECT COALESCE(array_agg(d.bucket_id), '{}'),
-           COALESCE(array_agg(d.name), '{}')
-    INTO v_bucket_ids, v_names
-    FROM deleted AS d
-    WHERE d.name <> '';
-
-    PERFORM storage.lock_top_prefixes(v_bucket_ids, v_names);
-    PERFORM storage.delete_leaf_prefixes(v_bucket_ids, v_names);
-
-    RETURN NULL;
-END;
-$$;
-
-
---
--- Name: prefixes_insert_trigger(); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.prefixes_insert_trigger() RETURNS trigger
+CREATE FUNCTION storage.protect_delete() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
-    PERFORM "storage"."add_prefixes"(NEW."bucket_id", NEW."name");
-    RETURN NEW;
+    -- Check if storage.allow_delete_query is set to 'true'
+    IF COALESCE(current_setting('storage.allow_delete_query', true), 'false') != 'true' THEN
+        RAISE EXCEPTION 'Direct deletion from storage tables is not allowed. Use the Storage API instead.'
+            USING HINT = 'This prevents accidental data loss from orphaned objects.',
+                  ERRCODE = '42501';
+    END IF;
+    RETURN NULL;
 END;
 $$;
 
@@ -2628,23 +2450,360 @@ $$;
 --
 
 CREATE FUNCTION storage.search(prefix text, bucketname text, limits integer DEFAULT 100, levels integer DEFAULT 1, offsets integer DEFAULT 0, search text DEFAULT ''::text, sortcolumn text DEFAULT 'name'::text, sortorder text DEFAULT 'asc'::text) RETURNS TABLE(name text, id uuid, updated_at timestamp with time zone, created_at timestamp with time zone, last_accessed_at timestamp with time zone, metadata jsonb)
-    LANGUAGE plpgsql
-    AS $$
-declare
-    can_bypass_rls BOOLEAN;
-begin
-    SELECT rolbypassrls
-    INTO can_bypass_rls
-    FROM pg_roles
-    WHERE rolname = coalesce(nullif(current_setting('role', true), 'none'), current_user);
+    LANGUAGE plpgsql STABLE
+    AS $_$
+DECLARE
+    v_peek_name TEXT;
+    v_current RECORD;
+    v_common_prefix TEXT;
+    v_delimiter CONSTANT TEXT := '/';
 
-    IF can_bypass_rls THEN
-        RETURN QUERY SELECT * FROM storage.search_v1_optimised(prefix, bucketname, limits, levels, offsets, search, sortcolumn, sortorder);
-    ELSE
-        RETURN QUERY SELECT * FROM storage.search_legacy_v1(prefix, bucketname, limits, levels, offsets, search, sortcolumn, sortorder);
+    -- Configuration
+    v_limit INT;
+    v_prefix TEXT;
+    v_prefix_lower TEXT;
+    v_is_asc BOOLEAN;
+    v_order_by TEXT;
+    v_sort_order TEXT;
+    v_upper_bound TEXT;
+    v_file_batch_size INT;
+
+    -- Dynamic SQL for batch query only
+    v_batch_query TEXT;
+
+    -- Seek state
+    v_next_seek TEXT;
+    v_count INT := 0;
+    v_skipped INT := 0;
+BEGIN
+    -- ========================================================================
+    -- INITIALIZATION
+    -- ========================================================================
+    v_limit := LEAST(coalesce(limits, 100), 1500);
+    v_prefix := coalesce(prefix, '') || coalesce(search, '');
+    v_prefix_lower := lower(v_prefix);
+    v_is_asc := lower(coalesce(sortorder, 'asc')) = 'asc';
+    v_file_batch_size := LEAST(GREATEST(v_limit * 2, 100), 1000);
+
+    -- Validate sort column
+    CASE lower(coalesce(sortcolumn, 'name'))
+        WHEN 'name' THEN v_order_by := 'name';
+        WHEN 'updated_at' THEN v_order_by := 'updated_at';
+        WHEN 'created_at' THEN v_order_by := 'created_at';
+        WHEN 'last_accessed_at' THEN v_order_by := 'last_accessed_at';
+        ELSE v_order_by := 'name';
+    END CASE;
+
+    v_sort_order := CASE WHEN v_is_asc THEN 'asc' ELSE 'desc' END;
+
+    -- ========================================================================
+    -- NON-NAME SORTING: Use path_tokens approach (unchanged)
+    -- ========================================================================
+    IF v_order_by != 'name' THEN
+        RETURN QUERY EXECUTE format(
+            $sql$
+            WITH folders AS (
+                SELECT path_tokens[$1] AS folder
+                FROM storage.objects
+                WHERE objects.name ILIKE $2 || '%%'
+                  AND bucket_id = $3
+                  AND array_length(objects.path_tokens, 1) <> $1
+                GROUP BY folder
+                ORDER BY folder %s
+            )
+            (SELECT folder AS "name",
+                   NULL::uuid AS id,
+                   NULL::timestamptz AS updated_at,
+                   NULL::timestamptz AS created_at,
+                   NULL::timestamptz AS last_accessed_at,
+                   NULL::jsonb AS metadata FROM folders)
+            UNION ALL
+            (SELECT path_tokens[$1] AS "name",
+                   id, updated_at, created_at, last_accessed_at, metadata
+             FROM storage.objects
+             WHERE objects.name ILIKE $2 || '%%'
+               AND bucket_id = $3
+               AND array_length(objects.path_tokens, 1) = $1
+             ORDER BY %I %s)
+            LIMIT $4 OFFSET $5
+            $sql$, v_sort_order, v_order_by, v_sort_order
+        ) USING levels, v_prefix, bucketname, v_limit, offsets;
+        RETURN;
     END IF;
-end;
-$$;
+
+    -- ========================================================================
+    -- NAME SORTING: Hybrid skip-scan with batch optimization
+    -- ========================================================================
+
+    -- Calculate upper bound for prefix filtering
+    IF v_prefix_lower = '' THEN
+        v_upper_bound := NULL;
+    ELSIF right(v_prefix_lower, 1) = v_delimiter THEN
+        v_upper_bound := left(v_prefix_lower, -1) || chr(ascii(v_delimiter) + 1);
+    ELSE
+        v_upper_bound := left(v_prefix_lower, -1) || chr(ascii(right(v_prefix_lower, 1)) + 1);
+    END IF;
+
+    -- Build batch query (dynamic SQL - called infrequently, amortized over many rows)
+    IF v_is_asc THEN
+        IF v_upper_bound IS NOT NULL THEN
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" >= $2 ' ||
+                'AND lower(o.name) COLLATE "C" < $3 ORDER BY lower(o.name) COLLATE "C" ASC LIMIT $4';
+        ELSE
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" >= $2 ' ||
+                'ORDER BY lower(o.name) COLLATE "C" ASC LIMIT $4';
+        END IF;
+    ELSE
+        IF v_upper_bound IS NOT NULL THEN
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" < $2 ' ||
+                'AND lower(o.name) COLLATE "C" >= $3 ORDER BY lower(o.name) COLLATE "C" DESC LIMIT $4';
+        ELSE
+            v_batch_query := 'SELECT o.name, o.id, o.updated_at, o.created_at, o.last_accessed_at, o.metadata ' ||
+                'FROM storage.objects o WHERE o.bucket_id = $1 AND lower(o.name) COLLATE "C" < $2 ' ||
+                'ORDER BY lower(o.name) COLLATE "C" DESC LIMIT $4';
+        END IF;
+    END IF;
+
+    -- Initialize seek position
+    IF v_is_asc THEN
+        v_next_seek := v_prefix_lower;
+    ELSE
+        -- DESC: find the last item in range first (static SQL)
+        IF v_upper_bound IS NOT NULL THEN
+            SELECT o.name INTO v_peek_name FROM storage.objects o
+            WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_prefix_lower AND lower(o.name) COLLATE "C" < v_upper_bound
+            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+        ELSIF v_prefix_lower <> '' THEN
+            SELECT o.name INTO v_peek_name FROM storage.objects o
+            WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_prefix_lower
+            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+        ELSE
+            SELECT o.name INTO v_peek_name FROM storage.objects o
+            WHERE o.bucket_id = bucketname
+            ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+        END IF;
+
+        IF v_peek_name IS NOT NULL THEN
+            v_next_seek := lower(v_peek_name) || v_delimiter;
+        ELSE
+            RETURN;
+        END IF;
+    END IF;
+
+    -- ========================================================================
+    -- MAIN LOOP: Hybrid peek-then-batch algorithm
+    -- Uses STATIC SQL for peek (hot path) and DYNAMIC SQL for batch
+    -- ========================================================================
+    LOOP
+        EXIT WHEN v_count >= v_limit;
+
+        -- STEP 1: PEEK using STATIC SQL (plan cached, very fast)
+        IF v_is_asc THEN
+            IF v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek AND lower(o.name) COLLATE "C" < v_upper_bound
+                ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+            ELSE
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" >= v_next_seek
+                ORDER BY lower(o.name) COLLATE "C" ASC LIMIT 1;
+            END IF;
+        ELSE
+            IF v_upper_bound IS NOT NULL THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek AND lower(o.name) COLLATE "C" >= v_prefix_lower
+                ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+            ELSIF v_prefix_lower <> '' THEN
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek AND lower(o.name) COLLATE "C" >= v_prefix_lower
+                ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+            ELSE
+                SELECT o.name INTO v_peek_name FROM storage.objects o
+                WHERE o.bucket_id = bucketname AND lower(o.name) COLLATE "C" < v_next_seek
+                ORDER BY lower(o.name) COLLATE "C" DESC LIMIT 1;
+            END IF;
+        END IF;
+
+        EXIT WHEN v_peek_name IS NULL;
+
+        -- STEP 2: Check if this is a FOLDER or FILE
+        v_common_prefix := storage.get_common_prefix(lower(v_peek_name), v_prefix_lower, v_delimiter);
+
+        IF v_common_prefix IS NOT NULL THEN
+            -- FOLDER: Handle offset, emit if needed, skip to next folder
+            IF v_skipped < offsets THEN
+                v_skipped := v_skipped + 1;
+            ELSE
+                name := split_part(rtrim(storage.get_common_prefix(v_peek_name, v_prefix, v_delimiter), v_delimiter), v_delimiter, levels);
+                id := NULL;
+                updated_at := NULL;
+                created_at := NULL;
+                last_accessed_at := NULL;
+                metadata := NULL;
+                RETURN NEXT;
+                v_count := v_count + 1;
+            END IF;
+
+            -- Advance seek past the folder range
+            IF v_is_asc THEN
+                v_next_seek := lower(left(v_common_prefix, -1)) || chr(ascii(v_delimiter) + 1);
+            ELSE
+                v_next_seek := lower(v_common_prefix);
+            END IF;
+        ELSE
+            -- FILE: Batch fetch using DYNAMIC SQL (overhead amortized over many rows)
+            -- For ASC: upper_bound is the exclusive upper limit (< condition)
+            -- For DESC: prefix_lower is the inclusive lower limit (>= condition)
+            FOR v_current IN EXECUTE v_batch_query
+                USING bucketname, v_next_seek,
+                    CASE WHEN v_is_asc THEN COALESCE(v_upper_bound, v_prefix_lower) ELSE v_prefix_lower END, v_file_batch_size
+            LOOP
+                v_common_prefix := storage.get_common_prefix(lower(v_current.name), v_prefix_lower, v_delimiter);
+
+                IF v_common_prefix IS NOT NULL THEN
+                    -- Hit a folder: exit batch, let peek handle it
+                    v_next_seek := lower(v_current.name);
+                    EXIT;
+                END IF;
+
+                -- Handle offset skipping
+                IF v_skipped < offsets THEN
+                    v_skipped := v_skipped + 1;
+                ELSE
+                    -- Emit file
+                    name := split_part(v_current.name, v_delimiter, levels);
+                    id := v_current.id;
+                    updated_at := v_current.updated_at;
+                    created_at := v_current.created_at;
+                    last_accessed_at := v_current.last_accessed_at;
+                    metadata := v_current.metadata;
+                    RETURN NEXT;
+                    v_count := v_count + 1;
+                END IF;
+
+                -- Advance seek past this file
+                IF v_is_asc THEN
+                    v_next_seek := lower(v_current.name) || v_delimiter;
+                ELSE
+                    v_next_seek := lower(v_current.name);
+                END IF;
+
+                EXIT WHEN v_count >= v_limit;
+            END LOOP;
+        END IF;
+    END LOOP;
+END;
+$_$;
+
+
+--
+-- Name: search_by_timestamp(text, text, integer, integer, text, text, text, text); Type: FUNCTION; Schema: storage; Owner: -
+--
+
+CREATE FUNCTION storage.search_by_timestamp(p_prefix text, p_bucket_id text, p_limit integer, p_level integer, p_start_after text, p_sort_order text, p_sort_column text, p_sort_column_after text) RETURNS TABLE(key text, name text, id uuid, updated_at timestamp with time zone, created_at timestamp with time zone, last_accessed_at timestamp with time zone, metadata jsonb)
+    LANGUAGE plpgsql STABLE
+    AS $_$
+DECLARE
+    v_cursor_op text;
+    v_query text;
+    v_prefix text;
+BEGIN
+    v_prefix := coalesce(p_prefix, '');
+
+    IF p_sort_order = 'asc' THEN
+        v_cursor_op := '>';
+    ELSE
+        v_cursor_op := '<';
+    END IF;
+
+    v_query := format($sql$
+        WITH raw_objects AS (
+            SELECT
+                o.name AS obj_name,
+                o.id AS obj_id,
+                o.updated_at AS obj_updated_at,
+                o.created_at AS obj_created_at,
+                o.last_accessed_at AS obj_last_accessed_at,
+                o.metadata AS obj_metadata,
+                storage.get_common_prefix(o.name, $1, '/') AS common_prefix
+            FROM storage.objects o
+            WHERE o.bucket_id = $2
+              AND o.name COLLATE "C" LIKE $1 || '%%'
+        ),
+        -- Aggregate common prefixes (folders)
+        -- Both created_at and updated_at use MIN(obj_created_at) to match the old prefixes table behavior
+        aggregated_prefixes AS (
+            SELECT
+                rtrim(common_prefix, '/') AS name,
+                NULL::uuid AS id,
+                MIN(obj_created_at) AS updated_at,
+                MIN(obj_created_at) AS created_at,
+                NULL::timestamptz AS last_accessed_at,
+                NULL::jsonb AS metadata,
+                TRUE AS is_prefix
+            FROM raw_objects
+            WHERE common_prefix IS NOT NULL
+            GROUP BY common_prefix
+        ),
+        leaf_objects AS (
+            SELECT
+                obj_name AS name,
+                obj_id AS id,
+                obj_updated_at AS updated_at,
+                obj_created_at AS created_at,
+                obj_last_accessed_at AS last_accessed_at,
+                obj_metadata AS metadata,
+                FALSE AS is_prefix
+            FROM raw_objects
+            WHERE common_prefix IS NULL
+        ),
+        combined AS (
+            SELECT * FROM aggregated_prefixes
+            UNION ALL
+            SELECT * FROM leaf_objects
+        ),
+        filtered AS (
+            SELECT *
+            FROM combined
+            WHERE (
+                $5 = ''
+                OR ROW(
+                    date_trunc('milliseconds', %I),
+                    name COLLATE "C"
+                ) %s ROW(
+                    COALESCE(NULLIF($6, '')::timestamptz, 'epoch'::timestamptz),
+                    $5
+                )
+            )
+        )
+        SELECT
+            split_part(name, '/', $3) AS key,
+            name,
+            id,
+            updated_at,
+            created_at,
+            last_accessed_at,
+            metadata
+        FROM filtered
+        ORDER BY
+            COALESCE(date_trunc('milliseconds', %I), 'epoch'::timestamptz) %s,
+            name COLLATE "C" %s
+        LIMIT $4
+    $sql$,
+        p_sort_column,
+        v_cursor_op,
+        p_sort_column,
+        p_sort_order,
+        p_sort_order
+    );
+
+    RETURN QUERY EXECUTE v_query
+    USING v_prefix, p_bucket_id, p_level, p_limit, p_start_after, p_sort_column_after;
+END;
+$_$;
 
 
 --
@@ -2717,167 +2876,63 @@ $_$;
 
 
 --
--- Name: search_v1_optimised(text, text, integer, integer, integer, text, text, text); Type: FUNCTION; Schema: storage; Owner: -
---
-
-CREATE FUNCTION storage.search_v1_optimised(prefix text, bucketname text, limits integer DEFAULT 100, levels integer DEFAULT 1, offsets integer DEFAULT 0, search text DEFAULT ''::text, sortcolumn text DEFAULT 'name'::text, sortorder text DEFAULT 'asc'::text) RETURNS TABLE(name text, id uuid, updated_at timestamp with time zone, created_at timestamp with time zone, last_accessed_at timestamp with time zone, metadata jsonb)
-    LANGUAGE plpgsql STABLE
-    AS $_$
-declare
-    v_order_by text;
-    v_sort_order text;
-begin
-    case
-        when sortcolumn = 'name' then
-            v_order_by = 'name';
-        when sortcolumn = 'updated_at' then
-            v_order_by = 'updated_at';
-        when sortcolumn = 'created_at' then
-            v_order_by = 'created_at';
-        when sortcolumn = 'last_accessed_at' then
-            v_order_by = 'last_accessed_at';
-        else
-            v_order_by = 'name';
-        end case;
-
-    case
-        when sortorder = 'asc' then
-            v_sort_order = 'asc';
-        when sortorder = 'desc' then
-            v_sort_order = 'desc';
-        else
-            v_sort_order = 'asc';
-        end case;
-
-    v_order_by = v_order_by || ' ' || v_sort_order;
-
-    return query execute
-        'with folders as (
-           select (string_to_array(name, ''/''))[level] as name
-           from storage.prefixes
-             where lower(prefixes.name) like lower($2 || $3) || ''%''
-               and bucket_id = $4
-               and level = $1
-           order by name ' || v_sort_order || '
-     )
-     (select name,
-            null as id,
-            null as updated_at,
-            null as created_at,
-            null as last_accessed_at,
-            null as metadata from folders)
-     union all
-     (select path_tokens[level] as "name",
-            id,
-            updated_at,
-            created_at,
-            last_accessed_at,
-            metadata
-     from storage.objects
-     where lower(objects.name) like lower($2 || $3) || ''%''
-       and bucket_id = $4
-       and level = $1
-     order by ' || v_order_by || ')
-     limit $5
-     offset $6' using levels, prefix, search, bucketname, limits, offsets;
-end;
-$_$;
-
-
---
 -- Name: search_v2(text, text, integer, integer, text, text, text, text); Type: FUNCTION; Schema: storage; Owner: -
 --
 
 CREATE FUNCTION storage.search_v2(prefix text, bucket_name text, limits integer DEFAULT 100, levels integer DEFAULT 1, start_after text DEFAULT ''::text, sort_order text DEFAULT 'asc'::text, sort_column text DEFAULT 'name'::text, sort_column_after text DEFAULT ''::text) RETURNS TABLE(key text, name text, id uuid, updated_at timestamp with time zone, created_at timestamp with time zone, last_accessed_at timestamp with time zone, metadata jsonb)
     LANGUAGE plpgsql STABLE
-    AS $_$
+    AS $$
 DECLARE
-    sort_col text;
-    sort_ord text;
-    cursor_op text;
-    cursor_expr text;
-    sort_expr text;
+    v_sort_col text;
+    v_sort_ord text;
+    v_limit int;
 BEGIN
-    -- Validate sort_order
-    sort_ord := lower(sort_order);
-    IF sort_ord NOT IN ('asc', 'desc') THEN
-        sort_ord := 'asc';
+    -- Cap limit to maximum of 1500 records
+    v_limit := LEAST(coalesce(limits, 100), 1500);
+
+    -- Validate and normalize sort_order
+    v_sort_ord := lower(coalesce(sort_order, 'asc'));
+    IF v_sort_ord NOT IN ('asc', 'desc') THEN
+        v_sort_ord := 'asc';
     END IF;
 
-    -- Determine cursor comparison operator
-    IF sort_ord = 'asc' THEN
-        cursor_op := '>';
-    ELSE
-        cursor_op := '<';
-    END IF;
-    
-    sort_col := lower(sort_column);
-    -- Validate sort column  
-    IF sort_col IN ('updated_at', 'created_at') THEN
-        cursor_expr := format(
-            '($5 = '''' OR ROW(date_trunc(''milliseconds'', %I), name COLLATE "C") %s ROW(COALESCE(NULLIF($6, '''')::timestamptz, ''epoch''::timestamptz), $5))',
-            sort_col, cursor_op
-        );
-        sort_expr := format(
-            'COALESCE(date_trunc(''milliseconds'', %I), ''epoch''::timestamptz) %s, name COLLATE "C" %s',
-            sort_col, sort_ord, sort_ord
-        );
-    ELSE
-        cursor_expr := format('($5 = '''' OR name COLLATE "C" %s $5)', cursor_op);
-        sort_expr := format('name COLLATE "C" %s', sort_ord);
+    -- Validate and normalize sort_column
+    v_sort_col := lower(coalesce(sort_column, 'name'));
+    IF v_sort_col NOT IN ('name', 'updated_at', 'created_at') THEN
+        v_sort_col := 'name';
     END IF;
 
-    RETURN QUERY EXECUTE format(
-        $sql$
-        SELECT * FROM (
-            (
-                SELECT
-                    split_part(name, '/', $4) AS key,
-                    name,
-                    NULL::uuid AS id,
-                    updated_at,
-                    created_at,
-                    NULL::timestamptz AS last_accessed_at,
-                    NULL::jsonb AS metadata
-                FROM storage.prefixes
-                WHERE name COLLATE "C" LIKE $1 || '%%'
-                    AND bucket_id = $2
-                    AND level = $4
-                    AND %s
-                ORDER BY %s
-                LIMIT $3
-            )
-            UNION ALL
-            (
-                SELECT
-                    split_part(name, '/', $4) AS key,
-                    name,
-                    id,
-                    updated_at,
-                    created_at,
-                    last_accessed_at,
-                    metadata
-                FROM storage.objects
-                WHERE name COLLATE "C" LIKE $1 || '%%'
-                    AND bucket_id = $2
-                    AND level = $4
-                    AND %s
-                ORDER BY %s
-                LIMIT $3
-            )
-        ) obj
-        ORDER BY %s
-        LIMIT $3
-        $sql$,
-        cursor_expr,    -- prefixes WHERE
-        sort_expr,      -- prefixes ORDER BY
-        cursor_expr,    -- objects WHERE
-        sort_expr,      -- objects ORDER BY
-        sort_expr       -- final ORDER BY
-    )
-    USING prefix, bucket_name, limits, levels, start_after, sort_column_after;
+    -- Route to appropriate implementation
+    IF v_sort_col = 'name' THEN
+        -- Use list_objects_with_delimiter for name sorting (most efficient: O(k * log n))
+        RETURN QUERY
+        SELECT
+            split_part(l.name, '/', levels) AS key,
+            l.name AS name,
+            l.id,
+            l.updated_at,
+            l.created_at,
+            l.last_accessed_at,
+            l.metadata
+        FROM storage.list_objects_with_delimiter(
+            bucket_name,
+            coalesce(prefix, ''),
+            '/',
+            v_limit,
+            start_after,
+            '',
+            v_sort_ord
+        ) l;
+    ELSE
+        -- Use aggregation approach for timestamp sorting
+        -- Not efficient for large datasets but supports correct pagination
+        RETURN QUERY SELECT * FROM storage.search_by_timestamp(
+            prefix, bucket_name, v_limit, levels, start_after,
+            v_sort_ord, v_sort_col, sort_column_after
+        );
+    END IF;
 END;
-$_$;
+$$;
 
 
 --
@@ -3481,7 +3536,8 @@ CREATE TABLE public.church_billing_settings (
 CREATE TABLE public.churches (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     name text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    stripe_customer_id text
 );
 
 
@@ -3537,6 +3593,7 @@ CREATE TABLE public.plans (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     included_solo_seconds_per_month integer DEFAULT 0 NOT NULL,
     included_host_seconds_per_month integer DEFAULT 0 NOT NULL,
+    stripe_price_id text,
     CONSTRAINT plans_included_host_seconds_per_month_check CHECK ((included_host_seconds_per_month >= 0)),
     CONSTRAINT plans_included_seconds_per_month_check CHECK ((included_seconds_per_month >= 0)),
     CONSTRAINT plans_included_solo_seconds_per_month_check CHECK ((included_solo_seconds_per_month >= 0)),
@@ -3572,6 +3629,29 @@ CREATE TABLE public.profiles (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT profiles_role_check CHECK ((role = ANY (ARRAY['admin'::text, 'member'::text])))
 );
+
+
+--
+-- Name: purchased_credits; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.purchased_credits (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    church_id uuid NOT NULL,
+    amount_seconds integer NOT NULL,
+    stripe_payment_intent_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    mode text,
+    CONSTRAINT purchased_credits_amount_seconds_check CHECK ((amount_seconds > 0)),
+    CONSTRAINT purchased_credits_mode_check CHECK ((mode = ANY (ARRAY['solo'::text, 'host'::text])))
+);
+
+
+--
+-- Name: COLUMN purchased_credits.mode; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.purchased_credits.mode IS 'Mode the purchased credits apply to: solo or host.';
 
 
 --
@@ -3628,7 +3708,7 @@ CREATE TABLE public.subscriptions (
     stripe_price_id text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT subscriptions_status_check CHECK ((status = ANY (ARRAY['trialing'::text, 'active'::text, 'past_due'::text, 'canceled'::text, 'paused'::text])))
+    CONSTRAINT subscriptions_status_check CHECK ((status = ANY (ARRAY['inactive'::text, 'trialing'::text, 'active'::text, 'past_due'::text, 'canceled'::text, 'paused'::text])))
 );
 
 
@@ -3819,8 +3899,7 @@ CREATE TABLE storage.objects (
     path_tokens text[] GENERATED ALWAYS AS (string_to_array(name, '/'::text)) STORED,
     version text,
     owner_id text,
-    user_metadata jsonb,
-    level integer
+    user_metadata jsonb
 );
 
 
@@ -3829,19 +3908,6 @@ CREATE TABLE storage.objects (
 --
 
 COMMENT ON COLUMN storage.objects.owner IS 'Field is deprecated, use owner_id instead';
-
-
---
--- Name: prefixes; Type: TABLE; Schema: storage; Owner: -
---
-
-CREATE TABLE storage.prefixes (
-    bucket_id text NOT NULL,
-    name text NOT NULL COLLATE pg_catalog."C",
-    level integer GENERATED ALWAYS AS (storage.get_level(name)) STORED NOT NULL,
-    created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
-);
 
 
 --
@@ -4211,6 +4277,14 @@ ALTER TABLE ONLY public.profiles
 
 
 --
+-- Name: purchased_credits purchased_credits_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.purchased_credits
+    ADD CONSTRAINT purchased_credits_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: session_spans session_spans_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4352,14 +4426,6 @@ ALTER TABLE ONLY storage.migrations
 
 ALTER TABLE ONLY storage.objects
     ADD CONSTRAINT objects_pkey PRIMARY KEY (id);
-
-
---
--- Name: prefixes prefixes_pkey; Type: CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.prefixes
-    ADD CONSTRAINT prefixes_pkey PRIMARY KEY (bucket_id, level, name);
 
 
 --
@@ -4731,6 +4797,27 @@ CREATE INDEX users_is_anonymous_idx ON auth.users USING btree (is_anonymous);
 
 
 --
+-- Name: churches_stripe_customer_id_uidx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX churches_stripe_customer_id_uidx ON public.churches USING btree (stripe_customer_id) WHERE (stripe_customer_id IS NOT NULL);
+
+
+--
+-- Name: idx_purchased_credits_mode; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_purchased_credits_mode ON public.purchased_credits USING btree (church_id, mode, created_at DESC);
+
+
+--
+-- Name: idx_purchased_credits_monthly; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_purchased_credits_monthly ON public.purchased_credits USING btree (church_id, created_at DESC);
+
+
+--
 -- Name: idx_session_spans_mode; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4815,10 +4902,31 @@ CREATE INDEX plan_model_routing_plan_idx ON public.plan_model_routing USING btre
 
 
 --
+-- Name: plans_stripe_price_id_uidx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX plans_stripe_price_id_uidx ON public.plans USING btree (stripe_price_id) WHERE (stripe_price_id IS NOT NULL);
+
+
+--
 -- Name: profiles_church_id_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX profiles_church_id_idx ON public.profiles USING btree (church_id);
+
+
+--
+-- Name: purchased_credits_church_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX purchased_credits_church_created_idx ON public.purchased_credits USING btree (church_id, created_at DESC);
+
+
+--
+-- Name: purchased_credits_payment_intent_uidx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX purchased_credits_payment_intent_uidx ON public.purchased_credits USING btree (stripe_payment_intent_id);
 
 
 --
@@ -4969,13 +5077,6 @@ CREATE INDEX idx_multipart_uploads_list ON storage.s3_multipart_uploads USING bt
 
 
 --
--- Name: idx_name_bucket_level_unique; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE UNIQUE INDEX idx_name_bucket_level_unique ON storage.objects USING btree (name COLLATE "C", bucket_id, level);
-
-
---
 -- Name: idx_objects_bucket_id_name; Type: INDEX; Schema: storage; Owner: -
 --
 
@@ -4983,17 +5084,10 @@ CREATE INDEX idx_objects_bucket_id_name ON storage.objects USING btree (bucket_i
 
 
 --
--- Name: idx_objects_lower_name; Type: INDEX; Schema: storage; Owner: -
+-- Name: idx_objects_bucket_id_name_lower; Type: INDEX; Schema: storage; Owner: -
 --
 
-CREATE INDEX idx_objects_lower_name ON storage.objects USING btree ((path_tokens[level]), lower(name) text_pattern_ops, bucket_id, level);
-
-
---
--- Name: idx_prefixes_lower_name; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE INDEX idx_prefixes_lower_name ON storage.prefixes USING btree (bucket_id, level, ((string_to_array(name, '/'::text))[level]), lower(name) text_pattern_ops);
+CREATE INDEX idx_objects_bucket_id_name_lower ON storage.objects USING btree (bucket_id, lower(name) COLLATE "C");
 
 
 --
@@ -5001,13 +5095,6 @@ CREATE INDEX idx_prefixes_lower_name ON storage.prefixes USING btree (bucket_id,
 --
 
 CREATE INDEX name_prefix_search ON storage.objects USING btree (name text_pattern_ops);
-
-
---
--- Name: objects_bucket_id_level_idx; Type: INDEX; Schema: storage; Owner: -
---
-
-CREATE UNIQUE INDEX objects_bucket_id_level_idx ON storage.objects USING btree (bucket_id, level, name COLLATE "C");
 
 
 --
@@ -5067,38 +5154,17 @@ CREATE TRIGGER enforce_bucket_name_length_trigger BEFORE INSERT OR UPDATE OF nam
 
 
 --
--- Name: objects objects_delete_delete_prefix; Type: TRIGGER; Schema: storage; Owner: -
+-- Name: buckets protect_buckets_delete; Type: TRIGGER; Schema: storage; Owner: -
 --
 
-CREATE TRIGGER objects_delete_delete_prefix AFTER DELETE ON storage.objects FOR EACH ROW EXECUTE FUNCTION storage.delete_prefix_hierarchy_trigger();
-
-
---
--- Name: objects objects_insert_create_prefix; Type: TRIGGER; Schema: storage; Owner: -
---
-
-CREATE TRIGGER objects_insert_create_prefix BEFORE INSERT ON storage.objects FOR EACH ROW EXECUTE FUNCTION storage.objects_insert_prefix_trigger();
+CREATE TRIGGER protect_buckets_delete BEFORE DELETE ON storage.buckets FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
 
 
 --
--- Name: objects objects_update_create_prefix; Type: TRIGGER; Schema: storage; Owner: -
+-- Name: objects protect_objects_delete; Type: TRIGGER; Schema: storage; Owner: -
 --
 
-CREATE TRIGGER objects_update_create_prefix BEFORE UPDATE ON storage.objects FOR EACH ROW WHEN (((new.name <> old.name) OR (new.bucket_id <> old.bucket_id))) EXECUTE FUNCTION storage.objects_update_prefix_trigger();
-
-
---
--- Name: prefixes prefixes_create_hierarchy; Type: TRIGGER; Schema: storage; Owner: -
---
-
-CREATE TRIGGER prefixes_create_hierarchy BEFORE INSERT ON storage.prefixes FOR EACH ROW WHEN ((pg_trigger_depth() < 1)) EXECUTE FUNCTION storage.prefixes_insert_trigger();
-
-
---
--- Name: prefixes prefixes_delete_hierarchy; Type: TRIGGER; Schema: storage; Owner: -
---
-
-CREATE TRIGGER prefixes_delete_hierarchy AFTER DELETE ON storage.prefixes FOR EACH ROW EXECUTE FUNCTION storage.delete_prefix_hierarchy_trigger();
+CREATE TRIGGER protect_objects_delete BEFORE DELETE ON storage.objects FOR EACH STATEMENT EXECUTE FUNCTION storage.protect_delete();
 
 
 --
@@ -5277,6 +5343,14 @@ ALTER TABLE ONLY public.profiles
 
 
 --
+-- Name: purchased_credits purchased_credits_church_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.purchased_credits
+    ADD CONSTRAINT purchased_credits_church_id_fkey FOREIGN KEY (church_id) REFERENCES public.churches(id) ON DELETE CASCADE;
+
+
+--
 -- Name: session_spans session_spans_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5338,14 +5412,6 @@ ALTER TABLE ONLY public.usage_events
 
 ALTER TABLE ONLY storage.objects
     ADD CONSTRAINT "objects_bucketId_fkey" FOREIGN KEY (bucket_id) REFERENCES storage.buckets(id);
-
-
---
--- Name: prefixes prefixes_bucketId_fkey; Type: FK CONSTRAINT; Schema: storage; Owner: -
---
-
-ALTER TABLE ONLY storage.prefixes
-    ADD CONSTRAINT "prefixes_bucketId_fkey" FOREIGN KEY (bucket_id) REFERENCES storage.buckets(id);
 
 
 --
@@ -5601,12 +5667,6 @@ ALTER TABLE storage.migrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: prefixes; Type: ROW SECURITY; Schema: storage; Owner: -
---
-
-ALTER TABLE storage.prefixes ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: s3_multipart_uploads; Type: ROW SECURITY; Schema: storage; Owner: -
 --
 
@@ -5687,5 +5747,5 @@ CREATE EVENT TRIGGER pgrst_drop_watch ON sql_drop
 -- PostgreSQL database dump complete
 --
 
-\unrestrict zuzkiXrEWyuTZXC60Xce6QZ9QKoBz8h9dxPGGnbNSXTen20Vb1OK1WroPYHzfUa
+\unrestrict GTkjpbJhtpqLeoRgHC6zf7c6MN6Hy205N9QcaPRBFkuhglpd2e97kXOYoD7hfmw
 

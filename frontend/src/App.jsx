@@ -162,6 +162,7 @@ function LoginRoute() {
       onSuccess={() => navigate(redirectTo)}
       onBack={() => navigate('/')}
       onSwitchToSignUp={() => navigate(`/signup${redirectTo !== '/' ? `?redirect=${encodeURIComponent(redirectTo)}` : ''}`)}
+      redirectAfter={redirectTo !== '/' ? redirectTo : undefined}
     />
   )
 }

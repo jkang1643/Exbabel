@@ -194,11 +194,18 @@ export function AuthProvider({ children }) {
     };
 
     // Sign in with Google OAuth
-    const signInWithGoogle = async () => {
+    // redirectAfter: optional URL path to redirect to after OAuth callback
+    const signInWithGoogle = async (redirectAfter) => {
+        // Build redirectTo with optional redirect param
+        let redirectTo = `${window.location.origin}/signin`;
+        if (redirectAfter) {
+            redirectTo += `?redirect=${encodeURIComponent(redirectAfter)}`;
+        }
+
         const { data, error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: {
-                redirectTo: `${window.location.origin}/signin`,
+                redirectTo,
             },
         });
 
