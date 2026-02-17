@@ -13,6 +13,8 @@ export function AdvancedSettingsDrawer({
   onSpeakerPriorityChange,
   streamingTts,
   onStreamingTtsChange,
+  profanityFilter,
+  onProfanityFilterChange,
   availableVoices = [],
   selectedVoice,
   onVoiceChange,
@@ -97,6 +99,28 @@ export function AdvancedSettingsDrawer({
               <span className="toggle-slider" />
               <span className="toggle-label">
                 {streamingTts ? 'On' : 'Off'}
+              </span>
+            </label>
+          </div>
+
+          {/* Profanity Filter */}
+          <div className="setting-group">
+            <div className="setting-header">
+              <Lock size={18} />
+              <span>Profanity Filter</span>
+            </div>
+            <p className="setting-desc">
+              Filter inappropriate language in transcriptions
+            </p>
+            <label className="toggle-label">
+              <input
+                type="checkbox"
+                checked={profanityFilter}
+                onChange={(e) => onProfanityFilterChange(e.target.checked)}
+              />
+              <span className="toggle-slider" />
+              <span className="toggle-text">
+                {profanityFilter ? 'Enabled' : 'Disabled'}
               </span>
             </label>
           </div>

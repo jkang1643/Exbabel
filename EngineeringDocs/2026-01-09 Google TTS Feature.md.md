@@ -9,6 +9,27 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top**
 
+### FEATURE: Profanity Filter Toggle (Session-Level Control)
+**Status:** ✅ IMPLEMENTED (2026-02-17)
+
+Implemented a user-controllable profanity filter for Google Speech-to-Text transcriptions, adjustable in both Host and Solo modes.
+
+#### Key Features:
+1. **Session-Level Control:** The filter setting is passed via WebSocket `init` message for each session, allowing real-time toggling without database persistence.
+2. **Default Enabled:** The filter defaults to `true` (enabled) via `STT_PROFANITY_FILTER` environment variable.
+3. **UI Toggles:** Added "Profanity Filter" checkbox in Host Mode settings (HostPage) and Solo Mode settings (AdvancedSettingsDrawer).
+4. **Backend Enforcement:** The backend `googleSpeechStream.js` accepts the `profanityFilter` parameter and applies it to the Google Speech request configuration.
+
+#### Files Modified:
+- `backend/googleSpeechStream.js` - Added filter parameter to request config
+- `backend/soloModeHandler.js` - WebSocket parameter extraction
+- `backend/host/adapter.js` - WebSocket parameter extraction and missing init params
+- `frontend/src/components/HostPage.jsx` - UI toggle and init message updates
+- `frontend/src/components/solo/SoloPage.jsx` - UI toggle and init message updates
+- `frontend/src/components/solo/AdvancedSettingsDrawer.jsx` - Settings UI component
+
+---
+
 ### BUG 42: FIXED — Solo Mode Unlimited Voice Unlocking (Stale Entitlements)
 **Status:** ✅ RESOLVED (2026-02-13)
 

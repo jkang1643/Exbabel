@@ -715,6 +715,20 @@ console.log("[Backend] ===== TRANSCRIPTION SERVICE =====");
 console.log("[Backend] Provider: Google Cloud Speech-to-Text");
 console.log("[Backend] Model: Chirp 3 (latest_long)");
 console.log("[Backend] Features: Live streaming with partial results");
+// PhraseSet status
+const hasPhraseSet = !!(process.env.GOOGLE_PHRASE_SET_ID && (process.env.GOOGLE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID));
+if (hasPhraseSet) {
+  const projectId = process.env.GOOGLE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
+  console.log(`[Backend] PhraseSet: ENABLED ✓ (${process.env.GOOGLE_PHRASE_SET_ID})`);
+  console.log(`[Backend]   Project: ${projectId}`);
+  console.log(`[Backend]   Improves recognition for domain-specific terms`);
+} else {
+  console.log(`[Backend] PhraseSet: Not configured (optional)`);
+}
+// Profanity filter status
+const profanityFilterDefault = process.env.STT_PROFANITY_FILTER === 'true';
+console.log(`[Backend] Profanity Filter (default): ${profanityFilterDefault ? 'ENABLED ✓' : 'DISABLED ✗'}`);
+console.log(`[Backend]   Users can toggle this in settings menu`);
 console.log("[Backend] ===== TRANSLATION SERVICE =====");
 console.log("[Backend] Provider: OpenAI");
 console.log("[Backend] Model: gpt-4o-mini");

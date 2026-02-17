@@ -94,6 +94,7 @@ export function HostPage({ onBackToHome }) {
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [sourceLang, setSourceLang] = useState('en');
   const [usePremiumTier, setUsePremiumTier] = useState(false); // Tier selection: false = basic, true = premium
+  const [profanityFilter, setProfanityFilter] = useState(true); // Default: enabled
   const [showSettings, setShowSettings] = useState(false);
   const [showDownloadMenu, setShowDownloadMenu] = useState(false); // Dropdown menu for QR downloads
   const [connectionState, setConnectionState] = useState('disconnected');
@@ -447,7 +448,8 @@ export function HostPage({ onBackToHome }) {
       const initMessage = {
         type: 'init',
         sourceLang: sourceLang,
-        tier: usePremiumTier ? 'premium' : 'basic'
+        tier: usePremiumTier ? 'premium' : 'basic',
+        profanityFilter: profanityFilter
       };
       console.log('[Host] Sending init message:', initMessage);
       ws.send(JSON.stringify(initMessage));
@@ -1097,6 +1099,7 @@ export function HostPage({ onBackToHome }) {
           type: 'init',
           sourceLang: sourceLang,
           tier: usePremiumTier ? 'premium' : 'basic',
+          profanityFilter: profanityFilter,
           encoding: 'LINEAR16',
           sampleRateHertz: 24000 // Matches useAudioCapture configuration
         };
@@ -1169,7 +1172,8 @@ export function HostPage({ onBackToHome }) {
       wsRef.current.send(JSON.stringify({
         type: 'init',
         sourceLang: lang,
-        tier: usePremiumTier ? 'premium' : 'basic'
+        tier: usePremiumTier ? 'premium' : 'basic',
+        profanityFilter: profanityFilter // Include profanity filter setting
       }));
     }
   };
@@ -1178,13 +1182,16 @@ export function HostPage({ onBackToHome }) {
     if (isStreaming) {
       return; // Don't allow tier change while streaming
     }
-    setUsePremiumTier(tier === 'premium');
+    const newTier = tier === 'premium';
+    setUsePremiumTier(newTier);
 
+    // Send new tier to backend
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({
         type: 'init',
         sourceLang: sourceLang,
-        tier: tier
+        tier: tier,
+        profanityFilter: profanityFilter
       }));
     }
   };
@@ -1587,6 +1594,21 @@ export function HostPage({ onBackToHome }) {
                     Stop broadcasting to change tier
                   </p>
                 )}
+
+                {/* Profanity Filter */}
+                <h3 className="text-sm sm:text-base font-semibold text-gray-900 mb-3 mt-4">Profanity Filter</h3>
+                <label className="flex items-center justify-between p-3 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                  <div className="flex-1">
+                    <span className="text-sm font-medium text-gray-700">🔒 Filter Inappropriate Language</span>
+                    <p className="text-xs text-gray-500 mt-0.5">Censor profanity in transcriptions</p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={profanityFilter}
+                    onChange={(e) => setProfanityFilter(e.target.checked)}
+                    className="ml-3 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                  />
+                </label>
               </div>
             )}
           </div>

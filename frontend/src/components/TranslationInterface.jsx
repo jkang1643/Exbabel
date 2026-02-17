@@ -56,6 +56,7 @@ function TranslationInterface({ onBackToHome }) {
   const [audioEnabled, setAudioEnabled] = useState(true)
   const [latency, setLatency] = useState(0)
   const [usePremiumTier, setUsePremiumTier] = useState(false) // Tier selection: false = basic, true = premium
+  const [profanityFilter, setProfanityFilter] = useState(true) // Default: enabled
 
   // Track seen raw messages for invariant checking
   const seenRawInFpsRef = useRef(new Set());
@@ -873,7 +874,8 @@ function TranslationInterface({ onBackToHome }) {
         type: 'init',
         sourceLang,
         targetLang,
-        tier: usePremiumTier ? 'premium' : 'basic'
+        tier: usePremiumTier ? 'premium' : 'basic',
+        profanityFilter: profanityFilter
       })
     } else {
       setIsConnected(false)
@@ -922,7 +924,8 @@ function TranslationInterface({ onBackToHome }) {
         type: 'init',
         sourceLang,
         targetLang,
-        tier: usePremiumTier ? 'premium' : 'basic'
+        tier: usePremiumTier ? 'premium' : 'basic',
+        profanityFilter: profanityFilter
       })
 
       // Small delay to ensure backend is ready
@@ -1023,7 +1026,8 @@ function TranslationInterface({ onBackToHome }) {
       sendMessage({
         type: 'init',
         sourceLang: type === 'source' ? language : sourceLang,
-        targetLang: type === 'target' ? language : targetLang
+        targetLang: type === 'target' ? language : targetLang,
+        profanityFilter: profanityFilter
       })
     }
   }
@@ -1222,6 +1226,22 @@ function TranslationInterface({ onBackToHome }) {
                       Stop listening to change tier
                     </p>
                   )}
+                </div>
+
+                {/* Profanity Filter */}
+                <div className="mb-4">
+                  <label className="flex items-center justify-between p-3 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                    <div className="flex-1">
+                      <span className="text-sm font-medium text-gray-700">🔒 Profanity Filter</span>
+                      <p className="text-xs text-gray-500 mt-0.5">Filter inappropriate language in transcriptions</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={profanityFilter}
+                      onChange={(e) => setProfanityFilter(e.target.checked)}
+                      className="ml-3 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                  </label>
                 </div>
 
                 <div className="flex items-center space-x-4">

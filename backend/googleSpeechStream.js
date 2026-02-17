@@ -230,6 +230,9 @@ export class GoogleSpeechStream {
       sampleRateHertz: this.initOptions?.sampleRateHertz || 24000, // Default to 24kHz (frontend)
       languageCode: this.languageCode,
       enableAutomaticPunctuation: this.initOptions?.disablePunctuation ? false : true, // Allow disabling for recovery streams
+      profanityFilter: this.initOptions?.profanityFilter !== undefined
+        ? this.initOptions?.profanityFilter
+        : (process.env.STT_PROFANITY_FILTER === 'true'),
       alternativeLanguageCodes: [],
     };
 
@@ -352,6 +355,11 @@ export class GoogleSpeechStream {
       console.log(`[GoogleSpeech]    Model: ${requestConfig.model || 'default'} (enhanced: ${requestConfig.useEnhanced || false})`);
     } else {
       console.log(`[GoogleSpeech] ⚠️  WARNING: No adaptation.phraseSets in request config!`);
+    }
+
+    // Log profanity filter status
+    if (requestConfig.profanityFilter) {
+      console.log(`[GoogleSpeech] 🔒 Profanity filter ENABLED - inappropriate language will be censored`);
     }
 
     // Log the full request config for debugging (without sensitive data)

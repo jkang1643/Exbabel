@@ -305,11 +305,13 @@ export async function handleHostConnection(clientWs, sessionId) {
               // Initialize with source language and dynamic options from init message
               // Provide defaults for audio configuration if not specified
               await speechStream.initialize(currentSourceLang, {
-                encoding: message.encoding || 'LINEAR16',
-                sampleRateHertz: message.sampleRateHertz || 24000, // Must match frontend useAudioCapture (24kHz)
-                disablePunctuation: message.disablePunctuation,
+                encoding: message.encoding,
+                sampleRateHertz: message.sampleRateHertz,
+                disablePunctuation: false,
                 enableMultiLanguage: message.enableMultiLanguage,
                 alternativeLanguageCodes: message.alternativeLanguageCodes,
+                profanityFilter: message.profanityFilter !== undefined ? message.profanityFilter : (process.env.STT_PROFANITY_FILTER === 'true'),
+                entitlements: entitlements, // Pass entitlements for STT version routing
                 enableSpeakerDiarization: message.enableSpeakerDiarization,
                 minSpeakers: message.minSpeakers,
                 maxSpeakers: message.maxSpeakers,

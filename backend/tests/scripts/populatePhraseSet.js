@@ -26,7 +26,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Load environment variables from backend/.env if it exists
-const envPath = path.join(__dirname, '../.env');
+const envPath = path.join(__dirname, '../../.env');
 if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
 }
@@ -38,7 +38,7 @@ const phraseSetId = process.env.GOOGLE_PHRASE_SET_ID || 'church-glossary-10k';
 const boostValue = parseInt(process.env.PHRASESET_BOOST) || 20;
 
 // Load glossary
-const glossaryPath = path.join(__dirname, '../../glossary.json');
+const glossaryPath = path.join(__dirname, '../../../glossary.json');
 if (!fs.existsSync(glossaryPath)) {
   console.error(`❌ Error: glossary.json not found at ${glossaryPath}`);
   process.exit(1);
@@ -66,22 +66,22 @@ async function populatePhraseSet() {
     if (!credentialsPath) {
       throw new Error('GOOGLE_APPLICATION_CREDENTIALS environment variable not set');
     }
-    
+
     const auth = new GoogleAuth({
       keyFile: credentialsPath,
       scopes: ['https://www.googleapis.com/auth/cloud-platform']
     });
-    
+
     const client = await auth.getClient();
     const accessTokenResponse = await client.getAccessToken();
     const accessToken = accessTokenResponse?.token || accessTokenResponse;
-    
+
     if (!accessToken) {
       throw new Error('Failed to get access token');
     }
 
     console.log('⏳ Updating PhraseSet...');
-    
+
     // Make REST API call to update PhraseSet
     const response = await fetch(apiUrl, {
       method: 'PATCH',
@@ -115,7 +115,7 @@ async function populatePhraseSet() {
   } catch (err) {
     const errorMessage = err.message || String(err);
     const status = err.status;
-    
+
     if (status === 404 || errorMessage.includes('404') || errorMessage.includes('NOT_FOUND')) {
       console.error(`\n❌ PhraseSet not found!`);
       console.error(`   Expected: ${phraseSetName}`);

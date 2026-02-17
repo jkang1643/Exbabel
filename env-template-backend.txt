@@ -39,6 +39,15 @@ GOOGLE_SPEECH_API_KEY=your-google-api-key-here
 # GOOGLE_PHRASE_SET_ID=church-glossary-10k
 
 # ===================================
+# Speech-to-Text Configuration
+# ===================================
+
+# Profanity Filter (default: true)
+# When enabled, inappropriate language is censored in transcriptions (e.g., "f***")
+# Users can toggle this per-session in the settings menu
+STT_PROFANITY_FILTER=true
+
+# ===================================
 # Server Configuration
 # ===================================
 

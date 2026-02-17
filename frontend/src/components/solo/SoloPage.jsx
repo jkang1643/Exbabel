@@ -47,6 +47,7 @@ export function SoloPage({ onBackToHome }) {
     const [silenceThreshold, setSilenceThreshold] = useState(800);
     const [speakerPriority, setSpeakerPriority] = useState(false);
     const [streamingTts, setStreamingTts] = useState(false); // new speech cancels TTS
+    const [profanityFilter, setProfanityFilter] = useState(true); // Default: enabled
 
     // Voice selection
     const [selectedVoice, setSelectedVoice] = useState(null);
@@ -379,7 +380,8 @@ export function SoloPage({ onBackToHome }) {
                         tier: 'basic',
                         sessionId: sessionIdRef.current,
                         voiceId: selectedVoice?.voiceId || null,
-                        ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
+                        ttsMode: streamingTts ? 'streaming' : 'unary', // Tell backend which TTS mode to use
+                        profanityFilter: profanityFilter
                     };
                     console.log('[SoloPage] 📤 SENDING INIT (after info):', initMessage);
                     socket.send(JSON.stringify(initMessage));
@@ -482,7 +484,8 @@ export function SoloPage({ onBackToHome }) {
                 tier: 'basic',
                 sessionId: sessionIdRef.current,
                 voiceId: selectedVoice?.voiceId || null, // Include current voice
-                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
+                ttsMode: streamingTts ? 'streaming' : 'unary', // Tell backend which TTS mode to use
+                profanityFilter: profanityFilter
             };
 
             console.log('[SoloPage] 📤 Sending init message:', initMessage);
@@ -509,7 +512,8 @@ export function SoloPage({ onBackToHome }) {
                 tier: 'basic',
                 sessionId: sessionIdRef.current,
                 voiceId: voice.voiceId,
-                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
+                ttsMode: streamingTts ? 'streaming' : 'unary', // Tell backend which TTS mode to use
+                profanityFilter: profanityFilter
             };
 
             console.log('[SoloPage] 📤 Sending init message (voice update):', initMessage);
@@ -535,7 +539,8 @@ export function SoloPage({ onBackToHome }) {
                 sourceLang: newSourceLang,
                 targetLang: newTargetLang,
                 tier: 'basic',
-                ttsMode: streamingTts ? 'streaming' : 'unary' // Tell backend which TTS mode to use
+                ttsMode: streamingTts ? 'streaming' : 'unary', // Tell backend which TTS mode to use
+                profanityFilter: profanityFilter
             };
 
             console.log('[SoloPage] 📤 Sending init message (swap):', initMessage);
@@ -590,7 +595,8 @@ export function SoloPage({ onBackToHome }) {
                 tier: 'basic',
                 sessionId: sessionIdRef.current,
                 voiceId: selectedVoice?.voiceId || null,
-                ttsMode: streamingTts ? 'streaming' : 'unary'
+                ttsMode: streamingTts ? 'streaming' : 'unary',
+                profanityFilter: profanityFilter
             };
             console.log('[SoloPage] 📤 Sending init (streamingTts changed):', initMessage);
             wsRef.current.send(JSON.stringify(initMessage));
@@ -734,6 +740,8 @@ export function SoloPage({ onBackToHome }) {
                     onSpeakerPriorityChange={setSpeakerPriority}
                     streamingTts={streamingTts}
                     onStreamingTtsChange={setStreamingTts}
+                    profanityFilter={profanityFilter}
+                    onProfanityFilterChange={setProfanityFilter}
                     availableVoices={availableVoices}
                     selectedVoice={selectedVoice}
                     onVoiceChange={handleVoiceChange}

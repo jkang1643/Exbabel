@@ -569,6 +569,7 @@ export async function handleSoloMode(clientWs) {
                 enableSpeakerDiarization: message.enableSpeakerDiarization,
                 minSpeakers: message.minSpeakers,
                 maxSpeakers: message.maxSpeakers,
+                profanityFilter: message.profanityFilter !== undefined ? message.profanityFilter : (process.env.STT_PROFANITY_FILTER === 'true'),
                 entitlements: entitlements // PHASE 7: Pass entitlements for STT version routing
               });
 
