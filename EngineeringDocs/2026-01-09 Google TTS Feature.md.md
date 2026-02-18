@@ -9,6 +9,25 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top**
 
+### FEATURE: Bi-Directional Translation & Auto-Routing (Solo Mode)
+**Status:** ✅ IMPLEMENTED (2026-02-18)
+
+Implemented seamless bi-directional translation for Solo Mode. The system now automatically detects the language spoken (e.g., English vs. Spanish) and routes the translation direction accordingly, eliminating the need for manual swapping.
+
+#### Key Features:
+1. **Auto-Detection Routing:** The backend STT stream monitors audio for both the user's primary *Source* language (e.g., English) and the *Target* language (e.g., Spanish) simultaneously.
+2. **Dynamic Direction Switching:**
+   - If the detected language matches the **Source**, the system translates **Source → Target**.
+   - If the detected language matches the **Target**, the system instantly flips routing to translate **Target → Source**.
+3. **Persisted State:** The target language code (`targetSttCode`) is persisted across stream restarts and re-initializations, ensuring detection works reliably even after long sessions or network interruptions.
+4. **Smart Fallback:** If auto-detection is ambiguous or the language is unknown, the system defaults to the primary Source → Target direction.
+
+#### Files Modified:
+- `backend/soloModeHandler.js` - Logic for `targetSttCode` persistence, auto-detection, and routing.
+- `frontend/src/components/solo/SoloPage.jsx` - Removed manual "Swap" buttons (now obsolete).
+
+---
+
 ### FEATURE: Profanity Filter Toggle (Session-Level Control)
 **Status:** ✅ IMPLEMENTED (2026-02-17)
 

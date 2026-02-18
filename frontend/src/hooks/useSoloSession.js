@@ -51,7 +51,7 @@ export function useSoloSession({
     const [isConnected, setIsConnected] = useState(false);
 
     // Conversation mode: tracks current direction
-    const [conversationDirection, setConversationDirection] = useState('forward'); // 'forward' or 'reverse'
+    // REMOVED: conversationDirection - now using bi-directional auto-detection
 
     // Transcript accumulator
     const [partialText, setPartialText] = useState('');
@@ -65,6 +65,7 @@ export function useSoloSession({
     const lastAudioTimeRef = useRef(null);
     const stateRef = useRef(state); // Ref for closure-safe state check
     const finalizedSegmentsRef = useRef([]); // Ref for synchronous access to segments
+
 
     // Keep stateRef in sync
     useEffect(() => {
@@ -232,31 +233,16 @@ export function useSoloSession({
         setPendingSpeakQueue(prev => prev.slice(1));
 
         if (mode === SoloMode.CONVERSATION) {
-            // Auto-swap direction
-            setConversationDirection(prev => prev === 'forward' ? 'reverse' : 'forward');
+            // Just resume listening (bi-directional)
             updateState(SessionState.LISTENING);
-            console.log('[useSoloSession] Conversation: swapped direction, now listening');
+            console.log('[useSoloSession] Conversation: TTS done, resuming listening');
         } else if (state === SessionState.SPEAKING) {
             // Preaching mode: if queue is empty, keep listening
             updateState(SessionState.LISTENING);
         }
     }, [mode, state, updateState]);
 
-    // Swap conversation direction manually
-    const swapDirection = useCallback(() => {
-        if (mode !== SoloMode.CONVERSATION) return;
 
-        setConversationDirection(prev => prev === 'forward' ? 'reverse' : 'forward');
-        console.log('[useSoloSession] Manually swapped conversation direction');
-    }, [mode]);
-
-    // Get effective languages based on conversation direction
-    const getEffectiveLanguages = useCallback(() => {
-        if (mode === SoloMode.CONVERSATION && conversationDirection === 'reverse') {
-            return { source: targetLang, target: sourceLang };
-        }
-        return { source: sourceLang, target: targetLang };
-    }, [mode, conversationDirection, sourceLang, targetLang]);
 
     // Clear all segments
     const clearSegments = useCallback(() => {
@@ -285,7 +271,6 @@ export function useSoloSession({
         state,
         mode,
         isConnected,
-        conversationDirection,
         partialText,
         finalizedSegments,
         pendingSpeakQueue,
@@ -294,7 +279,6 @@ export function useSoloSession({
         start,
         stop,
         setMode,
-        swapDirection,
         clearSegments,
 
         // Handlers (call these from WebSocket message handler)
@@ -303,8 +287,6 @@ export function useSoloSession({
         onSpeakComplete,
         popSpeakQueue,
 
-        // Helpers
-        getEffectiveLanguages,
 
         // Derived state
         isListening: state === SessionState.LISTENING,

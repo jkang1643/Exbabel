@@ -521,35 +521,8 @@ export function SoloPage({ onBackToHome }) {
         }
     }, [sourceLang, targetLang]);
 
-    // Handle language swap (exchange source and target)
-    const handleLanguageSwap = useCallback(() => {
-        console.log('[SoloPage] 🔄 Swapping languages:', sourceLang, '↔️', targetLang);
 
-        // Swap the languages
-        const newSourceLang = targetLang;
-        const newTargetLang = sourceLang;
 
-        setSourceLang(newSourceLang);
-        setTargetLang(newTargetLang);
-
-        // Reinitialize backend if connected
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            const initMessage = {
-                type: 'init',
-                sourceLang: newSourceLang,
-                targetLang: newTargetLang,
-                tier: 'basic',
-                ttsMode: streamingTts ? 'streaming' : 'unary', // Tell backend which TTS mode to use
-                profanityFilter: profanityFilter
-            };
-
-            console.log('[SoloPage] 📤 Sending init message (swap):', initMessage);
-            wsRef.current.send(JSON.stringify(initMessage));
-            console.log('[SoloPage] ✅ Languages swapped:', newSourceLang, '→', newTargetLang);
-        } else {
-            console.warn('[SoloPage] ⚠️ Cannot swap - WebSocket not connected');
-        }
-    }, [sourceLang, targetLang]);
 
     // Handle mode change
     const handleModeChange = useCallback((newMode) => {
@@ -658,13 +631,11 @@ export function SoloPage({ onBackToHome }) {
                     isConnected={isConnected}
                 />
 
-                {/* Turn Indicator (conversation mode) */}
+                {/* Turn Indicator (bi-directional auto-detect status) */}
                 {session.mode === SoloMode.CONVERSATION && (
                     <TurnIndicator
-                        direction={session.conversationDirection}
                         sourceLang={sourceLang}
                         targetLang={targetLang}
-                        onSwap={handleLanguageSwap}
                     />
                 )}
 

@@ -3,7 +3,7 @@
  * 
  * Always shows:
  * - App branding
- * - User dropdown (email, billing, sign out)
+ * - User dropdown (email, billing, settings, sign out)
  */
 
 import { useState, useRef, useEffect } from 'react';
@@ -89,6 +89,17 @@ export function Header({ onSignIn, onSignUp, onSignOut }) {
                       onClick={() => setMenuOpen(false)}
                     >
                       💳 Billing &amp; Usage
+                    </a>
+                  )}
+
+                  {/* Settings — admin only */}
+                  {isAdmin && (
+                    <a
+                      href="/settings"
+                      className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      ⚙️ Settings
                     </a>
                   )}
 

@@ -35,9 +35,9 @@ class SessionStore {
    * @param {string|null} hostUserId - Optional host user ID
    * @returns {Promise<Object>} { sessionId, sessionCode }
    */
-  async createSession(churchId = null, hostUserId = null) {
+  async createSession(churchId = null, hostUserId = null, overrideCode = null) {
     const sessionId = this.generateUUID();
-    const sessionCode = this.generateSessionCode();
+    const sessionCode = overrideCode || this.generateSessionCode();
 
     const sessionData = {
       sessionId,

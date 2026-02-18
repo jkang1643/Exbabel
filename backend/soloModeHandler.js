@@ -28,6 +28,7 @@ import { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from './usage
 import { checkQuotaLimit, createQuotaEvent } from './usage/quotaEnforcement.js';
 import { supabaseAdmin } from './supabaseAdmin.js';
 import crypto from 'crypto';
+import { getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -37,6 +38,7 @@ export async function handleSoloMode(clientWs) {
   let speechStream = null;
   let currentSourceLang = 'en';
   let currentTargetLang = 'es';
+  let targetSttCode = null; // BCP-47 code for target language (used for auto-detection routing in multi-lang mode)
   let usePremiumTier = false; // Tier selection: false = basic (Chat API), true = premium (Realtime API)
   let legacySessionId = `session_${Date.now()}`;
   let currentVoiceId = null; // Track selected voice ID
@@ -544,10 +546,42 @@ export async function handleSoloMode(clientWs) {
           const isTranscription = currentSourceLang === currentTargetLang;
           console.log(`[SoloMode] Languages: ${currentSourceLang} → ${currentTargetLang} (${isTranscription ? 'TRANSCRIPTION' : 'TRANSLATION'} mode)`);
 
-          // Reinitialize stream if source language changed
-          const languagesChanged = (prevSourceLang !== currentSourceLang);
-          if (languagesChanged && speechStream) {
-            console.log('[SoloMode] 🔄 Source language changed! Destroying old stream...');
+          // SOLO_STT_MULTI_LANG_ENABLED: When on, the stream handles both languages simultaneously.
+          // On a swap, we only need to update the translation direction — no stream restart needed.
+          const soloMultiLangEnabled = process.env.SOLO_STT_MULTI_LANG_ENABLED === 'true';
+          // Determine BCP-47 code for target language (for auto-detection)
+          // Always calculate this, even if stream is not restarted
+          let newTargetSttCode = null;
+          if (soloMultiLangEnabled && currentTargetLang && currentTargetLang !== currentSourceLang) {
+            newTargetSttCode = isTranscriptionSupported(currentTargetLang)
+              ? getTranscriptionLanguageCode(currentTargetLang)
+              : null;
+          }
+          targetSttCode = newTargetSttCode;
+
+          console.log(`[SoloMode] 🌍 Target STT Code updated to: ${targetSttCode} (for auto-detection)`);
+
+          // Reinitialize stream if source OR target language changed (critical for updating alt-langs)
+          const sourceChanged = (prevSourceLang !== currentSourceLang);
+          const targetChanged = (prevTargetLang !== currentTargetLang);
+
+          let shouldRestartStream = false;
+          if (soloMultiLangEnabled) {
+            // In multi-lang mode, target language is used as alt-lang.
+            // If EITHER changes, we must restart to update the stream configuration.
+            if ((sourceChanged || targetChanged) && speechStream) {
+              console.log(`[SoloMode] 🔄 Multi-lang config changed (${prevSourceLang}→${currentSourceLang}, ${prevTargetLang}→${currentTargetLang}). Restarting stream...`);
+              shouldRestartStream = true;
+            }
+          } else {
+            // Single-lang mode: only restart if source changes
+            if (sourceChanged && speechStream) {
+              console.log('[SoloMode] 🔄 Source language changed! Restarting stream...');
+              shouldRestartStream = true;
+            }
+          }
+
+          if (shouldRestartStream) {
             speechStream.destroy();
             speechStream = null;
             await new Promise(resolve => setTimeout(resolve, 200));
@@ -559,13 +593,25 @@ export async function handleSoloMode(clientWs) {
               console.log(`[SoloMode] 🚀 Creating Google Speech stream for ${currentSourceLang}...`);
               speechStream = new GoogleSpeechStream();
 
+              // Build alternative language codes for solo multi-lang mode
+              // When SOLO_STT_MULTI_LANG_ENABLED=true, automatically include the target language
+              // so both speakers in the conversation pair are detected without stream restarts.
+              let soloAltLangCodes = message.alternativeLanguageCodes || [];
+              // Use the already calculated targetSttCode
+              // targetSttCode is now set in the outer scope at the start of init (see above)
+
+              if (targetSttCode && !soloAltLangCodes.includes(targetSttCode)) {
+                soloAltLangCodes = [targetSttCode, ...soloAltLangCodes];
+              }
+              console.log(`[SoloMode] 🌍 Solo multi-lang: initializing STT with primary=${currentSourceLang}, alt=${soloAltLangCodes.join(',')}, targetSttCode=${targetSttCode}`);
+
               // Initialize with source language and dynamic options from init message
               await speechStream.initialize(currentSourceLang, {
                 encoding: message.encoding,
                 sampleRateHertz: message.sampleRateHertz,
                 disablePunctuation: false,
-                enableMultiLanguage: message.enableMultiLanguage,
-                alternativeLanguageCodes: message.alternativeLanguageCodes,
+                enableMultiLanguage: soloMultiLangEnabled || message.enableMultiLanguage,
+                alternativeLanguageCodes: soloAltLangCodes,
                 enableSpeakerDiarization: message.enableSpeakerDiarization,
                 minSpeakers: message.minSpeakers,
                 maxSpeakers: message.maxSpeakers,
@@ -825,6 +871,11 @@ export async function handleSoloMode(clientWs) {
                   try {
                     // Set flag to prevent concurrent processing
                     isProcessingFinal = true;
+
+                    // Determine effective languages for this specific final
+                    // Default to current session state, but allow override via options (e.g. from auto-detection)
+                    const effectiveSourceLang = options.sourceLang || currentSourceLang;
+                    const effectiveTargetLang = options.targetLang || currentTargetLang;
                     // CRITICAL: Duplicate prevention - check against both original and corrected text
                     // This prevents sending grammar-corrected version of same original text twice
                     const trimmedText = textToProcess.trim();
@@ -879,13 +930,24 @@ export async function handleSoloMode(clientWs) {
                             const matchingWords = textWords.filter(w =>
                               lastSentWords.some(lw => wordsAreRelated(w, lw))
                             );
-                            const wordOverlapRatio = matchingWords.length / Math.min(textWords.length, lastSentWords.length);
 
-                            // If 80%+ words match and texts are similar length, it's likely a duplicate
-                            if (wordOverlapRatio >= 0.8 && lengthDiff < 20) {
-                              console.log(`[SoloMode] ⚠️ Duplicate final detected (high word overlap ${(wordOverlapRatio * 100).toFixed(0)}%, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (last sent: "${lastSentFinalText.substring(0, 60)}...")`);
+                            if (matchingWords.length >= textWords.length * 0.8) {
+                              console.log(`[SoloMode] ⚠️ Duplicate final detected (high word overlap, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..."`);
                               return; // Skip processing duplicate
                             }
+                          }
+                        }
+
+                        // CRITICAL FIX: Detection for "subset finals" (glitch where shorter final arrives AFTER longer one)
+                        // Example: "Well pull up weather here" (Seq 24) -> "Well." (Seq 25)
+                        // If current text is significantly shorter AND is a substring of last sent text
+                        if (timeSinceLastFinal < 3000) {
+                          const isSubstring = lastSentFinalNormalized.includes(textNormalized);
+                          const isSignificantlyShorter = textNormalized.length < lastSentFinalNormalized.length * 0.7; // 70% length threshold
+
+                          if (isSubstring && isSignificantlyShorter) {
+                            console.log(`[SoloMode] ⚠️ Subset final detected (likely glitch, ${timeSinceLastFinal}ms ago), skipping: "${trimmedText.substring(0, 60)}..." (subset of: "${lastSentFinalText.substring(0, 60)}...")`);
+                            return; // Skip processing duplicate
                           }
                         }
                       } else if (timeSinceLastFinal < FINAL_CONTINUATION_WINDOW_MS) {
@@ -1000,12 +1062,17 @@ export async function handleSoloMode(clientWs) {
                       // Check for extending partials
                       checkForExtendingPartialsAfterFinal(textToProcess);
 
+                      // Determine effective languages for this specific final
+                      // Default to current session state, but allow override via options (e.g. from auto-detection)
+                      const effectiveSourceLang = options.sourceLang || currentSourceLang;
+                      const effectiveTargetLang = options.targetLang || currentTargetLang;
+
                       // Asynchronously process grammar/translation and send updates
                       (async () => {
                         try {
                           if (isTranscriptionOnly) {
                             // Transcription mode - only grammar correction needed
-                            if (currentSourceLang === 'en') {
+                            if (effectiveSourceLang === 'en') {
                               try {
                                 const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
                                 if (correctedText !== textToProcess) {
@@ -1033,7 +1100,7 @@ export async function handleSoloMode(clientWs) {
                             let correctedText = textToProcess;
 
                             // Grammar correction (English only)
-                            if (currentSourceLang === 'en') {
+                            if (effectiveSourceLang === 'en') {
                               try {
                                 correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
                                 rememberGrammarCorrection(textToProcess, correctedText);
@@ -1074,10 +1141,11 @@ export async function handleSoloMode(clientWs) {
                               }
 
                               console.log(`[SoloMode] 🔀 Using ${workerType} API for forced final translation (async, ${correctedText.length} chars)`);
+                              // Use effective languages for translation
                               const translatedText = await finalWorker.translateFinal(
                                 correctedText,
-                                currentSourceLang,
-                                currentTargetLang,
+                                effectiveSourceLang,
+                                effectiveTargetLang,
                                 process.env.OPENAI_API_KEY,
                                 sessionId,
                                 { model: effectiveModel } // Use resolved model from entitlements
@@ -1112,7 +1180,7 @@ export async function handleSoloMode(clientWs) {
                     // Regular finals - keep existing behavior (wait for grammar/translation)
                     if (isTranscriptionOnly) {
                       // Same language - just send transcript with grammar correction (English only)
-                      if (currentSourceLang === 'en') {
+                      if (effectiveSourceLang === 'en') {
                         try {
                           const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
 
@@ -1252,7 +1320,7 @@ export async function handleSoloMode(clientWs) {
                       try {
                         // CRITICAL FIX: Get grammar correction FIRST (English only), then translate the CORRECTED text
                         // This ensures the translation matches the corrected English text
-                        if (currentSourceLang === 'en') {
+                        if (effectiveSourceLang === 'en') {
                           try {
                             correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
                             rememberGrammarCorrection(textToProcess, correctedText);
@@ -1286,8 +1354,8 @@ export async function handleSoloMode(clientWs) {
                           console.log(`[SoloMode] 🔀 Using ${workerType} API for final translation (${correctedText.length} chars)`);
                           translatedText = await finalWorker.translateFinal(
                             correctedText, // Use corrected text for translation
-                            currentSourceLang,
-                            currentTargetLang,
+                            effectiveSourceLang,
+                            effectiveTargetLang,
                             process.env.OPENAI_API_KEY,
                             sessionId, // MULTI-SESSION: Pass sessionId for fair-share allocation
                             { model: effectiveModel } // Use resolved model from entitlements
@@ -1448,6 +1516,43 @@ export async function handleSoloMode(clientWs) {
                 const pipeline = meta.pipeline || 'normal';
                 console.log(`[SoloMode] 📥 RESULT RECEIVED: ${isPartial ? 'PARTIAL' : 'FINAL'} "${transcriptText.substring(0, 60)}..." (pipeline: ${pipeline})`);
 
+                // DYNAMIC AUTO-DETECTION: Determine effective source/target based on detected language
+                let effectiveSource = currentSourceLang;
+                let effectiveTarget = currentTargetLang;
+
+                if (soloMultiLangEnabled && meta.detectedLanguage) {
+                  const detectedCode = meta.detectedLanguage; // e.g. 'es-ES', 'zh-CN', 'en-US'
+                  const detectedBase = detectedCode.split('-')[0].toLowerCase(); // e.g. 'es', 'zh', 'en'
+
+                  // Get BCP-47 base codes for source and target
+                  const sourceSttCode = getTranscriptionLanguageCode(currentSourceLang); // e.g. 'en-US'
+                  const sourceBase = sourceSttCode ? sourceSttCode.split('-')[0].toLowerCase() : currentSourceLang.toLowerCase();
+                  const targetBase = targetSttCode ? targetSttCode.split('-')[0].toLowerCase() : currentTargetLang.toLowerCase();
+
+                  // Check if detected language matches target → flip direction
+                  // Relaxed check: allow matching against targetBase even if targetSttCode is null (fallback to currentTargetLang)
+                  const matchesTarget = (targetSttCode && detectedCode === targetSttCode) ||
+                    (detectedBase === targetBase);
+                  // Check if detected language matches source → keep normal direction
+                  const matchesSource = (
+                    detectedCode === sourceSttCode ||
+                    detectedBase === sourceBase
+                  );
+
+                  if (matchesTarget && !matchesSource) {
+                    // Target language detected → translate TO source language
+                    effectiveSource = currentTargetLang;
+                    effectiveTarget = currentSourceLang;
+                    console.log(`[SoloMode] 🔀 Auto-Detected ${detectedCode} (Target lang) → Routing: ${effectiveSource} → ${effectiveTarget}`);
+                  } else if (matchesSource) {
+                    // Source language detected → keep normal direction
+                    console.log(`[SoloMode] ✅ Auto-Detected ${detectedCode} (Source lang) → Routing: ${effectiveSource} → ${effectiveTarget}`);
+                  } else {
+                    // Unknown language detected → default to normal direction
+                    console.log(`[SoloMode] ⚠️ Auto-Detected ${detectedCode} (Unknown) → Defaulting to normal routing: ${effectiveSource} → ${effectiveTarget}`);
+                  }
+                }
+
                 if (isPartial) {
                   // PHASE 6: Use Forced Commit Engine to check for forced final extensions
                   syncForcedFinalBuffer(); // Sync variable from engine
@@ -1472,7 +1577,7 @@ export async function handleSoloMode(clientWs) {
                             if (recoveredMerged) {
                               console.log('[SoloMode] 🔁 Merging recovered text with extending partial and committing');
                               forcedCommitEngine.clearForcedFinalBufferTimeout();
-                              processFinalText(recoveredMerged, { forceFinal: true });
+                              processFinalText(recoveredMerged, { forceFinal: true, sourceLang: effectiveSource, targetLang: effectiveTarget });
                               forcedCommitEngine.clearForcedFinalBuffer();
                               syncForcedFinalBuffer();
                               // Continue processing the extended partial normally
@@ -1489,10 +1594,10 @@ export async function handleSoloMode(clientWs) {
                       forcedCommitEngine.clearForcedFinalBufferTimeout();
                       const mergedFinal = mergeWithOverlap(forcedCommitEngine.getForcedFinalBuffer().text, transcriptText);
                       if (mergedFinal) {
-                        processFinalText(mergedFinal, { forceFinal: true });
+                        processFinalText(mergedFinal, { forceFinal: true, sourceLang: effectiveSource, targetLang: effectiveTarget });
                       } else {
                         // Merge failed - use extended text
-                        processFinalText(extension.extendedText, { forceFinal: true });
+                        processFinalText(extension.extendedText, { forceFinal: true, sourceLang: effectiveSource, targetLang: effectiveTarget });
                       }
                       forcedCommitEngine.clearForcedFinalBuffer();
                       syncForcedFinalBuffer();
@@ -1695,7 +1800,7 @@ export async function handleSoloMode(clientWs) {
                       // PHASE 4: Reset partial tracking using tracker
                       partialTracker.reset();
                       syncPartialVariables();
-                      processFinalText(textToCommit);
+                      processFinalText(textToCommit, { sourceLang: effectiveSource, targetLang: effectiveTarget });
                       // Continue processing the new partial as a new segment (don't return - let it be processed below)
                     }
 
@@ -1811,7 +1916,7 @@ export async function handleSoloMode(clientWs) {
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
-                        processFinalText(textToProcess);
+                        processFinalText(textToProcess, { sourceLang: effectiveSource, targetLang: effectiveTarget });
                       }, remainingWait);
                       syncPendingFinalization(); // Sync after setting timeout
                       // Continue tracking this partial (don't return - let it be tracked normally below)
@@ -1899,7 +2004,7 @@ export async function handleSoloMode(clientWs) {
                         syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
                         // Process final (reuse the async function logic from the main timeout)
-                        processFinalText(textToProcess);
+                        processFinalText(textToProcess, { sourceLang: effectiveSource, targetLang: effectiveTarget });
                       }, remainingWait);
                     } else if (!extendsFinal && timeSinceFinal > 600) {
                       // New segment detected - commit FINAL immediately to avoid blocking
@@ -1997,7 +2102,7 @@ export async function handleSoloMode(clientWs) {
                         }
 
                         console.log(`[SoloMode] ✅ FINAL (new segment detected - committing): "${textToProcess.substring(0, 100)}..."`);
-                        processFinalText(textToProcess);
+                        processFinalText(textToProcess, { sourceLang: effectiveSource, targetLang: effectiveTarget });
                         // Continue processing the new partial as a new segment
                       }
                     } else {
@@ -3152,6 +3257,12 @@ export async function handleSoloMode(clientWs) {
                     // Both BASIC and PREMIUM tiers need partials available during the wait period
                     // Partials will be reset AFTER final processing completes (see timeout callback)
                     finalizationEngine.createPendingFinalization(finalTextToUse, null);
+                    // Store effective language routing on the pending finalization for use in timeout callback
+                    syncPendingFinalization();
+                    if (pendingFinalization) {
+                      pendingFinalization.effectiveSource = effectiveSource;
+                      pendingFinalization.effectiveTarget = effectiveTarget;
+                    }
                   }
 
                   // Schedule or reschedule the timeout
@@ -3330,11 +3441,14 @@ export async function handleSoloMode(clientWs) {
                         // longestPartialText = '';
                         // latestPartialTime = 0;
                         // longestPartialTime = 0;
+                        // Capture effective langs before clearing pendingFinalization
+                        const capturedSource = pendingFinalization.effectiveSource || currentSourceLang;
+                        const capturedTarget = pendingFinalization.effectiveTarget || currentTargetLang;
                         // PHASE 5: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
-                        processFinalText(textToProcess);
+                        processFinalText(textToProcess, { sourceLang: capturedSource, targetLang: capturedTarget });
                       }, remainingWait);
                       return; // Don't commit yet
                     }
@@ -3347,6 +3461,9 @@ export async function handleSoloMode(clientWs) {
                     // longestPartialText = '';
                     // latestPartialTime = 0;
                     // longestPartialTime = 0;
+                    // Capture effective langs before clearing pendingFinalization
+                    const capturedSource = pendingFinalization.effectiveSource || currentSourceLang;
+                    const capturedTarget = pendingFinalization.effectiveTarget || currentTargetLang;
                     // PHASE 5: Clear using engine (prevents duplicate processing)
                     finalizationEngine.clearPendingFinalization();
                     syncPendingFinalization();
@@ -3357,7 +3474,7 @@ export async function handleSoloMode(clientWs) {
                     console.log(`[SoloMode] ✅ FINAL Transcript (after ${waitTime}ms wait): "${textToProcess.substring(0, 80)}..."`);
 
                     // Process final - translate and send to client
-                    processFinalText(textToProcess);
+                    processFinalText(textToProcess, { sourceLang: capturedSource, targetLang: capturedTarget });
                   }, WAIT_FOR_PARTIALS_MS);
                 }
               });

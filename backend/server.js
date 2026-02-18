@@ -186,6 +186,7 @@ import { churchRouter } from './routes/churches.js';
 import { analyticsRouter } from './routes/analytics.js';
 import { webhookRouter } from './routes/webhooks.js';
 import { billingRouter } from './routes/billing.js';
+import { churchSettingsRouter } from './routes/churchSettings.js';
 
 // Reload API keys now that dotenv has loaded the .env file
 // (apiAuth is instantiated when imported, but dotenv.config runs after imports)
@@ -390,6 +391,7 @@ app.use('/api', usageRouter);
 app.use('/api', churchRouter);
 app.use('/api', analyticsRouter);
 app.use('/api', billingRouter);
+app.use('/api', churchSettingsRouter);
 
 // ========================================
 // SESSION MANAGEMENT ENDPOINTS
@@ -414,7 +416,56 @@ app.post('/session/start', async (req, res) => {
       });
     }
 
-    const { sessionId, sessionCode } = await sessionStore.createSession();
+    // Determine session code: use permanent church code unless conference mode is on
+    let overrideCode = null;
+    const authHeader = req.headers.authorization || '';
+    if (authHeader.startsWith('Bearer ')) {
+      const token = authHeader.slice('Bearer '.length).trim();
+      try {
+        const { data: { user }, error: authErr } = await supabaseAdmin.auth.getUser(token);
+        if (!authErr && user) {
+          const { data: profile } = await supabaseAdmin
+            .from('profiles')
+            .select('church_id')
+            .eq('user_id', user.id)
+            .single();
+
+          if (profile?.church_id) {
+            const { data: church } = await supabaseAdmin
+              .from('churches')
+              .select('permanent_code, conference_mode')
+              .eq('id', profile.church_id)
+              .single();
+
+            if (church && !church.conference_mode) {
+              // Regular service mode: use (or generate) the permanent code
+              if (church.permanent_code) {
+                overrideCode = church.permanent_code;
+                console.log(`[Backend] Using permanent code ${overrideCode} for church ${profile.church_id}`);
+              } else {
+                // Lazily generate and save permanent code
+                const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+                let newCode = '';
+                for (let i = 0; i < 6; i++) newCode += chars.charAt(Math.floor(Math.random() * chars.length));
+                await supabaseAdmin
+                  .from('churches')
+                  .update({ permanent_code: newCode })
+                  .eq('id', profile.church_id);
+                overrideCode = newCode;
+                console.log(`[Backend] Generated new permanent code ${overrideCode} for church ${profile.church_id}`);
+              }
+            } else if (church?.conference_mode) {
+              console.log(`[Backend] Conference mode ON for church ${profile.church_id} — using fresh code`);
+            }
+          }
+        }
+      } catch (codeErr) {
+        console.warn('[Backend] Could not resolve permanent code (non-fatal):', codeErr.message);
+        // Fall through to random code
+      }
+    }
+
+    const { sessionId, sessionCode } = await sessionStore.createSession(null, null, overrideCode);
 
     res.json({
       success: true,

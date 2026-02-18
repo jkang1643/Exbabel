@@ -25,6 +25,7 @@ import { ListenerPage } from './components/ListenerPage'
 import DemoPage from './components/DemoPage'
 import { BillingPage } from './components/BillingPage'
 import { CheckoutPage } from './components/CheckoutPage'
+import { GlobalSettingsPage } from './components/home/GlobalSettingsPage'
 
 // Protected route wrapper for routes that require authentication
 function ProtectedRoute({ children, requireAuth = true, requireMember = false, requireAdmin = false }) {
@@ -301,6 +302,15 @@ function AppContent() {
         element={
           <ProtectedRoute requireAuth={true} requireAdmin={true}>
             <BillingPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute requireAuth={true} requireAdmin={true}>
+            <GlobalSettingsPage />
           </ProtectedRoute>
         }
       />

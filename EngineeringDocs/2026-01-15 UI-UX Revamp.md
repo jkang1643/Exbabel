@@ -1,7 +1,7 @@
 # Exbabel — UI/UX Revamp
-**Last updated:** 2026-01-16 (America/Chicago) - Mobile Header Optimization
+**Last updated:** 2026-02-18 (America/Chicago) — Persistent QR Code & Global Settings
 
-This is a running "what is done" document capturing frontend enhancements, user flow improvements, and visual revamps for the Exbabel platform.
+This is a running "what we did" document capturing frontend enhancements, user flow improvements, and visual revamps for the Exbabel platform.
 **Newest items are at the top.**
 
 ---
@@ -62,6 +62,51 @@ Resolved a critical "White Screen" crash that occurred when activating or closin
 ---
 
 ## 1) What we did (feature updates / changes)
+
+### 2026-02-18 — PR 8: Global Settings Page
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Created a new admin-only **Global Settings** page (`/settings`) accessible from the header dropdown menu (hamburger → ⚙️ Settings), positioned between "Billing & Usage" and "Sign Out".
+
+**Key Changes:**
+- **New Route:** `/settings` — admin-protected, added to `App.jsx`
+- **New Page:** `GlobalSettingsPage.jsx` — two sections:
+  - **Billing card** — click-through link to `/billing`
+  - **QR Code & Session Settings** — full QR management panel (see PR 7)
+- **Header Dropdown:** Added ⚙️ Settings link to `Header.jsx` for all admin users; removed the card that was briefly on the main dashboard
+
+**Where implemented:**
+- **Frontend:** `frontend/src/components/home/GlobalSettingsPage.jsx` (New), `frontend/src/components/Header.jsx`, `frontend/src/App.jsx`
+
+---
+
+### 2026-02-18 — PR 7: Persistent Church QR Code & Conference Mode
+**Status:** ✅ IMPLEMENTED - Production Ready
+
+Eliminated the weekly friction of re-sharing session codes by giving each church a **permanent 6-character code** that never changes between services. Added a **Conference Mode** toggle for events where a fresh code per session is preferred.
+
+**Key Changes:**
+- **Database:** Added `permanent_code VARCHAR(6) UNIQUE` and `conference_mode BOOLEAN DEFAULT false` to `churches` table. Added admin UPDATE RLS policy.
+- **Permanent Code Logic:**
+  - `POST /session/start` now resolves the host's church and uses `permanent_code` as the session code (regular service mode)
+  - Code is lazily generated on first host session if not yet set
+  - `sessionStore.createSession()` accepts an optional `overrideCode` parameter
+- **Conference Mode:** When `conference_mode = true`, a fresh random code is generated per session (existing behavior). Toggled from Global Settings.
+- **New API Routes** (`backend/routes/churchSettings.js`):
+  - `GET /api/church/settings` — returns `permanentCode` + `conferenceMode`
+  - `PATCH /api/church/settings` — updates `conferenceMode`
+  - `POST /api/church/settings/regenerate-code` — generates a new `permanent_code`
+- **QR Panel in Settings:**
+  - Displays the permanent QR code image (generated client-side via `qrcode` library)
+  - Copy code button, Download QR (PNG), Regenerate Code button
+  - Conference Mode toggle with contextual description
+
+**Where implemented:**
+- **Backend:** `backend/routes/churchSettings.js` (New), `backend/server.js`, `backend/sessionStore.js`
+- **Frontend:** `frontend/src/components/home/GlobalSettingsPage.jsx`
+- **Database:** `supabase/migrations/20260218_add_church_settings.sql`
+
+---
 
 ### 2026-01-18 — PR 6: Downloadable QR Code & Professional Join Slide
 **Status:** ✅ IMPLEMENTED - Production Ready
@@ -202,6 +247,10 @@ Enhanced the "Live Translation" experience by introducing focus-mode defaults, i
 ## 2) Where we are now (implementation status)
 
 ### ✅ Implemented
+- **Persistent Church QR Code:** Each church has a permanent 6-char code stored in DB; never changes between services.
+- **Conference Mode Toggle:** Admin can switch to per-session fresh codes for events/conferences.
+- **Global Settings Page (`/settings`):** Admin-only page with QR display, download, regenerate, and conference mode toggle.
+- **Settings in Header Dropdown:** ⚙️ Settings link in the hamburger menu for all admins.
 - **QR Scanning:** Robust browser-side QR detection with multi-camera support.
 - **Manual Input:** High-visibility manual code entry with auto-focus and auto-capitalization.
 - **Professional Join Slide:** Automated 1080p slide generation with QR and spaced session code.
