@@ -76,6 +76,7 @@ export class TtsPlayerController {
             this.audioEl = new Audio();
             this.audioEl.playsInline = true;
             this.audioEl.preload = 'auto';
+            this.audioEl.crossOrigin = "anonymous"; // Required for Web Audio API to work with cross-origin sources
             this.audioEl.volume = 1.0;
 
             // Add unique ID for debugging element identity
@@ -88,12 +89,19 @@ export class TtsPlayerController {
                 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
                 if (AudioContextClass) {
                     this._audioCtx = new AudioContextClass();
+
+                    // Track state changes
+                    this._audioCtx.onstatechange = () => {
+                        console.log(`[TtsPlayerController] AudioContext state changed to: ${this._audioCtx.state}`);
+                    };
+
                     this._gainNode = this._audioCtx.createGain();
-                    this._gainNode.gain.value = 2.5; // 250% volume
+                    this._gainNode.gain.value = 2.0; // 200% volume boost
+
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
                     src.connect(this._gainNode);
                     this._gainNode.connect(this._audioCtx.destination);
-                    console.log('[TtsPlayerController] Gain node wired: 250% volume boost active');
+                    console.log(`[TtsPlayerController] Gain node wired: 200% volume boost (gain=2.0). Context state: ${this._audioCtx.state}`);
                 }
             } catch (err) {
                 console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);
@@ -1273,6 +1281,13 @@ export class TtsPlayerController {
      */
     _prime() {
         if (!this.audioEl) return;
+
+        // Resume AudioContext if suspended (required for Web Audio API on iOS/Chrome autoplay policies)
+        if (this._audioCtx && this._audioCtx.state === 'suspended') {
+            this._audioCtx.resume().then(() => {
+                console.log('[TtsPlayerController] AudioContext resumed via _prime() ✅');
+            }).catch(err => console.warn('[TtsPlayerController] AudioContext resume failed in _prime():', err));
+        }
 
         console.log('[TtsPlayerController] Priming audio system via persistent audioEl...');
         // Playing an empty source or a short silent sound works to "unlock" audio in most browsers

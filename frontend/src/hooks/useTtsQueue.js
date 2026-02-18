@@ -37,6 +37,7 @@ export function useTtsQueue({
 
     // Audio context and player
     const audioContextRef = useRef(null);
+    const gainNodeRef = useRef(null);
     const currentSourceRef = useRef(null);
     const processingRef = useRef(false);
     const wsRef = useRef(ws);
@@ -50,10 +51,23 @@ export function useTtsQueue({
         wsRef.current = ws;
     }, [ws]);
 
-    // Initialize audio context
+    // Initialize audio context with gain boost
     const initAudioContext = useCallback(() => {
         if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            audioContextRef.current = new AudioContextClass();
+
+            // Create and connect persistent gain node for volume boost
+            const gainNode = audioContextRef.current.createGain();
+            gainNode.gain.value = 2.0; // 200% volume boost
+            gainNode.connect(audioContextRef.current.destination);
+            gainNodeRef.current = gainNode;
+
+            console.log('[useTtsQueue] AudioContext initialized with 200% gain boost');
+        }
+        // Resume if suspended (browser policy)
+        if (audioContextRef.current.state === 'suspended') {
+            audioContextRef.current.resume().catch(err => console.warn('AudioContext resume failed', err));
         }
         return audioContextRef.current;
     }, []);
@@ -73,10 +87,14 @@ export function useTtsQueue({
             mode: 'unary'
         }));
 
+        // IMPORTANT: Initialize/Resume AudioContext HERE (inside user gesture handler)
+        // This ensures iOS/mobile browsers don't block audio later
+        initAudioContext();
+
         setIsStarted(true);
         isStartedRef.current = true; // Update ref for closure-safe access
         console.log('[useTtsQueue] TTS session started');
-    }, [languageCode, voiceName, tier]);
+    }, [languageCode, voiceName, tier, initAudioContext]);
 
     // Stop TTS session
     const stopTts = useCallback(() => {
@@ -220,11 +238,17 @@ export function useTtsQueue({
                 return;
             }
 
-            // Create source
+            // Create source and connect to gain node (not destination)
             const source = ctx.createBufferSource();
             source.buffer = audioBuffer;
             source.playbackRate.value = playbackRate;
-            source.connect(ctx.destination);
+
+            // Connect to gain node if available, otherwise destination
+            if (gainNodeRef.current) {
+                source.connect(gainNodeRef.current);
+            } else {
+                source.connect(ctx.destination);
+            }
 
             console.log(`[useTtsQueue] Playing segment ${segmentId} at rate ${playbackRate}x (source.playbackRate.value=${source.playbackRate.value})`);
 
@@ -350,7 +374,9 @@ export function useTtsQueue({
                 }
             }
             if (audioContextRef.current) {
-                audioContextRef.current.close();
+                audioContextRef.current.close().catch(() => { });
+                audioContextRef.current = null;
+                gainNodeRef.current = null;
             }
         };
     }, []);
