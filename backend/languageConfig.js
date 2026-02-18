@@ -332,6 +332,18 @@ export function getTranscriptionLanguageCode(langCode) {
   return lang ? lang.code : 'en-US';
 }
 
+// Maps our internal language codes to the exact BCP-47 codes Google STT V1 requires
+// for alternativeLanguageCodes. Some languages use non-standard codes in Google's API
+// (e.g. zh-CN is not accepted; cmn-Hans-CN is required).
+const GOOGLE_STT_ALT_CODE_MAP = {
+  'zh-CN': 'cmn-Hans-CN',
+  'zh-TW': 'cmn-Hant-TW',
+};
+
+export function getGoogleSttAltCode(sttCode) {
+  return GOOGLE_STT_ALT_CODE_MAP[sttCode] || sttCode;
+}
+
 export function getLanguageName(langCode) {
   const lang = TRANSLATION_LANGUAGES[langCode] || TRANSLATION_LANGUAGES[langCode.split('-')[0]];
   return lang ? lang.name : langCode;

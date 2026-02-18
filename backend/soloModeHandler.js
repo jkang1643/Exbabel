@@ -28,7 +28,7 @@ import { startSessionSpan, heartbeatSessionSpan, stopSessionSpan } from './usage
 import { checkQuotaLimit, createQuotaEvent } from './usage/quotaEnforcement.js';
 import { supabaseAdmin } from './supabaseAdmin.js';
 import crypto from 'crypto';
-import { getTranscriptionLanguageCode, isTranscriptionSupported } from './languageConfig.js';
+import { getTranscriptionLanguageCode, getGoogleSttAltCode, isTranscriptionSupported } from './languageConfig.js';
 // PHASE 7: Using CoreEngine which coordinates all extracted engines
 // Individual engines are still accessible via coreEngine properties if needed
 
@@ -601,7 +601,10 @@ export async function handleSoloMode(clientWs) {
               // targetSttCode is now set in the outer scope at the start of init (see above)
 
               if (targetSttCode && !soloAltLangCodes.includes(targetSttCode)) {
-                soloAltLangCodes = [targetSttCode, ...soloAltLangCodes];
+                // CRITICAL: Map to Google STT's actual required code (e.g. zh-CN → cmn-Hans-CN)
+                // Google STT V1 silently ignores zh-CN but accepts cmn-Hans-CN
+                const googleAltCode = getGoogleSttAltCode(targetSttCode);
+                soloAltLangCodes = [googleAltCode, ...soloAltLangCodes];
               }
               console.log(`[SoloMode] 🌍 Solo multi-lang: initializing STT with primary=${currentSourceLang}, alt=${soloAltLangCodes.join(',')}, targetSttCode=${targetSttCode}`);
 
@@ -1157,6 +1160,7 @@ export async function handleSoloMode(clientWs) {
                                 originalText: textToProcess,
                                 correctedText: correctedText,
                                 translatedText: translatedText,
+                                targetLang: effectiveTargetLang, // Use flipped lang for TTS voice
                                 timestamp: Date.now(),
                                 hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
                                 hasCorrection: correctedText !== textToProcess,
@@ -1218,7 +1222,7 @@ export async function handleSoloMode(clientWs) {
                           // Trigger TTS streaming for this committed segment
                           // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
                           const normalizedTtsText = normalizePunctuation(correctedText);
-                          await triggerTtsStreaming(finalSeqId, normalizedTtsText, currentTargetLang);
+                          await triggerTtsStreaming(finalSeqId, normalizedTtsText, effectiveTargetLang);
 
                           // CRITICAL: Update last sent FINAL tracking after sending
                           // Track both original and corrected text to prevent duplicates
@@ -1263,7 +1267,7 @@ export async function handleSoloMode(clientWs) {
                           // Trigger TTS streaming for this committed segment
                           // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
                           const normalizedTtsTextError = normalizePunctuation(textToProcess);
-                          await triggerTtsStreaming(finalSeqIdError, normalizedTtsTextError, currentTargetLang);
+                          await triggerTtsStreaming(finalSeqIdError, normalizedTtsTextError, effectiveTargetLang);
 
                           // CRITICAL: Update last sent FINAL tracking after sending (even on error)
                           lastSentOriginalText = textToProcess; // Track original
@@ -1305,7 +1309,7 @@ export async function handleSoloMode(clientWs) {
                         // Trigger TTS streaming for this committed segment
                         // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
                         const normalizedTtsTextNonEn = normalizePunctuation(textToProcess);
-                        await triggerTtsStreaming(finalSeqIdNonEn, normalizedTtsTextNonEn, currentTargetLang);
+                        await triggerTtsStreaming(finalSeqIdNonEn, normalizedTtsTextNonEn, effectiveTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         lastSentFinalText = textToProcess;
@@ -1412,6 +1416,7 @@ export async function handleSoloMode(clientWs) {
                           originalText: textToProcess, // Use final text (may include recovered words from partials)
                           correctedText: correctedText, // Grammar-corrected text (updates when available)
                           translatedText: translatedText, // Translation of CORRECTED text
+                          targetLang: effectiveTargetLang, // Use flipped lang for TTS voice
                           timestamp: Date.now(),
                           hasTranslation: translatedText && !translatedText.startsWith('[Translation error'),
                           hasCorrection: hasCorrection,
@@ -1425,7 +1430,7 @@ export async function handleSoloMode(clientWs) {
                         // Trigger TTS streaming for this committed segment (use translated text)
                         // CRITICAL: Normalize punctuation before TTS (convert single quotes to double, etc.)
                         const normalizedTtsTextTrans = normalizePunctuation(translatedText);
-                        await triggerTtsStreaming(finalSeqIdTrans, normalizedTtsTextTrans, currentTargetLang);
+                        await triggerTtsStreaming(finalSeqIdTrans, normalizedTtsTextTrans, effectiveTargetLang);
 
                         // CRITICAL: Update last sent FINAL tracking after sending
                         // Track both original and corrected text to prevent duplicates
@@ -1521,23 +1526,33 @@ export async function handleSoloMode(clientWs) {
                 let effectiveTarget = currentTargetLang;
 
                 if (soloMultiLangEnabled && meta.detectedLanguage) {
-                  const detectedCode = meta.detectedLanguage; // e.g. 'es-ES', 'zh-CN', 'en-US'
-                  const detectedBase = detectedCode.split('-')[0].toLowerCase(); // e.g. 'es', 'zh', 'en'
+                  const detectedCode = meta.detectedLanguage; // e.g. 'es-ES', 'cmn-hans-cn', 'en-US'
 
-                  // Get BCP-47 base codes for source and target
+                  // NORMALIZATION: Google STT returns non-standard BCP-47 codes for some languages,
+                  // and may return them in all-lowercase. Normalize to standard ISO 639-1 base codes.
+                  // Known mismatches:
+                  //   cmn-Hans-CN / cmn-Hant-TW → zh (Chinese Mandarin, Simplified/Traditional)
+                  //   yue-Hant-HK               → zh (Cantonese)
+                  const GOOGLE_STT_CODE_NORMALIZATION = {
+                    'cmn': 'zh',
+                    'yue': 'zh',
+                  };
+                  const rawDetectedBase = detectedCode.split('-')[0].toLowerCase();
+                  const detectedBase = GOOGLE_STT_CODE_NORMALIZATION[rawDetectedBase] || rawDetectedBase;
+
+                  // Get BCP-47 codes for source and target (from languageConfig)
                   const sourceSttCode = getTranscriptionLanguageCode(currentSourceLang); // e.g. 'en-US'
                   const sourceBase = sourceSttCode ? sourceSttCode.split('-')[0].toLowerCase() : currentSourceLang.toLowerCase();
                   const targetBase = targetSttCode ? targetSttCode.split('-')[0].toLowerCase() : currentTargetLang.toLowerCase();
+                  // Also normalize targetBase in case it's a cmn-style code
+                  const normalizedTargetBase = GOOGLE_STT_CODE_NORMALIZATION[targetBase] || targetBase;
 
                   // Check if detected language matches target → flip direction
-                  // Relaxed check: allow matching against targetBase even if targetSttCode is null (fallback to currentTargetLang)
-                  const matchesTarget = (targetSttCode && detectedCode === targetSttCode) ||
-                    (detectedBase === targetBase);
+                  // Use normalized base codes so cmn matches zh, etc.
+                  const matchesTarget = (detectedBase === normalizedTargetBase);
                   // Check if detected language matches source → keep normal direction
-                  const matchesSource = (
-                    detectedCode === sourceSttCode ||
-                    detectedBase === sourceBase
-                  );
+                  const normalizedSourceBase = GOOGLE_STT_CODE_NORMALIZATION[sourceBase] || sourceBase;
+                  const matchesSource = (detectedBase === normalizedSourceBase);
 
                   if (matchesTarget && !matchesSource) {
                     // Target language detected → translate TO source language
@@ -1552,6 +1567,7 @@ export async function handleSoloMode(clientWs) {
                     console.log(`[SoloMode] ⚠️ Auto-Detected ${detectedCode} (Unknown) → Defaulting to normal routing: ${effectiveSource} → ${effectiveTarget}`);
                   }
                 }
+
 
                 if (isPartial) {
                   // PHASE 6: Use Forced Commit Engine to check for forced final extensions
@@ -1912,11 +1928,14 @@ export async function handleSoloMode(clientWs) {
                         // latestPartialText = '';
                         // longestPartialText = '';
                         const waitTime = Date.now() - pendingFinalization.timestamp;
+                        // Capture effective langs before clearing pendingFinalization (avoid stale closure)
+                        const capturedSource = pendingFinalization.effectiveSource || currentSourceLang;
+                        const capturedTarget = pendingFinalization.effectiveTarget || currentTargetLang;
                         // PHASE 5: Clear using engine
                         finalizationEngine.clearPendingFinalization();
                         syncPendingFinalization();
                         console.log(`[SoloMode] ✅ FINAL Transcript (after continuation wait): "${textToProcess.substring(0, 80)}..."`);
-                        processFinalText(textToProcess, { sourceLang: effectiveSource, targetLang: effectiveTarget });
+                        processFinalText(textToProcess, { sourceLang: capturedSource, targetLang: capturedTarget });
                       }, remainingWait);
                       syncPendingFinalization(); // Sync after setting timeout
                       // Continue tracking this partial (don't return - let it be tracked normally below)
@@ -2705,7 +2724,7 @@ export async function handleSoloMode(clientWs) {
                               }
 
                               // Commit the forced final immediately
-                              processFinalText(forcedFinalText, { forceFinal: true });
+                              processFinalText(forcedFinalText, { forceFinal: true, sourceLang: effectiveSource, targetLang: effectiveTarget });
 
                               // Clear the buffer
                               forcedCommitEngine.clearForcedFinalBuffer();
@@ -2814,7 +2833,7 @@ export async function handleSoloMode(clientWs) {
                           // Commit the forced final (with grammar correction via processFinalText)
                           console.log(`[SoloMode] 📝 Committing forced final from timeout: "${textToCommit.substring(0, 80)}..." (${textToCommit.length} chars)`);
                           console.log(`[SoloMode] 📊 Final text to commit: "${textToCommit}"`);
-                          processFinalText(textToCommit, { forceFinal: true });
+                          processFinalText(textToCommit, { forceFinal: true, sourceLang: effectiveSource, targetLang: effectiveTarget });
 
                           // Clear buffer if it still exists
                           if (bufferStillExists) {
@@ -2865,7 +2884,7 @@ export async function handleSoloMode(clientWs) {
                             forcedFinalBuffer.committedByRecovery = true;
                           }
 
-                          processFinalText(recoveredText, { forceFinal: true });
+                          processFinalText(recoveredText, { forceFinal: true, sourceLang: effectiveSource, targetLang: effectiveTarget });
                           forcedCommitEngine.clearForcedFinalBuffer();
                           syncForcedFinalBuffer();
 
@@ -2890,7 +2909,7 @@ export async function handleSoloMode(clientWs) {
 
                           // Commit the forced final (from buffer, since recovery found nothing)
                           const forcedFinalText = buffer.text;
-                          processFinalText(forcedFinalText, { forceFinal: true });
+                          processFinalText(forcedFinalText, { forceFinal: true, sourceLang: effectiveSource, targetLang: effectiveTarget });
 
                           // Now merge with new FINAL and process it
                           forcedCommitEngine.clearForcedFinalBufferTimeout();
@@ -3226,10 +3245,16 @@ export async function handleSoloMode(clientWs) {
 
                   // If we have a pending finalization, check if this final extends it
                   // Google can send multiple finals for long phrases - accumulate them
+                  // CRITICAL: Preserve routing in case we clear pending due to text mismatch
+                  let preservedSource = null;
+                  let preservedTarget = null;
                   if (pendingFinalization) {
+                    preservedSource = pendingFinalization.effectiveSource;
+                    preservedTarget = pendingFinalization.effectiveTarget;
+
                     // Check if this final (or extended final) extends the pending one
-                    if (finalTextToUse.length > pendingFinalization.text.length &&
-                      finalTextToUse.startsWith(pendingFinalization.text.trim())) {
+                    if (finalTextToUse.length >= pendingFinalization.text.length &&
+                      finalTextToUse.toLowerCase().startsWith(pendingFinalization.text.trim().toLowerCase())) {
                       // This final extends the pending one - update it with the extended text
                       console.log(`[SoloMode] 📦 Final extends pending (${pendingFinalization.text.length} → ${finalTextToUse.length} chars)`);
                       // PHASE 5: Update using engine
@@ -3257,9 +3282,30 @@ export async function handleSoloMode(clientWs) {
                     // Both BASIC and PREMIUM tiers need partials available during the wait period
                     // Partials will be reset AFTER final processing completes (see timeout callback)
                     finalizationEngine.createPendingFinalization(finalTextToUse, null);
-                    // Store effective language routing on the pending finalization for use in timeout callback
+
+                    // Sync immediately so we can restore routing
                     syncPendingFinalization();
-                    if (pendingFinalization) {
+
+                    // CRITICAL: Restore preserved routing if we cleared the previous pending
+                    // This prevents losing detected language context when text is rewritten
+                    if (pendingFinalization && preservedSource) {
+                      console.log(`[SoloMode] 🔄 Restoring preserved routing to new pending final (${preservedSource} -> ${preservedTarget})`);
+                      pendingFinalization.effectiveSource = preservedSource;
+                      pendingFinalization.effectiveTarget = preservedTarget;
+                    }
+                  }
+                  // ALWAYS update effective language routing on pendingFinalization.
+                  // Must happen outside the if-block above so extended finals also get the correct
+                  // detected direction (not just the first time pendingFinalization is created).
+                  syncPendingFinalization();
+                  if (pendingFinalization) {
+                    // CRITICAL: Prevent ephemeral reverts on FINAL results.
+                    // Example: Chinese detected in partials (ZH→EN), but FINAL result has noise/silence
+                    // detected as English (EN→ZH). We must preserve the specific language flip.
+                    const isRevertingToDefault = (effectiveSource === currentSourceLang) &&
+                      (pendingFinalization.effectiveSource && pendingFinalization.effectiveSource !== currentSourceLang);
+
+                    if (!isRevertingToDefault) {
                       pendingFinalization.effectiveSource = effectiveSource;
                       pendingFinalization.effectiveTarget = effectiveTarget;
                     }

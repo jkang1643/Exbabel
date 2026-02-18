@@ -81,6 +81,23 @@ export class TtsPlayerController {
             // Add unique ID for debugging element identity
             this.audioEl.__id = Math.random().toString(16).slice(2);
             console.log('[TtsPlayerController] Created persistent audioEl with ID:', this.audioEl.__id);
+
+            // Web Audio API gain boost (250% = 2.5x)
+            // MediaElementSourceNode can only be created once per element, so we wire it here.
+            try {
+                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                if (AudioContextClass) {
+                    this._audioCtx = new AudioContextClass();
+                    this._gainNode = this._audioCtx.createGain();
+                    this._gainNode.gain.value = 2.5; // 250% volume
+                    const src = this._audioCtx.createMediaElementSource(this.audioEl);
+                    src.connect(this._gainNode);
+                    this._gainNode.connect(this._audioCtx.destination);
+                    console.log('[TtsPlayerController] Gain node wired: 250% volume boost active');
+                }
+            } catch (err) {
+                console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);
+            }
         }
 
         // iOS unlock state
@@ -183,6 +200,13 @@ export class TtsPlayerController {
 
             // Tiny silent WAV (more reliable than MP3 data URI on iOS)
             this.audioEl.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+
+            // Resume AudioContext if suspended (iOS requirement for Web Audio API)
+            if (this._audioCtx && this._audioCtx.state === 'suspended') {
+                this._audioCtx.resume().then(() => {
+                    console.log('[TtsPlayerController] AudioContext resumed ✅');
+                }).catch(err => console.warn('[TtsPlayerController] AudioContext resume failed:', err));
+            }
 
             const p = this.audioEl.play();
             if (p?.then) {
@@ -1320,6 +1344,11 @@ export class TtsPlayerController {
         if (this.audioEl) {
             this.audioEl.pause();
             this.audioEl = null;
+        }
+        if (this._audioCtx) {
+            this._audioCtx.close().catch(() => { });
+            this._audioCtx = null;
+            this._gainNode = null;
         }
         this.audioQueue = [];
         this.queue = [];

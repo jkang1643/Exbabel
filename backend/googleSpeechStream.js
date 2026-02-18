@@ -596,7 +596,10 @@ export class GoogleSpeechStream {
       console.warn(`[GoogleSpeech] ⚠️ Forcing FINAL of latest partial before restart (${this.lastPartialTranscript.length} chars)`);
       if (this.resultCallback) {
         try {
-          this.resultCallback(this.lastPartialTranscript, false, { forced: true });
+          this.resultCallback(this.lastPartialTranscript, false, {
+            forced: true,
+            detectedLanguage: this.lastDetectedLanguage
+          });
         } catch (err) {
           console.error('[GoogleSpeech] ⚠️ Error forcing final transcript before restart:', err.message);
         }
@@ -828,7 +831,12 @@ export class GoogleSpeechStream {
         // Pass speaker tag and detected language in metadata if available
         const meta = { pipeline: this.pipeline };
         if (speakerTag !== null) meta.speakerTag = speakerTag;
-        if (detectedLanguage) meta.detectedLanguage = detectedLanguage;
+        if (detectedLanguage) {
+          meta.detectedLanguage = detectedLanguage;
+          this.lastDetectedLanguage = detectedLanguage;
+        } else if (this.lastDetectedLanguage) {
+          meta.detectedLanguage = this.lastDetectedLanguage;
+        }
         this.resultCallback(combinedTranscript, false, meta); // isPartial = false
       }
 
@@ -851,6 +859,9 @@ export class GoogleSpeechStream {
 
       // Cache the latest partial so we can force-commit if the stream restarts
       this.lastPartialTranscript = combinedTranscript;
+      if (detectedLanguage) {
+        this.lastDetectedLanguage = detectedLanguage;
+      }
     }
   }
 
