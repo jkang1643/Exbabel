@@ -130,6 +130,10 @@ export class TtsPlayerController {
                     compressor.attack.value = 0.01;
                     compressor.release.value = 0.3;
 
+                    // 3.5. Makeup Gain (Compressor Stage)
+                    const makeupGain = this._audioCtx.createGain();
+                    makeupGain.gain.value = 2.0; // +6dB
+
                     // 4. Hard Limiter (Safety)
                     const limiter = this._audioCtx.createDynamicsCompressor();
                     limiter.threshold.value = -1.0;
@@ -140,19 +144,20 @@ export class TtsPlayerController {
 
                     // 5. Output Gain (Trim)
                     this._gainNode = this._audioCtx.createGain();
-                    this._gainNode.gain.value = 2.0; // +6dB Gain
+                    this._gainNode.gain.value = 1.0; // Unity
 
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
 
-                    // Connect Chain: HPF -> EQ -> Compressor -> Limiter -> Gain -> Dest
+                    // Connect Chain: HPF -> EQ -> Compressor -> Makeup -> Limiter -> Gain -> Dest
                     src.connect(hpf);
                     hpf.connect(eq);
                     eq.connect(compressor);
-                    compressor.connect(limiter);
+                    compressor.connect(makeupGain);
+                    makeupGain.connect(limiter);
                     limiter.connect(this._gainNode);
                     this._gainNode.connect(this._audioCtx.destination);
 
-                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Comp(3:1) -> Limiter(20:1) -> Gain(2x/+6dB). Context state: ${this._audioCtx.state}`);
+                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Comp(3:1) -> Makeup(2x) -> Limiter(20:1) -> Out(1x). Context state: ${this._audioCtx.state}`);
                 }
             } catch (err) {
                 console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);

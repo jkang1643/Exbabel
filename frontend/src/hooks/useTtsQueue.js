@@ -93,6 +93,11 @@ export function useTtsQueue({
             compressor.attack.value = 0.01;   // 10ms to preserve consonants
             compressor.release.value = 0.3;   // 300ms to avoid volume wobble
 
+            // 3.5. Makeup Gain (Compressor Stage)
+            // Boost signal AFTER compression but BEFORE Limiter
+            const makeupGain = audioContextRef.current.createGain();
+            makeupGain.gain.value = 2.0;    // +6dB boost (Compensation)
+
             // 4. Hard Limiter (Safety)
             // True brickwall (20:1) only detecting max peaks (-1dB)
             const limiter = audioContextRef.current.createDynamicsCompressor();
@@ -103,21 +108,22 @@ export function useTtsQueue({
             limiter.release.value = 0.1;      // 100ms release
 
             // 5. Output Gain (Trim) - Post-Limiter
-            // Replaced massive 9x Pre-Gain with unity trim to avoid clipping
+            // Unity gain to prevent clipping after the limiter
             const outputGain = audioContextRef.current.createGain();
-            outputGain.gain.value = 2.0;      // +6dB Gain (User requested boost)
+            outputGain.gain.value = 1.0;      // Back to Unity (User reported clipping at 2.0)
 
-            // Connect Chain: HPF -> EQ -> Compressor -> Limiter -> Gain -> Dest
+            // Connect Chain: HPF -> EQ -> Compressor -> MakeupGain -> Limiter -> OutGain -> Dest
             hpf.connect(eq);
             eq.connect(compressor);
-            compressor.connect(limiter);
+            compressor.connect(makeupGain);
+            makeupGain.connect(limiter);
             limiter.connect(outputGain);
             outputGain.connect(audioContextRef.current.destination);
 
             // Store entry point
             gainNodeRef.current = hpf;
 
-            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Comp(3:1) -> Limiter(20:1) -> Gain(2x/+6dB)');
+            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Comp(3:1) -> Makeup(2x) -> Limiter(20:1) -> Out(1x)');
 
             // Store entry point
             gainNodeRef.current = hpf;
