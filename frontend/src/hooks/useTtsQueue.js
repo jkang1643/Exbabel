@@ -87,7 +87,7 @@ export function useTtsQueue({
             // 3. Broadcast Compressor (Levelling)
             // Catches peaks gently (3:1) and lets speech breathe (0.3s release)
             const compressor = audioContextRef.current.createDynamicsCompressor();
-            compressor.threshold.value = -18; // Catches peaks, not everything
+            compressor.threshold.value = -12; // Raised to -12dB (User requested)
             compressor.knee.value = 20;       // Soft knee
             compressor.ratio.value = 3;       // Transparent 3:1 compression
             compressor.attack.value = 0.01;   // 10ms to preserve consonants
