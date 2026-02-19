@@ -85,13 +85,13 @@ export function useTtsQueue({
             eq.gain.value = 3.0; // +3dB (Restored for clarity)
 
             // 3. Broadcast Compressor (Levelling)
-            // Catches peaks gently (3:1) and lets speech breathe (0.3s release)
+            // Catches peaks gently (3:1) with FAST release to avoid pumping
             const compressor = audioContextRef.current.createDynamicsCompressor();
-            compressor.threshold.value = -10; // Raised to -10dB (User requested "slightly up")
+            compressor.threshold.value = -12; // Reverted to -12dB (User preference)
             compressor.knee.value = 20;       // Soft knee
             compressor.ratio.value = 3;       // Transparent 3:1 compression
-            compressor.attack.value = 0.01;   // 10ms to preserve consonants
-            compressor.release.value = 0.3;   // 300ms to avoid volume wobble
+            compressor.attack.value = 0.003;  // Fast attack (3ms) to catch transients
+            compressor.release.value = 0.05;  // FAST release (50ms) to prevent "dipping"
 
             // 3.5. Makeup Gain (Compressor Stage)
             // Boost signal AFTER compression but BEFORE Limiter
@@ -105,7 +105,7 @@ export function useTtsQueue({
             limiter.knee.value = 0.0;
             limiter.ratio.value = 20.0;       // Brickwall
             limiter.attack.value = 0.001;     // 1ms instant catch
-            limiter.release.value = 0.1;      // 100ms release
+            limiter.release.value = 0.02;     // Fast release (20ms) to recover volume instantly
 
             // 5. Output Gain (Trim) - Post-Limiter
             // Unity gain to prevent clipping after the limiter

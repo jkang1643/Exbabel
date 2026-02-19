@@ -124,11 +124,11 @@ export class TtsPlayerController {
 
                     // 3. Broadcast Compressor (Levelling)
                     const compressor = this._audioCtx.createDynamicsCompressor();
-                    compressor.threshold.value = -10; // Raised to -10dB (User requested "slightly up")
+                    compressor.threshold.value = -12; // Reverted to -12dB
                     compressor.knee.value = 20;
                     compressor.ratio.value = 3;
-                    compressor.attack.value = 0.01;
-                    compressor.release.value = 0.3;
+                    compressor.attack.value = 0.003; // Fast attack (3ms)
+                    compressor.release.value = 0.05; // Fast release (50ms)
 
                     // 3.5. Makeup Gain (Compressor Stage)
                     const makeupGain = this._audioCtx.createGain();
@@ -140,7 +140,7 @@ export class TtsPlayerController {
                     limiter.knee.value = 0.0;
                     limiter.ratio.value = 20.0;
                     limiter.attack.value = 0.001;
-                    limiter.release.value = 0.1;
+                    limiter.release.value = 0.02; // Fast release (20ms)
 
                     // 5. Output Gain (Trim)
                     this._gainNode = this._audioCtx.createGain();
