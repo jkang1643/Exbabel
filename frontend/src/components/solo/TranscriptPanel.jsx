@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { Copy, Trash2 } from 'lucide-react';
+import { Copy, Trash2, Play } from 'lucide-react';
 
 /**
  * TranscriptPanel - Displays live and finalized transcripts
@@ -13,7 +13,8 @@ export function TranscriptPanel({
   partialText,
   segments,
   showTranslation = true,
-  onClear
+  onClear,
+  onPlay
 }) {
   const scrollRef = useRef(null);
 
@@ -76,13 +77,25 @@ export function TranscriptPanel({
         {/* Finalized segments */}
         {segments.map((segment) => (
           <div key={segment.id} className="segment">
-            <div className="segment-original">{segment.originalText}</div>
-            {showTranslation && segment.translatedText &&
-              segment.translatedText !== segment.originalText && (
-                <div className="segment-translation">
-                  → {segment.translatedText}
-                </div>
-              )}
+            <div className="segment-content">
+              <div className="segment-original">{segment.originalText}</div>
+              {showTranslation && segment.translatedText &&
+                segment.translatedText !== segment.originalText && (
+                  <div className="segment-translation">
+                    → {segment.translatedText}
+                  </div>
+                )}
+            </div>
+            {onPlay && (segment.translatedText || segment.originalText) && (
+              <button
+                className="play-btn"
+                onClick={() => onPlay(segment)}
+                aria-label="Play segment"
+                title="Play Audio"
+              >
+                <Play size={16} fill="currentColor" />
+              </button>
+            )}
           </div>
         ))}
 
@@ -215,6 +228,45 @@ export function TranscriptPanel({
         @keyframes blink {
           0%, 100% { opacity: 0.3; }
           50% { opacity: 1; }
+        }
+
+        .segment {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 1rem;
+          margin-bottom: 1rem;
+          padding-bottom: 1rem;
+          border-bottom: 1px solid rgba(16, 185, 129, 0.1);
+        }
+
+        .segment-content {
+          flex: 1;
+        }
+
+        .play-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 32px;
+          height: 32px;
+          border: none;
+          background: rgba(59, 91, 255, 0.1);
+          color: #3B5BFF;
+          border-radius: 50%;
+          cursor: pointer;
+          transition: all 0.2s;
+          flex-shrink: 0;
+          margin-top: 0.25rem;
+        }
+
+        .play-btn:hover {
+          background: rgba(59, 91, 255, 0.2);
+          transform: scale(1.1);
+        }
+
+        .play-btn:active {
+          transform: scale(0.95);
         }
       `}</style>
     </div>

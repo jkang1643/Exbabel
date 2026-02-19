@@ -667,6 +667,21 @@ export function SoloPage({ onBackToHome }) {
                 partialText={session.partialText}
                 segments={session.finalizedSegments}
                 showTranslation={session.mode !== SoloMode.TEXT_ONLY || sourceLang !== targetLang}
+                onPlay={useCallback((segment) => {
+                    const textToSpeak = segment.translatedText || segment.originalText;
+                    if (!textToSpeak) return;
+
+                    console.log('[SoloPage] Replaying segment:', segment.id);
+                    ttsQueue.enqueue({
+                        text: segment.originalText,
+                        translatedText: textToSpeak,
+                        languageCode: normalizeLanguageCode(targetLangRef.current),
+                        voiceId: selectedVoice?.voiceId
+                    });
+                    // If queue was empty, we need to make sure audio context is resumed and TTS is started?
+                    // ttsQueue.startTts() handles context resume, but manual enqueue might work if already started.
+                    // Assuming 'Started Listening' state means TTS is started. 
+                }, [ttsQueue, selectedVoice])}
             />
 
             {/* Control Button */}

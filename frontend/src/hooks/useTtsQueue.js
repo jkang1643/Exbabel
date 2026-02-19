@@ -88,7 +88,7 @@ export function useTtsQueue({
             const compressor = audioContextRef.current.createDynamicsCompressor();
             compressor.threshold.value = -24; // Start compressing early to catch quiet parts
             compressor.knee.value = 10;       // Soft knee for transparent transition
-            compressor.ratio.value = 4;       // Gentle 4:1 compression
+            compressor.ratio.value = 6;       // Higher 6:1 compression (User requested >4:1)
             compressor.attack.value = 0.003;  // Fast attack
             compressor.release.value = 0.25;  // Natural release
 
@@ -104,10 +104,10 @@ export function useTtsQueue({
             // 5. Hard Limiter (Brickwall) - tuned for consistent loudness
             const limiter = audioContextRef.current.createDynamicsCompressor();
             limiter.threshold.value = -0.5;
-            limiter.knee.value = 0.0;
-            limiter.ratio.value = 20.0;
+            limiter.knee.value = 10.0;     // Soft knee (User requested smoothing)
+            limiter.ratio.value = 10.0;    // 10:1 (User requested less aggressive than brickwall)
             limiter.attack.value = 0.003;  // Slight attack to preserve punch
-            limiter.release.value = 0.15;  // Slower release to prevent pumping
+            limiter.release.value = 0.05;  // FAST release (50ms) to prevent pumping/dips
 
             // Connect Chain
             hpf.connect(eq);

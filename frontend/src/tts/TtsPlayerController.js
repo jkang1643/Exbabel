@@ -126,7 +126,7 @@ export class TtsPlayerController {
                     const compressor = this._audioCtx.createDynamicsCompressor();
                     compressor.threshold.value = -24;
                     compressor.knee.value = 10;
-                    compressor.ratio.value = 4;
+                    compressor.ratio.value = 6;
                     compressor.attack.value = 0.003;
                     compressor.release.value = 0.25;
 
@@ -142,10 +142,10 @@ export class TtsPlayerController {
                     // 5. Hard Limiter
                     const limiter = this._audioCtx.createDynamicsCompressor();
                     limiter.threshold.value = -0.5;
-                    limiter.knee.value = 0.0;
-                    limiter.ratio.value = 20.0;
+                    limiter.knee.value = 10.0;
+                    limiter.ratio.value = 10.0;
                     limiter.attack.value = 0.003;
-                    limiter.release.value = 0.15;
+                    limiter.release.value = 0.05;
 
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
 
