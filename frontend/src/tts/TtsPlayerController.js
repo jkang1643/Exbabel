@@ -129,15 +129,15 @@ export class TtsPlayerController {
 
                     // 4. Pre-Gain
                     this._gainNode = this._audioCtx.createGain();
-                    this._gainNode.gain.value = 4.5;
+                    this._gainNode.gain.value = 6.0;
 
                     // 5. Hard Limiter
                     const limiter = this._audioCtx.createDynamicsCompressor();
                     limiter.threshold.value = -0.5;
                     limiter.knee.value = 0.0;
                     limiter.ratio.value = 20.0;
-                    limiter.attack.value = 0.001;
-                    limiter.release.value = 0.05;
+                    limiter.attack.value = 0.003;
+                    limiter.release.value = 0.15;
 
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
 

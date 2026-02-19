@@ -89,17 +89,17 @@ export function useTtsQueue({
             distortion.curve = makeDistortionCurve(0); // No saturation (linear)
             distortion.oversample = 'none';
 
-            // 4. Pre-Gain (450% Boost - MAX LOUDNESS)
+            // 4. Pre-Gain (600% Boost - MAX LOUDNESS)
             const preGain = audioContextRef.current.createGain();
-            preGain.gain.value = 4.5; // Pushing gain hard into the limiter
+            preGain.gain.value = 6.0; // Drive hard into limiter
 
-            // 5. Hard Limiter (Brickwall)
+            // 5. Hard Limiter (Brickwall) - tuned for consistent loudness
             const limiter = audioContextRef.current.createDynamicsCompressor();
-            limiter.threshold.value = -0.5; // Ceiling at -0.5dB
+            limiter.threshold.value = -0.5;
             limiter.knee.value = 0.0;
             limiter.ratio.value = 20.0;
-            limiter.attack.value = 0.001;
-            limiter.release.value = 0.05; // Faster release for loudness
+            limiter.attack.value = 0.003;  // Slight attack to preserve punch
+            limiter.release.value = 0.15;  // Slower release to prevent pumping
 
             // Connect Chain
             hpf.connect(eq);
