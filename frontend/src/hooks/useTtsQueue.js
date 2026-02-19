@@ -84,38 +84,40 @@ export function useTtsQueue({
             eq.Q.value = 1.0;
             eq.gain.value = 3.0; // +3dB (Restored for clarity)
 
-            // 2.5. Intermediate Compressor (Smooths dynamics before limiting)
+            // 3. Broadcast Compressor (Levelling)
+            // Catches peaks gently (3:1) and lets speech breathe (0.3s release)
             const compressor = audioContextRef.current.createDynamicsCompressor();
-            compressor.threshold.value = -24; // Start compressing early to catch quiet parts
-            compressor.knee.value = 10;       // Soft knee for transparent transition
-            compressor.ratio.value = 6;       // Higher 6:1 compression (User requested >4:1)
-            compressor.attack.value = 0.003;  // Fast attack
-            compressor.release.value = 0.03;  // VERY FAST release (30ms) to prevent pumping
+            compressor.threshold.value = -18; // Catches peaks, not everything
+            compressor.knee.value = 20;       // Soft knee
+            compressor.ratio.value = 3;       // Transparent 3:1 compression
+            compressor.attack.value = 0.01;   // 10ms to preserve consonants
+            compressor.release.value = 0.3;   // 300ms to avoid volume wobble
 
-            // 3. Gentle Saturation (WaveShaper) - DISABLED
-            const distortion = audioContextRef.current.createWaveShaper();
-            distortion.curve = makeDistortionCurve(0); // No saturation (linear)
-            distortion.oversample = 'none';
-
-            // 4. Pre-Gain (900% Boost - MAX LOUDNESS)
-            const preGain = audioContextRef.current.createGain();
-            preGain.gain.value = 9.0; // Drive hard into limiter
-
-            // 5. Hard Limiter (Brickwall) - tuned for consistent loudness
+            // 4. Hard Limiter (Safety)
+            // True brickwall (20:1) only detecting max peaks (-1dB)
             const limiter = audioContextRef.current.createDynamicsCompressor();
-            limiter.threshold.value = -0.5;
-            limiter.knee.value = 10.0;     // Soft knee (User requested smoothing)
-            limiter.ratio.value = 10.0;    // 10:1 (User requested less aggressive than brickwall)
-            limiter.attack.value = 0.003;  // Slight attack to preserve punch
-            limiter.release.value = 0.01;  // INSTANT release (10ms) to preventing "dipping" at all
+            limiter.threshold.value = -1.0;
+            limiter.knee.value = 0.0;
+            limiter.ratio.value = 20.0;       // Brickwall
+            limiter.attack.value = 0.001;     // 1ms instant catch
+            limiter.release.value = 0.1;      // 100ms release
 
-            // Connect Chain
+            // 5. Output Gain (Trim) - Post-Limiter
+            // Replaced massive 9x Pre-Gain with unity trim to avoid clipping
+            const outputGain = audioContextRef.current.createGain();
+            outputGain.gain.value = 2.0;      // +6dB Gain (User requested boost)
+
+            // Connect Chain: HPF -> EQ -> Compressor -> Limiter -> Gain -> Dest
             hpf.connect(eq);
             eq.connect(compressor);
-            compressor.connect(distortion);
-            distortion.connect(preGain);
-            preGain.connect(limiter);
-            limiter.connect(audioContextRef.current.destination);
+            compressor.connect(limiter);
+            limiter.connect(outputGain);
+            outputGain.connect(audioContextRef.current.destination);
+
+            // Store entry point
+            gainNodeRef.current = hpf;
+
+            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Comp(3:1) -> Limiter(20:1) -> Gain(2x/+6dB)');
 
             // Store entry point
             gainNodeRef.current = hpf;
