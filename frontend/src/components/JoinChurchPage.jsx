@@ -43,8 +43,17 @@ export function JoinChurchPage({ onBack, onSuccess, onSignIn }) {
         setIsSearching(true);
         setError('');
         try {
+            // Hotfix: Include token if available (endpoints might require it)
+            const { supabase } = await import('@/lib/supabase');
+            const { data: { session } } = await supabase.auth.getSession();
+            const headers = {};
+            if (session?.access_token) {
+                headers['Authorization'] = `Bearer ${session.access_token}`;
+            }
+
             const response = await fetch(
-                `${API_URL}/api/churches/search?q=${encodeURIComponent(query)}&limit=20`
+                `${API_URL}/api/churches/search?q=${encodeURIComponent(query)}&limit=20`,
+                { headers }
             );
             const data = await response.json();
 
