@@ -38,7 +38,11 @@ export function AuthProvider({ children }) {
                 setProfile(data.profile);
                 setError(null);
             } else if (response.status === 401) {
-                // Token invalid
+                // Token invalid - force sign out to recover from stuck state
+                console.warn('[Auth] Token rejected by backend (401), signing out...');
+                await supabase.auth.signOut();
+                setUser(null);
+                setSession(null);
                 setProfile(null);
                 setError('auth_invalid');
             } else {

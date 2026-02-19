@@ -84,14 +84,22 @@ export function useTtsQueue({
             eq.Q.value = 1.0;
             eq.gain.value = 3.0; // +3dB (Restored for clarity)
 
+            // 2.5. Intermediate Compressor (Smooths dynamics before limiting)
+            const compressor = audioContextRef.current.createDynamicsCompressor();
+            compressor.threshold.value = -24; // Start compressing early to catch quiet parts
+            compressor.knee.value = 10;       // Soft knee for transparent transition
+            compressor.ratio.value = 4;       // Gentle 4:1 compression
+            compressor.attack.value = 0.003;  // Fast attack
+            compressor.release.value = 0.25;  // Natural release
+
             // 3. Gentle Saturation (WaveShaper) - DISABLED
             const distortion = audioContextRef.current.createWaveShaper();
             distortion.curve = makeDistortionCurve(0); // No saturation (linear)
             distortion.oversample = 'none';
 
-            // 4. Pre-Gain (600% Boost - MAX LOUDNESS)
+            // 4. Pre-Gain (900% Boost - MAX LOUDNESS)
             const preGain = audioContextRef.current.createGain();
-            preGain.gain.value = 6.0; // Drive hard into limiter
+            preGain.gain.value = 9.0; // Drive hard into limiter
 
             // 5. Hard Limiter (Brickwall) - tuned for consistent loudness
             const limiter = audioContextRef.current.createDynamicsCompressor();
@@ -103,7 +111,8 @@ export function useTtsQueue({
 
             // Connect Chain
             hpf.connect(eq);
-            eq.connect(distortion);
+            eq.connect(compressor);
+            compressor.connect(distortion);
             distortion.connect(preGain);
             preGain.connect(limiter);
             limiter.connect(audioContextRef.current.destination);
@@ -111,7 +120,7 @@ export function useTtsQueue({
             // Store entry point
             gainNodeRef.current = hpf;
 
-            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF(80) -> EQ(3k) -> Sat(100) -> Gain(300%) -> Limiter');
+            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF(80) -> EQ(3k) -> Comp(4:1) -> Sat(0) -> Gain(9x) -> Limiter');
         }
         // Resume if suspended (browser policy)
         if (audioContextRef.current.state === 'suspended') {

@@ -122,6 +122,14 @@ export class TtsPlayerController {
                     eq.Q.value = 1.0;
                     eq.gain.value = 3.0;
 
+                    // 2.5. Intermediate Compressor (Smooths dynamics before limiting)
+                    const compressor = this._audioCtx.createDynamicsCompressor();
+                    compressor.threshold.value = -24;
+                    compressor.knee.value = 10;
+                    compressor.ratio.value = 4;
+                    compressor.attack.value = 0.003;
+                    compressor.release.value = 0.25;
+
                     // 3. Gentle Saturation
                     const distortion = this._audioCtx.createWaveShaper();
                     distortion.curve = makeDistortionCurve(0);
@@ -129,7 +137,7 @@ export class TtsPlayerController {
 
                     // 4. Pre-Gain
                     this._gainNode = this._audioCtx.createGain();
-                    this._gainNode.gain.value = 6.0;
+                    this._gainNode.gain.value = 9.0;
 
                     // 5. Hard Limiter
                     const limiter = this._audioCtx.createDynamicsCompressor();
@@ -144,12 +152,13 @@ export class TtsPlayerController {
                     // Connect Chain
                     src.connect(hpf);
                     hpf.connect(eq);
-                    eq.connect(distortion);
+                    eq.connect(compressor);
+                    compressor.connect(distortion);
                     distortion.connect(this._gainNode);
                     this._gainNode.connect(limiter);
                     limiter.connect(this._audioCtx.destination);
 
-                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Sat(100) -> Gain(300%) -> Limiter. Context state: ${this._audioCtx.state}`);
+                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Comp(4:1) -> Sat(0) -> Gain(9x) -> Limiter. Context state: ${this._audioCtx.state}`);
                 }
             } catch (err) {
                 console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);
