@@ -9,7 +9,30 @@ This is a running "what is done" document capturing what we changed, why, and wh
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top**
 
+### FEATURE: Vocal Channel Strip (Web Audio DSP) — Solo & Host Mode
+**Status:** ✅ IMPLEMENTED (2026-02-18)
+
+Implemented a professional-grade audio processing chain using the Web Audio API to significantly boost vocal clarity and perceived loudness for all TTS playback. The chain runs entirely in the browser with zero backend changes.
+
+#### DSP Signal Chain:
+```
+Source → HPF (80Hz) → Presence EQ (3kHz, +3dB) → Pre-Gain (6.0×) → Hard Limiter → Destination
+```
+
+1. **High-Pass Filter (HPF):** `BiquadFilterNode` at 80Hz removes low-frequency rumble and muddiness from speech.
+2. **Presence EQ:** `BiquadFilterNode` (peaking, 3kHz, Q=1.0, +3dB) lifts vocal intelligibility — the critical frequency band for clarity and cut-through.
+3. **Pre-Gain Stage:** `GainNode` at 6.0× (600%) drives the signal hard into the limiter, maximizing perceived loudness.
+4. **Hard Limiter (Brickwall):** `DynamicsCompressorNode` configured as a true brickwall limiter — threshold: -0.5dB, ratio: 20:1, knee: 0dB, attack: 3ms, release: 150ms. Prevents digital clipping while sustaining high average loudness density. The slower release (150ms) was specifically tuned to eliminate "pumping" artifacts.
+5. **Saturation:** Evaluated but **intentionally disabled** (drive=0). Testing confirmed it was the primary source of clipping. The HPF + EQ + Gain + Limiter chain achieves sufficient loudness and warmth without it.
+
+#### Files Modified:
+- `frontend/src/hooks/useTtsQueue.js` — Solo Mode: `initAudioContext` function fully rewritten with the new chain.
+- `frontend/src/tts/TtsPlayerController.js` — Host/Listener Mode: constructor audio setup block replaced with the matching chain.
+
+---
+
 ### FEATURE: Bi-Directional Translation & Auto-Routing (Solo Mode)
+
 **Status:** ✅ IMPLEMENTED (2026-02-18)
 
 Implemented seamless bi-directional translation for Solo Mode. The system now automatically detects the language spoken (e.g., English vs. Spanish) and routes the translation direction accordingly, eliminating the need for manual swapping.

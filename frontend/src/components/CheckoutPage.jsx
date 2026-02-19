@@ -30,13 +30,14 @@ const PLANS = [
             { text: '200+ languages', icon: '🌐' },
             { text: '3 languages at once', icon: '🔀' },
             { text: 'Email & phone support', icon: '📧' },
-            { text: '30-day free trial', icon: '🎁' },
+            { text: '30-day free trial', icon: '🎁', promoText: '3-month free trial' },
         ],
         cta: 'Start Free Trial',
         gradient: 'from-emerald-500 to-teal-600',
         accentColor: '#10b981',
         highlight: false,
         badge: '🎁 30-DAY FREE TRIAL',
+        promoBadge: '🎁 3-MONTH FREE TRIAL',
     },
     {
         code: 'pro',
@@ -91,6 +92,7 @@ export function CheckoutPage() {
     const [error, setError] = useState(null);
 
     const plan = searchParams.get('plan');
+    const promo = searchParams.get('promo') || null;
 
     // Smart router: ONLY auto-redirect if a plan parameter is present
     // Otherwise, show the normal plan selection UI
@@ -120,7 +122,7 @@ export function CheckoutPage() {
 
         // Not authenticated → redirect to signup with return URL
         if (!isAuthenticated) {
-            const returnUrl = `/checkout?plan=${plan}`;
+            const returnUrl = `/checkout?plan=${plan}${promo ? `&promo=${promo}` : ''}`;
             console.log('[Checkout] Not authenticated, redirecting to signup');
             navigate(`/signup?redirect=${encodeURIComponent(returnUrl)}`, { replace: true });
             return;
@@ -128,7 +130,7 @@ export function CheckoutPage() {
 
         // Authenticated but no church → redirect to create church
         if (!hasChurch) {
-            const returnUrl = `/checkout?plan=${plan}`;
+            const returnUrl = `/checkout?plan=${plan}${promo ? `&promo=${promo}` : ''}`;
             console.log('[Checkout] No church, redirecting to create church');
             navigate(`/create-church?redirect=${encodeURIComponent(returnUrl)}`, { replace: true });
             return;
@@ -148,14 +150,14 @@ export function CheckoutPage() {
 
             // Not signed in → redirect to signup with plan in return URL
             if (!isAuthenticated) {
-                const returnUrl = `/checkout?plan=${planCode}`;
+                const returnUrl = `/checkout?plan=${planCode}${promo ? `&promo=${promo}` : ''}`;
                 navigate(`/signup?redirect=${encodeURIComponent(returnUrl)}`);
                 return;
             }
 
             // Signed in but no church → redirect to create church
             if (!hasChurch) {
-                const returnUrl = `/checkout?plan=${planCode}`;
+                const returnUrl = `/checkout?plan=${planCode}${promo ? `&promo=${promo}` : ''}`;
                 navigate(`/create-church?redirect=${encodeURIComponent(returnUrl)}`);
                 return;
             }
@@ -173,7 +175,7 @@ export function CheckoutPage() {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ plan: planCode }),
+                body: JSON.stringify({ plan: planCode, ...(promo ? { promo } : {}) }),
             });
 
             if (!res.ok) {
@@ -267,7 +269,7 @@ export function CheckoutPage() {
                                 {/* Special Badge (e.g. Free Trial) */}
                                 {planInfo.badge && !isHighlighted && (
                                     <div style={styles.trialBadge}>
-                                        {planInfo.badge}
+                                        {promo && planInfo.promoBadge ? planInfo.promoBadge : planInfo.badge}
                                     </div>
                                 )}
 
@@ -315,7 +317,7 @@ export function CheckoutPage() {
                                                 textTransform: 'uppercase',
                                                 letterSpacing: '0.05em'
                                             }}>
-                                                Free for 30 Days
+                                                {promo ? 'Free for 3 Months' : 'Free for 30 Days'}
                                             </div>
                                             <div style={{
                                                 fontSize: '3rem',
@@ -359,7 +361,9 @@ export function CheckoutPage() {
                                     {planInfo.features.map((feature, i) => (
                                         <li key={i} style={styles.featureItem}>
                                             <span style={styles.featureIcon}>{feature.icon}</span>
-                                            <span style={styles.featureText}>{feature.text}</span>
+                                            <span style={styles.featureText}>
+                                                {promo && feature.promoText ? feature.promoText : feature.text}
+                                            </span>
                                         </li>
                                     ))}
                                 </ul>
@@ -399,7 +403,7 @@ export function CheckoutPage() {
                     </div>
                     <div style={styles.trustItem}>
                         <span style={styles.trustIcon}>🎁</span>
-                        <span style={styles.trustText}>30-day free trial on Starter</span>
+                        <span style={styles.trustText}>{promo ? '3-month free trial on Starter' : '30-day free trial on Starter'}</span>
                     </div>
                 </div>
             </div>

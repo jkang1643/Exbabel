@@ -24,6 +24,11 @@ const router = express.Router();
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000';
 
+// Promo codes → trial days (server-side truth — client sends code only)
+const PROMO_TRIAL_DAYS = {
+    vip: 90, // 3-month exclusive trial for church friends
+};
+
 // Top-up packs configuration (server-side truth)
 const TOP_UP_PACKS = {
     '1_hour': { seconds: 3600, amountCents: 999, label: '1 Hour' },
@@ -50,10 +55,13 @@ router.post('/billing/checkout-session', requireAuth, async (req, res) => {
             return res.status(503).json({ error: 'Billing not configured' });
         }
 
-        const { plan } = req.body;
+        const { plan, promo } = req.body;
         if (!plan) {
             return res.status(400).json({ error: 'plan is required (starter, pro, unlimited)' });
         }
+
+        // Resolve promo → trial days (server-side — never trust a client-supplied number)
+        const promoTrialDays = promo ? (PROMO_TRIAL_DAYS[promo] ?? null) : null;
 
         const userId = req.auth.user_id;
         const profile = req.auth.profile;
@@ -133,14 +141,17 @@ router.post('/billing/checkout-session', requireAuth, async (req, res) => {
             }];
         }
 
-        // Starter plan gets 30-day free trial
-        if (plan === 'starter') {
+        // Trial period: promo codes override the default 30-day starter trial
+        if (promoTrialDays) {
+            sessionConfig.subscription_data.trial_period_days = promoTrialDays;
+        } else if (plan === 'starter') {
             sessionConfig.subscription_data.trial_period_days = 30;
         }
 
         const session = await stripe.checkout.sessions.create(sessionConfig);
 
-        console.log(`[Billing] ✓ Checkout session created: church=${churchId} plan=${plan} user=${userId} session=${session.id} trial=${plan === 'starter' ? '30d' : 'none'}`);
+        const trialLabel = promoTrialDays ? `${promoTrialDays}d (promo=${promo})` : plan === 'starter' ? '30d' : 'none';
+        console.log(`[Billing] ✓ Checkout session created: church=${churchId} plan=${plan} user=${userId} session=${session.id} trial=${trialLabel}`);
         res.json({ url: session.url });
 
     } catch (err) {

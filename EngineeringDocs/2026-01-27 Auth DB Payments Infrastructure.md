@@ -1289,7 +1289,42 @@ APP_BASE_URL=http://localhost:5173
 ### 2026-02-12 - Investigation: Missing Voices on Listener Page
 - 🔍 **Bug Description**: Voices fail to appear in the dropdown on the listener page even when the session is active.
 - 🔍 **Root Cause**: Identified a **Race Condition** in `backend/websocketHandler.js` within `handleListenerConnection`.
-    - **Detail**: The backend `awaits` the `getEntitlements(churchId)` call *before* attaching the `clientWs.on('message', ...)` listener.
-    - **Timing Issue**: The frontend (ListenerPage) sends the `tts/list_voices` request immediately upon connection. Because the backend is still awaiting entitlements, the message arrives before a listener is registered, causing it to be dropped.
-- 🔍 **Verification**: Confirmed that `handleSoloMode` attaches its handler synchronously at the start of the function, explaining why Solo mode is unaffected.
-- 🔍 **Proposed Fix**: Restructure `handleListenerConnection` to attach the message listener synchronously at the top of the function to ensure no early client requests are lost.
+- 🔍 **Verification**: Restructure `handleListenerConnection` to attach the message listener synchronously to ensure no early client requests are lost.
+
+### 2026-02-19 - Part 12: Hidden Promo Codes & Custom Trials
+- ✅ **Backend**: Implemented `PROMO_TRIAL_DAYS` whitelist in `billing.js`.
+- ✅ **Security**: Client sends string `promo` code; server resolves to `90` days (prevents client-side tampering).
+- ✅ **Frontend**: `CheckoutPage.jsx` reads `?promo=vip`, updates UI labels (e.g., "3-MONTH FREE TRIAL"), and persists code through signup/church-creation redirects.
+- ✅ **Compatibility**: Verified that 90-day trials stack correctly with existing 50% coupons in Stripe.
+
+---
+
+## Part 12: Hidden Promo Codes & Custom Trials (2026-02-19)
+
+**Context:** To support targeted acquisition (e.g., church friends, early VIPs), we implemented a way to grant longer free trials (90 days vs default 30) without creating separate Stripe Products or manage complex Coupons.
+
+### 1. Server-Side Whitelist (`backend/routes/billing.js`)
+We use a hardcoded whitelist on the server. The client sends a string `promo` code, and the server maps that to a trial length. This ensures a malicious user cannot craft a request for "1000 days free".
+
+```javascript
+const PROMO_TRIAL_DAYS = {
+    vip: 90, // 3-month exclusive trial for church friends
+};
+```
+
+### 2. Frontend Persistence
+Since our checkout flow is "Account First" (Signup → Create Church → Payment), we must ensure the `promo` code survives multiple redirects.
+
+- **URL Pattern**: `/checkout?plan=starter&promo=vip`
+- **Redirect Chain**: 
+    1. `CheckoutPage` detects `promo` and embeds it in the `redirect` URL.
+    2. `/signup?redirect=/checkout?plan=starter&promo=vip`
+    3. `/create-church?redirect=/checkout?plan=starter&promo=vip`
+    4. Back to `CheckoutPage`, where it is finally sent in the `POST` body.
+
+### 3. Dynamic UI Labels
+To ensure users feel the promo is "active", the `CheckoutPage` adjusts its UI when `promo=vip` is in the URL:
+- **Badge**: Changes from "30-DAY FREE TRIAL" to "🎁 3-MONTH FREE TRIAL".
+- **Pricing**: Changes "Free for 30 days" to "Free for 3 Months".
+- **Features**: Updates the trial feature line item.
+- **Trust Bar**: Mentions the 3-month trial.
