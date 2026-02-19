@@ -9,6 +9,19 @@
 
 import { TtsPlayerState, TtsMode, TtsTier } from './types.js';
 import { normalizeLanguageCode } from '../config/ttsVoices.js';
+
+// DSP Helper: Soft clipping / Warmth saturation curve
+function makeDistortionCurve(amount) {
+    const k = typeof amount === 'number' ? amount : 50;
+    const n_samples = 44100;
+    const curve = new Float32Array(n_samples);
+    const deg = Math.PI / 180;
+    for (let i = 0; i < n_samples; ++i) {
+        const x = i * 2 / n_samples - 1;
+        curve[i] = (3 + k) * x * 20 * deg / (Math.PI + k * Math.abs(x));
+    }
+    return curve;
+}
 // Global debug buffer for on-screen visual debugging (mobile)
 if (typeof window !== 'undefined' && !window.__AUDIO_DEBUG__) {
     window.__AUDIO_DEBUG__ = [];
@@ -95,13 +108,48 @@ export class TtsPlayerController {
                         console.log(`[TtsPlayerController] AudioContext state changed to: ${this._audioCtx.state}`);
                     };
 
+                    // Vocal Channel Strip: HPF -> Presence EQ -> Saturation -> Gain -> Limiter
+
+                    // 1. High-Pass Filter
+                    const hpf = this._audioCtx.createBiquadFilter();
+                    hpf.type = 'highpass';
+                    hpf.frequency.value = 80;
+
+                    // 2. Presence EQ
+                    const eq = this._audioCtx.createBiquadFilter();
+                    eq.type = 'peaking';
+                    eq.frequency.value = 3000;
+                    eq.Q.value = 1.0;
+                    eq.gain.value = 3.0;
+
+                    // 3. Gentle Saturation
+                    const distortion = this._audioCtx.createWaveShaper();
+                    distortion.curve = makeDistortionCurve(0);
+                    distortion.oversample = 'none';
+
+                    // 4. Pre-Gain
                     this._gainNode = this._audioCtx.createGain();
-                    this._gainNode.gain.value = 2.0; // 200% volume boost
+                    this._gainNode.gain.value = 4.5;
+
+                    // 5. Hard Limiter
+                    const limiter = this._audioCtx.createDynamicsCompressor();
+                    limiter.threshold.value = -0.5;
+                    limiter.knee.value = 0.0;
+                    limiter.ratio.value = 20.0;
+                    limiter.attack.value = 0.001;
+                    limiter.release.value = 0.05;
 
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
-                    src.connect(this._gainNode);
-                    this._gainNode.connect(this._audioCtx.destination);
-                    console.log(`[TtsPlayerController] Gain node wired: 200% volume boost (gain=2.0). Context state: ${this._audioCtx.state}`);
+
+                    // Connect Chain
+                    src.connect(hpf);
+                    hpf.connect(eq);
+                    eq.connect(distortion);
+                    distortion.connect(this._gainNode);
+                    this._gainNode.connect(limiter);
+                    limiter.connect(this._audioCtx.destination);
+
+                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Sat(100) -> Gain(300%) -> Limiter. Context state: ${this._audioCtx.state}`);
                 }
             } catch (err) {
                 console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);

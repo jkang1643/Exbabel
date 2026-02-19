@@ -335,6 +335,11 @@ export async function handleHostConnection(clientWs, sessionId) {
                 });
               });
 
+              // Mark session as active NOW — speech stream is ready, host is broadcasting
+              // setHost sets session.isActive = true, enabling POST /session/join for listeners
+              sessionStore.setHost(currentSessionId, clientWs, null);
+              console.log(`[HostMode] ✅ Session ${session.sessionCode} is now active - listeners can join`);
+
               // PHASE 8: Set up helper functions and result callback using CoreEngine components
               // Translation throttling for partials (solo mode style)
               let lastPartialTranslation = ''; // Track last translation (single value, not per language)

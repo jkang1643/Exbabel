@@ -79,14 +79,23 @@ export function JoinSessionModal({ isOpen, onClose, onJoin }) {
                     let sessionCode = decodedText;
 
                     try {
-                        const match = decodedText.match(/[?&]join=([A-Z0-9]{1,6})/i);
+                        // Try URL parsing first (handles any hostname, not just localhost)
+                        const url = new URL(decodedText);
+                        const codeParam = url.searchParams.get('code') || url.searchParams.get('join');
+                        if (codeParam) {
+                            sessionCode = codeParam.toUpperCase();
+                        } else if (decodedText.length <= 8 && /^[A-Z0-9]+$/i.test(decodedText)) {
+                            // Raw code (no URL wrapping)
+                            sessionCode = decodedText.toUpperCase();
+                        }
+                    } catch (e) {
+                        // Not a valid URL — try regex as fallback
+                        const match = decodedText.match(/[?&](?:code|join)=([A-Z0-9]{1,6})/i);
                         if (match && match[1]) {
                             sessionCode = match[1].toUpperCase();
                         } else if (decodedText.length <= 8 && /^[A-Z0-9]+$/i.test(decodedText)) {
                             sessionCode = decodedText.toUpperCase();
                         }
-                    } catch (e) {
-                        console.error("[Scanner] Error parsing decoded text:", e);
                     }
 
                     console.log("[Scanner] Extracted session code:", sessionCode);

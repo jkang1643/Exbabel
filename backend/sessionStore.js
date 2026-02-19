@@ -207,6 +207,9 @@ class SessionStore {
       throw new Error('Session not found');
     }
 
+    // Cancel any pending end timer (host is reconnecting within grace period)
+    this.cancelScheduledEnd(sessionId);
+
     session.hostSocket = hostSocket;
     session.hostGeminiSocket = geminiSocket;
     session.isActive = true;

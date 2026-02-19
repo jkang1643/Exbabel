@@ -1,5 +1,18 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
+// DSP Helper: Soft clipping / Warmth saturation curve
+function makeDistortionCurve(amount) {
+    const k = typeof amount === 'number' ? amount : 50;
+    const n_samples = 44100;
+    const curve = new Float32Array(n_samples);
+    const deg = Math.PI / 180;
+    for (let i = 0; i < n_samples; ++i) {
+        const x = i * 2 / n_samples - 1;
+        curve[i] = (3 + k) * x * 20 * deg / (Math.PI + k * Math.abs(x));
+    }
+    return curve;
+}
+
 /**
  * TTS Queue Manager
  * 
@@ -57,13 +70,48 @@ export function useTtsQueue({
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
             audioContextRef.current = new AudioContextClass();
 
-            // Create and connect persistent gain node for volume boost
-            const gainNode = audioContextRef.current.createGain();
-            gainNode.gain.value = 2.0; // 200% volume boost
-            gainNode.connect(audioContextRef.current.destination);
-            gainNodeRef.current = gainNode;
+            // Vocal Channel Strip: HPF -> Presence EQ -> Saturation -> Gain -> Limiter
 
-            console.log('[useTtsQueue] AudioContext initialized with 200% gain boost');
+            // 1. High-Pass Filter (Remove rumble/mud)
+            const hpf = audioContextRef.current.createBiquadFilter();
+            hpf.type = 'highpass';
+            hpf.frequency.value = 80;
+
+            // 2. Presence EQ (Vocal Clarity)
+            const eq = audioContextRef.current.createBiquadFilter();
+            eq.type = 'peaking';
+            eq.frequency.value = 3000; // 3kHz clarity
+            eq.Q.value = 1.0;
+            eq.gain.value = 3.0; // +3dB (Restored for clarity)
+
+            // 3. Gentle Saturation (WaveShaper) - DISABLED
+            const distortion = audioContextRef.current.createWaveShaper();
+            distortion.curve = makeDistortionCurve(0); // No saturation (linear)
+            distortion.oversample = 'none';
+
+            // 4. Pre-Gain (450% Boost - MAX LOUDNESS)
+            const preGain = audioContextRef.current.createGain();
+            preGain.gain.value = 4.5; // Pushing gain hard into the limiter
+
+            // 5. Hard Limiter (Brickwall)
+            const limiter = audioContextRef.current.createDynamicsCompressor();
+            limiter.threshold.value = -0.5; // Ceiling at -0.5dB
+            limiter.knee.value = 0.0;
+            limiter.ratio.value = 20.0;
+            limiter.attack.value = 0.001;
+            limiter.release.value = 0.05; // Faster release for loudness
+
+            // Connect Chain
+            hpf.connect(eq);
+            eq.connect(distortion);
+            distortion.connect(preGain);
+            preGain.connect(limiter);
+            limiter.connect(audioContextRef.current.destination);
+
+            // Store entry point
+            gainNodeRef.current = hpf;
+
+            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF(80) -> EQ(3k) -> Sat(100) -> Gain(300%) -> Limiter');
         }
         // Resume if suspended (browser policy)
         if (audioContextRef.current.state === 'suspended') {
