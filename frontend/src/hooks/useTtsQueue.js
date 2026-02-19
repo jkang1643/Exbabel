@@ -84,51 +84,31 @@ export function useTtsQueue({
             eq.Q.value = 1.0;
             eq.gain.value = 3.0; // +3dB (Restored for clarity)
 
-            // 3. Broadcast Compressor (Levelling)
-            // Catches peaks gently (3:1) with FAST release to avoid pumping
-            const compressor = audioContextRef.current.createDynamicsCompressor();
-            compressor.threshold.value = -12; // Reverted to -12dB (User preference)
-            compressor.knee.value = 20;       // Soft knee
-            compressor.ratio.value = 3;       // Transparent 3:1 compression
-            compressor.attack.value = 0.003;  // Fast attack (3ms) to catch transients
-            compressor.release.value = 0.05;  // FAST release (50ms) to prevent "dipping"
+            // 3. High-Gain Drive (Loudness)
+            // Massive gain boost to hit broadcast loudness targets
+            const preGain = audioContextRef.current.createGain();
+            preGain.gain.value = 4.0; // +12dB (Very Loud)
 
-            // 3.5. Makeup Gain (Compressor Stage)
-            // Boost signal AFTER compression but BEFORE Limiter
-            const makeupGain = audioContextRef.current.createGain();
-            makeupGain.gain.value = 2.0;    // +6dB boost (Compensation)
-
-            // 4. Hard Limiter (Safety)
-            // True brickwall (20:1) only detecting max peaks (-1dB)
+            // 4. Fast Limiter (Safety)
+            // Catches the +12dB peaks instantly without pumping
             const limiter = audioContextRef.current.createDynamicsCompressor();
-            limiter.threshold.value = -1.0;
-            limiter.knee.value = 0.0;
+            limiter.threshold.value = -1.0;   // Catch peaks just before 0dB
+            limiter.knee.value = 0.0;         // Hard knee for precise limiting
             limiter.ratio.value = 20.0;       // Brickwall
             limiter.attack.value = 0.001;     // 1ms instant catch
-            limiter.release.value = 0.02;     // Fast release (20ms) to recover volume instantly
+            limiter.release.value = 0.01;     // 10ms ULTRA-FAST release to prevent ducking
 
-            // 5. Output Gain (Trim) - Post-Limiter
-            // Unity gain to prevent clipping after the limiter
-            const outputGain = audioContextRef.current.createGain();
-            outputGain.gain.value = 1.0;      // Back to Unity (User reported clipping at 2.0)
-
-            // Connect Chain: HPF -> EQ -> Compressor -> MakeupGain -> Limiter -> OutGain -> Dest
+            // Connect Chain: HPF -> EQ -> PreGain -> Limiter -> Dest
+            // Simple chain: Boost -> Limit -> Out. No complex interactions.
             hpf.connect(eq);
-            eq.connect(compressor);
-            compressor.connect(makeupGain);
-            makeupGain.connect(limiter);
-            limiter.connect(outputGain);
-            outputGain.connect(audioContextRef.current.destination);
+            eq.connect(preGain);
+            preGain.connect(limiter);
+            limiter.connect(audioContextRef.current.destination);
 
             // Store entry point
             gainNodeRef.current = hpf;
 
-            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Comp(3:1) -> Makeup(2x) -> Limiter(20:1) -> Out(1x)');
-
-            // Store entry point
-            gainNodeRef.current = hpf;
-
-            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF(80) -> EQ(3k) -> Comp(4:1) -> Sat(0) -> Gain(9x) -> Limiter');
+            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Gain(4x/+12dB) -> FastLimiter(10ms)');
         }
         // Resume if suspended (browser policy)
         if (audioContextRef.current.state === 'suspended') {
