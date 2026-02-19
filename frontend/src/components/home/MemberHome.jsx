@@ -55,6 +55,11 @@ export function MemberHome({ onSoloMode, onJoinSession, onSignOut, onJoinChurch 
 
         try {
             const token = getAccessToken();
+            if (!token) {
+                setError("You must be logged in.");
+                setIsLeaving(false);
+                return;
+            }
             const response = await fetch(`${API_URL}/api/churches/leave`, {
                 method: 'POST',
                 headers: {

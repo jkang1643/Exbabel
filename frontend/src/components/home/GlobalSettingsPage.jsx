@@ -56,6 +56,7 @@ export function GlobalSettingsPage() {
             setLoading(true);
             setError(null);
             const token = getAccessToken();
+            if (!token) return;
             const res = await fetch(`${API_URL}/api/church/settings`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
@@ -75,6 +76,7 @@ export function GlobalSettingsPage() {
             setRegenerating(true);
             setError(null);
             const token = getAccessToken();
+            if (!token) { setError("Not authenticated"); return; }
             const res = await fetch(`${API_URL}/api/church/settings/regenerate-code`, {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}` },
@@ -95,6 +97,7 @@ export function GlobalSettingsPage() {
             setSavingMode(true);
             setError(null);
             const token = getAccessToken();
+            if (!token) { setError("Not authenticated"); return; }
             const res = await fetch(`${API_URL}/api/church/settings`, {
                 method: 'PATCH',
                 headers: {

@@ -92,6 +92,7 @@ export function BillingPage() {
             attempts++;
             try {
                 const token = getAccessToken();
+                if (!token) return; // Wait for auth
                 const res = await fetch(`${API_URL}/api/billing/checkout-status?session_id=${sessionId}`, {
                     headers: { Authorization: `Bearer ${token}` },
                 });
@@ -155,6 +156,7 @@ export function BillingPage() {
         try {
             setLoading(true);
             const token = getAccessToken();
+            if (!token) return;
             const res = await fetch(`${API_URL}/api/billing/status`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
@@ -175,6 +177,10 @@ export function BillingPage() {
             setActionLoading(endpoint);
             setError(null);
             const token = getAccessToken();
+            if (!token) {
+                setError("You must be logged in.");
+                return;
+            }
             const url = `${API_URL}/api/billing/${endpoint}`;
             // Portal now uses POST to support flow_data
             const method = 'POST';
@@ -219,6 +225,10 @@ export function BillingPage() {
             setActionLoading('upgrade');
             setError(null);
             const token = getAccessToken();
+            if (!token) {
+                setError("You must be logged in.");
+                return;
+            }
             const res = await fetch(`${API_URL}/api/billing/subscription-checkout`, {
                 method: 'POST',
                 headers: {
