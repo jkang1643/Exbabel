@@ -128,7 +128,7 @@ export class TtsPlayerController {
                     compressor.knee.value = 10;
                     compressor.ratio.value = 6;
                     compressor.attack.value = 0.003;
-                    compressor.release.value = 0.25;
+                    compressor.release.value = 0.03;
 
                     // 3. Gentle Saturation
                     const distortion = this._audioCtx.createWaveShaper();
@@ -145,7 +145,7 @@ export class TtsPlayerController {
                     limiter.knee.value = 10.0;
                     limiter.ratio.value = 10.0;
                     limiter.attack.value = 0.003;
-                    limiter.release.value = 0.05;
+                    limiter.release.value = 0.01;
 
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
 

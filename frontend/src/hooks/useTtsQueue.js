@@ -90,7 +90,7 @@ export function useTtsQueue({
             compressor.knee.value = 10;       // Soft knee for transparent transition
             compressor.ratio.value = 6;       // Higher 6:1 compression (User requested >4:1)
             compressor.attack.value = 0.003;  // Fast attack
-            compressor.release.value = 0.25;  // Natural release
+            compressor.release.value = 0.03;  // VERY FAST release (30ms) to prevent pumping
 
             // 3. Gentle Saturation (WaveShaper) - DISABLED
             const distortion = audioContextRef.current.createWaveShaper();
@@ -107,7 +107,7 @@ export function useTtsQueue({
             limiter.knee.value = 10.0;     // Soft knee (User requested smoothing)
             limiter.ratio.value = 10.0;    // 10:1 (User requested less aggressive than brickwall)
             limiter.attack.value = 0.003;  // Slight attack to preserve punch
-            limiter.release.value = 0.05;  // FAST release (50ms) to prevent pumping/dips
+            limiter.release.value = 0.01;  // INSTANT release (10ms) to preventing "dipping" at all
 
             // Connect Chain
             hpf.connect(eq);
