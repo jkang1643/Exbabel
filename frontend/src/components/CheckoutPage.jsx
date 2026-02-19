@@ -28,7 +28,7 @@ const PLANS = [
             { text: '6 hrs/mo live + 10 hrs solo', icon: '🎙️' },
             { text: '60 natural voices', icon: '🔊' },
             { text: '200+ languages', icon: '🌐' },
-            { text: '3 languages at once', icon: '🔀' },
+            { text: 'Unlimited simultaneous languages', icon: '🔀' },
             { text: 'Email & phone support', icon: '📧' },
             { text: '30-day free trial', icon: '🎁', promoText: '3-month free trial' },
         ],
@@ -50,7 +50,7 @@ const PLANS = [
             { text: '12 hrs/mo live + 20 hrs solo', icon: '🎙️' },
             { text: '90 premium AI voices', icon: '🔊' },
             { text: '250+ languages & dialects', icon: '🌐' },
-            { text: '5 languages at once', icon: '🔀' },
+            { text: 'Unlimited simultaneous languages', icon: '🔀' },
             { text: '50% faster translation', icon: '⚡' },
             { text: '24/7 support', icon: '📧' },
         ],
@@ -68,7 +68,9 @@ const PLANS = [
         description: 'No limits. World-class voices. White-glove service.',
         features: [
             { text: 'Unlimited live & solo hours', icon: '🎙️' },
-            { text: 'Studio-grade lifelike voices', icon: '🔊' },
+            { text: '60 standard voices', icon: '🔊' },
+            { text: '90 premium voices', icon: '🎤' },
+            { text: '75 lifelike studio-grade voices (ElevenLabs)', icon: '💎' },
             { text: '250+ languages & dialects', icon: '🌐' },
             { text: 'Unlimited simultaneous languages', icon: '🔀' },
             { text: 'Fastest translation speed', icon: '⚡' },
@@ -94,15 +96,12 @@ export function CheckoutPage() {
     const plan = searchParams.get('plan');
     const promo = searchParams.get('promo') || null;
 
-    // Smart router: ONLY auto-redirect if a plan parameter is present
-    // Otherwise, show the normal plan selection UI
+    // Smart router: Only auto-act if specific conditions are met — otherwise show the plan UI
     useEffect(() => {
         if (loading) return;
 
         // No plan parameter → show normal UI (user is browsing plans)
-        if (!plan) {
-            return;
-        }
+        if (!plan) return;
 
         // Invalid plan → redirect to checkout without params
         if (!PLANS.find(p => p.code === plan)) {
@@ -111,34 +110,23 @@ export function CheckoutPage() {
             return;
         }
 
-        // Plan parameter present → act as smart router
-
-        // Already admin → go to billing (treat as upgrade/downgrade)
+        // Already admin → go to billing (for upgrades/downgrades)
         if (isAdmin) {
             console.log('[Checkout] User is already admin, redirecting to billing');
             navigate('/billing', { replace: true });
             return;
         }
 
-        // Not authenticated → redirect to signup with return URL
-        if (!isAuthenticated) {
-            const returnUrl = `/checkout?plan=${plan}${promo ? `&promo=${promo}` : ''}`;
-            console.log('[Checkout] Not authenticated, redirecting to signup');
-            navigate(`/signup?redirect=${encodeURIComponent(returnUrl)}`, { replace: true });
+        // Authenticated with a church → skip the UI and auto-launch Stripe immediately
+        if (isAuthenticated && hasChurch) {
+            console.log('[Checkout] Ready to checkout, initiating Stripe session');
+            handleCheckout(plan);
             return;
         }
 
-        // Authenticated but no church → redirect to create church
-        if (!hasChurch) {
-            const returnUrl = `/checkout?plan=${plan}${promo ? `&promo=${promo}` : ''}`;
-            console.log('[Checkout] No church, redirecting to create church');
-            navigate(`/create-church?redirect=${encodeURIComponent(returnUrl)}`, { replace: true });
-            return;
-        }
-
-        // Authenticated with church → auto-initiate Stripe checkout
-        console.log('[Checkout] Ready to checkout, initiating Stripe session');
-        handleCheckout(plan);
+        // Not authenticated OR no church → just show the plan UI.
+        // The CTA button will handle signup/church-creation redirects on click.
+        console.log('[Checkout] Showing plan UI — user will click to begin auth flow');
     }, [loading, isAuthenticated, isAdmin, hasChurch, plan, navigate]);
 
 
@@ -245,29 +233,31 @@ export function CheckoutPage() {
                     </div>
                 )}
 
-                <div style={styles.plansGrid}>
+                <div className="checkout-plans-grid" style={styles.plansGrid}>
                     {PLANS.map((planInfo) => {
                         const isLoading = redirecting && selectedPlan === planInfo.code;
-                        const isHighlighted = planInfo.highlight;
+                        // Highlight the plan from the URL param; fall back to hardcoded highlight (Pro) if no param
+                        const isHighlighted = plan ? planInfo.code === plan : planInfo.highlight;
 
                         return (
                             <div
                                 key={planInfo.code}
+                                className="checkout-plan-card"
                                 style={{
                                     ...styles.card,
                                     ...(isHighlighted ? styles.cardHighlighted : {}),
                                     transform: isHighlighted ? 'scale(1.04)' : 'scale(1)',
                                 }}
                             >
-                                {/* Popular Badge */}
-                                {isHighlighted && (
+                                {/* Popular Badge — only on the hardcoded 'highlight' plan (Pro) */}
+                                {planInfo.highlight && (
                                     <div style={styles.popularBadge}>
                                         ⭐ MOST POPULAR
                                     </div>
                                 )}
 
-                                {/* Special Badge (e.g. Free Trial) */}
-                                {planInfo.badge && !isHighlighted && (
+                                {/* Special Badge (e.g. Free Trial) — show when not the hardcoded Most Popular card */}
+                                {planInfo.badge && !planInfo.highlight && (
                                     <div style={styles.trialBadge}>
                                         {promo && planInfo.promoBadge ? planInfo.promoBadge : planInfo.badge}
                                     </div>
@@ -736,7 +726,14 @@ if (typeof document !== 'undefined') {
             to { transform: rotate(360deg); }
         }
         @media (max-width: 768px) {
-            /* Make grid stack on mobile */
+            .checkout-plans-grid {
+                grid-template-columns: 1fr !important;
+                max-width: 420px;
+                margin: 0 auto;
+            }
+            .checkout-plan-card {
+                transform: scale(1) !important;
+            }
         }
     `;
     if (!document.querySelector('[data-checkout-styles]')) {

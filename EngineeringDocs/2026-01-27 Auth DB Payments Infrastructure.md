@@ -1328,3 +1328,12 @@ To ensure users feel the promo is "active", the `CheckoutPage` adjusts its UI wh
 - **Pricing**: Changes "Free for 30 days" to "Free for 3 Months".
 - **Features**: Updates the trial feature line item.
 - **Trust Bar**: Mentions the 3-month trial.
+
+### 2026-02-19 - Checkout UX & Copy Fixes
+- ✅ **UX Fix**: Removed auto-redirect for unauthenticated users on `/checkout?plan=X`. Users now see the plan card first; the CTA button drives the auth redirect. Only already-authenticated users with a church are auto-forwarded to Stripe.
+- ✅ **Mobile Layout**: Added `checkout-plans-grid` and `checkout-plan-card` CSS classes with a `@media (max-width: 768px)` rule to stack plan cards in a single column on mobile.
+- ✅ **Dynamic Plan Highlight**: Blue highlight border now follows the `?plan=` URL param (e.g., `/checkout?plan=starter` highlights Starter). Falls back to Pro when no param is present.
+- ✅ **Badge Decoupling**: "⭐ MOST POPULAR" badge is now hardcoded to `planInfo.highlight` (Pro only), preventing it from firing on Starter when highlighted via the VIP link. Starter correctly shows "🎁 3-MONTH FREE TRIAL".
+- ✅ **Copy — Unlimited Voices**: Updated Unlimited plan voice feature to three specific lines: "60 standard voices", "90 premium voices", "75 lifelike studio-grade voices (ElevenLabs)".
+- ✅ **Copy — Simultaneous Languages**: Changed Starter ("3 languages at once") and Pro ("5 languages at once") to "Unlimited simultaneous languages" to match Unlimited plan copy.
+
