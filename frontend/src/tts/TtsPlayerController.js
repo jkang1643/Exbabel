@@ -122,42 +122,28 @@ export class TtsPlayerController {
                     eq.Q.value = 1.0;
                     eq.gain.value = 3.0;
 
-                    // 3. Broadcast Compressor (Levelling)
+                    // 3. Drive (Loudness)
+                    const preGain = this._audioCtx.createGain();
+                    preGain.gain.value = 2.0; // +6dB
+
+                    // 4. Single Broadcast Compressor (Levelling & Limiting)
                     const compressor = this._audioCtx.createDynamicsCompressor();
-                    compressor.threshold.value = -12; // Reverted to -12dB
-                    compressor.knee.value = 20;
-                    compressor.ratio.value = 3;
-                    compressor.attack.value = 0.003; // Fast attack (3ms)
-                    compressor.release.value = 0.05; // Fast release (50ms)
-
-                    // 3.5. Makeup Gain (Compressor Stage)
-                    const makeupGain = this._audioCtx.createGain();
-                    makeupGain.gain.value = 2.0; // +6dB
-
-                    // 4. Hard Limiter (Safety)
-                    const limiter = this._audioCtx.createDynamicsCompressor();
-                    limiter.threshold.value = -1.0;
-                    limiter.knee.value = 0.0;
-                    limiter.ratio.value = 20.0;
-                    limiter.attack.value = 0.001;
-                    limiter.release.value = 0.02; // Fast release (20ms)
-
-                    // 5. Output Gain (Trim)
-                    this._gainNode = this._audioCtx.createGain();
-                    this._gainNode.gain.value = 1.0; // Unity
+                    compressor.threshold.value = -24;
+                    compressor.knee.value = 30;
+                    compressor.ratio.value = 8;
+                    compressor.attack.value = 0.003;
+                    compressor.release.value = 0.1;
 
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
 
-                    // Connect Chain: HPF -> EQ -> Compressor -> Makeup -> Limiter -> Gain -> Dest
+                    // Connect Chain: HPF -> EQ -> PreGain -> Compressor -> Dest
                     src.connect(hpf);
                     hpf.connect(eq);
-                    eq.connect(compressor);
-                    compressor.connect(makeupGain);
-                    makeupGain.connect(limiter);
-                    limiter.connect(this._gainNode);
-                    this._gainNode.connect(this._audioCtx.destination);
+                    eq.connect(preGain);
+                    preGain.connect(compressor);
+                    compressor.connect(this._audioCtx.destination);
 
-                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Comp(3:1) -> Makeup(2x) -> Limiter(20:1) -> Out(1x). Context state: ${this._audioCtx.state}`);
+                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Gain(+6dB) -> Compressor(8:1). Context state: ${this._audioCtx.state}`);
                 }
             } catch (err) {
                 console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);

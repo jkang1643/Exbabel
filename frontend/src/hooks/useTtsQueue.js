@@ -84,31 +84,30 @@ export function useTtsQueue({
             eq.Q.value = 1.0;
             eq.gain.value = 3.0; // +3dB (Restored for clarity)
 
-            // 3. High-Gain Drive (Loudness)
-            // Massive gain boost to hit broadcast loudness targets
+            // 3. Drive (Loudness)
             const preGain = audioContextRef.current.createGain();
-            preGain.gain.value = 4.0; // +12dB (Very Loud)
+            preGain.gain.value = 2.0; // +6dB Drive
 
-            // 4. Fast Limiter (Safety)
-            // Catches the +12dB peaks instantly without pumping
-            const limiter = audioContextRef.current.createDynamicsCompressor();
-            limiter.threshold.value = -1.0;   // Catch peaks just before 0dB
-            limiter.knee.value = 0.0;         // Hard knee for precise limiting
-            limiter.ratio.value = 20.0;       // Brickwall
-            limiter.attack.value = 0.001;     // 1ms instant catch
-            limiter.release.value = 0.01;     // 10ms ULTRA-FAST release to prevent ducking
+            // 4. Single Broadcast Compressor (Levelling & Limiting)
+            // Replaces separate Limiter to avoid "ducking" conflicts.
+            // Ratio 8:1 acts as a soft limiter.
+            const compressor = audioContextRef.current.createDynamicsCompressor();
+            compressor.threshold.value = -24; // Start compressing early
+            compressor.knee.value = 30;       // Very soft knee for transparent gain reduction
+            compressor.ratio.value = 8;       // 8:1 (Strong compression / Soft Limiting)
+            compressor.attack.value = 0.003;  // Fast attack
+            compressor.release.value = 0.1;   // 100ms release (User preference)
 
-            // Connect Chain: HPF -> EQ -> PreGain -> Limiter -> Dest
-            // Simple chain: Boost -> Limit -> Out. No complex interactions.
+            // Connect Chain: HPF -> EQ -> PreGain -> Compressor -> Dest
             hpf.connect(eq);
             eq.connect(preGain);
-            preGain.connect(limiter);
-            limiter.connect(audioContextRef.current.destination);
+            preGain.connect(compressor);
+            compressor.connect(audioContextRef.current.destination);
 
             // Store entry point
             gainNodeRef.current = hpf;
 
-            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Gain(4x/+12dB) -> FastLimiter(10ms)');
+            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Gain(+6dB) -> Compressor(8:1)');
         }
         // Resume if suspended (browser policy)
         if (audioContextRef.current.state === 'suspended') {
