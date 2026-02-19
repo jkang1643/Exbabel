@@ -124,7 +124,7 @@ export class TtsPlayerController {
 
                     // 3. Broadcast Compressor (Levelling)
                     const compressor = this._audioCtx.createDynamicsCompressor();
-                    compressor.threshold.value = -12; // Raised to -12dB (User requested)
+                    compressor.threshold.value = -10; // Raised to -10dB (User requested "slightly up")
                     compressor.knee.value = 20;
                     compressor.ratio.value = 3;
                     compressor.attack.value = 0.01;
