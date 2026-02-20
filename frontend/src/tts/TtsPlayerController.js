@@ -119,7 +119,9 @@ export class TtsPlayerController {
 
                         // Track state changes
                         this._audioCtx.onstatechange = () => {
-                            console.log(`[TtsPlayerController] AudioContext state changed to: ${this._audioCtx.state}`);
+                            if (this._audioCtx) {
+                                console.log(`[TtsPlayerController] AudioContext state changed to: ${this._audioCtx.state}`);
+                            }
                         };
 
                         // Vocal Channel Strip: HPF -> Presence EQ -> Saturation -> Gain -> Limiter
