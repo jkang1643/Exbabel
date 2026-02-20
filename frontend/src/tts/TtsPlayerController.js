@@ -99,8 +99,14 @@ export class TtsPlayerController {
             // Web Audio API gain boost (250% = 2.5x)
             // MediaElementSourceNode can only be created once per element, so we wire it here.
             try {
+                // CRITICAL FIX: iOS Safari has a severe bug where createMediaElementSource 
+                // outputs silence when audio is assigned via Blob URL.
+                // We must bypass Web Audio API routing entirely on iOS devices.
+                const isIOS = typeof navigator !== 'undefined' &&
+                    (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
+
                 const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                if (AudioContextClass) {
+                if (AudioContextClass && !isIOS) {
                     this._audioCtx = new AudioContextClass();
 
                     // Track state changes
