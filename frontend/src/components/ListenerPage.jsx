@@ -801,9 +801,13 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     // This must happen synchronously before any await, while the browser still considers
     // this a trusted user interaction. Without this, AudioContext stays 'suspended' and
     // auto-play silently fails on iOS/Chrome ~15% of the time.
+    if (window.audioDebug) window.audioDebug('User tapped Join Session');
     if (ttsControllerRef.current) {
+      if (window.audioDebug) window.audioDebug('ListenerPage calling unlockFromUserGesture');
       ttsControllerRef.current.unlockFromUserGesture();
       console.log('[ListenerPage] 🔓 AudioContext unlocked from Join gesture');
+    } else {
+      if (window.audioDebug) window.audioDebug('ttsControllerRef.current is null!');
     }
 
     setIsJoining(true);

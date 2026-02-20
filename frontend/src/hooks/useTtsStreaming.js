@@ -109,6 +109,7 @@ export function useTtsStreaming({
                 });
 
                 try {
+                    if (window.audioDebug) window.audioDebug('Starting StreamingAudioPlayer...');
                     await player.start({
                         streamId: `stream_${sessionId}_${Date.now()}`,
                         codec: 'mp3',
@@ -118,6 +119,7 @@ export function useTtsStreaming({
                     });
                     playerRef.current = player;
                 } catch (startErr) {
+                    if (window.audioDebug) window.audioDebug('StreamingAudioPlayer.start() failed: ' + startErr.message);
                     // StreamingAudioPlayer failed to initialize (e.g. MediaSource timeout,
                     // QuotaExceededError, unsupported format). Close and reconnect cleanly.
                     console.error('[useTtsStreaming] ❌ StreamingAudioPlayer.start() failed — will reconnect:', startErr);

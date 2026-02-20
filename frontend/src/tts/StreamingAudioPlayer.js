@@ -61,15 +61,18 @@ export class StreamingAudioPlayer {
         this.mediaSource = new MediaSource();
         this.audioElement.src = URL.createObjectURL(this.mediaSource);
 
+        if (window.audioDebug) window.audioDebug('Creating MediaSource');
         // Wait for MediaSource to open — with a safety timeout.
         // On all browsers, if sourceopen never fires (e.g. stale audio context,
         // browser resource limit), this previously hung forever, preventing
         // audio.hello from being sent and silently breaking TTS.
         await new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
+                if (window.audioDebug) window.audioDebug('MediaSource sourceopen timed out after 5s');
                 reject(new Error('[StreamingPlayer] MediaSource sourceopen timed out after 5s — browser may be resource-limited'));
             }, 5000);
             this.mediaSource.addEventListener('sourceopen', () => {
+                if (window.audioDebug) window.audioDebug('MediaSource sourceopen fired!');
                 clearTimeout(timer);
                 resolve();
             }, { once: true });
