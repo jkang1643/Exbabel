@@ -673,6 +673,42 @@ PARTIAL TEXT RULES:
     this.pendingRequests.clear();
     console.log('[PartialWorker] Cache cleared');
   }
+
+  /**
+   * Reset for a new speech segment (e.g. after a forced final / stream restart).
+   * Re-arms the instant first-sentence path so the very first partial on the new
+   * stream gets zero-throttle treatment — no 2s wait, no 25-char growth gate.
+   * Also cancels any in-flight requests for the given language pair so stale
+   * translations from the previous segment don't pollute the new line.
+   * @param {string} [langPairKey] - Optional "sourceLang:targetLang" key to cancel. If omitted, cancels all.
+   */
+  resetForNewSegment(langPairKey = null) {
+    // Clear pending throttle timeout so the buffered text is discarded
+    if (this.pendingPartialTimeout) {
+      clearTimeout(this.pendingPartialTimeout);
+      this.pendingPartialTimeout = null;
+    }
+    this.pendingPartialBuffer = null;
+
+    // Cancel in-flight requests for this language pair (or all)
+    for (const [key, value] of this.pendingRequests.entries()) {
+      if (!langPairKey || key.startsWith(langPairKey)) {
+        value.abortController.abort();
+        this.pendingRequests.delete(key);
+      }
+    }
+    // Reject any buffered promise resolvers (they'll catch AbortError silently)
+    for (const { reject } of this.pendingPartialResolvers.values()) {
+      reject(new Error('AbortError: segment reset'));
+    }
+    this.pendingPartialResolvers.clear();
+
+    // Re-arm the instant first-sentence path for the new line
+    this.isFirstTranslation = true;
+    this.lastPartialRequestTime = 0;
+
+    console.log(`[PartialWorker] 🔄 Segment reset — instant-path re-armed for new line${langPairKey ? ` (${langPairKey})` : ''}`);
+  }
 }
 
 /**

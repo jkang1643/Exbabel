@@ -1072,7 +1072,26 @@ You are a TRANSLATOR, not an assistant. Output: Translation only.`
       console.log(`[RealtimePartialWorker] ℹ️ No idle connections to close for ${baseKey}`);
     }
   }
+
+  /**
+   * Reset for a new speech segment (e.g. after a forced final / stream restart).
+   * Closes all open WebSocket connections for the given language pair and rejects
+   * any in-flight requests so stale translations from the previous line don't
+   * block or pollute the first partial of the new line.
+   * @param {string} [langPairKey] - Optional "sourceLang:targetLang". If omitted, resets all.
+   */
+  resetForNewSegment(langPairKey = null) {
+    let closedCount = 0;
+    for (const [key, session] of this.connectionPool.entries()) {
+      if (!langPairKey || key.startsWith(langPairKey)) {
+        this._resetSession(session, 'forced final segment reset');
+        closedCount++;
+      }
+    }
+    console.log(`[RealtimePartialWorker] 🔄 Segment reset — closed ${closedCount} connection(s)${langPairKey ? ` for ${langPairKey}` : ''}`);
+  }
 }
+
 
 /**
  * Realtime Final Translation Worker - Optimized for quality

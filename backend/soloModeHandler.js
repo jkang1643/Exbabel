@@ -1062,6 +1062,17 @@ export async function handleSoloMode(clientWs) {
                       lastSentFinalText = textToProcess;
                       lastSentFinalTime = Date.now();
 
+                      // ⚡ COLD-START FIX: Re-arm the instant first-sentence path on both partial workers
+                      // so the very first partial on the new stream gets zero-throttle translation.
+                      // Without this, the worker stays in "normal" mode (2000ms + 25-char gate) after
+                      // the first session segment, causing a 2-3 word lag before translation appears.
+                      const langPairKey = `${effectiveSourceLang || currentSourceLang}:${effectiveTargetLang || currentTargetLang}`;
+                      partialTranslationWorker.resetForNewSegment(langPairKey);
+                      if (realtimePartialTranslationWorker && realtimePartialTranslationWorker !== partialTranslationWorker) {
+                        realtimePartialTranslationWorker.resetForNewSegment(langPairKey);
+                      }
+                      console.log(`[SoloMode] 🔄 Partial worker instant-path re-armed for new segment (${langPairKey})`);
+
                       // Check for extending partials
                       checkForExtendingPartialsAfterFinal(textToProcess);
 
@@ -1080,6 +1091,7 @@ export async function handleSoloMode(clientWs) {
                                 const correctedText = await grammarWorker.correctFinal(textToProcess, process.env.OPENAI_API_KEY);
                                 if (correctedText !== textToProcess) {
                                   // Send grammar update with same seqId
+                                  // isUpdate:true tells the frontend NOT to re-commit — just refine the live display
                                   sendWithSequence({
                                     type: 'translation',
                                     originalText: textToProcess,
@@ -1090,6 +1102,7 @@ export async function handleSoloMode(clientWs) {
                                     isTranscriptionOnly: true,
                                     forceFinal: true,
                                     updateType: 'grammar',
+                                    isUpdate: true,            // ← prevents double-commit on frontend
                                     seqId: immediateSeqId // Use same seqId for update
                                   }, false);
                                   lastSentFinalText = correctedText;
@@ -1110,6 +1123,7 @@ export async function handleSoloMode(clientWs) {
 
                                 if (correctedText !== textToProcess) {
                                   // Send grammar update with same seqId
+                                  // isUpdate:true tells the frontend NOT to re-commit — just refine the live display
                                   sendWithSequence({
                                     type: 'translation',
                                     originalText: textToProcess,
@@ -1120,6 +1134,7 @@ export async function handleSoloMode(clientWs) {
                                     isTranscriptionOnly: false,
                                     forceFinal: true,
                                     updateType: 'grammar',
+                                    isUpdate: true,            // ← prevents double-commit on frontend
                                     seqId: immediateSeqId // Use same seqId for update
                                   }, false);
                                 }
@@ -1155,6 +1170,7 @@ export async function handleSoloMode(clientWs) {
                               );
 
                               // Send translation update with same seqId
+                              // isUpdate:true tells the frontend NOT to re-commit — just refine the live display
                               sendWithSequence({
                                 type: 'translation',
                                 originalText: textToProcess,
@@ -1167,6 +1183,7 @@ export async function handleSoloMode(clientWs) {
                                 isTranscriptionOnly: false,
                                 forceFinal: true,
                                 updateType: 'translation',
+                                isUpdate: true,            // ← prevents double-commit on frontend
                                 seqId: immediateSeqId // Use same seqId for update
                               }, false);
                             } catch (translationError) {

@@ -1188,6 +1188,17 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                 lastPartialSeqBySourceRef.current.set(message.sourceSeqId, Number.MAX_SAFE_INTEGER);
               }
 
+              // ⚡ FORCED FINAL UPDATE GATE: Async grammar/translation refinements carry isUpdate:true.
+              // They refine an already-committed row — do NOT add another history entry.
+              if (message.isUpdate === true) {
+                const refinedText = message.translatedText || message.correctedText || '';
+                if (refinedText.trim()) {
+                  updateTranslationText(refinedText);
+                  setCurrentTranslation(refinedText);
+                }
+                break;
+              }
+
               // Final translation - add to history directly (no segmenter needed for finals)
               // CRITICAL: Only use translatedText if hasTranslation is true - never fallback to English
               const finalText = message.hasTranslation ? (message.translatedText || undefined) : undefined;

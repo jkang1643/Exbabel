@@ -577,6 +577,17 @@ export function HostPage({ onBackToHome }) {
                 lastPartialSeqBySourceRef.current.set(message.sourceSeqId, Number.MAX_SAFE_INTEGER);
               }
 
+              // ⚡ FORCED FINAL UPDATE GATE: Async grammar/translation refinements carry isUpdate:true.
+              // They refine an already-committed row — do NOT call processFinal() again.
+              if (message.isUpdate === true) {
+                const refinedText = message.correctedText || message.translatedText || '';
+                if (refinedText.trim()) {
+                  updateTranscriptText(refinedText);
+                  setCurrentTranscript(refinedText);
+                }
+                break;
+              }
+
               // Final transcript - use processFinal like solo mode (handles deduplication automatically)
               // CRITICAL: Use correctedText if available (grammar corrections), otherwise fall back to originalText or translatedText
               // This ensures grammar corrections and recovered text are applied to finals
