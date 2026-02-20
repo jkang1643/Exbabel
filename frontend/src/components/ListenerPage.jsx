@@ -20,7 +20,6 @@ import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
 import { CaptionClientEngine, SentenceSegmenter } from '@jkang1643/caption-engine';
 import { useTtsStreaming } from '../hooks/useTtsStreaming';
 import TtsStreamingControl from './tts/TtsStreamingControl';
-import { AudioDebugOverlay } from './AudioDebugOverlay';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -524,19 +523,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   // Initialize TTS Controller once
   useEffect(() => {
-    if (window.audioDebug) window.audioDebug(`ListenerPage TTS init check: UI_ENABLED=${TTS_UI_ENABLED}, hasRef=${!!ttsControllerRef.current}`);
     if (TTS_UI_ENABLED && !ttsControllerRef.current) {
       console.log('[ListenerPage] Initializing stable TTS controller');
-      if (window.audioDebug) window.audioDebug('Instantiating new TtsPlayerController...');
       try {
         ttsControllerRef.current = new TtsPlayerController((msg) => {
           if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify(msg));
           }
         });
-        if (window.audioDebug) window.audioDebug('TtsPlayerController instantiated successfully');
       } catch (e) {
-        if (window.audioDebug) window.audioDebug(`TtsPlayerController instantiation FAILED: ${e.message}`);
         console.error("Failed to init TTS controller", e);
       }
     }
@@ -816,13 +811,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     // This must happen synchronously before any await, while the browser still considers
     // this a trusted user interaction. Without this, AudioContext stays 'suspended' and
     // auto-play silently fails on iOS/Chrome ~15% of the time.
-    if (window.audioDebug) window.audioDebug('User tapped Join Session');
     if (ttsControllerRef.current) {
-      if (window.audioDebug) window.audioDebug('ListenerPage calling unlockFromUserGesture');
       ttsControllerRef.current.unlockFromUserGesture();
       console.log('[ListenerPage] 🔓 AudioContext unlocked from Join gesture');
-    } else {
-      if (window.audioDebug) window.audioDebug('ttsControllerRef.current is null!');
     }
 
     setIsJoining(true);

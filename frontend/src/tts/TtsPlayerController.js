@@ -179,7 +179,6 @@ export class TtsPlayerController {
         // Diagnostic tracking
         this.instanceId = Math.random().toString(16).slice(2);
         console.log(`[TtsPlayerController] init ${this.instanceId}`);
-        if (window.audioDebug) window.audioDebug(`init ${this.instanceId}, hasAudioEl=${!!this.audioEl}`);
 
         // Safeties
         this.playedSet = new Set(); // Prevent duplicate playback of the same segment
@@ -313,19 +312,16 @@ export class TtsPlayerController {
     unlockFromUserGesture() {
         if (this._iosUnlocked) {
             console.log('[TtsPlayerController] iOS already unlocked, skipping');
-            if (window.audioDebug) {
-                window.audioDebug('iOS unlock skipped (already unlocked)', { elementId: this.audioEl?.__id });
-            }
             return;
         }
 
         if (!this.audioEl) {
             console.warn('[TtsPlayerController] No audioEl available for unlock');
-            if (window.audioDebug) window.audioDebug('unlock failed: no audioEl');
             return;
         }
 
         try {
+            console.log('[TtsPlayerController] Attempting iOS audio unlock on persistent element');
             // Prime the *same* audio element you'll reuse later
             this.audioEl.muted = false; // ensure it's not permanently muted from a previous state
             this.audioEl.playsInline = true; // React/JS casing
@@ -335,7 +331,7 @@ export class TtsPlayerController {
             // Tiny silent WAV (more reliable than MP3 data URI on iOS)
             this.audioEl.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
 
-            // On iOS Safari, calling play() immediately followed by pause() on a data URI 
+            // On iOS Safari, calling play() immediately followed by pause() on a data URI
             // often triggers an AbortError and fails to unlock the element.
             // Instead of playing and pausing, we simply load the element and resume the AudioContext.
             // The user gesture on the Join button is enough to unlock the AudioContext.
@@ -345,13 +341,11 @@ export class TtsPlayerController {
             if (this._audioCtx && this._audioCtx.state === 'suspended') {
                 this._audioCtx.resume().then(() => {
                     console.log('[TtsPlayerController] AudioContext resumed ✅');
-                    if (window.audioDebug) window.audioDebug('AudioContext resumed ✅');
                 }).catch(err => {
                     console.warn('[TtsPlayerController] AudioContext resume failed:', err);
-                    if (window.audioDebug) window.audioDebug('AudioContext resume failed: ' + err.message);
                 });
             } else if (this._audioCtx) {
-                if (window.audioDebug) window.audioDebug('AudioContext already ' + this._audioCtx.state);
+                // AudioContext is already running or closed, no action needed for resume
             }
 
             // Mark as unlocked via gesture
@@ -1449,7 +1443,6 @@ export class TtsPlayerController {
      */
     dispose() {
         console.log(`[TtsPlayerController] Disposing controller [idx:${this.instanceId}]`);
-        if (window.audioDebug) window.audioDebug(`dispose ${this.instanceId}`);
 
         // Clear queue health monitoring interval
         if (this.queueHealthInterval) {
