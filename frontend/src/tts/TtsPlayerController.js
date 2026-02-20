@@ -258,35 +258,30 @@ export class TtsPlayerController {
             // Tiny silent WAV (more reliable than MP3 data URI on iOS)
             this.audioEl.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
 
+            // On iOS Safari, calling play() immediately followed by pause() on a data URI 
+            // often triggers an AbortError and fails to unlock the element.
+            // Instead of playing and pausing, we simply load the element and resume the AudioContext.
+            // The user gesture on the Join button is enough to unlock the AudioContext.
+            this.audioEl.load();
+
             // Resume AudioContext if suspended (iOS requirement for Web Audio API)
             if (this._audioCtx && this._audioCtx.state === 'suspended') {
                 this._audioCtx.resume().then(() => {
                     console.log('[TtsPlayerController] AudioContext resumed ✅');
-                }).catch(err => console.warn('[TtsPlayerController] AudioContext resume failed:', err));
+                    if (window.audioDebug) window.audioDebug('AudioContext resumed ✅');
+                }).catch(err => {
+                    console.warn('[TtsPlayerController] AudioContext resume failed:', err);
+                    if (window.audioDebug) window.audioDebug('AudioContext resume failed: ' + err.message);
+                });
+            } else if (this._audioCtx) {
+                if (window.audioDebug) window.audioDebug('AudioContext already ' + this._audioCtx.state);
             }
 
-            const p = this.audioEl.play();
-            if (p?.then) {
-                p.then(() => {
-                    this.audioEl.pause();
-                    this.audioEl.currentTime = 0;
-                    this.audioEl.muted = false;
-                    this._iosUnlocked = true;
-
-                    console.log('[TtsPlayerController] iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
-                    if (window.audioDebug) {
-                        window.audioDebug('iOS MEDIA ELEMENT UNLOCKED ✅', { elementId: this.audioEl.__id });
-                    }
-                }).catch(err => {
-                    console.warn('[TtsPlayerController] iOS media unlock failed:', err);
-                    if (window.audioDebug) {
-                        window.audioDebug('iOS MEDIA UNLOCK FAILED', {
-                            elementId: this.audioEl.__id,
-                            error: err.name,
-                            message: err.message
-                        });
-                    }
-                });
+            // Mark as unlocked via gesture
+            this._iosUnlocked = true;
+            console.log('[TtsPlayerController] iOS MEDIA ELEMENT UNLOCKED (loaded) ✅', { elementId: this.audioEl.__id });
+            if (window.audioDebug) {
+                window.audioDebug('iOS MEDIA ELEMENT UNLOCKED (loaded) ✅', { elementId: this.audioEl.__id });
             }
         } catch (err) {
             console.warn('[TtsPlayerController] iOS media unlock threw:', err);
