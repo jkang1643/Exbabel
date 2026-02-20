@@ -13,7 +13,7 @@ import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 
 import { TRANSLATION_LANGUAGES } from '../config/languages.js';
 
-import { Play, Square, Settings } from 'lucide-react';
+import { Play, Square, Settings, Volume2 } from 'lucide-react';
 import { TtsSettingsModal } from './TtsSettingsModal';
 import { TtsMode, TtsPlayerState } from '../tts/types.js';
 import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
@@ -154,6 +154,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
 
   const ttsControllerRef = useRef(null); // TTS controller for audio playback
+  const ttsUnlockCleanupRef = useRef(null); // Cleanup function for iOS audio unlock
 
   // SHARED ENGINE INTEGRATION
   useEffect(() => {
@@ -807,7 +808,8 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     }
 
     if (ttsStreaming && ttsStreaming.unlockAudio) {
-      ttsStreaming.unlockAudio();
+      // Store the cleanup function to be called when actual audio starts
+      ttsUnlockCleanupRef.current = ttsStreaming.unlockAudio();
       console.log('[ListenerPage] 🔓 Streaming Audio Player unlocked from Join gesture');
     }
 
@@ -897,6 +899,12 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     ws.onopen = () => {
       console.log('[Listener] WebSocket connected');
       setConnectionState('open');
+
+      // Stop the looping silence now that real connection is established
+      if (ttsUnlockCleanupRef.current) {
+        ttsUnlockCleanupRef.current();
+        ttsUnlockCleanupRef.current = null;
+      }
     };
 
     ws.onclose = () => {
@@ -1725,21 +1733,37 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                       }}
                       className="bg-white rounded-lg p-4 sm:p-5 shadow-sm hover:shadow-md transition-all border border-gray-200 cursor-pointer"
                     >
-                      {/* Show translation by default, tap to reveal original */}
                       {(() => { const itemKey = item.seqId !== -1 && item.seqId != null ? `seq_${item.seqId}` : `ts_${item.timestamp}`; return showOriginalMapRef.current.get(itemKey); })() && item.original ? (
                         <div>
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-semibold text-blue-600 uppercase">Original (Tap to hide)</span>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                navigator.clipboard.writeText(item.original);
-                              }}
-                              className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                              title="Copy"
-                            >
-                              📋
-                            </button>
+                            <div className="flex items-center space-x-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if ('speechSynthesis' in window) {
+                                    window.speechSynthesis.cancel();
+                                    const utterance = new SpeechSynthesisUtterance(item.original);
+                                    utterance.lang = sessionInfo?.sourceLang || 'en';
+                                    window.speechSynthesis.speak(utterance);
+                                  }
+                                }}
+                                className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                                title="Play Original"
+                              >
+                                <Volume2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(item.original);
+                                }}
+                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Copy"
+                              >
+                                📋
+                              </button>
+                            </div>
                           </div>
                           <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.original}</p>
                         </div>
@@ -1748,6 +1772,21 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-semibold text-green-600 uppercase">Translation (Tap to see original)</span>
                             <div className="flex items-center space-x-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if ('speechSynthesis' in window) {
+                                    window.speechSynthesis.cancel();
+                                    const utterance = new SpeechSynthesisUtterance(item.translated);
+                                    utterance.lang = targetLang;
+                                    window.speechSynthesis.speak(utterance);
+                                  }
+                                }}
+                                className="p-1 text-gray-400 hover:text-green-600 transition-colors"
+                                title="Play Translation"
+                              >
+                                <Volume2 className="w-4 h-4" />
+                              </button>
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();

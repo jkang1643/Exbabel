@@ -38,6 +38,7 @@ export class StreamingAudioPlayer {
     /**
      * Unlock iOS Safari audio by priming the actual audio element
      * MUST be called from within a user gesture (e.g., Play button click)
+     * @returns {Function} A cleanup function to call when actual audio is ready
      */
     unlockFromUserGesture() {
         if (!this.audioElement) {
@@ -48,24 +49,39 @@ export class StreamingAudioPlayer {
         try {
             // Prime the *same* audio element you'll reuse later
             this.audioElement.muted = true;
-            this.audioElement.playsInline = true;
+            this.audioElement.playsInline = true; // React/JS casing
+            this.audioElement.setAttribute('playsinline', ''); // HTML casing
+            this.audioElement.setAttribute('webkit-playsinline', ''); // Legacy iOS casing
+            this.audioElement.loop = true; // Keep playing to hold the token
 
             // Tiny silent WAV
             this.audioElement.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
 
             const p = this.audioElement.play();
             if (p?.then) {
-                p.then(() => {
-                    this.audioElement.pause();
-                    this.audioElement.currentTime = 0;
-                    this.audioElement.muted = false;
-                    console.log('[StreamingPlayer] iOS MEDIA ELEMENT UNLOCKED ✅');
-                }).catch(err => {
+                p.catch(err => {
                     console.warn('[StreamingPlayer] iOS media unlock failed:', err);
+                    if (window.audioDebug) window.audioDebug('StreamingPlayer iOS media unlock failed', { error: err.message });
                 });
             }
+
+            console.log('[StreamingPlayer] iOS MEDIA ELEMENT UNLOCKED (Looping) ✅');
+            if (window.audioDebug) window.audioDebug('StreamingPlayer iOS MEDIA ELEMENT UNLOCKED ✅');
+
+            // Return a cleanup function caller must invoke when ready to stream
+            return () => {
+                if (this.audioElement) {
+                    this.audioElement.pause();
+                    this.audioElement.currentTime = 0;
+                    this.audioElement.loop = false;
+                    this.audioElement.muted = false;
+                    console.log('[StreamingPlayer] Released looping silence');
+                }
+            };
         } catch (err) {
             console.warn('[StreamingPlayer] iOS media unlock threw:', err);
+            if (window.audioDebug) window.audioDebug('StreamingPlayer iOS media unlock threw', { error: err.message });
+            return () => { }; // Safe no-op
         }
     }
 
@@ -88,6 +104,7 @@ export class StreamingAudioPlayer {
         if (!window.MediaSource) {
             const error = new Error('MediaSource API not supported');
             console.error('[StreamingPlayer]', error);
+            if (window.audioDebug) window.audioDebug('MediaSource API not supported');
             if (this.onError) this.onError(error);
             throw error;
         }
@@ -102,14 +119,18 @@ export class StreamingAudioPlayer {
         // audio.hello from being sent and silently breaking TTS.
         await new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
-                reject(new Error('[StreamingPlayer] MediaSource sourceopen timed out after 5s — browser may be resource-limited'));
+                const err = new Error('[StreamingPlayer] MediaSource sourceopen timed out after 5s');
+                if (window.audioDebug) window.audioDebug('MediaSource sourceopen timed out');
+                reject(err);
             }, 5000);
             this.mediaSource.addEventListener('sourceopen', () => {
                 clearTimeout(timer);
+                if (window.audioDebug) window.audioDebug('MediaSource sourceopen SUCCESS');
                 resolve();
             }, { once: true });
             this.mediaSource.addEventListener('error', (e) => {
                 clearTimeout(timer);
+                if (window.audioDebug) window.audioDebug('MediaSource sourceopen ERROR', { error: e.message || 'unknown' });
                 reject(e);
             }, { once: true });
         });

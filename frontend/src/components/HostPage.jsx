@@ -444,15 +444,9 @@ export function HostPage({ onBackToHome }) {
       console.log('[Host] WebSocket connected');
       setConnectionState('open');
 
-      // Send initialization
-      const initMessage = {
-        type: 'init',
-        sourceLang: sourceLang,
-        tier: usePremiumTier ? 'premium' : 'basic',
-        profanityFilter: profanityFilter
-      };
-      console.log('[Host] Sending init message:', initMessage);
-      ws.send(JSON.stringify(initMessage));
+      // Init message is intentionally deferred until Start Broadcast is clicked
+      // so that listeners cannot join an inactive session.
+      console.log('[Host] WebSocket ready, waiting for broadcast to start...');
     };
 
     ws.onclose = () => {

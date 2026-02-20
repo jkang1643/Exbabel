@@ -251,7 +251,9 @@ export class TtsPlayerController {
         try {
             // Prime the *same* audio element you'll reuse later
             this.audioEl.muted = true;
-            this.audioEl.playsInline = true;
+            this.audioEl.playsInline = true; // React/JS casing
+            this.audioEl.setAttribute('playsinline', ''); // HTML casing
+            this.audioEl.setAttribute('webkit-playsinline', ''); // Legacy iOS casing
 
             // Tiny silent WAV (more reliable than MP3 data URI on iOS)
             this.audioEl.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
