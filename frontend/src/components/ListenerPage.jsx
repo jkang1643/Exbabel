@@ -811,6 +811,17 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       console.log('[ListenerPage] 🔓 Streaming Audio Player unlocked from Join gesture');
     }
 
+    // CRITICAL: iOS needs SpeechSynthesis to be touched at least once during a user gesture
+    // Otherwise it fails to initialize the subsystem, even if we are using Web Audio API / MediaSource.
+    try {
+      const utterance = new SpeechSynthesisUtterance('');
+      utterance.volume = 0;
+      speechSynthesis.speak(utterance);
+      console.log('[ListenerPage] 🔓 SpeechSynthesis primed from Join gesture');
+    } catch (e) {
+      console.warn('[ListenerPage] Failed to prime SpeechSynthesis', e);
+    }
+
     setIsJoining(true);
     setError('');
 
