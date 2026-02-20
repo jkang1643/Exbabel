@@ -122,11 +122,7 @@ export class TtsPlayerController {
                     eq.Q.value = 1.0;
                     eq.gain.value = 3.0;
 
-                    // 3. Drive (Loudness)
-                    const preGain = this._audioCtx.createGain();
-                    preGain.gain.value = 2.0; // +6dB
-
-                    // 4. Single Broadcast Compressor (Levelling & Limiting)
+                    // 3. Broadcast Compressor (User Preferred Settings)
                     const compressor = this._audioCtx.createDynamicsCompressor();
                     compressor.threshold.value = -24;
                     compressor.knee.value = 30;
@@ -134,16 +130,25 @@ export class TtsPlayerController {
                     compressor.attack.value = 0.003;
                     compressor.release.value = 0.1;
 
+                    // 3.5. Makeup Gain
+                    const makeupGain = this._audioCtx.createGain();
+                    makeupGain.gain.value = 2.0; // +6dB
+
+                    // 4. Output Gain (Trim)
+                    this._gainNode = this._audioCtx.createGain();
+                    this._gainNode.gain.value = 1.0; // Unity
+
                     const src = this._audioCtx.createMediaElementSource(this.audioEl);
 
-                    // Connect Chain: HPF -> EQ -> PreGain -> Compressor -> Dest
+                    // Connect Chain: HPF -> EQ -> Compressor -> Makeup -> Out -> Dest
                     src.connect(hpf);
                     hpf.connect(eq);
-                    eq.connect(preGain);
-                    preGain.connect(compressor);
-                    compressor.connect(this._audioCtx.destination);
+                    eq.connect(compressor);
+                    compressor.connect(makeupGain);
+                    makeupGain.connect(this._gainNode);
+                    this._gainNode.connect(this._audioCtx.destination);
 
-                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Gain(+6dB) -> Compressor(8:1). Context state: ${this._audioCtx.state}`);
+                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Comp(8:1/-24dB) -> Makeup(+6dB) -> Out(Unity). Context state: ${this._audioCtx.state}`);
                 }
             } catch (err) {
                 console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);

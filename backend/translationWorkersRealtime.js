@@ -1089,7 +1089,10 @@ export class RealtimeFinalTranslationWorker {
     this.requestCounter = 0;
     this.pendingResponses = new Map();
     this.responseToRequestMap = new Map(); // Track response ID → request ID mapping for cleanup
-    this.MAX_CONCURRENT = 1; // CRITICAL: Must be 1 to prevent "conversation_already_has_active_response" errors
+    // Dynamic concurrency: allow one connection per language pair being translated simultaneously,
+    // capped at 5. Set conservatively low at construction; translateToMultipleLanguages() will
+    // temporarily raise this to Math.min(targetLangs.length, 5) per call.
+    this.MAX_CONCURRENT = 1; // Default; overridden dynamically in translateToMultipleLanguages()
 
     // CRITICAL: NO PERSISTENT CONVERSATION CONTEXT (matching 4o mini pipeline)
     // Conversation context causes performance degradation over time
@@ -1808,22 +1811,35 @@ You are a TRANSLATOR, not an assistant. Output: Translation only.`
       return translations;
     }
 
-    // Translate to each target language in parallel
-    const translationPromises = langsToTranslate.map(async (targetLang) => {
-      try {
-        const translated = await this.translateFinal(text, sourceLang, targetLang, apiKey, sessionId);
-        return { lang: targetLang, text: translated };
-      } catch (error) {
-        console.error(`[RealtimeFinalWorker] Failed to translate to ${targetLang}:`, error.message);
-        return { lang: targetLang, text: `[Translation error: ${targetLang}]` };
-      }
-    });
+    // SCALING FIX: Temporarily raise MAX_CONCURRENT for this call so that
+    // Promise.all() can open one connection per language pair in parallel
+    // instead of serializing through the single default slot.
+    // Cap at 5 to avoid connection thrashing / GC pressure.
+    const prevMax = this.MAX_CONCURRENT;
+    this.MAX_CONCURRENT = Math.min(langsToTranslate.length, 5);
+    console.log(`[RealtimeFinalWorker] 🔀 Raising MAX_CONCURRENT to ${this.MAX_CONCURRENT} for ${langsToTranslate.length} language(s)`);
 
-    const results = await Promise.all(translationPromises);
+    try {
+      // Translate to each target language in parallel
+      const translationPromises = langsToTranslate.map(async (targetLang) => {
+        try {
+          const translated = await this.translateFinal(text, sourceLang, targetLang, apiKey, sessionId);
+          return { lang: targetLang, text: translated };
+        } catch (error) {
+          console.error(`[RealtimeFinalWorker] Failed to translate to ${targetLang}:`, error.message);
+          return { lang: targetLang, text: `[Translation error: ${targetLang}]` };
+        }
+      });
 
-    results.forEach(({ lang, text }) => {
-      translations[lang] = text;
-    });
+      const results = await Promise.all(translationPromises);
+
+      results.forEach(({ lang, text }) => {
+        translations[lang] = text;
+      });
+    } finally {
+      // Always restore concurrency limit after this batch
+      this.MAX_CONCURRENT = prevMax;
+    }
 
     return translations;
   }

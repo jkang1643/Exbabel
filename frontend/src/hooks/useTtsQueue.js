@@ -84,30 +84,37 @@ export function useTtsQueue({
             eq.Q.value = 1.0;
             eq.gain.value = 3.0; // +3dB (Restored for clarity)
 
-            // 3. Drive (Loudness)
-            const preGain = audioContextRef.current.createGain();
-            preGain.gain.value = 2.0; // +6dB Drive
-
-            // 4. Single Broadcast Compressor (Levelling & Limiting)
-            // Replaces separate Limiter to avoid "ducking" conflicts.
-            // Ratio 8:1 acts as a soft limiter.
+            // 3. Broadcast Compressor (User Preferred Settings)
+            // Strong compression acts as leveller/soft-limiter
             const compressor = audioContextRef.current.createDynamicsCompressor();
             compressor.threshold.value = -24; // Start compressing early
-            compressor.knee.value = 30;       // Very soft knee for transparent gain reduction
-            compressor.ratio.value = 8;       // 8:1 (Strong compression / Soft Limiting)
+            compressor.knee.value = 30;       // Very soft knee
+            compressor.ratio.value = 8;       // 8:1 (Strong compression, User liked this)
             compressor.attack.value = 0.003;  // Fast attack
-            compressor.release.value = 0.1;   // 100ms release (User preference)
+            compressor.release.value = 0.1;   // 100ms release
 
-            // Connect Chain: HPF -> EQ -> PreGain -> Compressor -> Dest
+            // 3.5. Makeup Gain (Compressor Stage)
+            // Boost signal AFTER compression (+6dB)
+            const makeupGain = audioContextRef.current.createGain();
+            makeupGain.gain.value = 2.0;      // +6dB boost
+
+            // 4. Output Gain (Trim)
+            // Final trim (Unity)
+            const outputGain = audioContextRef.current.createGain();
+            outputGain.gain.value = 1.0;
+
+            // Connect Chain: HPF -> EQ -> Compressor -> MakeupGain -> OutGain -> Dest
+            // LIMITER REMOVED.
             hpf.connect(eq);
-            eq.connect(preGain);
-            preGain.connect(compressor);
-            compressor.connect(audioContextRef.current.destination);
+            eq.connect(compressor);
+            compressor.connect(makeupGain);
+            makeupGain.connect(outputGain);
+            outputGain.connect(audioContextRef.current.destination);
 
             // Store entry point
             gainNodeRef.current = hpf;
 
-            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Gain(+6dB) -> Compressor(8:1)');
+            console.log('[useTtsQueue] Initialized Vocal Channel Strip: HPF -> EQ -> Comp(8:1/-24dB) -> Makeup(+6dB) -> Out(Unity)');
         }
         // Resume if suspended (browser policy)
         if (audioContextRef.current.state === 'suspended') {

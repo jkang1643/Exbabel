@@ -137,7 +137,7 @@ Audio chunks → Google Speech Streaming API
 
 **Files:**
 - `backend/soloModeHandler.js` (solo mode)
-- `backend/hostModeHandler.js` (host/listener mode)
+- `backend/host/adapter.js` and `core/engine/coreEngine.js` (host/listener mode)
 
 #### 3a. Partial Results (DECOUPLED - For Speed)
 
@@ -211,9 +211,18 @@ Google Speech → Final (isPartial=false)
 
 ### 4. Translation Workers
 
-**File:** `backend/translationWorkers.js`
+**Files:** `backend/translationWorkers.js`, `backend/translationWorkersRealtime.js`
 
-#### PartialTranslationWorker
+#### RealtimePartialTranslationWorker (Host Mode)
+
+**Purpose:** Ultra low-latency translations using OpenAI's Realtime API.
+
+**Configuration:**
+- **Model:** `gpt-realtime-mini`
+- **Connection Strategy:** WebSocket pool. Connections are specifically closed after *each* partial response to prevent conversational context accumulation, maintaining consistent ~150-300ms latency.
+- **Concurrency:** `5` parallel workers, handling up to `30` pending requests.
+
+#### PartialTranslationWorker (Legacy/Solo)
 
 **Purpose:** Fast, low-latency translations for live updates
 
@@ -370,19 +379,37 @@ latestSeqIdRef.current = message.seqId;
 
 ### Host/Listener Mode
 
-**File:** `backend/hostModeHandler.js`
+**Files:** `backend/host/adapter.js`, `core/engine/coreEngine.js`
 
 **Flow:**
-1. Host connects → Google Speech stream initialized
-2. Listeners connect → join session, select target language
-3. Host audio → transcription → parallel translation to multiple languages
-4. Results broadcast to each language group
+1. Host connects → `host/adapter.js` delegates session management to `CoreEngine`.
+2. Audio stream → transcription → `CoreEngine` sequences messages via `TimelineOffsetTracker`.
+3. `RTTTracker` measures network latency to adjust finalization timing via `FinalizationEngine`.
+4. Translated segments are broadcast directly via `SessionStore` WebSockets.
 
 **Features:**
-- ✅ Multi-language broadcasting
-- ✅ Session management (`sessionStore.js`)
-- ✅ Real-time instant updates (0ms throttle)
-- ✅ Parallel translation to multiple target languages
+- ✅ Stateful orchestration separated from transport via `CoreEngine`.
+- ✅ Adaptive lookahead based on Round-Trip Time (RTT).
+- ✅ Real-time translations using OpenAI's Realtime API (`gpt-realtime-mini`).
+- ✅ Strict segment sequencing (`seqId`) guarantees correct display order.
+
+---
+
+### 8. Text-to-Speech (TTS) Pipeline
+
+**Files:** 
+- `backend/tts/TtsStreamingOrchestrator.js`
+- `frontend/src/tts/TtsPlayerController.js`
+
+**Flow:**
+1. Backend `TtsStreamingOrchestrator` queues finalized segments.
+2. Segments are routed to providers (e.g., ElevenLabs, Google).
+3. Audio chunks are streamed to frontend WebSockets.
+4. Frontend `TtsPlayerController` receives chunks and queues them.
+
+**Queue Processing & Latency:**
+- **Mode 1 (Radio Mode):** Enforces *strict sequential playback*. If segment `seqId=5` is requested but delayed, segment `seqId=6` *will not play* even if ready. This prevents out-of-order audio but can artificially inflate perceived latency if a single synthesis request stalls.
+- **Deduplication:** The controller actively discards duplicate segments based on text hashing to stabilize playback.
 
 ---
 

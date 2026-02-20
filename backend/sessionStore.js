@@ -348,7 +348,16 @@ class SessionStore {
   }
 
   /**
-   * Broadcast message to all listeners in a session
+   * Broadcast message to all listeners in a session.
+   *
+   * SCALING: Uses batched micro-yielding to prevent the event loop from being
+   * blocked by N synchronous ws.send() calls when listener count is large.
+   * For small groups (≤8) we send immediately to minimise latency.
+   * For larger groups we send 10 at a time, yielding via setImmediate between
+   * batches so incoming audio chunks and partial results aren't starved.
+   *
+   * Backpressure guard: listeners whose kernel send buffer exceeds 1 MB are
+   * skipped to prevent one slow client from stalling the whole loop.
    */
   broadcastToListeners(sessionId, message, targetLang = null) {
     const session = this.sessions.get(sessionId);
@@ -363,11 +372,22 @@ class SessionStore {
       listeners = Array.from(session.listeners.values());
     }
 
+    if (listeners.length === 0) return;
+
+    // Stringify once — never inside the loop
     const messageStr = JSON.stringify(message);
+    const BACKPRESSURE_LIMIT = 1024 * 1024; // 1 MB
+    const BATCH_SIZE = 10;
     let sentCount = 0;
 
-    listeners.forEach(listener => {
-      if (listener.socket.readyState === 1) { // WebSocket.OPEN
+    if (listeners.length <= 8) {
+      // Small group: send immediately for minimum latency
+      for (const listener of listeners) {
+        if (listener.socket.readyState !== 1) continue;
+        if (listener.socket.bufferedAmount > BACKPRESSURE_LIMIT) {
+          console.warn(`[SessionStore] ⚠️ Skipping slow listener (bufferedAmount=${listener.socket.bufferedAmount}) for ${targetLang || 'all'}`);
+          continue;
+        }
         try {
           listener.socket.send(messageStr);
           sentCount++;
@@ -380,9 +400,34 @@ class SessionStore {
           console.error(`[SessionStore] Error sending to listener:`, error.message);
         }
       }
-    });
-
-    if (DEBUG_BROADCAST) console.log(`[SessionStore] Broadcast to ${sentCount}/${listeners.length} listeners${targetLang ? ` (${targetLang})` : ''}`);
+      if (DEBUG_BROADCAST) console.log(`[SessionStore] Broadcast to ${sentCount}/${listeners.length} listeners${targetLang ? ` (${targetLang})` : ''}`);
+    } else {
+      // Large group: send in batches, yield between batches
+      let i = 0;
+      const processBatch = () => {
+        const end = Math.min(i + BATCH_SIZE, listeners.length);
+        for (; i < end; i++) {
+          const listener = listeners[i];
+          if (listener.socket.readyState !== 1) continue;
+          if (listener.socket.bufferedAmount > BACKPRESSURE_LIMIT) {
+            console.warn(`[SessionStore] ⚠️ Skipping slow listener (bufferedAmount=${listener.socket.bufferedAmount}) for ${targetLang || 'all'}`);
+            continue;
+          }
+          try {
+            listener.socket.send(messageStr);
+            sentCount++;
+          } catch (error) {
+            console.error(`[SessionStore] Error sending to listener:`, error.message);
+          }
+        }
+        if (i < listeners.length) {
+          setImmediate(processBatch);
+        } else if (DEBUG_BROADCAST) {
+          console.log(`[SessionStore] Broadcast (batched) to ${sentCount}/${listeners.length} listeners${targetLang ? ` (${targetLang})` : ''}`);
+        }
+      };
+      processBatch();
+    }
   }
 
   updateSourceLanguage(sessionId, sourceLang) {
