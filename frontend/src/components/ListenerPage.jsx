@@ -20,6 +20,7 @@ import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
 import { CaptionClientEngine, SentenceSegmenter } from '@jkang1643/caption-engine';
 import { useTtsStreaming } from '../hooks/useTtsStreaming';
 import TtsStreamingControl from './tts/TtsStreamingControl';
+import { AudioDebugOverlay } from './AudioDebugOverlay';
 
 // Dynamically determine backend URL based on frontend URL
 // If accessing via network IP, use the same IP for backend
@@ -1933,6 +1934,9 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
           {error}
         </div>
       )}
+
+      <AudioDebugOverlay />
+
       {/* TTS Routing Debug Overlay */}
       {import.meta.env.VITE_ENABLE_DEBUG_ROUTING === 'true' && routingDebug && (
         <div className="fixed bottom-20 left-4 z-50 bg-black/80 text-white text-[10px] p-2 rounded-md border border-gray-600 font-mono pointer-events-none max-w-xs shadow-xl backdrop-blur-sm">
