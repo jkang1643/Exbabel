@@ -38,7 +38,6 @@ export class StreamingAudioPlayer {
     /**
      * Unlock iOS Safari audio by priming the actual audio element
      * MUST be called from within a user gesture (e.g., Play button click)
-     * @returns {Function} A cleanup function to call when actual audio is ready
      */
     unlockFromUserGesture() {
         if (!this.audioElement) {
@@ -52,36 +51,28 @@ export class StreamingAudioPlayer {
             this.audioElement.playsInline = true; // React/JS casing
             this.audioElement.setAttribute('playsinline', ''); // HTML casing
             this.audioElement.setAttribute('webkit-playsinline', ''); // Legacy iOS casing
-            this.audioElement.loop = true; // Keep playing to hold the token
 
             // Tiny silent WAV
             this.audioElement.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
 
             const p = this.audioElement.play();
             if (p?.then) {
-                p.catch(err => {
+                p.then(() => {
+                    this.audioElement.pause();
+                    this.audioElement.currentTime = 0;
+                    this.audioElement.muted = false;
+                    console.log('[StreamingPlayer] iOS MEDIA ELEMENT UNLOCKED ✅');
+                    if (window.audioDebug) window.audioDebug('StreamingPlayer iOS MEDIA ELEMENT UNLOCKED ✅');
+                }).catch(err => {
                     console.warn('[StreamingPlayer] iOS media unlock failed:', err);
                     if (window.audioDebug) window.audioDebug('StreamingPlayer iOS media unlock failed', { error: err.message });
                 });
+            } else {
+                if (window.audioDebug) window.audioDebug('StreamingPlayer play() did not return a promise', { p });
             }
-
-            console.log('[StreamingPlayer] iOS MEDIA ELEMENT UNLOCKED (Looping) ✅');
-            if (window.audioDebug) window.audioDebug('StreamingPlayer iOS MEDIA ELEMENT UNLOCKED ✅');
-
-            // Return a cleanup function caller must invoke when ready to stream
-            return () => {
-                if (this.audioElement) {
-                    this.audioElement.pause();
-                    this.audioElement.currentTime = 0;
-                    this.audioElement.loop = false;
-                    this.audioElement.muted = false;
-                    console.log('[StreamingPlayer] Released looping silence');
-                }
-            };
         } catch (err) {
             console.warn('[StreamingPlayer] iOS media unlock threw:', err);
             if (window.audioDebug) window.audioDebug('StreamingPlayer iOS media unlock threw', { error: err.message });
-            return () => { }; // Safe no-op
         }
     }
 

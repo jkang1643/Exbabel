@@ -320,7 +320,6 @@ export function useTtsStreaming({
     }, [isConnected, sendAck]);
 
     // Allow manual unlock from user gesture
-    // Returns a cleanup function that should be called when actual audio begins
     const unlockAudio = useCallback(() => {
         if (!playerRef.current) {
             playerRef.current = new StreamingAudioPlayer({
@@ -339,7 +338,7 @@ export function useTtsStreaming({
                 }
             });
         }
-        return playerRef.current.unlockFromUserGesture();
+        playerRef.current.unlockFromUserGesture();
     }, []);
 
     return {

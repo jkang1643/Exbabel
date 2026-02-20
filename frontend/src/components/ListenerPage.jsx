@@ -152,9 +152,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const { updateText: updateTranslationText, clearText: clearTranslationText } = useImperativePainter(currentTranslationElRef, { shrinkDelayMs: 200 });
   const { updateText: updateOriginalText, clearText: clearOriginalText } = useImperativePainter(currentOriginalElRef, { shrinkDelayMs: 0 }); // No delay for transcription - show last word immediately
 
-
   const ttsControllerRef = useRef(null); // TTS controller for audio playback
-  const ttsUnlockCleanupRef = useRef(null); // Cleanup function for iOS audio unlock
 
   // SHARED ENGINE INTEGRATION
   useEffect(() => {
@@ -808,8 +806,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     }
 
     if (ttsStreaming && ttsStreaming.unlockAudio) {
-      // Store the cleanup function to be called when actual audio starts
-      ttsUnlockCleanupRef.current = ttsStreaming.unlockAudio();
+      ttsStreaming.unlockAudio();
       console.log('[ListenerPage] 🔓 Streaming Audio Player unlocked from Join gesture');
     }
 
@@ -899,12 +896,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     ws.onopen = () => {
       console.log('[Listener] WebSocket connected');
       setConnectionState('open');
-
-      // Stop the looping silence now that real connection is established
-      if (ttsUnlockCleanupRef.current) {
-        ttsUnlockCleanupRef.current();
-        ttsUnlockCleanupRef.current = null;
-      }
     };
 
     ws.onclose = () => {
