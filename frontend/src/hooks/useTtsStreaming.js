@@ -92,7 +92,8 @@ export function useTtsStreaming({
             // surfaces loudly and triggers a clean reconnect instead of
             // silently leaving the client unregistered on the backend.
             if (!playerRef.current) {
-                const player = new StreamingAudioPlayer({
+                // Should have been created by unlockAudio(), but fallback just in case
+                playerRef.current = new StreamingAudioPlayer({
                     jitterBufferMs: 500, // Increased for Host Mode broadcast architecture (was 150ms)
                     onBufferUpdate: (ms) => {
                         setBufferedMs(ms);
@@ -107,38 +108,38 @@ export function useTtsStreaming({
                         onErrorRef.current?.(err);
                     }
                 });
+            }
 
-                try {
-                    await player.start({
-                        streamId: `stream_${sessionId}_${Date.now()}`,
-                        codec: 'mp3',
-                        sampleRate: 44100,
-                        channels: 1,
-                        playbackRate: playbackRateRef.current
-                    });
-                    playerRef.current = player;
-                } catch (startErr) {
-                    // StreamingAudioPlayer failed to initialize (e.g. MediaSource timeout,
-                    // QuotaExceededError, unsupported format). Close and reconnect cleanly.
-                    console.error('[useTtsStreaming] ❌ StreamingAudioPlayer.start() failed — will reconnect:', startErr);
-                    onErrorRef.current?.(startErr);
-                    // Null out the broken player so the next connection starts fresh
-                    playerRef.current = null;
-                    // Remove listeners to prevent zombie events on this dead socket
-                    ws.onopen = null;
-                    ws.onmessage = null;
-                    ws.onclose = null;
-                    ws.onerror = null;
-                    ws.close();
-                    wsRef.current = null;
-                    setIsConnected(false);
-                    // Trigger reconnect after a short delay
-                    reconnectTimeoutRef.current = setTimeout(() => {
-                        console.log('[useTtsStreaming] Reconnecting after player init failure...');
-                        connect();
-                    }, 1500);
-                    return;
-                }
+            try {
+                await playerRef.current.start({
+                    streamId: `stream_${sessionId}_${Date.now()}`,
+                    codec: 'mp3',
+                    sampleRate: 44100,
+                    channels: 1,
+                    playbackRate: playbackRateRef.current
+                });
+                playerRef.current = player;
+            } catch (startErr) {
+                // StreamingAudioPlayer failed to initialize (e.g. MediaSource timeout,
+                // QuotaExceededError, unsupported format). Close and reconnect cleanly.
+                console.error('[useTtsStreaming] ❌ StreamingAudioPlayer.start() failed — will reconnect:', startErr);
+                onErrorRef.current?.(startErr);
+                // Null out the broken player so the next connection starts fresh
+                playerRef.current = null;
+                // Remove listeners to prevent zombie events on this dead socket
+                ws.onopen = null;
+                ws.onmessage = null;
+                ws.onclose = null;
+                ws.onerror = null;
+                ws.close();
+                wsRef.current = null;
+                setIsConnected(false);
+                // Trigger reconnect after a short delay
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    console.log('[useTtsStreaming] Reconnecting after player init failure...');
+                    connect();
+                }, 1500);
+                return;
             }
 
             // Send hello message with explicit clientId and subscribed language
@@ -318,13 +319,36 @@ export function useTtsStreaming({
         return () => clearInterval(interval);
     }, [isConnected, sendAck]);
 
+    // Allow manual unlock from user gesture
+    const unlockAudio = useCallback(() => {
+        if (!playerRef.current) {
+            playerRef.current = new StreamingAudioPlayer({
+                jitterBufferMs: 500,
+                onBufferUpdate: (ms) => {
+                    setBufferedMs(ms);
+                    onBufferUpdateRef.current?.(ms);
+                },
+                onUnderrun: (count) => {
+                    setStats(prev => ({ ...prev, underruns: count }));
+                    onUnderrunRef.current?.(count);
+                },
+                onError: (err) => {
+                    console.error('[useTtsStreaming] Player error:', err);
+                    onErrorRef.current?.(err);
+                }
+            });
+        }
+        playerRef.current.unlockFromUserGesture();
+    }, []);
+
     return {
         isConnected,
         isPlaying,
         bufferedMs,
         stats,
         connect,
-        disconnect
+        disconnect,
+        unlockAudio
     };
 }
 

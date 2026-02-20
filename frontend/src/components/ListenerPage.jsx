@@ -806,6 +806,11 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       console.log('[ListenerPage] 🔓 AudioContext unlocked from Join gesture');
     }
 
+    if (ttsStreaming && ttsStreaming.unlockAudio) {
+      ttsStreaming.unlockAudio();
+      console.log('[ListenerPage] 🔓 Streaming Audio Player unlocked from Join gesture');
+    }
+
     setIsJoining(true);
     setError('');
 

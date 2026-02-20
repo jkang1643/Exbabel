@@ -31,9 +31,42 @@ export class StreamingAudioPlayer {
         this.currentStreamId = null;
         this.currentSegmentId = null;
 
-        // Metrics
         this.bytesReceived = 0;
         this.chunksReceived = 0;
+    }
+
+    /**
+     * Unlock iOS Safari audio by priming the actual audio element
+     * MUST be called from within a user gesture (e.g., Play button click)
+     */
+    unlockFromUserGesture() {
+        if (!this.audioElement) {
+            this.audioElement = new Audio();
+            this.audioElement.autoplay = true;
+        }
+
+        try {
+            // Prime the *same* audio element you'll reuse later
+            this.audioElement.muted = true;
+            this.audioElement.playsInline = true;
+
+            // Tiny silent WAV
+            this.audioElement.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+
+            const p = this.audioElement.play();
+            if (p?.then) {
+                p.then(() => {
+                    this.audioElement.pause();
+                    this.audioElement.currentTime = 0;
+                    this.audioElement.muted = false;
+                    console.log('[StreamingPlayer] iOS MEDIA ELEMENT UNLOCKED ✅');
+                }).catch(err => {
+                    console.warn('[StreamingPlayer] iOS media unlock failed:', err);
+                });
+            }
+        } catch (err) {
+            console.warn('[StreamingPlayer] iOS media unlock threw:', err);
+        }
     }
 
     /**
@@ -45,9 +78,11 @@ export class StreamingAudioPlayer {
 
         this.currentStreamId = streamConfig.streamId;
 
-        // Create audio element
-        this.audioElement = new Audio();
-        this.audioElement.autoplay = true;
+        // Create audio element if it was not created by unlockFromUserGesture
+        if (!this.audioElement) {
+            this.audioElement = new Audio();
+            this.audioElement.autoplay = true;
+        }
 
         // Check MediaSource support
         if (!window.MediaSource) {
