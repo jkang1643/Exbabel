@@ -465,7 +465,26 @@ app.post('/session/start', async (req, res) => {
       }
     }
 
-    const { sessionId, sessionCode } = await sessionStore.createSession(null, null, overrideCode);
+    let overrideId = null;
+    if (overrideCode) {
+      // If using a permanent code, reuse the existing session UUID to prevent unique constraint violations on session_code
+      try {
+        const { data: existingSession, error: checkErr } = await supabaseAdmin
+          .from('sessions')
+          .select('id')
+          .eq('session_code', overrideCode)
+          .single();
+
+        if (!checkErr && existingSession) {
+          overrideId = existingSession.id;
+          console.log(`[Backend] Reusing existing session ID ${overrideId} for permanent code ${overrideCode}`);
+        }
+      } catch (err) {
+        console.warn(`[Backend] Error checking existing session for code ${overrideCode}:`, err.message);
+      }
+    }
+
+    const { sessionId, sessionCode } = await sessionStore.createSession(null, null, overrideCode, overrideId);
 
     res.json({
       success: true,

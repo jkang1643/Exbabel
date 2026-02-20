@@ -1365,6 +1365,7 @@ export async function handleListenerConnection(clientWs, req, sessionId, targetL
                   sampleRateHz: response.audio.sampleRateHz
                 },
                 mode: response.mode,
+                languageCode: ttsRequest.profile.languageCode, // Added for easier debugging
                 // Include resolved routing for frontend visibility
                 resolvedRoute: response.route,
                 ssmlOptions: ttsRequest.ssmlOptions || null

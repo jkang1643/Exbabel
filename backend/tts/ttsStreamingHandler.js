@@ -9,6 +9,7 @@ import { URL } from 'url';
 import {
     registerClient,
     unregisterClient,
+    updateClientLang,
     handleMessage,
     MessageType
 } from './ttsStreamingTransport.js';
@@ -50,6 +51,19 @@ export function handleTtsStreamingConnection(ws, req) {
                     if (ackData.bufferedMs !== undefined) {
                         console.log(`[TTS-WS] Client ack: bufferedMs=${ackData.bufferedMs}, underruns=${ackData.underruns || 0}`);
                     }
+                },
+                onSetLang: (clientId, newLang) => {
+                    // Listener is switching languages mid-session (no reconnect needed)
+                    const updated = updateClientLang(sessionId, clientId, newLang);
+                    if (updated) {
+                        console.log(`[TTS-WS] Language switch: session=${sessionId}, client=${clientId}, newLang=${newLang}`);
+                        // Also update local clientInfo ref so close handler has accurate state
+                        if (clientInfo && clientInfo.clientId === clientId) {
+                            clientInfo.lang = newLang || null;
+                        }
+                    } else {
+                        console.warn(`[TTS-WS] audio.set_lang: client ${clientId} not found in session ${sessionId}`);
+                    }
                 }
             });
 
@@ -61,7 +75,8 @@ export function handleTtsStreamingConnection(ws, req) {
                     capabilities: result.capabilities,
                     codec: result.codec,
                     sampleRate: result.sampleRate,
-                    streamId: result.streamId
+                    streamId: result.streamId,
+                    lang: result.targetLang || null
                 };
             }
         } catch (err) {
@@ -71,7 +86,7 @@ export function handleTtsStreamingConnection(ws, req) {
 
     // Handle connection close
     ws.on('close', (code, reason) => {
-        const clientDesc = clientInfo ? `Client ${clientInfo.clientId}` : 'Unknown Client (no hello)';
+        const clientDesc = clientInfo ? `Client ${clientInfo.clientId} (lang: ${clientInfo.lang || 'all'})` : 'Unknown Client (no hello)';
         console.log(`[TTS-WS] Connection closed for session ${sessionId}: ${code} ${reason} [${clientDesc}]`);
         if (clientInfo) {
             unregisterClient(sessionId, clientInfo);

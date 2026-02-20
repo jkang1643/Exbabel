@@ -16,6 +16,7 @@ import { StreamingAudioPlayer, decodeAudioFrame } from '../tts/StreamingAudioPla
 export function useTtsStreaming({
     sessionId,
     enabled = false,
+    targetLang = null,
     playbackRate = 1.0,
     onBufferUpdate,
     onUnderrun,
@@ -53,6 +54,8 @@ export function useTtsStreaming({
     const playerRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const clientIdRef = useRef(`client_${Date.now()}_${Math.random().toString(36).substring(7)}`);
+    // Track the lang the server knows about so we only send set_lang when it actually changes
+    const serverKnownLangRef = useRef(null);
 
     // Get WebSocket URL
     const getWebSocketUrl = useCallback(() => {
@@ -112,14 +115,16 @@ export function useTtsStreaming({
                 });
             }
 
-            // Send hello message with explicit clientId
+            // Send hello message with explicit clientId and subscribed language
             ws.send(JSON.stringify({
                 type: 'audio.hello',
                 clientId: clientIdRef.current,
                 capabilities: ['mp3'],
                 codec: 'mp3',
-                sampleRate: 44100
+                sampleRate: 44100,
+                targetLang: targetLang || null   // Tell server which language to filter to
             }));
+            serverKnownLangRef.current = targetLang || null;
         };
 
         ws.onmessage = (event) => {
@@ -255,6 +260,23 @@ export function useTtsStreaming({
             disconnect();
         };
     }, [enabled, connect, disconnect]);
+
+    // Mid-session language switch — send audio.set_lang without reconnecting
+    // When a listener switches their target language while already connected,
+    // we notify the server so it updates the registry filter immediately.
+    useEffect(() => {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (targetLang === serverKnownLangRef.current) return; // No change
+
+        console.log(`[useTtsStreaming] Language switch: ${serverKnownLangRef.current} → ${targetLang}`);
+        ws.send(JSON.stringify({
+            type: 'audio.set_lang',
+            clientId: clientIdRef.current,
+            lang: targetLang || null
+        }));
+        serverKnownLangRef.current = targetLang || null;
+    }, [targetLang]);
 
     // Periodic ACK sending
     useEffect(() => {

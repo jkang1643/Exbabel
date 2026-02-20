@@ -133,6 +133,106 @@ const emptyDecoded = decodeAudioFrame(emptyFrame);
 assertEquals(emptyDecoded.audioBytes.length, 0, 'Empty audio bytes decoded correctly');
 assertEquals(emptyDecoded.meta.isLast, true, 'isLast flag preserved');
 
+// ============================================================
+// Language Filtering Tests
+// ============================================================
+
+const { registerClient, unregisterClient, broadcastAudioFrame, broadcastControl, updateClientLang } = await import('../../../tts/ttsStreamingTransport.js');
+
+// Test 9: registerClient stores lang field
+console.log('\n=== Test 9: registerClient stores lang field ===');
+
+const sentMessages9 = [];
+const mockWs9 = { readyState: 1, send: (data) => sentMessages9.push(data) };
+registerClient('session9', { ws: mockWs9, clientId: 'c1', lang: 'es' });
+
+// Verify: broadcastAudioFrame with matching lang sends to client
+broadcastAudioFrame('session9', new Uint8Array([1, 2, 3]), 'es');
+assert(sentMessages9.length === 1, 'Spanish client receives Spanish audio frame');
+
+// Verify: broadcastAudioFrame with non-matching lang skips client
+broadcastAudioFrame('session9', new Uint8Array([4, 5, 6]), 'fr');
+assert(sentMessages9.length === 1, 'Spanish client does NOT receive French audio frame');
+
+// Verify: broadcastAudioFrame with no lang sends to everyone (backwards compat)
+broadcastAudioFrame('session9', new Uint8Array([7, 8, 9]), null);
+assert(sentMessages9.length === 2, 'No-lang broadcast reaches all clients');
+
+// Cleanup
+unregisterClient('session9', { ws: mockWs9, clientId: 'c1', lang: 'es' });
+
+// Test 10: Multiple language groups in same session
+console.log('\n=== Test 10: Multi-language session filtering ===');
+
+const esSent = [];
+const frSent = [];
+const mockWsEs = { readyState: 1, send: (d) => esSent.push(d) };
+const mockWsFr = { readyState: 1, send: (d) => frSent.push(d) };
+const esClient = { ws: mockWsEs, clientId: 'es-client', lang: 'es' };
+const frClient = { ws: mockWsFr, clientId: 'fr-client', lang: 'fr' };
+
+registerClient('session10', esClient);
+registerClient('session10', frClient);
+
+// Broadcast Spanish audio
+broadcastAudioFrame('session10', new Uint8Array([1]), 'es');
+assert(esSent.length === 1, 'Spanish client gets Spanish audio');
+assert(frSent.length === 0, 'French client does NOT get Spanish audio');
+
+// Broadcast French audio
+broadcastAudioFrame('session10', new Uint8Array([2]), 'fr');
+assert(esSent.length === 1, 'Spanish client does NOT get French audio');
+assert(frSent.length === 1, 'French client gets French audio');
+
+unregisterClient('session10', esClient);
+unregisterClient('session10', frClient);
+
+// Test 11: updateClientLang changes filter mid-session
+console.log('\n=== Test 11: updateClientLang mid-session switch ===');
+
+const switchSent = [];
+const mockWsSwitch = { readyState: 1, send: (d) => switchSent.push(d) };
+const switchClient = { ws: mockWsSwitch, clientId: 'switch-client', lang: 'es' };
+
+registerClient('session11', switchClient);
+
+// Before switch: receives Spanish, not French
+broadcastAudioFrame('session11', new Uint8Array([1]), 'es');
+assert(switchSent.length === 1, 'Before switch: receives Spanish');
+broadcastAudioFrame('session11', new Uint8Array([2]), 'fr');
+assert(switchSent.length === 1, 'Before switch: does NOT receive French');
+
+// Switch to French
+const updated = updateClientLang('session11', 'switch-client', 'fr');
+assert(updated === true, 'updateClientLang returns true for found client');
+
+// After switch: receives French, not Spanish
+broadcastAudioFrame('session11', new Uint8Array([3]), 'es');
+assert(switchSent.length === 1, 'After switch: does NOT receive Spanish');
+broadcastAudioFrame('session11', new Uint8Array([4]), 'fr');
+assert(switchSent.length === 2, 'After switch: receives French');
+
+unregisterClient('session11', switchClient);
+
+// Test 12: updateClientLang returns false for unknown client
+console.log('\n=== Test 12: updateClientLang unknown client ===');
+const notFound = updateClientLang('session11', 'nonexistent', 'de');
+assert(notFound === false, 'updateClientLang returns false for unknown client');
+
+// Test 13: broadcastControl language filtering
+console.log('\n=== Test 13: broadcastControl language filtering ===');
+
+const ctrlEs = [];
+const ctrlFr = [];
+const wsCtrlEs = { readyState: 1, send: (d) => ctrlEs.push(d) };
+const wsCtrlFr = { readyState: 1, send: (d) => ctrlFr.push(d) };
+registerClient('session13', { ws: wsCtrlEs, clientId: 'ctrl-es', lang: 'es' });
+registerClient('session13', { ws: wsCtrlFr, clientId: 'ctrl-fr', lang: 'fr' });
+
+broadcastControl('session13', { type: 'audio.start', lang: 'es' }, 'es');
+assert(ctrlEs.length === 1, 'broadcastControl sends to matching lang');
+assert(ctrlFr.length === 0, 'broadcastControl skips non-matching lang');
+
 // Summary
 console.log('\n=== Test Summary ===');
 console.log(`Passed: ${passed}`);
