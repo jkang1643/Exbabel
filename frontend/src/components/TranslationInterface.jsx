@@ -644,6 +644,17 @@ function TranslationInterface({ onBackToHome }) {
             return; // Skip committing partials - they should only update live text
           }
 
+          // ⚡ FORCED FINAL UPDATE GATE: Async grammar/translation refinements for a forced final
+          // carry isUpdate:true. They refine an ALREADY-committed history row — do NOT re-commit
+          // or call processFinal() again (which wipes segmenter state and causes a new-line hang).
+          if (message.isUpdate === true) {
+            const refinedText = message.translatedText || message.correctedText || '';
+            if (refinedText) {
+              flushSync(() => setLivePartial(refinedText));
+            }
+            break;
+          }
+
           const finalText = message.translatedText || message.correctedText || message.originalText || ''
           const finalSeqId = message.seqId
           const isForcedFinal = message.forceFinal === true
