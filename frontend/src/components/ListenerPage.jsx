@@ -524,35 +524,49 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
 
   // Initialize TTS Controller once
   useEffect(() => {
+    if (window.audioDebug) window.audioDebug(`ListenerPage TTS init check: UI_ENABLED=${TTS_UI_ENABLED}, hasRef=${!!ttsControllerRef.current}`);
     if (TTS_UI_ENABLED && !ttsControllerRef.current) {
       console.log('[ListenerPage] Initializing stable TTS controller');
-      ttsControllerRef.current = new TtsPlayerController((msg) => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify(msg));
-        }
-      });
+      if (window.audioDebug) window.audioDebug('Instantiating new TtsPlayerController...');
+      try {
+        ttsControllerRef.current = new TtsPlayerController((msg) => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify(msg));
+          }
+        });
+        if (window.audioDebug) window.audioDebug('TtsPlayerController instantiated successfully');
+      } catch (e) {
+        if (window.audioDebug) window.audioDebug(`TtsPlayerController instantiation FAILED: ${e.message}`);
+        console.error("Failed to init TTS controller", e);
+      }
     }
 
     // Attach listeners to update local state
     if (ttsControllerRef.current) {
-      ttsControllerRef.current.onStateChange = (newState) => {
+      const handleStateChange = (newState) => {
         setTtsState(newState);
       };
-      ttsControllerRef.current.onError = (err) => {
+      const handleError = (err) => {
         console.error('[ListenerPage] TTS Error:', err);
       };
-      ttsControllerRef.current.onRouteResolved = (route) => {
+      const handleRouteResolved = (route) => {
         console.log('[ListenerPage] TTS Route resolved:', route);
         setRoutingDebug(route);
       };
-      ttsControllerRef.current.onVoicesUpdate = (voices) => {
+      const handleVoicesUpdate = (voices) => {
         console.log('[ListenerPage] Received dynamic voices update:', voices.length);
         setAvailableVoices(voices);
       };
-      ttsControllerRef.current.onDefaultsUpdate = (defaults) => {
+      const handleDefaultsUpdate = (defaults) => {
         console.log('[ListenerPage] Received dynamic defaults update:', Object.keys(defaults).length);
         setTtsDefaults(defaults);
       };
+
+      ttsControllerRef.current.addListener('stateChange', handleStateChange);
+      ttsControllerRef.current.addListener('error', handleError);
+      ttsControllerRef.current.addListener('routeResolved', handleRouteResolved);
+      ttsControllerRef.current.addListener('voicesUpdate', handleVoicesUpdate);
+      ttsControllerRef.current.addListener('defaultsUpdate', handleDefaultsUpdate);
     }
 
     return () => {
@@ -882,6 +896,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     const ws = new WebSocket(
       `${finalWsUrl}?role=listener&sessionId=${sessionId}&targetLang=${lang}&userName=${encodeURIComponent(name)}&listenerId=${listenerId}`
     );
+    wsRef.current = ws;
 
     ws.onopen = () => {
       console.log('[Listener] WebSocket connected');

@@ -103,32 +103,40 @@ export function TtsPanel({ controller, targetLang, isConnected, translations }) 
 
     // Subscribe to controller state changes
     useEffect(() => {
-        controller.onStateChange = (newState) => {
+        const handleStateChange = (newState) => {
             setPlayerState(newState);
         };
 
-        controller.onError = (error) => {
+        const handleError = (error) => {
             console.error('[TtsPanel] Error:', error);
             alert(`TTS Error: ${error.message}`);
         };
 
-        controller.onRouteResolved = (route) => {
+        const handleRouteResolved = (route) => {
             console.log('[TtsPanel] Route resolved:', route);
             setResolvedRoute(route);
         };
 
-        controller.onVoicesUpdate = (voices) => {
+        const handleVoicesUpdate = (voices) => {
             console.log('[TtsPanel] Received dynamic voices update:', voices.length);
             setAvailableVoices(voices);
         };
 
+        if (controller) {
+            controller.addListener('stateChange', handleStateChange);
+            controller.addListener('error', handleError);
+            controller.addListener('routeResolved', handleRouteResolved);
+            controller.addListener('voicesUpdate', handleVoicesUpdate);
+        }
+
         return () => {
             console.log('[TtsPanel] Component unmounting, clearing listeners');
-            // Remove listeners when panel unmounts, but do NOT dispose controller
-            controller.onStateChange = null;
-            controller.onError = null;
-            controller.onRouteResolved = null;
-            controller.onVoicesUpdate = null;
+            if (controller) {
+                controller.removeListener('stateChange', handleStateChange);
+                controller.removeListener('error', handleError);
+                controller.removeListener('routeResolved', handleRouteResolved);
+                controller.removeListener('voicesUpdate', handleVoicesUpdate);
+            }
         };
     }, [controller]);
 

@@ -75,12 +75,21 @@ export class TtsPlayerController {
         this.currentRequestCount = 0; // Track active requests
         this._concurrencyFullSince = null; // Track when concurrency became saturated
 
-        // Callbacks
+        // Callbacks (Legacy - do not use for new code)
         this.onStateChange = null;
         this.onError = null;
-        this.onRouteResolved = null; // New callback for routing updates
-        this.onVoicesUpdate = null; // Callback for voice catalog updates
-        this.onDefaultsUpdate = null; // Callback for voice defaults updates
+        this.onRouteResolved = null;
+        this.onVoicesUpdate = null;
+        this.onDefaultsUpdate = null;
+
+        // Multi-listener support
+        this._listeners = {
+            stateChange: new Set(),
+            error: new Set(),
+            routeResolved: new Set(),
+            voicesUpdate: new Set(),
+            defaultsUpdate: new Set()
+        };
 
         this.lastRequestId = 0; // Track latest request ID to prevent out-of-order playback
 
@@ -179,53 +188,111 @@ export class TtsPlayerController {
         this._isProcessingQueue = false; // Serialize queue processing
 
         // Queue health monitoring (every 5 seconds)
-        this.queueHealthInterval = setInterval(() => {
-            if (this.state === TtsPlayerState.PLAYING) {
-                const pending = this.queue.filter(i => i.status === 'pending').length;
-                const requesting = this.queue.filter(i => i.status === 'requesting').length;
-                const ready = this.queue.filter(i => i.status === 'ready').length;
+        this.queueHealthInterval = setInterval(() => this._checkQueueHealth(), 5000);
+    }
 
-                // Actual playing count should be 0 or 1 based on currentAudio
-                const playing = this.currentAudio ? 1 : 0;
-                const playingInQueue = this.queue.filter(i => i.status === 'playing').length;
+    /**
+     * Add an event listener
+     * @param {string} event - Event name (stateChange, error, routeResolved, voicesUpdate, defaultsUpdate)
+     * @param {Function} callback - Callback function
+     */
+    addListener(event, callback) {
+        if (this._listeners && this._listeners[event]) {
+            this._listeners[event].add(callback);
+        }
+    }
 
-                // Invariant checks
-                if (playingInQueue > 1) {
-                    console.error('[TTS INVARIANT VIOLATION] Multiple items marked playing in queue:', playingInQueue);
-                }
-                if (this.currentAudio && playingInQueue === 0) {
-                    console.warn('[TTS STATE DRIFT] currentAudio exists but no item marked playing in queue');
-                }
+    /**
+     * Remove an event listener
+     * @param {string} event - Event name
+     * @param {Function} callback - Callback function
+     */
+    removeListener(event, callback) {
+        if (this._listeners && this._listeners[event]) {
+            this._listeners[event].delete(callback);
+        }
+    }
 
-                console.log('[TTS QUEUE HEALTH]', {
-                    total: this.queue.length,
-                    pending,
-                    requesting,
-                    ready,
-                    playing,
-                    playingSegmentId: this.currentAudio ? this.queue.find(i => i.status === 'playing')?.segmentId : null,
-                    currentRequestCount: this.currentRequestCount,
-                    maxConcurrent: this.maxConcurrentRequests,
-                    utilizationPct: Math.round((this.currentRequestCount / this.maxConcurrentRequests) * 100)
-                });
+    /**
+     * Internal event emitter
+     */
+    _emit(event, ...args) {
+        if (this._listeners && this._listeners[event]) {
+            this._listeners[event].forEach(cb => cb(...args));
+        }
 
-                // Alert if queue is growing too large
-                if (this.queue.length > 10) {
-                    console.warn('[TTS] Queue is growing large, may indicate lag:', this.queue.length);
-                }
+        // Legacy fallback
+        const legacyProp = 'on' + event.charAt(0).toUpperCase() + event.slice(1);
+        if (this[legacyProp]) {
+            this[legacyProp](...args);
+        }
+    }
 
-                // Alert if all concurrency slots are used for >10s
-                if (this.currentRequestCount >= this.maxConcurrentRequests) {
-                    if (!this._concurrencyFullSince) {
-                        this._concurrencyFullSince = Date.now();
-                    } else if (Date.now() - this._concurrencyFullSince > 10000) {
-                        console.error('[TTS] Concurrency saturated for >10s, system is lagging behind');
-                    }
-                } else {
-                    this._concurrencyFullSince = null;
-                }
+    /**
+     * Prime the audio element and context
+     * @private
+     */
+    _prime() {
+        // Ensure audio context is resumed if suspended (iOS Safari)
+        if (this._audioCtx && this._audioCtx.state === 'suspended') {
+            this._audioCtx.resume().then(() => {
+                console.log('[TtsPlayerController] AudioContext resumed during prime.');
+            }).catch(e => {
+                console.warn('[TtsPlayerController] Failed to resume AudioContext during prime:', e);
+            });
+        }
+    }
+
+    /**
+     * Check queue health and log diagnostics
+     * @private
+     */
+    _checkQueueHealth() {
+        if (this.state === TtsPlayerState.PLAYING) {
+            const pending = this.queue.filter(i => i.status === 'pending').length;
+            const requesting = this.queue.filter(i => i.status === 'requesting').length;
+            const ready = this.queue.filter(i => i.status === 'ready').length;
+
+            // Actual playing count should be 0 or 1 based on currentAudio
+            const playing = this.currentAudio ? 1 : 0;
+            const playingInQueue = this.queue.filter(i => i.status === 'playing').length;
+
+            // Invariant checks
+            if (playingInQueue > 1) {
+                console.error('[TTS INVARIANT VIOLATION] Multiple items marked playing in queue:', playingInQueue);
             }
-        }, 5000);
+            if (this.currentAudio && playingInQueue === 0) {
+                console.warn('[TTS STATE DRIFT] currentAudio exists but no item marked playing in queue');
+            }
+
+            console.log('[TTS QUEUE HEALTH]', {
+                total: this.queue.length,
+                pending,
+                requesting,
+                ready,
+                playing,
+                playingSegmentId: this.currentAudio ? this.queue.find(i => i.status === 'playing')?.segmentId : null,
+                currentRequestCount: this.currentRequestCount,
+                maxConcurrent: this.maxConcurrentRequests,
+                utilizationPct: Math.round((this.currentRequestCount / this.maxConcurrentRequests) * 100)
+            });
+
+            // Alert if queue is growing too large
+            if (this.queue.length > 10) {
+                console.warn('[TTS] Queue is growing large, may indicate lag:', this.queue.length);
+            }
+
+            // Alert if all concurrency slots are used for >10s
+            if (this.currentRequestCount >= this.maxConcurrentRequests) {
+                if (!this._concurrencyFullSince) {
+                    this._concurrencyFullSince = Date.now();
+                } else if (Date.now() - this._concurrencyFullSince > 10000) {
+                    console.error('[TTS] Concurrency saturated for >10s, system is lagging behind');
+                }
+            } else {
+                this._concurrencyFullSince = null;
+            }
+        }
     }
 
     /**
@@ -365,9 +432,7 @@ export class TtsPlayerController {
         }
 
         // Notify state change
-        if (this.onStateChange) {
-            this.onStateChange(this.state);
-        }
+        this._emit('stateChange', this.state);
     }
 
     /**
@@ -404,9 +469,7 @@ export class TtsPlayerController {
         }
 
         // Notify state change
-        if (this.onStateChange) {
-            this.onStateChange(this.state);
-        }
+        this._emit('stateChange', this.state);
     }
 
     /**
@@ -434,9 +497,7 @@ export class TtsPlayerController {
         }
 
         // Notify state change
-        if (this.onStateChange) {
-            this.onStateChange(this.state);
-        }
+        this._emit('stateChange', this.state);
     }
 
     /**
@@ -469,9 +530,7 @@ export class TtsPlayerController {
         }
 
         // Notify state change
-        if (this.onStateChange) {
-            this.onStateChange(this.state);
-        }
+        this._emit('stateChange', this.state);
     }
 
     /**
@@ -699,17 +758,13 @@ export class TtsPlayerController {
                     voiceName: v.voiceName,
                     isAllowed: v.isAllowed  // Pass through server's tier gating decision
                 }));
-                if (this.onVoicesUpdate) {
-                    this.onVoicesUpdate(this.voices);
-                }
+                this._emit('voicesUpdate', this.voices);
                 break;
 
             case 'tts/defaults':
                 console.log(`[TtsPlayerController] Received defaults for ${Object.keys(msg.defaultsByLanguage || {}).length} languages`);
                 this.defaults = msg.defaultsByLanguage || {};
-                if (this.onDefaultsUpdate) {
-                    this.onDefaultsUpdate(this.defaults);
-                }
+                this._emit('defaultsUpdate', this.defaults);
                 break;
 
             case 'tts/audio': {
@@ -751,9 +806,7 @@ export class TtsPlayerController {
                     console.log('[TtsPlayerController] Resolved route:', msg.resolvedRoute);
 
                     // Notify listeners of routing resolution
-                    if (this.onRouteResolved) {
-                        this.onRouteResolved(msg.resolvedRoute);
-                    }
+                    this._emit('routeResolved', this.lastResolvedRoute);
                 }
 
                 // Store in queue with "ready" status (streaming-compatible structure)
@@ -886,9 +939,7 @@ export class TtsPlayerController {
                     }
                 }
 
-                if (this.onError) {
-                    this.onError(msg);
-                }
+                this._emit('error', msg);
                 break;
 
             default:
@@ -916,12 +967,10 @@ export class TtsPlayerController {
 
         if (!this.currentLanguageCode) {
             console.error('[TtsPlayerController] Cannot speak: language not set');
-            if (this.onError) {
-                this.onError({
-                    code: 'INVALID_STATE',
-                    message: 'TTS not initialized. Call start() first.'
-                });
-            }
+            this._emit('error', {
+                code: 'INVALID_STATE',
+                message: 'TTS not initialized. Call start() first.'
+            });
             return;
         }
 
