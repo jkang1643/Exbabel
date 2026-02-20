@@ -99,56 +99,64 @@ export class TtsPlayerController {
             // Web Audio API gain boost (250% = 2.5x)
             // MediaElementSourceNode can only be created once per element, so we wire it here.
             try {
-                const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-                if (AudioContextClass) {
-                    this._audioCtx = new AudioContextClass();
+                const isIOS = typeof navigator !== 'undefined' &&
+                    (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
-                    // Track state changes
-                    this._audioCtx.onstatechange = () => {
-                        console.log(`[TtsPlayerController] AudioContext state changed to: ${this._audioCtx.state}`);
-                    };
+                if (!isIOS) {
+                    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+                    if (AudioContextClass) {
+                        this._audioCtx = new AudioContextClass();
 
-                    // Vocal Channel Strip: HPF -> Presence EQ -> Saturation -> Gain -> Limiter
+                        // Track state changes
+                        this._audioCtx.onstatechange = () => {
+                            console.log(`[TtsPlayerController] AudioContext state changed to: ${this._audioCtx.state}`);
+                        };
 
-                    // 1. High-Pass Filter
-                    const hpf = this._audioCtx.createBiquadFilter();
-                    hpf.type = 'highpass';
-                    hpf.frequency.value = 80;
+                        // Vocal Channel Strip: HPF -> Presence EQ -> Saturation -> Gain -> Limiter
 
-                    // 2. Presence EQ
-                    const eq = this._audioCtx.createBiquadFilter();
-                    eq.type = 'peaking';
-                    eq.frequency.value = 3000;
-                    eq.Q.value = 1.0;
-                    eq.gain.value = 3.0;
+                        // 1. High-Pass Filter
+                        const hpf = this._audioCtx.createBiquadFilter();
+                        hpf.type = 'highpass';
+                        hpf.frequency.value = 80;
 
-                    // 3. Broadcast Compressor (User Preferred Settings)
-                    const compressor = this._audioCtx.createDynamicsCompressor();
-                    compressor.threshold.value = -24;
-                    compressor.knee.value = 30;
-                    compressor.ratio.value = 8;
-                    compressor.attack.value = 0.003;
-                    compressor.release.value = 0.1;
+                        // 2. Presence EQ
+                        const eq = this._audioCtx.createBiquadFilter();
+                        eq.type = 'peaking';
+                        eq.frequency.value = 3000;
+                        eq.Q.value = 1.0;
+                        eq.gain.value = 3.0;
 
-                    // 3.5. Makeup Gain
-                    const makeupGain = this._audioCtx.createGain();
-                    makeupGain.gain.value = 2.0; // +6dB
+                        // 3. Broadcast Compressor (User Preferred Settings)
+                        const compressor = this._audioCtx.createDynamicsCompressor();
+                        compressor.threshold.value = -24;
+                        compressor.knee.value = 30;
+                        compressor.ratio.value = 8;
+                        compressor.attack.value = 0.003;
+                        compressor.release.value = 0.1;
 
-                    // 4. Output Gain (Trim)
-                    this._gainNode = this._audioCtx.createGain();
-                    this._gainNode.gain.value = 1.0; // Unity
+                        // 3.5. Makeup Gain
+                        const makeupGain = this._audioCtx.createGain();
+                        makeupGain.gain.value = 2.0; // +6dB
 
-                    const src = this._audioCtx.createMediaElementSource(this.audioEl);
+                        // 4. Output Gain (Trim)
+                        this._gainNode = this._audioCtx.createGain();
+                        this._gainNode.gain.value = 1.0; // Unity
 
-                    // Connect Chain: HPF -> EQ -> Compressor -> Makeup -> Out -> Dest
-                    src.connect(hpf);
-                    hpf.connect(eq);
-                    eq.connect(compressor);
-                    compressor.connect(makeupGain);
-                    makeupGain.connect(this._gainNode);
-                    this._gainNode.connect(this._audioCtx.destination);
+                        const src = this._audioCtx.createMediaElementSource(this.audioEl);
 
-                    console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Comp(8:1/-24dB) -> Makeup(+6dB) -> Out(Unity). Context state: ${this._audioCtx.state}`);
+                        // Connect Chain: HPF -> EQ -> Compressor -> Makeup -> Out -> Dest
+                        src.connect(hpf);
+                        hpf.connect(eq);
+                        eq.connect(compressor);
+                        compressor.connect(makeupGain);
+                        makeupGain.connect(this._gainNode);
+                        this._gainNode.connect(this._audioCtx.destination);
+
+                        console.log(`[TtsPlayerController] Wired Vocal Channel Strip: HPF -> EQ -> Comp(8:1/-24dB) -> Makeup(+6dB) -> Out(Unity). Context state: ${this._audioCtx.state}`);
+                    }
+                } else {
+                    console.log('[TtsPlayerController] Bypassing Web Audio API (Vocal Channel Strip) on iOS to prevent silent playback bugs.');
                 }
             } catch (err) {
                 console.warn('[TtsPlayerController] Web Audio API gain setup failed, falling back to native volume:', err);
@@ -250,7 +258,7 @@ export class TtsPlayerController {
 
         try {
             // Prime the *same* audio element you'll reuse later
-            this.audioEl.muted = true;
+            this.audioEl.muted = false; // ensure it's not permanently muted from a previous state
             this.audioEl.playsInline = true; // React/JS casing
             this.audioEl.setAttribute('playsinline', ''); // HTML casing
             this.audioEl.setAttribute('webkit-playsinline', ''); // Legacy iOS casing
@@ -1257,9 +1265,12 @@ export class TtsPlayerController {
             if (window.audioDebug) {
                 window.audioDebug("play() attempt", {
                     segment: queueItem.segmentId,
-                    src: audio.src?.substring(0, 50) + '...',
+                    srcLen: audio.src ? audio.src.length : 0,
                     readyState: audio.readyState,
-                    paused: audio.paused
+                    paused: audio.paused,
+                    volume: audio.volume,
+                    muted: audio.muted,
+                    ctxState: this._audioCtx ? this._audioCtx.state : 'none'
                 });
             }
 
