@@ -170,6 +170,7 @@ export class TtsPlayerController {
         // Diagnostic tracking
         this.instanceId = Math.random().toString(16).slice(2);
         console.log(`[TtsPlayerController] init ${this.instanceId}`);
+        if (window.audioDebug) window.audioDebug(`init ${this.instanceId}, hasAudioEl=${!!this.audioEl}`);
 
         // Safeties
         this.playedSet = new Set(); // Prevent duplicate playback of the same segment
@@ -253,6 +254,7 @@ export class TtsPlayerController {
 
         if (!this.audioEl) {
             console.warn('[TtsPlayerController] No audioEl available for unlock');
+            if (window.audioDebug) window.audioDebug('unlock failed: no audioEl');
             return;
         }
 
@@ -1398,6 +1400,7 @@ export class TtsPlayerController {
      */
     dispose() {
         console.log(`[TtsPlayerController] Disposing controller [idx:${this.instanceId}]`);
+        if (window.audioDebug) window.audioDebug(`dispose ${this.instanceId}`);
 
         // Clear queue health monitoring interval
         if (this.queueHealthInterval) {
