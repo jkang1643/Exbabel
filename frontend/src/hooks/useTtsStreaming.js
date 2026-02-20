@@ -87,9 +87,12 @@ export function useTtsStreaming({
             console.log('[useTtsStreaming] Connected');
             setIsConnected(true);
 
-            // Initialize player
+            // Initialize player — wrapped in try/catch so that any failure
+            // (MediaSource timeout, QuotaExceededError, Safari quirk, etc.)
+            // surfaces loudly and triggers a clean reconnect instead of
+            // silently leaving the client unregistered on the backend.
             if (!playerRef.current) {
-                playerRef.current = new StreamingAudioPlayer({
+                const player = new StreamingAudioPlayer({
                     jitterBufferMs: 500, // Increased for Host Mode broadcast architecture (was 150ms)
                     onBufferUpdate: (ms) => {
                         setBufferedMs(ms);
@@ -105,14 +108,37 @@ export function useTtsStreaming({
                     }
                 });
 
-                // Start player with MP3 config
-                await playerRef.current.start({
-                    streamId: `stream_${sessionId}_${Date.now()}`,
-                    codec: 'mp3',
-                    sampleRate: 44100,
-                    channels: 1,
-                    playbackRate: playbackRateRef.current
-                });
+                try {
+                    await player.start({
+                        streamId: `stream_${sessionId}_${Date.now()}`,
+                        codec: 'mp3',
+                        sampleRate: 44100,
+                        channels: 1,
+                        playbackRate: playbackRateRef.current
+                    });
+                    playerRef.current = player;
+                } catch (startErr) {
+                    // StreamingAudioPlayer failed to initialize (e.g. MediaSource timeout,
+                    // QuotaExceededError, unsupported format). Close and reconnect cleanly.
+                    console.error('[useTtsStreaming] ❌ StreamingAudioPlayer.start() failed — will reconnect:', startErr);
+                    onErrorRef.current?.(startErr);
+                    // Null out the broken player so the next connection starts fresh
+                    playerRef.current = null;
+                    // Remove listeners to prevent zombie events on this dead socket
+                    ws.onopen = null;
+                    ws.onmessage = null;
+                    ws.onclose = null;
+                    ws.onerror = null;
+                    ws.close();
+                    wsRef.current = null;
+                    setIsConnected(false);
+                    // Trigger reconnect after a short delay
+                    reconnectTimeoutRef.current = setTimeout(() => {
+                        console.log('[useTtsStreaming] Reconnecting after player init failure...');
+                        connect();
+                    }, 1500);
+                    return;
+                }
             }
 
             // Send hello message with explicit clientId and subscribed language

@@ -797,6 +797,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
       return;
     }
 
+    // CRITICAL: Unlock AudioContext HERE — we are inside a direct user gesture (the Join button click).
+    // This must happen synchronously before any await, while the browser still considers
+    // this a trusted user interaction. Without this, AudioContext stays 'suspended' and
+    // auto-play silently fails on iOS/Chrome ~15% of the time.
+    if (ttsControllerRef.current) {
+      ttsControllerRef.current.unlockFromUserGesture();
+      console.log('[ListenerPage] 🔓 AudioContext unlocked from Join gesture');
+    }
+
     setIsJoining(true);
     setError('');
 
@@ -1732,17 +1741,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                                 title="Copy"
                               >
                                 📋
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const utterance = new SpeechSynthesisUtterance(item.translated);
-                                  speechSynthesis.speak(utterance);
-                                }}
-                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                                title="Listen"
-                              >
-                                🔊
                               </button>
                             </div>
                           </div>
