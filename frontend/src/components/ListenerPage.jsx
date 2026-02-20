@@ -13,7 +13,7 @@ import { TtsPlayerController } from '../tts/TtsPlayerController.js';
 
 import { TRANSLATION_LANGUAGES } from '../config/languages.js';
 
-import { Play, Square, Settings, Volume2 } from 'lucide-react';
+import { Play, Square, Settings } from 'lucide-react';
 import { TtsSettingsModal } from './TtsSettingsModal';
 import { TtsMode, TtsPlayerState } from '../tts/types.js';
 import { getDeliveryStyle, voiceSupportsSSML } from '../config/ssmlConfig.js';
@@ -151,6 +151,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   // Imperative painters for live partial text (avoids React state churn)
   const { updateText: updateTranslationText, clearText: clearTranslationText } = useImperativePainter(currentTranslationElRef, { shrinkDelayMs: 200 });
   const { updateText: updateOriginalText, clearText: clearOriginalText } = useImperativePainter(currentOriginalElRef, { shrinkDelayMs: 0 }); // No delay for transcription - show last word immediately
+
 
   const ttsControllerRef = useRef(null); // TTS controller for audio playback
 
@@ -803,22 +804,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     if (ttsControllerRef.current) {
       ttsControllerRef.current.unlockFromUserGesture();
       console.log('[ListenerPage] 🔓 AudioContext unlocked from Join gesture');
-    }
-
-    if (ttsStreaming && ttsStreaming.unlockAudio) {
-      ttsStreaming.unlockAudio();
-      console.log('[ListenerPage] 🔓 Streaming Audio Player unlocked from Join gesture');
-    }
-
-    // CRITICAL: iOS needs SpeechSynthesis to be touched at least once during a user gesture
-    // Otherwise it fails to initialize the subsystem, even if we are using Web Audio API / MediaSource.
-    try {
-      const utterance = new SpeechSynthesisUtterance('');
-      utterance.volume = 0;
-      speechSynthesis.speak(utterance);
-      console.log('[ListenerPage] 🔓 SpeechSynthesis primed from Join gesture');
-    } catch (e) {
-      console.warn('[ListenerPage] Failed to prime SpeechSynthesis', e);
     }
 
     setIsJoining(true);
@@ -1724,37 +1709,21 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                       }}
                       className="bg-white rounded-lg p-4 sm:p-5 shadow-sm hover:shadow-md transition-all border border-gray-200 cursor-pointer"
                     >
+                      {/* Show translation by default, tap to reveal original */}
                       {(() => { const itemKey = item.seqId !== -1 && item.seqId != null ? `seq_${item.seqId}` : `ts_${item.timestamp}`; return showOriginalMapRef.current.get(itemKey); })() && item.original ? (
                         <div>
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-semibold text-blue-600 uppercase">Original (Tap to hide)</span>
-                            <div className="flex items-center space-x-1">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if ('speechSynthesis' in window) {
-                                    window.speechSynthesis.cancel();
-                                    const utterance = new SpeechSynthesisUtterance(item.original);
-                                    utterance.lang = sessionInfo?.sourceLang || 'en';
-                                    window.speechSynthesis.speak(utterance);
-                                  }
-                                }}
-                                className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
-                                title="Play Original"
-                              >
-                                <Volume2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  navigator.clipboard.writeText(item.original);
-                                }}
-                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                                title="Copy"
-                              >
-                                📋
-                              </button>
-                            </div>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(item.original);
+                              }}
+                              className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                              title="Copy"
+                            >
+                              📋
+                            </button>
                           </div>
                           <p className="text-gray-900 text-lg sm:text-xl md:text-2xl leading-relaxed font-medium">{item.original}</p>
                         </div>
@@ -1766,27 +1735,23 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if ('speechSynthesis' in window) {
-                                    window.speechSynthesis.cancel();
-                                    const utterance = new SpeechSynthesisUtterance(item.translated);
-                                    utterance.lang = targetLang;
-                                    window.speechSynthesis.speak(utterance);
-                                  }
-                                }}
-                                className="p-1 text-gray-400 hover:text-green-600 transition-colors"
-                                title="Play Translation"
-                              >
-                                <Volume2 className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
                                   navigator.clipboard.writeText(item.translated);
                                 }}
                                 className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
                                 title="Copy"
                               >
                                 📋
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const utterance = new SpeechSynthesisUtterance(item.translated);
+                                  speechSynthesis.speak(utterance);
+                                }}
+                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                title="Listen"
+                              >
+                                🔊
                               </button>
                             </div>
                           </div>
