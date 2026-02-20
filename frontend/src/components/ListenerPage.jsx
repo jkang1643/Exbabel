@@ -136,6 +136,10 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const [routingDebug, setRoutingDebug] = useState(null);
   const [isJoining, setIsJoining] = useState(false);
   const [showOriginal, setShowOriginal] = useState(false); // Toggle for showing original text
+  // Stable map: item identity key -> boolean, survives setTranslations() replacements
+  const showOriginalMapRef = useRef(new Map());
+  // Dummy state to force re-render when the map changes
+  const [showOriginalVersion, setShowOriginalVersion] = useState(0);
 
   const wsRef = useRef(null);
   const engineRef = useRef(null); // Shared engine ref
@@ -316,6 +320,7 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
   const ttsStreaming = useTtsStreaming({
     sessionId: sessionInfo?.sessionId || streamingSessionIdRef.current,
     enabled: streamingTts && isJoined && connectionState === 'open',
+    targetLang: targetLang,  // Filter server-side audio delivery to this language only
     playbackRate: getEffectivePlaybackRate(),
     onBufferUpdate: (ms) => {
       console.log('[ListenerPage] Buffer:', ms, 'ms');
@@ -790,6 +795,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
     if (!sessionCode.trim()) {
       setError('Please enter a session code');
       return;
+    }
+
+    // CRITICAL: Unlock AudioContext HERE — we are inside a direct user gesture (the Join button click).
+    // This must happen synchronously before any await, while the browser still considers
+    // this a trusted user interaction. Without this, AudioContext stays 'suspended' and
+    // auto-play silently fails on iOS/Chrome ~15% of the time.
+    if (ttsControllerRef.current) {
+      ttsControllerRef.current.unlockFromUserGesture();
+      console.log('[ListenerPage] 🔓 AudioContext unlocked from Join gesture');
     }
 
     setIsJoining(true);
@@ -1688,14 +1702,15 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                     <div
                       key={index}
                       onClick={() => {
-                        const updatedTranslations = [...translations];
-                        updatedTranslations[actualIndex] = { ...item, showOriginal: !item.showOriginal };
-                        setTranslations(updatedTranslations);
+                        const itemKey = item.seqId !== -1 && item.seqId != null ? `seq_${item.seqId}` : `ts_${item.timestamp}`;
+                        const current = showOriginalMapRef.current.get(itemKey) || false;
+                        showOriginalMapRef.current.set(itemKey, !current);
+                        setShowOriginalVersion(v => v + 1); // force re-render
                       }}
                       className="bg-white rounded-lg p-4 sm:p-5 shadow-sm hover:shadow-md transition-all border border-gray-200 cursor-pointer"
                     >
                       {/* Show translation by default, tap to reveal original */}
-                      {item.showOriginal && item.original ? (
+                      {(() => { const itemKey = item.seqId !== -1 && item.seqId != null ? `seq_${item.seqId}` : `ts_${item.timestamp}`; return showOriginalMapRef.current.get(itemKey); })() && item.original ? (
                         <div>
                           <div className="flex items-center justify-between mb-2">
                             <span className="text-xs font-semibold text-blue-600 uppercase">Original (Tap to hide)</span>
@@ -1726,17 +1741,6 @@ export function ListenerPage({ sessionCodeProp, onBackToHome }) {
                                 title="Copy"
                               >
                                 📋
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const utterance = new SpeechSynthesisUtterance(item.translated);
-                                  speechSynthesis.speak(utterance);
-                                }}
-                                className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-                                title="Listen"
-                              >
-                                🔊
                               </button>
                             </div>
                           </div>

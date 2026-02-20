@@ -35,9 +35,18 @@ class SessionStore {
    * @param {string|null} hostUserId - Optional host user ID
    * @returns {Promise<Object>} { sessionId, sessionCode }
    */
-  async createSession(churchId = null, hostUserId = null, overrideCode = null) {
-    const sessionId = this.generateUUID();
+  async createSession(churchId = null, hostUserId = null, overrideCode = null, overrideId = null) {
+    const sessionId = overrideId || this.generateUUID();
     const sessionCode = overrideCode || this.generateSessionCode();
+
+    // If session already exists in memory (e.g., host reconnected/refreshed), reuse it
+    if (this.sessions.has(sessionId)) {
+      console.log(`[SessionStore] Session ${sessionId} already exists in memory. Reusing it to preserve listeners.`);
+      const existingSession = this.sessions.get(sessionId);
+      if (churchId && !existingSession.churchId) existingSession.churchId = churchId;
+      if (hostUserId && !existingSession.hostUserId) existingSession.hostUserId = hostUserId;
+      return { sessionId, sessionCode };
+    }
 
     const sessionData = {
       sessionId,

@@ -13,21 +13,25 @@ import { TTS_STREAMING_CONFIG } from './ttsStreamingConfig.js';
 
 /**
  * Registry of WebSocket clients per session
- * Structure: { sessionId: Set<{ ws, clientId, capabilities, codec, sampleRate }> }
+ * Structure: { sessionId: Set<{ ws, clientId, capabilities, codec, sampleRate, lang }> }
+ * 
+ * NOTE: `lang` is the listener's subscribed language (e.g. 'es', 'fr').
+ * When set, broadcastAudioFrame and broadcastControl will only send to clients
+ * whose lang matches. Clients with lang=null receive all frames (backwards compat).
  */
 const ttsWsRegistry = new Map();
 
 /**
  * Register a client for TTS streaming
  * @param {string} sessionId 
- * @param {Object} clientInfo - { ws, clientId, capabilities, codec, sampleRate }
+ * @param {Object} clientInfo - { ws, clientId, capabilities, codec, sampleRate, lang }
  */
 export function registerClient(sessionId, clientInfo) {
     if (!ttsWsRegistry.has(sessionId)) {
         ttsWsRegistry.set(sessionId, new Set());
     }
     ttsWsRegistry.get(sessionId).add(clientInfo);
-    console.log(`[TTS-WS] Client ${clientInfo.clientId} registered for session ${sessionId}`);
+    console.log(`[TTS-WS] Client ${clientInfo.clientId} registered for session ${sessionId} (lang: ${clientInfo.lang || 'all'})`);
 }
 
 /**
@@ -44,6 +48,30 @@ export function unregisterClient(sessionId, clientInfo) {
         }
     }
     console.log(`[TTS-WS] Client ${clientInfo.clientId} unregistered from session ${sessionId}`);
+}
+
+/**
+ * Update the subscribed language for a registered client.
+ * Called when a listener switches language mid-session without reconnecting.
+ * 
+ * @param {string} sessionId
+ * @param {string} clientId
+ * @param {string} newLang - New language code (e.g. 'fr', 'es')
+ * @returns {boolean} true if the client was found and updated
+ */
+export function updateClientLang(sessionId, clientId, newLang) {
+    const clients = ttsWsRegistry.get(sessionId);
+    if (!clients) return false;
+
+    for (const client of clients) {
+        if (client.clientId === clientId) {
+            const oldLang = client.lang;
+            client.lang = newLang || null;
+            console.log(`[TTS-WS] Client ${clientId} language updated: ${oldLang || 'all'} → ${newLang || 'all'}`);
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -128,6 +156,7 @@ export function decodeAudioFrame(frame) {
 export const MessageType = {
     // Client → Server
     HELLO: 'audio.hello',
+    SET_LANG: 'audio.set_lang',
     ACK: 'audio.ack',
 
     // Server → Client
@@ -209,34 +238,56 @@ export function createErrorMessage(streamId, errorCode, message) {
 // ============================================================================
 
 /**
- * Broadcast a JSON control message to all clients in a session
+ * Broadcast a JSON control message to clients in a session.
+ * If `lang` is provided, only sends to clients subscribed to that language
+ * (or clients with no language set, for backwards compatibility).
+ * 
  * @param {string} sessionId 
  * @param {Object} message 
+ * @param {string|null} [lang] - Optional language filter (e.g. 'es')
  */
-export function broadcastControl(sessionId, message) {
+export function broadcastControl(sessionId, message, lang = null) {
     const clients = getClients(sessionId);
     const json = JSON.stringify(message);
+    let sentCount = 0;
 
     for (const client of clients) {
-        if (client.ws.readyState === 1) { // WebSocket.OPEN
-            client.ws.send(json);
+        // Send if: no language filter, client has no language, or languages match
+        if (!lang || !client.lang || client.lang === lang) {
+            if (client.ws.readyState === 1) { // WebSocket.OPEN
+                client.ws.send(json);
+                sentCount++;
+            }
         }
     }
+
+    return sentCount;
 }
 
 /**
- * Broadcast a binary audio frame to all clients in a session
+ * Broadcast a binary audio frame to clients in a session.
+ * If `lang` is provided, only sends to clients subscribed to that language
+ * (or clients with no language set, for backwards compatibility).
+ * 
  * @param {string} sessionId 
- * @param {Uint8Array} frameBytes 
+ * @param {Uint8Array} frameBytes
+ * @param {string|null} [lang] - Optional language filter (e.g. 'es')
  */
-export function broadcastAudioFrame(sessionId, frameBytes) {
+export function broadcastAudioFrame(sessionId, frameBytes, lang = null) {
     const clients = getClients(sessionId);
+    let sentCount = 0;
 
     for (const client of clients) {
-        if (client.ws.readyState === 1) { // WebSocket.OPEN
-            client.ws.send(frameBytes);
+        // Send if: no language filter, client has no language, or languages match
+        if (!lang || !client.lang || client.lang === lang) {
+            if (client.ws.readyState === 1) { // WebSocket.OPEN
+                client.ws.send(frameBytes);
+                sentCount++;
+            }
         }
     }
+
+    return sentCount;
 }
 
 // ============================================================================
@@ -248,7 +299,7 @@ export function broadcastAudioFrame(sessionId, frameBytes) {
  * @param {WebSocket} ws - WebSocket connection
  * @param {string} sessionId - Session ID
  * @param {Buffer|string} data - Incoming message data
- * @param {Object} handlers - { onAck: (ackData) => void }
+ * @param {Object} handlers - { onAck: (ackData) => void, onSetLang: (clientId, lang) => void }
  * @returns {Object|null} - Parsed message or null if binary
  */
 export function handleMessage(ws, sessionId, data, handlers = {}) {
@@ -260,6 +311,12 @@ export function handleMessage(ws, sessionId, data, handlers = {}) {
             switch (message.type) {
                 case MessageType.HELLO:
                     return handleHello(ws, sessionId, message);
+
+                case MessageType.SET_LANG:
+                    if (handlers.onSetLang) {
+                        handlers.onSetLang(message.clientId, message.lang);
+                    }
+                    return message;
 
                 case MessageType.ACK:
                     if (handlers.onAck) {
@@ -284,7 +341,7 @@ export function handleMessage(ws, sessionId, data, handlers = {}) {
  * Handle audio.hello message
  */
 function handleHello(ws, sessionId, message) {
-    const { clientId, capabilities, desiredCodec, desiredSampleRate } = message;
+    const { clientId, capabilities, desiredCodec, desiredSampleRate, targetLang } = message;
 
     // Choose codec based on capabilities and config
     let codec = TTS_STREAMING_CONFIG.defaultCodec;
@@ -297,13 +354,14 @@ function handleHello(ws, sessionId, message) {
         sampleRate = desiredSampleRate || 44100;
     }
 
-    // Register the client
+    // Register the client, storing their subscribed language
     const clientInfo = {
         ws,
         clientId,
         capabilities,
         codec,
-        sampleRate
+        sampleRate,
+        lang: targetLang || null  // null = receive all languages (backwards compat)
     };
     registerClient(sessionId, clientInfo);
 
@@ -314,7 +372,7 @@ function handleHello(ws, sessionId, message) {
     const readyMsg = createReadyMessage(streamId, codec, sampleRate);
     ws.send(JSON.stringify(readyMsg));
 
-    console.log(`[TTS-WS] Client ${clientId} ready: codec=${codec}, sampleRate=${sampleRate}`);
+    console.log(`[TTS-WS] Client ${clientId} ready: codec=${codec}, sampleRate=${sampleRate}, lang=${targetLang || 'all'}`);
 
     // Store streamId on client for later reference
     clientInfo.streamId = streamId;

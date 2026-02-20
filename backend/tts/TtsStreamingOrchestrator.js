@@ -175,7 +175,11 @@ class SessionOrchestrator {
         // Use 'opus' for Google (WebM remuxing optimization), 'mp3' for others (ElevenLabs/OpenAI)
         const codec = route.provider === 'google' ? 'opus' : 'mp3';
 
-        // Broadcast metadata including routing decisions
+        // Normalise lang to the base language code for registry matching
+        // e.g. 'es-ES' → 'es', so it matches listeners who registered with 'es'
+        const baseLang = lang ? lang.split('-')[0].toLowerCase() : null;
+
+        // Broadcast metadata including routing decisions — filtered to this language's listeners
         broadcastControl(this.sessionId, createStartMessage({
             streamId: this.streamId,
             segmentId,
@@ -189,7 +193,7 @@ class SessionOrchestrator {
                 tier: route.tier,
                 provider: route.provider
             }
-        }));
+        }), baseLang);
 
         // Start streaming based on provider
         let streamHandle;
@@ -258,7 +262,7 @@ class SessionOrchestrator {
 
                 // console.log(`[TTS-Orch] Broadcasting chunk ${chunkIndex} for segment ${segmentId}: ${chunk.length} bytes`);
 
-                // Encode and broadcast frame
+                // Encode and broadcast frame — filtered to this language's listeners
                 const isLast = false; // We don't know until stream ends
                 const frame = encodeAudioFrame({
                     streamId: this.streamId,
@@ -268,7 +272,7 @@ class SessionOrchestrator {
                     isLast
                 }, chunk);
 
-                broadcastAudioFrame(this.sessionId, frame);
+                broadcastAudioFrame(this.sessionId, frame, baseLang);
                 recordBytesSent(chunk.length);
 
                 totalBytes += chunk.length;
@@ -284,7 +288,7 @@ class SessionOrchestrator {
                 isLast: true
             }, new Uint8Array(0));
 
-            broadcastAudioFrame(this.sessionId, finalFrame);
+            broadcastAudioFrame(this.sessionId, finalFrame, baseLang);
 
             console.log(`[TTS-Orch] Segment ${segmentId} complete: ${chunkIndex} chunks, ${totalBytes} bytes`);
 
@@ -330,8 +334,8 @@ class SessionOrchestrator {
             this.currentStreamHandle = null;
         }
 
-        // Broadcast audio.end
-        broadcastControl(this.sessionId, createEndMessage(this.streamId, segmentId, version));
+        // Broadcast audio.end — filtered to this language's listeners
+        broadcastControl(this.sessionId, createEndMessage(this.streamId, segmentId, version), baseLang);
     }
 
     /**

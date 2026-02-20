@@ -4175,6 +4175,7 @@ export async function handleSoloMode(clientWs) {
                   sampleRateHz: response.audio.sampleRateHz
                 },
                 mode: response.mode,
+                languageCode: ttsRequest.profile.languageCode, // Added for easier debugging
                 resolvedRoute: response.route,
                 ssmlOptions: ttsRequest.ssmlOptions || null
               }));

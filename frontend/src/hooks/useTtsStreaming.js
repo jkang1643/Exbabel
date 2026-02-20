@@ -16,6 +16,7 @@ import { StreamingAudioPlayer, decodeAudioFrame } from '../tts/StreamingAudioPla
 export function useTtsStreaming({
     sessionId,
     enabled = false,
+    targetLang = null,
     playbackRate = 1.0,
     onBufferUpdate,
     onUnderrun,
@@ -53,6 +54,8 @@ export function useTtsStreaming({
     const playerRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const clientIdRef = useRef(`client_${Date.now()}_${Math.random().toString(36).substring(7)}`);
+    // Track the lang the server knows about so we only send set_lang when it actually changes
+    const serverKnownLangRef = useRef(null);
 
     // Get WebSocket URL
     const getWebSocketUrl = useCallback(() => {
@@ -84,9 +87,12 @@ export function useTtsStreaming({
             console.log('[useTtsStreaming] Connected');
             setIsConnected(true);
 
-            // Initialize player
+            // Initialize player — wrapped in try/catch so that any failure
+            // (MediaSource timeout, QuotaExceededError, Safari quirk, etc.)
+            // surfaces loudly and triggers a clean reconnect instead of
+            // silently leaving the client unregistered on the backend.
             if (!playerRef.current) {
-                playerRef.current = new StreamingAudioPlayer({
+                const player = new StreamingAudioPlayer({
                     jitterBufferMs: 500, // Increased for Host Mode broadcast architecture (was 150ms)
                     onBufferUpdate: (ms) => {
                         setBufferedMs(ms);
@@ -102,24 +108,49 @@ export function useTtsStreaming({
                     }
                 });
 
-                // Start player with MP3 config
-                await playerRef.current.start({
-                    streamId: `stream_${sessionId}_${Date.now()}`,
-                    codec: 'mp3',
-                    sampleRate: 44100,
-                    channels: 1,
-                    playbackRate: playbackRateRef.current
-                });
+                try {
+                    await player.start({
+                        streamId: `stream_${sessionId}_${Date.now()}`,
+                        codec: 'mp3',
+                        sampleRate: 44100,
+                        channels: 1,
+                        playbackRate: playbackRateRef.current
+                    });
+                    playerRef.current = player;
+                } catch (startErr) {
+                    // StreamingAudioPlayer failed to initialize (e.g. MediaSource timeout,
+                    // QuotaExceededError, unsupported format). Close and reconnect cleanly.
+                    console.error('[useTtsStreaming] ❌ StreamingAudioPlayer.start() failed — will reconnect:', startErr);
+                    onErrorRef.current?.(startErr);
+                    // Null out the broken player so the next connection starts fresh
+                    playerRef.current = null;
+                    // Remove listeners to prevent zombie events on this dead socket
+                    ws.onopen = null;
+                    ws.onmessage = null;
+                    ws.onclose = null;
+                    ws.onerror = null;
+                    ws.close();
+                    wsRef.current = null;
+                    setIsConnected(false);
+                    // Trigger reconnect after a short delay
+                    reconnectTimeoutRef.current = setTimeout(() => {
+                        console.log('[useTtsStreaming] Reconnecting after player init failure...');
+                        connect();
+                    }, 1500);
+                    return;
+                }
             }
 
-            // Send hello message with explicit clientId
+            // Send hello message with explicit clientId and subscribed language
             ws.send(JSON.stringify({
                 type: 'audio.hello',
                 clientId: clientIdRef.current,
                 capabilities: ['mp3'],
                 codec: 'mp3',
-                sampleRate: 44100
+                sampleRate: 44100,
+                targetLang: targetLang || null   // Tell server which language to filter to
             }));
+            serverKnownLangRef.current = targetLang || null;
         };
 
         ws.onmessage = (event) => {
@@ -255,6 +286,23 @@ export function useTtsStreaming({
             disconnect();
         };
     }, [enabled, connect, disconnect]);
+
+    // Mid-session language switch — send audio.set_lang without reconnecting
+    // When a listener switches their target language while already connected,
+    // we notify the server so it updates the registry filter immediately.
+    useEffect(() => {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (targetLang === serverKnownLangRef.current) return; // No change
+
+        console.log(`[useTtsStreaming] Language switch: ${serverKnownLangRef.current} → ${targetLang}`);
+        ws.send(JSON.stringify({
+            type: 'audio.set_lang',
+            clientId: clientIdRef.current,
+            lang: targetLang || null
+        }));
+        serverKnownLangRef.current = targetLang || null;
+    }, [targetLang]);
 
     // Periodic ACK sending
     useEffect(() => {

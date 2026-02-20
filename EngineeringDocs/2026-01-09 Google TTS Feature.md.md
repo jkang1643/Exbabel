@@ -1,5 +1,5 @@
 # Exbabel — Feat/Google TTS Integration
-**Last updated:** 2026-01-22 (America/Chicago) - Dynamic Voice Catalog Synchronization (PR4/4.1)
+**Last updated:** 2026-02-20 (America/Chicago) - TTS Listener Connect Race Condition Fixes
 
 This is a running "what is done" document capturing what we changed, why, and where we are now regarding the Google Text-to-Speech integration.
 **Newest items are at the top.**
@@ -8,6 +8,99 @@ This is a running "what is done" document capturing what we changed, why, and wh
 
 ## 0) BUG FIXES (Resolved Issues)
 **Most recent at the top**
+
+### BUG 46: FIXED — TTS Fails to Load ~15% of the Time on Listener Connect (Cross-Platform)
+**Status:** ✅ RESOLVED (2026-02-20)
+
+Resolved a persistent race condition where TTS audio would silently fail to initialize when connecting as a listener, with a ~15% failure rate. Affected Mac, Windows, and iPhone equally — not platform-specific.
+
+#### Root Causes (3 stacked bugs):
+
+1. **AudioContext stays `suspended` (primary):** All modern browsers start `AudioContext` in a `suspended` state and require a trusted user gesture to resume it. `unlockFromUserGesture()` was never called in the auto-play path — the Play button is now auto-triggered, so the call was missing entirely. The `_prime()` method it fell back to called `.resume()` after an `await fetch()`, which breaks the browser's gesture-trust chain and causes the resume to silently fail.
+
+2. **`StreamingAudioPlayer.start()` could hang forever (secondary):** The player awaited the MediaSource `sourceopen` event with **no timeout**. When the browser never fires this event (resource contention, stale audio context), the entire init chain hung silently. `audio.hello` was never sent, the client was never registered in the backend TTS registry, and all audio frames were silently dropped.
+
+3. **Player init failure was swallowed (secondary):** The `ws.onopen` async handler in `useTtsStreaming` had no `try/catch`. If `player.start()` threw, the unhandled async rejection silently stopped execution mid-function. `audio.hello` was never sent, but `isConnected` was set to `true` — the UI looked healthy while audio was completely broken.
+
+#### Key Fixes:
+
+1. **`ListenerPage.jsx`:** Added `ttsControllerRef.current.unlockFromUserGesture()` at the very top of `handleJoinSession()` — synchronously, before any `await`. The Join button click is a trusted gesture; calling it here ensures `AudioContext` is resumed and the persistent audio element is primed before any auto-play fires on connect.
+
+2. **`StreamingAudioPlayer.js`:** Added a **5-second timeout** to the `MediaSource sourceopen` Promise. Now fails immediately with a clear error instead of hanging forever, allowing the caller's catch block to trigger a clean retry.
+
+3. **`useTtsStreaming.js`:** Added `try/catch` around `player.start()`. On failure: logs clearly, closes the broken WebSocket, and **auto-reconnects after 1.5s** with a fresh player. `audio.hello` is now only sent after a confirmed successful player start.
+
+#### Impact:
+- ✅ **Consistent TTS load:** AudioContext unlocked reliably on every join across all browsers/platforms.
+- ✅ **No silent hangs:** MediaSource timeout surfaces failures immediately instead of blocking forever.
+- ✅ **Self-healing:** If player init fails (rare), the system reconnects automatically within 1.5s with no user intervention.
+
+#### Files Modified:
+- `frontend/src/components/ListenerPage.jsx` — `unlockFromUserGesture()` in `handleJoinSession`
+- `frontend/src/tts/StreamingAudioPlayer.js` — 5-second `sourceopen` timeout
+- `frontend/src/hooks/useTtsStreaming.js` — `try/catch` + clean reconnect on player init failure
+
+---
+
+### BUG 45: FIXED — Language Bleed in Multi-Language Broadcasts (Streaming TTS)
+**Status:** ✅ RESOLVED (2026-02-20)
+
+Resolved an issue where listeners in a multi-language session would receive audio frames for all synthesized languages, not just their selected one.
+
+#### Root Cause:
+1. **Unfiltered Handshake:** The `ttsStreamingTransport.js` registration logic didn't capture the client's target language.
+2. **Global Broadcast:** `broadcastAudioFrame` sent binary data to all sockets in a session indiscriminately.
+
+#### Key Fixes:
+1. **Language-Aware Handshake:** Updated `audio.hello` and the new `audio.set_lang` message to register and update the client's `targetLang` in the transport registry.
+2. **Selective Broadcasting:** Modified `ttsStreamingTransport.js` to filter both audio frames and control messages (start/stop/cancel) based on the client's registered language.
+3. **Frontend Sync:** Updated `useTtsStreaming.js` to pass the user's `targetLang` and notify the server of mid-session language changes.
+
+#### Impact:
+- ✅ **Strict Isolation:** Listeners now only receive audio for their subscribed language.
+- ✅ **Improved Performance:** Reduced unnecessary network traffic and CPU usage for clients.
+
+#### Files Modified:
+- `backend/tts/ttsStreamingTransport.js`
+- `backend/tts/ttsStreamingHandler.js`
+- `frontend/src/hooks/useTtsStreaming.js`
+
+---
+
+### BUG 44: FIXED — Session Spans Foreign Key Constraint Violation
+**Status:** ✅ RESOLVED (2026-02-20)
+
+Resolved a critical database error (`violates foreign key constraint "session_spans_session_id_fkey"`) that occurred when starting a session with a permanent code.
+
+#### Root Cause:
+1. **Unique Code Collision:** When a church used a permanent code (e.g., `BUYKPN`), the backend generated a new UUID for the session but kept the same short code.
+2. **Silent Persistence Failure:** The `UPSERT` to `public.sessions` failed because the short code already existed for a different UUID.
+3. **Orphaned Spans:** Because the session record was never created/updated in the DB, the subsequent `session_spans` record had no parent session to reference.
+
+#### Key Fixes:
+1. **UUID Reuse:** Updated `POST /session/start` to check for an existing session by its `session_code` and reuse its UUID for the current session.
+2. **Store update:** Modified `sessionStore.createSession` to accept an `overrideId`.
+
+#### Impact:
+- ✅ **Data Integrity:** Session spans and usage metrics are now correctly recorded for all churches.
+- ✅ **Error-Free Activation:** Sessions with permanent codes activate seamlessly.
+
+#### Files Modified:
+- `backend/server.js`
+- `backend/sessionStore.js`
+
+---
+
+### IMPROVEMENT: Debugging Metadata for TTS JSON Payloads
+**Status:** ✅ IMPLEMENTED (2026-02-20)
+
+Added `languageCode` to the `tts/audio` JSON payloads in both Host and Solo modes. This allows developers to verify the synthesized language directly in the browser's Network tab (WS frames) without cross-referencing logs.
+
+#### Files Modified:
+- `backend/websocketHandler.js`
+- `backend/soloModeHandler.js`
+
+---
 
 ### FEATURE: Vocal Channel Strip (Web Audio DSP) — Solo & Host Mode
 **Status:** ✅ IMPLEMENTED (2026-02-18)
